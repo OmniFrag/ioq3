@@ -12,6 +12,14 @@ if(CMAKE_BUILD_TYPE)
     set(BUILD_TYPE_ARG -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE})
 endif()
 
+# The tools run on the build machine, so their suffix follows the host
+# rather than the target (e.g. when cross compiling for Windows on Linux)
+if(DEFINED CMAKE_HOST_EXECUTABLE_SUFFIX) # CMake 3.31+
+    set(HOST_EXECUTABLE_SUFFIX ${CMAKE_HOST_EXECUTABLE_SUFFIX})
+elseif(CMAKE_HOST_WIN32)
+    set(HOST_EXECUTABLE_SUFFIX .exe)
+endif()
+
 set(Q3RCC ${TOOLS_DIR}/$<CONFIG>/q3rcc${HOST_EXECUTABLE_SUFFIX})
 set(Q3CPP ${TOOLS_DIR}/$<CONFIG>/q3cpp${HOST_EXECUTABLE_SUFFIX})
 set(Q3LCC ${TOOLS_DIR}/$<CONFIG>/q3lcc${HOST_EXECUTABLE_SUFFIX})
