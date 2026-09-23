@@ -7,14 +7,15 @@ Includelist	includelist[NINCLUDE];
 
 extern char	*objname;
 
-void appendDirToIncludeList( char *dir )
+static int isAbsolutePath( const char *path )
+{
+	return path[0] == '/' || path[0] == '\\' ||
+		( path[0] != '\0' && path[1] == ':' );
+}
+
+static void addToIncludeList( char *fqdir )
 {
 	int i;
-	char *fqdir;
-
-	fqdir = (char *)newstring( (uchar *)includelist[NINCLUDE-1].file, 256, 0 );
-	strcat( fqdir, "/" );
-	strcat( fqdir, dir );
 
 	//avoid adding it more than once
 	for (i=NINCLUDE-2; i>=0; i--) {
@@ -33,6 +34,19 @@ void appendDirToIncludeList( char *dir )
 	}
 	if (i<0)
 		error(FATAL, "Too many -I directives");
+}
+
+void appendDirToIncludeList( char *dir )
+{
+	// Relative directories are relative to the source file's directory
+	if ( !isAbsolutePath( dir ) ) {
+		char *fqdir = (char *)newstring( (uchar *)includelist[NINCLUDE-1].file, 256, 0 );
+		strcat( fqdir, "/" );
+		strcat( fqdir, dir );
+		dir = fqdir;
+	}
+
+	addToIncludeList( dir );
 }
 
 void
@@ -74,9 +88,7 @@ doinclude(Tokenrow *trp)
 		goto syntax;
 	fname[len] = '\0';
 
-	appendDirToIncludeList( basepath( fname ) );
-
-	if (fname[0]=='/') {
+	if (isAbsolutePath(fname)) {
 		fd = open(fname, 0);
 		strcpy(iname, fname);
 	} else for (fd = -1,i=NINCLUDE-1; i>=0; i--) {
@@ -97,6 +109,9 @@ doinclude(Tokenrow *trp)
 		write(1,"\n",1);
 	}
 	if (fd >= 0) {
+		// Let the included file's own includes resolve relative to where
+		// it was actually found, which may be through a -I directory
+		addToIncludeList( basepath( iname ) );
 		if (++incdepth > 10)
 			error(FATAL, "#include too deeply nested");
 		setsource((char*)newstring((uchar*)iname, strlen(iname), 0), fd, NULL);
