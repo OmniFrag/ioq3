@@ -1,5 +1,9 @@
-get_directory_property(INSTALL_TARGETS DIRECTORY
-    ${PROJECT_SOURCE_DIR} BUILDSYSTEM_TARGETS)
+set(INSTALL_TARGETS)
+foreach(DIRECTORY IN ITEMS ${PROJECT_SOURCE_DIR} ${EXTRA_GAME_DIRECTORIES})
+    get_directory_property(DIRECTORY_TARGETS DIRECTORY
+        ${DIRECTORY} BUILDSYSTEM_TARGETS)
+    list(APPEND INSTALL_TARGETS ${DIRECTORY_TARGETS})
+endforeach()
 
 # Iterate over all the targets that have an INSTALL_DESTINATION
 # property (set by set_output_dirs) and call install() on them

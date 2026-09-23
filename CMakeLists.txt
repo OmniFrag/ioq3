@@ -17,6 +17,8 @@ option(BUILD_RENDERER_GL1 "Build GL1 renderer" ON)
 option(BUILD_RENDERER_GL2 "Build GL2 renderer" ON)
 option(BUILD_GAME_LIBRARIES "Build game module libraries" ON)
 option(BUILD_GAME_QVMS "Build game module qvms" ON)
+option(BUILD_BASEGAME "Build the baseq3 game modules" ON)
+option(BUILD_MISSIONPACK "Build the missionpack game modules" ON)
 option(BUILD_STANDALONE "Build binaries for standalone games" OFF)
 
 option(USE_RENDERER_DLOPEN "Dynamically load the renderer(s)" ON)
@@ -102,6 +104,14 @@ include(renderer_gl2)
 include(client)
 include(basegame)
 include(missionpack)
+
+# Game code kept outside this source tree, e.g. by a parent project
+foreach(GAME_DIRECTORY IN LISTS EXTRA_GAME_DIRECTORIES)
+    # Normalize first so a trailing slash still yields a name
+    get_filename_component(GAME_DIRECTORY ${GAME_DIRECTORY} ABSOLUTE)
+    get_filename_component(GAME_DIRECTORY_NAME ${GAME_DIRECTORY} NAME)
+    add_subdirectory(${GAME_DIRECTORY} ${CMAKE_BINARY_DIR}/${GAME_DIRECTORY_NAME})
+endforeach()
 
 include(post_configure)
 include(installer)
