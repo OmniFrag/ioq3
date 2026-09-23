@@ -82,7 +82,15 @@ if(NOT PRODUCT_VERSION)
     endif()
 endif()
 
-add_compile_definitions(PRODUCT_VERSION="${PRODUCT_VERSION}")
+# Only these files use the version. Defining it for them alone means a new
+# version recompiles them, not everything.
+set_property(SOURCE
+        code/client/cl_console.c
+        code/client/cl_http_curl.c
+        code/client/cl_http_windows.c
+        code/qcommon/common.c
+        code/sys/sys_main.c
+    APPEND PROPERTY COMPILE_DEFINITIONS PRODUCT_VERSION="${PRODUCT_VERSION}")
 
 # For CI to read from
 file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/version.txt CONTENT ${PRODUCT_VERSION})
