@@ -1,5 +1,5 @@
 # Import variables from misc/lib-versions.sh
-file(STRINGS ${CMAKE_SOURCE_DIR}/misc/lib-versions.sh LIB_VERSIONS_CONTENT
+file(STRINGS ${PROJECT_SOURCE_DIR}/misc/lib-versions.sh LIB_VERSIONS_CONTENT
     REGEX "^[A-Z_]+=[^ ]+")
 foreach(LINE ${LIB_VERSIONS_CONTENT})
     if(LINE MATCHES "^([A-Z_]+)=(.+)$")
