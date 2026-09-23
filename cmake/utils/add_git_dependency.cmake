@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 
 function(add_git_dependency SOURCE_FILE)
-    set(GIT_DIR ${CMAKE_SOURCE_DIR}/.git)
+    set(GIT_DIR ${PROJECT_SOURCE_DIR}/.git)
     if(NOT EXISTS ${GIT_DIR})
         return()
     endif()
@@ -15,6 +15,8 @@ function(add_git_dependency SOURCE_FILE)
         endif()
 
         string(STRIP ${CMAKE_MATCH_1} GIT_DIR)
+        # A submodule's gitdir is usually relative to its working tree
+        get_filename_component(GIT_DIR ${GIT_DIR} ABSOLUTE BASE_DIR ${PROJECT_SOURCE_DIR})
     endif()
 
     set(GIT_FILES)
