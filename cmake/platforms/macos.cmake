@@ -51,7 +51,7 @@ function(finish_macos_app)
         set(MACOS_APP_PLIST_URL_TYPES "")
     endif()
 
-    configure_file(${CMAKE_SOURCE_DIR}/cmake/Info.plist.in
+    configure_file(${PROJECT_SOURCE_DIR}/cmake/Info.plist.in
         ${CMAKE_BINARY_DIR}/Info.plist @ONLY)
 
     set_target_properties(${CLIENT_BINARY} PROPERTIES
@@ -84,7 +84,7 @@ if(NOT "$ENV{APPLE_CERTIFICATE_ID}" STREQUAL "")
         set(DEV_ID "Developer ID Application")
 
         get_directory_property(INSTALL_TARGETS DIRECTORY
-            ${CMAKE_SOURCE_DIR} BUILDSYSTEM_TARGETS)
+            ${PROJECT_SOURCE_DIR} BUILDSYSTEM_TARGETS)
 
         # Code sign everything that will be installed
         foreach(TARGET IN LISTS INSTALL_TARGETS)
@@ -95,7 +95,7 @@ if(NOT "$ENV{APPLE_CERTIFICATE_ID}" STREQUAL "")
 
             add_custom_command(TARGET ${TARGET} POST_BUILD
                 COMMAND codesign --force --deep --options runtime
-                    --entitlements ${CMAKE_SOURCE_DIR}/cmake/entitlements.plist
+                    --entitlements ${PROJECT_SOURCE_DIR}/cmake/entitlements.plist
                     --sign "$ENV{APPLE_CERTIFICATE_ID}"
                     "$<TARGET_FILE:${TARGET}>"
                 COMMENT "Code Signing for macOS: $<TARGET_FILE_BASE_NAME:${TARGET}>")
@@ -106,11 +106,11 @@ endif()
 set(CPACK_GENERATOR "DragNDrop")
 
 set(CPACK_DMG_VOLUME_NAME "${PROJECT_NAME} Installer")
-set(CPACK_DMG_BACKGROUND_IMAGE "${CMAKE_SOURCE_DIR}/misc/macos/macos-dmg-background.png")
+set(CPACK_DMG_BACKGROUND_IMAGE "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-background.png")
 set(CPACK_DMG_SUBDIRECTORY "${CLIENT_NAME}")
 
 configure_file(
-  "${CMAKE_SOURCE_DIR}/misc/macos/macos-dmg-setup.applescript.in"
+  "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-setup.applescript.in"
   "${CMAKE_BINARY_DIR}/macos-dmg-setup.applescript"
   @ONLY
 )
