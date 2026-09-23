@@ -55,7 +55,7 @@ foreach(SHADER_FILE IN LISTS RENDERER_GL2_SHADER_SOURCES)
             -DINPUT_FILE=${SHADER_FILE}
             -DOUTPUT_FILE=${SHADER_C_FILE}
             -DSHADER_NAME=${SHADER_NAME}
-            -P ${CMAKE_SOURCE_DIR}/cmake/utils/stringify_shader.cmake
+            -P ${PROJECT_SOURCE_DIR}/cmake/utils/stringify_shader.cmake
         DEPENDS ${SHADER_FILE}
         COMMENT "Stringify shader ${SHADER_C_FILE_COMMENT}")
 

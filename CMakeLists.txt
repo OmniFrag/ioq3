@@ -6,7 +6,7 @@ if(POLICY CMP0177)
     cmake_policy(SET CMP0177 NEW)
 endif()
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(identity)
 
 project(${PROJECT_NAME} VERSION ${PROJECT_VERSION} LANGUAGES C)
@@ -55,12 +55,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
 
 if(NOT PRODUCT_VERSION)
-    set(PRODUCT_VERSION "${CMAKE_PROJECT_VERSION}")
+    set(PRODUCT_VERSION "${PROJECT_VERSION}")
 
-    if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
         execute_process(
             COMMAND git describe --tags --exact-match
-            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
             OUTPUT_VARIABLE GIT_TAG
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET)
@@ -68,7 +68,7 @@ if(NOT PRODUCT_VERSION)
         if(NOT GIT_TAG STREQUAL "${PRODUCT_VERSION}")
             execute_process(
                 COMMAND git show -s --pretty=format:%h
-                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
                 OUTPUT_VARIABLE GIT_REV
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 ERROR_QUIET)
@@ -90,7 +90,7 @@ if(DEFINED ENV{SOURCE_DATE_EPOCH})
     add_compile_definitions(PRODUCT_DATE="${PRODUCT_DATE}")
 endif()
 
-set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/code)
+set(SOURCE_DIR ${PROJECT_SOURCE_DIR}/code)
 
 include(compilers/all)
 include(platforms/all)
