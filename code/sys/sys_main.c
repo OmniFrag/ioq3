@@ -31,11 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <ctype.h>
 #include <errno.h>
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
-
 #ifndef DEDICATED
+// SDL runs the main loop (SDL_AppIterate), so the game keeps running while
+// Windows moves or resizes its window, or shows the window menu
+#define SDL_MAIN_USE_CALLBACKS
 #ifdef USE_INTERNAL_SDL_HEADERS
 #	include "SDL3/SDL.h"
 #	include "SDL3/SDL_main.h"
@@ -49,6 +48,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "sys_local.h"
 #include "sys_loadlib.h"
+
+#if !defined(DEDICATED) && defined(SDL_PLATFORM_WINDOWS)
+#include <windows.h>
+#endif
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
@@ -780,13 +783,14 @@ void Sys_SigHandler( int signal )
 
 /*
 =================
-main
+Sys_Start
 =================
 */
-int main( int argc, char **argv )
+static void Sys_Start( int argc, char **argv )
 {
 	int   i;
-	char  commandLine[ MAX_STRING_CHARS ] = { 0 };
+	// Com_StartupVariable reads it after Com_Init
+	static char  commandLine[ MAX_STRING_CHARS ] = { 0 };
 #ifdef PROTOCOL_HANDLER
 	char *protocolCommand = NULL;
 #endif
@@ -889,15 +893,171 @@ int main( int argc, char **argv )
 	signal( SIGSEGV, Sys_SigHandler );
 	signal( SIGTERM, Sys_SigHandler );
 	signal( SIGINT, Sys_SigHandler );
+}
 
-#ifdef __EMSCRIPTEN__
-	emscripten_set_main_loop( Com_Frame, 0, 1 );
-#else
+#ifdef DEDICATED
+/*
+=================
+main
+=================
+*/
+int main( int argc, char **argv )
+{
+	Sys_Start( argc, argv );
+
 	while( 1 )
 	{
+		while( !Com_WaitFrame( ) )
+		{
+		}
+
 		Com_Frame( );
 	}
-#endif
 
 	return 0;
 }
+#else
+static qboolean inFrame = qfalse;
+
+/*
+=================
+Sys_Frame
+=================
+*/
+static void Sys_Frame( void )
+{
+	inFrame = qtrue;
+	Com_Frame( );
+	inFrame = qfalse;
+}
+
+#ifdef SDL_PLATFORM_WINDOWS
+// runs a frame from Sys_WindowsMessageHook
+#define SYS_FRAME_MESSAGE ( WM_APP + 0x51 )
+static qboolean framePosted = qfalse;
+
+/*
+=================
+Sys_WindowsMessageHook
+
+While Windows moves or resizes the window, SDL runs frames from a timer,
+but Windows fires timers only when no input is waiting, so a moving mouse
+holds them off. When a frame comes due, post the window a message to run
+it: posted messages come before input, and after the step of the move or
+resize at hand. The frame first takes the events SDL has queued, as SDL
+does before SDL_AppIterate.
+=================
+*/
+static bool SDLCALL Sys_WindowsMessageHook( void *userdata, MSG *msg )
+{
+	SDL_Event e;
+
+	if( msg->message == SYS_FRAME_MESSAGE )
+	{
+		framePosted = qfalse;
+
+		if( !inFrame && Sys_InModalLoop( ) )
+		{
+			while( SDL_PeepEvents( &e, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST ) > 0 )
+			{
+				IN_ProcessEvent( &e );
+			}
+
+			// it's due; this sends the server's queued packets
+			Com_WaitFrame( );
+			Sys_Frame( );
+		}
+
+		return false;
+	}
+
+	if( !framePosted && !inFrame && Com_FrameDue( ) && Sys_InModalLoop( ) )
+	{
+		framePosted = PostMessage( msg->hwnd, SYS_FRAME_MESSAGE, 0, 0 ) != 0;
+	}
+
+	return true;
+}
+#endif
+
+/*
+=================
+SDL_AppInit
+=================
+*/
+SDL_AppResult SDL_AppInit( void **appstate, int argc, char *argv[] )
+{
+	Sys_Start( argc, argv );
+
+#ifdef SDL_PLATFORM_WINDOWS
+	SDL_SetWindowsMessageHook( Sys_WindowsMessageHook, NULL );
+#endif
+
+	return SDL_APP_CONTINUE;
+}
+
+/*
+=================
+SDL_AppIterate
+
+SDL handles the pending events (SDL_AppEvent) before each call
+=================
+*/
+SDL_AppResult SDL_AppIterate( void *appstate )
+{
+	qboolean due;
+
+	// While Windows moves or resizes the window, or shows the window menu,
+	// SDL calls this from its modal loop. That loop can also start inside
+	// a frame, when something in it pumps events; let that frame finish.
+	if( inFrame )
+	{
+		return SDL_APP_CONTINUE;
+	}
+
+	due = Com_WaitFrame( );
+
+#ifndef __EMSCRIPTEN__
+	// Return between sleeps, so SDL handles the events that come in
+	// meanwhile and the frame starts with them. A Windows modal loop calls
+	// this from a timer instead, and handles no events in between; wait
+	// there, or frames come only on the timer's ticks. A browser calls it
+	// once per display refresh; run a frame each time.
+	if( !due && !Sys_InModalLoop( ) )
+	{
+		return SDL_APP_CONTINUE;
+	}
+#endif
+
+	while( !due )
+	{
+		due = Com_WaitFrame( );
+	}
+
+	Sys_Frame( );
+
+	return SDL_APP_CONTINUE;
+}
+
+/*
+=================
+SDL_AppEvent
+=================
+*/
+SDL_AppResult SDL_AppEvent( void *appstate, SDL_Event *event )
+{
+	IN_ProcessEvent( event );
+	return SDL_APP_CONTINUE;
+}
+
+/*
+=================
+SDL_AppQuit
+
+Unused: the engine quits through Sys_Quit, which exits
+=================
+*/
+void SDL_AppQuit( void *appstate, SDL_AppResult result )
+{
+}
+#endif

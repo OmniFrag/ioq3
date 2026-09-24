@@ -939,3 +939,19 @@ qboolean Sys_SetMaxFileLimit( void )
 {
 	return qtrue;
 }
+
+/*
+=================
+Sys_InModalLoop
+
+Windows is moving or resizing the window, or showing a menu, in a loop of
+its own
+=================
+*/
+qboolean Sys_InModalLoop( void )
+{
+	GUITHREADINFO info = { sizeof( info ) };
+
+	return GetGUIThreadInfo( GetCurrentThreadId( ), &info ) &&
+		( info.flags & ( GUI_INMOVESIZE | GUI_INMENUMODE ) );
+}
