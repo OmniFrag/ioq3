@@ -43,6 +43,8 @@ int		vm_debugLevel;
 // used by Com_Error to get rid of running vm's before longjmp
 static int forced_unload;
 
+static cvar_t	*vm_linked;
+
 #define	MAX_VM		3
 vm_t	vmTable[MAX_VM];
 
@@ -73,6 +75,8 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "2", CVAR_ARCHIVE );	// !@# SHIP WITH SET TO 2
 	Cvar_Get( "vm_game", "2", CVAR_ARCHIVE );	// !@# SHIP WITH SET TO 2
 	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE );		// !@# SHIP WITH SET TO 2
+	vm_linked = Cvar_Get( "vm_linked", "1", 0 );
+	Cvar_SetDescription( vm_linked, "Use the game modules linked into the executable when running the base game" );
 
 	Cmd_AddCommand ("vmprofile", VM_VmProfile_f );
 	Cmd_AddCommand ("vminfo", VM_VmInfo_f );
@@ -536,8 +540,8 @@ vm_t *VM_Restart(vm_t *vm, qboolean unpure)
 {
 	vmHeader_t	*header;
 
-	// DLL's can't be restarted in place
-	if ( vm->dllHandle ) {
+	// native code can't be restarted in place
+	if ( vm->entryPoint ) {
 		char	name[MAX_QPATH];
 		intptr_t	(*systemCall)( intptr_t *parms );
 		
@@ -567,16 +571,68 @@ vm_t *VM_Restart(vm_t *vm, qboolean unpure)
 
 /*
 ================
+VM_FindLinked
+
+Game modules linked into the executable are the base game's code, so a mod
+still loads its own from its game directory.
+================
+*/
+static vmLinkedModule_t *VM_FindLinked( const char *module ) {
+	vmLinkedModule_t	*linked;
+
+	if ( !vm_linked->integer || Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) ) {
+		return NULL;
+	}
+
+	for ( linked = vm_linkedModules; linked->name; linked++ ) {
+		if ( !Q_stricmp( linked->name, module ) ) {
+			return linked;
+		}
+	}
+
+	return NULL;
+}
+
+/*
+================
+VM_ResetLinked
+
+Gives a linked module the data it had before its first load. Game code
+expects a fresh copy each time it's loaded, as a dll or .qvm gets.
+================
+*/
+static void VM_ResetLinked( vmLinkedModule_t *linked ) {
+	size_t	dataSize = linked->dataEnd - linked->data;
+
+	// the build brackets the module's objects with these markers; out of
+	// order, the linker didn't keep the module's data together
+	if ( linked->dataEnd <= linked->data || linked->bssEnd <= linked->bss ) {
+		Com_Error( ERR_FATAL, "VM_Create: the linked %s's data isn't in one piece", linked->name );
+	}
+
+	if ( !linked->initialData ) {
+		linked->initialData = Z_Malloc( dataSize );
+		Com_Memcpy( linked->initialData, linked->data, dataSize );
+		return;
+	}
+
+	Com_Memcpy( linked->data, linked->initialData, dataSize );
+	Com_Memset( linked->bss, 0, linked->bssEnd - linked->bss );
+}
+
+/*
+================
 VM_Create
 
-If image ends in .qvm it will be interpreted, otherwise
-it will attempt to load as a system dll
+Uses the module linked into the executable if there is one,
+otherwise searches the filesystem for a system dll or a .qvm
 ================
 */
 vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				vmInterpret_t interpret ) {
 	vm_t		*vm;
 	vmHeader_t	*header = NULL;
+	vmLinkedModule_t	*linked;
 	int			i, remaining, retval;
 	char filename[MAX_OSPATH];
 	void *startSearch = NULL;
@@ -609,6 +665,17 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
 	vm = &vmTable[i];
 
 	Q_strncpyz(vm->name, module, sizeof(vm->name));
+
+	linked = VM_FindLinked( module );
+	if ( linked ) {
+		Com_Printf( "Using linked %s\n", module );
+
+		VM_ResetLinked( linked );
+		vm->entryPoint = linked->vmMain;
+		vm->systemCall = systemCalls;
+		linked->dllEntry( VM_DllSyscall );
+		return vm;
+	}
 
 	do
 	{
@@ -953,8 +1020,8 @@ void VM_VmInfo_f( void ) {
 			break;
 		}
 		Com_Printf( "%s : ", vm->name );
-		if ( vm->dllHandle ) {
-			Com_Printf( "native\n" );
+		if ( vm->entryPoint ) {
+			Com_Printf( vm->dllHandle ? "native\n" : "linked\n" );
 			continue;
 		}
 		if ( vm->compiled ) {
