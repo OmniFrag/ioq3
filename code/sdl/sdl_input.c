@@ -344,24 +344,19 @@ IN_ActivateMouse
 */
 static void IN_ActivateMouse( qboolean isFullscreen )
 {
+	// in_nograb makes no sense in fullscreen mode
+	bool relative = isFullscreen || !in_nograb->integer;
+
 	if (!mouseAvailable || !SDL_WasInit( SDL_INIT_VIDEO ) )
 		return;
 
-	if( !mouseActive )
-	{
-		SDL_SetWindowRelativeMouseMode( SDL_window, true );
-		IN_GobbleMotionEvents( );
-	}
+	// SDL can refuse relative mode, e.g. on the web until the pointer is
+	// over the canvas; keep asking, while the mouse works meanwhile
+	if( SDL_GetWindowRelativeMouseMode( SDL_window ) != relative )
+		SDL_SetWindowRelativeMouseMode( SDL_window, relative );
 
-	// in_nograb makes no sense in fullscreen mode
-	if( !isFullscreen )
-	{
-		if( in_nograb->modified || !mouseActive )
-		{
-			SDL_SetWindowRelativeMouseMode( SDL_window, in_nograb->integer ? false : true );
-			in_nograb->modified = qfalse;
-		}
-	}
+	if( !mouseActive )
+		IN_GobbleMotionEvents( );
 
 	mouseActive = qtrue;
 }
