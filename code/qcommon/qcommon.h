@@ -252,6 +252,15 @@ PROTOCOL
 // NOTE: that stuff only works with two digits protocols
 extern int demo_protocols[];
 
+// The engine doesn't include the game modules' headers (bg_public.h). These
+// are the game values it relies on; game modules must keep them.
+#define	GT_FFA				0	// g_gametype
+#define	GT_SINGLE_PLAYER	2
+#define	PM_INTERMISSION		5	// playerState_t pm_type
+#define	PERS_SCORE			0	// playerState_t persistant[]
+#define	CS_WARMUP			5	// configstrings
+#define	CS_PLAYERS			(32 + MAX_MODELS + MAX_SOUNDS)
+
 #if !defined UPDATE_SERVER_NAME && !defined STANDALONE
 #define	UPDATE_SERVER_NAME	"update.quake3arena.com"
 #endif
