@@ -313,6 +313,11 @@ typedef struct {
 	qboolean	uiStarted;
 	qboolean	cgameStarted;
 
+	// the game modules asked for "resizeInPlace": they read glconfig every
+	// frame, so the window can change size without a vid_restart
+	qboolean	uiResizesInPlace;
+	qboolean	cgameResizesInPlace;
+
 	int			framecount;
 	int			frametime;			// msec since last frame
 
@@ -477,6 +482,7 @@ void CL_ClearPing( int n );
 int CL_GetPingQueueCount( void );
 
 void CL_ShutdownRef( void );
+qboolean CL_ResizeWindow( void );
 void CL_InitRef( void );
 qboolean CL_CDKeyValidate( const char *key, const char *checksum );
 int CL_ServerStatus( char *serverAddress, char *serverStatusString, int maxLen );

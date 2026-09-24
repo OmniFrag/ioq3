@@ -245,6 +245,58 @@ void FBO_Bind(FBO_t * fbo)
 
 /*
 ============
+FBO_Fit
+
+Gives a framebuffer its image's size, after R_ResizeScreenImages
+============
+*/
+static void FBO_Fit(FBO_t *fbo, image_t *image)
+{
+	if (!fbo || !image)
+		return;
+
+	fbo->width = image->width;
+	fbo->height = image->height;
+	R_CheckFBO(fbo);
+}
+
+/*
+============
+FBO_Resize
+
+Fits the framebuffers that cover the screen to their resized images,
+keeping the framebuffers and their attachments
+============
+*/
+void FBO_Resize(void)
+{
+	int i;
+
+	// with MSAA the render framebuffer renders into renderbuffers, which
+	// need new storage at the new size
+	if (tr.msaaResolveFbo)
+	{
+		int multisample = r_ext_framebuffer_multisample->integer;
+
+		tr.renderFbo->width = tr.renderDepthImage->width;
+		tr.renderFbo->height = tr.renderDepthImage->height;
+		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->colorFormat, 0, multisample);
+		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->depthFormat, 0, multisample);
+		FBO_Fit(tr.msaaResolveFbo, tr.renderDepthImage);
+	}
+
+	FBO_Fit(tr.renderFbo, tr.renderDepthImage);
+	FBO_Fit(tr.screenScratchFbo, tr.screenScratchImage);
+	FBO_Fit(tr.sunRaysFbo, tr.renderDepthImage);
+	FBO_Fit(tr.screenShadowFbo, tr.screenShadowImage);
+	for (i = 0; i < 2; i++)
+		FBO_Fit(tr.quarterFbo[i], tr.quarterImage[i]);
+	FBO_Fit(tr.hdrDepthFbo, tr.hdrDepthImage);
+	FBO_Fit(tr.screenSsaoFbo, tr.screenSsaoImage);
+}
+
+/*
+============
 FBO_Init
 ============
 */

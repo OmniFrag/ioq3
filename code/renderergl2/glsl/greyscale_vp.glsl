@@ -2,8 +2,10 @@ attribute vec4 attr_Position;
 attribute vec2 attr_TexCoord0;
 varying   vec2 var_TexCoords;
 
+uniform vec2 u_FBufScale;
+
 void main() {
-    vec2 clipXY = (attr_Position.xy * r_FBufScale) * 2.0 - 1.0;
+    vec2 clipXY = (attr_Position.xy * u_FBufScale) * 2.0 - 1.0;
     clipXY.y = -clipXY.y;
 
     gl_Position   = vec4(clipXY, 0.0, 1.0);

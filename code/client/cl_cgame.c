@@ -404,11 +404,18 @@ static int	FloatAsInt( float f ) {
 ====================
 CL_GetValue
 
-Answers trap_GetValue for the cgame module. Keys name engine extensions; there
-are none yet.
+Answers trap_GetValue for the cgame module. Keys name engine extensions.
 ====================
 */
 static qboolean CL_GetValue( char *value, int valueSize, const char *key ) {
+	// Game code that reads glconfig every frame asks for this, which lets
+	// the window change size without a vid_restart (CL_ResizeWindow)
+	if ( !Q_stricmp( key, "resizeInPlace" ) ) {
+		cls.cgameResizesInPlace = qtrue;
+		Q_strncpyz( value, "1", valueSize );
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
@@ -748,6 +755,7 @@ void CL_InitCGame( void ) {
 			interpret = VMI_COMPILED;
 	}
 
+	cls.cgameResizesInPlace = qfalse;
 	cgvm = VM_Create( "cgame", CL_CgameSystemCalls, interpret );
 	if ( !cgvm ) {
 		Com_Error( ERR_DROP, "VM_Create on cgame failed" );

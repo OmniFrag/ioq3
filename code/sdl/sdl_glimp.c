@@ -428,8 +428,14 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL display\n");
 
+#ifdef __EMSCRIPTEN__
+	// The page sizes the canvas, and SDL3 follows its size changes only for
+	// a resizable window
+	flags |= SDL_WINDOW_RESIZABLE;
+#else
 	if ( r_allowResize->integer )
 		flags |= SDL_WINDOW_RESIZABLE;
+#endif
 
 #ifdef USE_ICON
 	icon = SDL_CreateSurfaceFrom(
@@ -842,15 +848,9 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	SDL_ShowWindow( SDL_window );
 
-	// SDL3 windows are DPI aware: on a scaled display the window has more
-	// pixels than the screen coordinates it was created with, so render at
-	// its size in pixels. Fullscreen takes effect once the window is shown.
+	// fullscreen takes effect once the window is shown
 	SDL_SyncWindow( SDL_window );
-	if( SDL_GetWindowSizeInPixels( SDL_window, &glConfig.vidWidth, &glConfig.vidHeight ) &&
-		glConfig.vidHeight > 0 )
-	{
-		glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
-	}
+	GLimp_UpdateWindowSize( );
 	ri.Printf( PRINT_ALL, "Window: %dx%d pixels\n", glConfig.vidWidth, glConfig.vidHeight );
 
 	GLimp_DetectAvailableModes();
@@ -1203,6 +1203,31 @@ success:
 
 /*
 ===============
+GLimp_UpdateWindowSize
+
+Takes the renderer's size from the window's size in pixels. SDL3 windows
+are DPI aware, so on a scaled display the window has more pixels than the
+screen coordinates it was created with.
+===============
+*/
+qboolean GLimp_UpdateWindowSize( void )
+{
+	int width, height;
+
+	if( !SDL_window || !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) ||
+		width <= 0 || height <= 0 )
+	{
+		return qfalse;
+	}
+
+	glConfig.vidWidth = width;
+	glConfig.vidHeight = height;
+	glConfig.windowAspect = (float)width / (float)height;
+	return qtrue;
+}
+
+/*
+===============
 GLimp_EndFrame
 
 Responsible for doing a swapbuffers
@@ -1239,9 +1264,12 @@ void GLimp_EndFrame( void )
 		{
 			sdlToggled = SDL_SetWindowFullscreen( SDL_window, r_fullscreen->integer );
 
-			// SDL_WM_ToggleFullScreen didn't work, so do it the slow way
+			// SDL_WM_ToggleFullScreen didn't work, so do it the slow way;
+			// otherwise the new size arrives as a window resize
 			if( !sdlToggled )
 				ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
+			else
+				glConfig.isFullscreen = !!r_fullscreen->integer;
 
 			ri.IN_Restart( );
 		}
