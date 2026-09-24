@@ -440,15 +440,19 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 			CLIENT_WINDOW_ICON.bytes_per_pixel * CLIENT_WINDOW_ICON.width);
 #endif
 
-	// If a window exists, note its display index
+	// Use the window's display if a window exists, else the primary one.
+	// SDL3 display IDs aren't indexes: 0 means none.
 	if( SDL_window != NULL )
 	{
 		display = SDL_GetDisplayForWindow( SDL_window );
-		if( display < 0 )
+		if( !display )
 		{
-			ri.Printf( PRINT_DEVELOPER, "SDL_GetWindowDisplayIndex() failed: %s\n", SDL_GetError() );
-			display = 0;
+			ri.Printf( PRINT_DEVELOPER, "SDL_GetDisplayForWindow() failed: %s\n", SDL_GetError() );
 		}
+	}
+	if( !display )
+	{
+		display = SDL_GetPrimaryDisplay( );
 	}
 
 	desktopMode = SDL_GetDesktopDisplayMode( display );
@@ -777,20 +781,27 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 		if( fullscreen )
 		{
-			SDL_DisplayMode desiredMode;
+			// SDL3 only accepts modes the display has; NULL keeps the
+			// desktop's, which is what mode -2 asks for
+			SDL_DisplayMode closestMode;
+			const SDL_DisplayMode *fullscreenMode = NULL;
 
-			switch( testColorBits )
+			glConfig.displayFrequency = ri.Cvar_VariableIntegerValue( "r_displayRefresh" );
+			if( mode != -2 )
 			{
-				case 16: desiredMode.format = SDL_PIXELFORMAT_RGB565; break;
-				case 24: desiredMode.format = SDL_PIXELFORMAT_RGB24;  break;
-				default: ri.Printf( PRINT_DEVELOPER, "testColorBits is %d, can't fullscreen\n", testColorBits ); continue;
+				if( SDL_GetClosestFullscreenDisplayMode( display, glConfig.vidWidth, glConfig.vidHeight,
+						(float)glConfig.displayFrequency, true, &closestMode ) )
+				{
+					fullscreenMode = &closestMode;
+				}
+				else
+				{
+					ri.Printf( PRINT_DEVELOPER, "No fullscreen mode near %dx%d, using the desktop's: %s\n",
+						glConfig.vidWidth, glConfig.vidHeight, SDL_GetError( ) );
+				}
 			}
 
-			desiredMode.w = glConfig.vidWidth;
-			desiredMode.h = glConfig.vidHeight;
-			desiredMode.refresh_rate = glConfig.displayFrequency = ri.Cvar_VariableIntegerValue( "r_displayRefresh" );
-
-			if( !SDL_SetWindowFullscreenMode( SDL_window, &desiredMode ) )
+			if( !SDL_SetWindowFullscreenMode( SDL_window, fullscreenMode ) )
 			{
 				ri.Printf( PRINT_DEVELOPER, "SDL_SetWindowFullscreenMode failed: %s\n", SDL_GetError( ) );
 				continue;
@@ -798,16 +809,6 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 		}
 
 		SDL_SetWindowIcon( SDL_window, icon );
-
-		// SDL3 windows are DPI aware: on a scaled display the window has
-		// more pixels than the screen coordinates it was created with, so
-		// render at its size in pixels
-		SDL_SyncWindow( SDL_window );
-		if( SDL_GetWindowSizeInPixels( SDL_window, &glConfig.vidWidth, &glConfig.vidHeight ) &&
-			glConfig.vidHeight > 0 )
-		{
-			glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
-		}
 
 		qglClearColor( 0, 0, 0, 1 );
 		qglClear( GL_COLOR_BUFFER_BIT );
@@ -840,6 +841,17 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	}
 
 	SDL_ShowWindow( SDL_window );
+
+	// SDL3 windows are DPI aware: on a scaled display the window has more
+	// pixels than the screen coordinates it was created with, so render at
+	// its size in pixels. Fullscreen takes effect once the window is shown.
+	SDL_SyncWindow( SDL_window );
+	if( SDL_GetWindowSizeInPixels( SDL_window, &glConfig.vidWidth, &glConfig.vidHeight ) &&
+		glConfig.vidHeight > 0 )
+	{
+		glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
+	}
+	ri.Printf( PRINT_ALL, "Window: %dx%d pixels\n", glConfig.vidWidth, glConfig.vidHeight );
 
 	GLimp_DetectAvailableModes();
 
