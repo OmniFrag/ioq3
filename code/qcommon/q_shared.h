@@ -29,7 +29,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef STANDALONE
   #define PRODUCT_NAME				"iofoo3"
   #define BASEGAME					"foobar"
+  #ifndef CLIENT_WINDOW_TITLE // the build can set it (cmake/identity.cmake)
   #define CLIENT_WINDOW_TITLE		"changeme"
+  #endif
   #define CLIENT_WINDOW_MIN_TITLE	"changeme2"
   #define HOMEPATH_NAME_UNIX_LEGACY	".foo"
   #define HOMEPATH_NAME				"FooBar"
@@ -42,7 +44,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #else
   #define PRODUCT_NAME				"ioq3"
   #define BASEGAME					"baseq3"
+  #ifndef CLIENT_WINDOW_TITLE // the build can set it (cmake/identity.cmake)
   #define CLIENT_WINDOW_TITLE		"ioquake3"
+  #endif
   #define CLIENT_WINDOW_MIN_TITLE	"ioq3"
   #define HOMEPATH_NAME_UNIX_LEGACY	".q3a"
   #define HOMEPATH_NAME				"Quake3"

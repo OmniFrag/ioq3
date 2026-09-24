@@ -93,6 +93,14 @@ set_property(SOURCE
         code/sys/sys_main.c
     APPEND PROPERTY COMPILE_DEFINITIONS PRODUCT_VERSION="${PRODUCT_VERSION}")
 
+if(DEFINED CLIENT_WINDOW_TITLE)
+    set_property(SOURCE
+            code/client/cl_cgame.c
+            code/sdl/sdl_glimp.c
+            code/sys/con_win32.c
+        APPEND PROPERTY COMPILE_DEFINITIONS CLIENT_WINDOW_TITLE="${CLIENT_WINDOW_TITLE}")
+endif()
+
 # For CI to read from
 file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/version.txt CONTENT ${PRODUCT_VERSION})
 
