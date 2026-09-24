@@ -402,6 +402,18 @@ static int	FloatAsInt( float f ) {
 
 /*
 ====================
+CL_GetValue
+
+Answers trap_GetValue for the cgame module. Keys name engine extensions; there
+are none yet.
+====================
+*/
+static qboolean CL_GetValue( char *value, int valueSize, const char *key ) {
+	return qfalse;
+}
+
+/*
+====================
 CL_CgameSystemCalls
 
 The cgame module is making a system call
@@ -692,6 +704,9 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return re.GetEntityToken( VMA(1), args[2] );
 	case CG_R_INPVS:
 		return re.inPVS( VMA(1), VMA(2) );
+
+	case COM_TRAP_GETVALUE:
+		return CL_GetValue( VMA(1), args[2], VMA(3) );
 
 	default:
 	        assert(0);
