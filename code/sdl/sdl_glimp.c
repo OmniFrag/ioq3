@@ -799,6 +799,16 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 		SDL_SetWindowIcon( SDL_window, icon );
 
+		// SDL3 windows are DPI aware: on a scaled display the window has
+		// more pixels than the screen coordinates it was created with, so
+		// render at its size in pixels
+		SDL_SyncWindow( SDL_window );
+		if( SDL_GetWindowSizeInPixels( SDL_window, &glConfig.vidWidth, &glConfig.vidHeight ) &&
+			glConfig.vidHeight > 0 )
+		{
+			glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
+		}
+
 		qglClearColor( 0, 0, 0, 1 );
 		qglClear( GL_COLOR_BUFFER_BIT );
 		SDL_GL_SwapWindow( SDL_window );
