@@ -41,6 +41,8 @@ static SDL_Joystick *stick = NULL;
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
+// in a window, the player clicked into the game since it last lost focus
+static qboolean mouseClickedIn = qfalse;
 
 static cvar_t *in_mouse             = NULL;
 static cvar_t *in_nograb;
@@ -1148,6 +1150,17 @@ static void IN_ProcessEvents( void )
 
 			case SDL_EVENT_MOUSE_BUTTON_DOWN:
 			case SDL_EVENT_MOUSE_BUTTON_UP:
+#ifndef __EMSCRIPTEN__
+				// in a window, the click that captures the mouse (IN_Frame)
+				// isn't a key press. Only that click: the mouse is also
+				// inactive with in_mouse 0, the console down, or loading.
+				if( !mouseClickedIn && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN )
+				{
+					mouseClickedIn = qtrue;
+					break;
+				}
+#endif
+
 				{
 					int b;
 					switch( e.button.button )
@@ -1194,7 +1207,7 @@ static void IN_ProcessEvents( void )
 			case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 			case SDL_EVENT_WINDOW_RESTORED:
 			case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
-			case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); break;
+			case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
 			case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
 
 			// the window manager, the browser or its Esc key can change
@@ -1249,6 +1262,11 @@ void IN_Frame( void )
 	// update isFullscreen since it might of changed since the last vid_restart
 	cls.glconfig.isFullscreen = Cvar_VariableIntegerValue( "r_fullscreen" ) != 0;
 
+	// a player in fullscreen is in the game, and stays in it if they switch
+	// to a window
+	if( cls.glconfig.isFullscreen )
+		mouseClickedIn = qtrue;
+
 	if( !cls.glconfig.isFullscreen && ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) )
 	{
 		// Console is down in windowed mode
@@ -1264,6 +1282,15 @@ void IN_Frame( void )
 		// Window not got focus
 		IN_DeactivateMouse( cls.glconfig.isFullscreen );
 	}
+#ifndef __EMSCRIPTEN__
+	else if( !mouseClickedIn )
+	{
+		// A window the player hasn't clicked into since it got focus, e.g.
+		// by its title bar to drag it: leave the mouse free. A browser asks
+		// for a click before it locks the pointer anyway.
+		IN_DeactivateMouse( cls.glconfig.isFullscreen );
+	}
+#endif
 	else
 		IN_ActivateMouse( cls.glconfig.isFullscreen );
 
