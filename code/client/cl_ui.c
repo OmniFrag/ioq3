@@ -714,6 +714,18 @@ static int FloatAsInt( float f ) {
 
 /*
 ====================
+UI_GetValue
+
+Answers trap_GetValue for the ui module. Keys name engine extensions; there
+are none yet.
+====================
+*/
+static qboolean UI_GetValue( char *value, int valueSize, const char *key ) {
+	return qfalse;
+}
+
+/*
+====================
 CL_UISystemCalls
 
 The ui module is making a system call
@@ -1072,6 +1084,9 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case UI_VERIFY_CDKEY:
 		return CL_CDKeyValidate(VMA(1), VMA(2));
 		
+	case COM_TRAP_GETVALUE:
+		return UI_GetValue( VMA(1), args[2], VMA(3) );
+
 	default:
 		Com_Error( ERR_DROP, "Bad UI system trap: %ld", (long int) args[0] );
 

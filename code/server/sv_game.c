@@ -284,6 +284,18 @@ static int	FloatAsInt( float f ) {
 
 /*
 ====================
+SV_GetValue
+
+Answers trap_GetValue for the game module. Keys name engine extensions; there
+are none yet.
+====================
+*/
+static qboolean SV_GetValue( char *value, int valueSize, const char *key ) {
+	return qfalse;
+}
+
+/*
+====================
 SV_GameSystemCalls
 
 The module is making a system call
@@ -842,6 +854,9 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case TRAP_CEIL:
 		return FloatAsInt( ceil( VMF(1) ) );
 
+
+	case COM_TRAP_GETVALUE:
+		return SV_GetValue( VMA(1), args[2], VMA(3) );
 
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );
