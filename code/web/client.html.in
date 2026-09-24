@@ -44,6 +44,22 @@ const dataURL = new URL(dataPath, location.origin + location.pathname);
 const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {files: []}})
   : fetch(configFilename).then(r => r.ok ? r.json() : { /* empty config */ });
 
+// Ask for raw mouse input when locking the pointer. Without it, Chromium on
+// Windows sometimes reports a huge movementY that snaps the view straight up
+// or down. Browsers without raw input either ignore the option or reject
+// the request with NotSupportedError (Chrome on Linux); only that rejection
+// falls back to a plain lock. Other failures, such as a request made during
+// a fullscreen change, must not quietly downgrade to it.
+const requestPointerLock = Element.prototype.requestPointerLock;
+Element.prototype.requestPointerLock = function (options) {
+    const request = requestPointerLock.call(this, { ...options, unadjustedMovement: true });
+    request?.catch?.((e) => {
+        if (e?.name === 'NotSupportedError')
+            requestPointerLock.call(this, options)?.catch?.(() => {});
+    });
+    return request;
+};
+
 const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
 ioquake3({
     canvas: canvas,
