@@ -35,6 +35,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../sys/sys_local.h"
 #include "sdl_icon.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 typedef enum
 {
 	RSERR_OK,
@@ -430,7 +434,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 #ifdef __EMSCRIPTEN__
 	// The page sizes the canvas, and SDL3 follows its size changes only for
-	// a resizable window
+	// a resizable window.
 	flags |= SDL_WINDOW_RESIZABLE;
 #else
 	if ( r_allowResize->integer )
@@ -1120,6 +1124,15 @@ void GLimp_Init( qboolean fixedFunction )
 		ri.Cvar_Set( "com_abnormalExit", "0" );
 	}
 
+#ifdef __EMSCRIPTEN__
+	// The page owns browser fullscreen (client.html), and r_fullscreen
+	// follows it, starting off; the page enters it on a click. A window
+	// made fullscreen by SDL would keep getting the display's size instead
+	// of the page's.
+	ri.Cvar_Set( "r_fullscreen", "0" );
+	r_fullscreen->modified = qfalse;
+#endif
+
 	ri.Sys_GLimpInit( );
 
 	// Create the window and set up the context
@@ -1241,6 +1254,15 @@ void GLimp_EndFrame( void )
 		SDL_GL_SwapWindow( SDL_window );
 	}
 
+#ifdef __EMSCRIPTEN__
+	// the page owns browser fullscreen; changing r_fullscreen, e.g. with
+	// Alt+Enter, toggles it, which the key press lets the page do
+	if( r_fullscreen->modified )
+	{
+		MAIN_THREAD_EM_ASM({ Module.setFullscreen?.($0); }, r_fullscreen->integer);
+		r_fullscreen->modified = qfalse;
+	}
+#else
 	if( r_fullscreen->modified )
 	{
 		int         fullscreen;
@@ -1276,4 +1298,5 @@ void GLimp_EndFrame( void )
 
 		r_fullscreen->modified = qfalse;
 	}
+#endif
 }

@@ -1960,7 +1960,14 @@ void CL_Vid_Restart_f( void ) {
 		// shutdown the CGame
 		CL_ShutdownCGame();
 		// shutdown the renderer and clear the renderer interface
+#ifdef __EMSCRIPTEN__
+		// but keep the window: the page decides the canvas's size, and a new
+		// window loses browser fullscreen until the next click
+		if ( re.Shutdown )
+			re.Shutdown( qfalse );
+#else
 		CL_ShutdownRef();
+#endif
 		// client is no longer pure until new checksums are sent
 		CL_ResetPureClientAtServer();
 		// clear pak references
