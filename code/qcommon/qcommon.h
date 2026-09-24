@@ -374,6 +374,14 @@ typedef struct {
 
 extern vmLinkedModule_t vm_linkedModules[];
 
+// Game modules look up engine extensions by name, as in Quake3e: the
+// "//trap_GetValue" cvar holds this syscall number, which every module
+// accepts as trap_GetValue( char *value, int valueSize, const char *key ).
+// It writes the key's value, such as an extension's syscall number, and
+// returns whether the engine knows the key. New features become new keys,
+// so the fixed syscall numbers don't change.
+#define	COM_TRAP_GETVALUE	700
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );
