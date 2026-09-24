@@ -220,11 +220,12 @@ void GL_CheckErrors( void ) {
 	int		err;
 	char	s[64];
 
-	err = qglGetError();
-	if ( err == GL_NO_ERROR ) {
+	// glGetError is a synchronous round trip in WebGL and on some drivers
+	if ( r_ignoreGLErrors->integer ) {
 		return;
 	}
-	if ( r_ignoreGLErrors->integer ) {
+	err = qglGetError();
+	if ( err == GL_NO_ERROR ) {
 		return;
 	}
 	switch( err ) {
