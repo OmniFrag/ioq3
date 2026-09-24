@@ -359,6 +359,21 @@ typedef enum {
 
 typedef intptr_t (QDECL *vmMainProc)(int callNum, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11);
 
+// A game module linked into the executable: the entry points a game dll
+// exports, and the bounds of the module's data, which VM_Create resets on
+// every load as reloading a dll would. The build generates vm_linkedModules,
+// which ends with a NULL name.
+typedef struct {
+	const char	*name;		// "qagame", "cgame" or "ui"
+	vmMainProc	vmMain;
+	void		(*dllEntry)( intptr_t (QDECL *syscallptr)( intptr_t arg, ... ) );
+	byte		*data, *dataEnd;	// initialized data
+	byte		*bss, *bssEnd;		// zero-initialized data
+	byte		*initialData;		// a copy of the data, taken before the first load
+} vmLinkedModule_t;
+
+extern vmLinkedModule_t vm_linkedModules[];
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );

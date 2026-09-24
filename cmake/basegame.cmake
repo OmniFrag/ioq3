@@ -1,7 +1,8 @@
-if(NOT BUILD_BASEGAME OR (NOT BUILD_GAME_LIBRARIES AND NOT BUILD_GAME_QVMS))
+if(NOT BUILD_BASEGAME OR (NOT BUILD_GAME_LIBRARIES AND NOT BUILD_GAME_QVMS AND NOT BUILD_GAME_LINKED))
     return()
 endif()
 
+include(utils/linked_game_module)
 include(utils/qvm_tools)
 include(utils/set_output_dirs)
 
@@ -180,4 +181,18 @@ if(BUILD_GAME_QVMS)
         OUTPUT_NAME ${UI_MODULE}
         OUTPUT_DIRECTORY ${BASEGAME}/vm
         SOURCES ${UI_SOURCES_BASEGAME} ${UI_QVM_SOURCES})
+endif()
+
+if(BUILD_GAME_LINKED)
+    add_linked_game_module(${CGAME_MODULE}
+        DEFINITIONS CGAME
+        SOURCES ${CGAME_SOURCES_BASEGAME} ${CGAME_BINARY_SOURCES})
+
+    add_linked_game_module(${GAME_MODULE}
+        DEFINITIONS QAGAME
+        SOURCES ${GAME_SOURCES_BASEGAME} ${GAME_BINARY_SOURCES})
+
+    add_linked_game_module(${UI_MODULE}
+        DEFINITIONS UI
+        SOURCES ${UI_SOURCES_BASEGAME} ${UI_BINARY_SOURCES})
 endif()
