@@ -1143,12 +1143,9 @@ static void IN_ProcessEvents( void )
 				Cbuf_ExecuteText(EXEC_NOW, "quit Closed window\n");
 				break;
 
-			case SDL_EVENT_WINDOW_RESIZED:
+			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
 				{
 					int width, height;
-
-					width = e.window.data1;
-					height = e.window.data2;
 
 					// ignore this event on fullscreen
 					if( cls.glconfig.isFullscreen )
@@ -1156,8 +1153,15 @@ static void IN_ProcessEvents( void )
 						break;
 					}
 
-					// check if size actually changed
-					if( cls.glconfig.vidWidth == width && cls.glconfig.vidHeight == height )
+					// check if size actually changed; the renderer's size
+					// is in pixels (GLimp_SetMode)
+					if( cls.glconfig.vidWidth == e.window.data1 && cls.glconfig.vidHeight == e.window.data2 )
+					{
+						break;
+					}
+
+					// the window is created in screen coordinates
+					if( !SDL_GetWindowSize( SDL_window, &width, &height ) )
 					{
 						break;
 					}
