@@ -2253,6 +2253,8 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 	}
 
 	image->internalFormat = internalFormat;
+	image->dataFormat = dataFormat;
+	image->dataType = dataType;
 
 	// Possibly scale image before uploading.
 	// if not rgba8 and uploading an image, skip picmips.
@@ -2878,6 +2880,7 @@ void R_CreateBuiltinImages( void ) {
 	{
 		int width, height, hdrFormat, rgbFormat;
 
+		// R_ResizeScreenImages resizes the images sized from these
 		width = glConfig.vidWidth;
 		height = glConfig.vidHeight;
 
@@ -2955,6 +2958,53 @@ void R_CreateBuiltinImages( void ) {
 	}
 }
 
+
+/*
+===============
+R_ResizeImage
+
+Gives an image storage of a new size, keeping its texture object and so
+the framebuffers it's attached to. Only for images created without data
+or mipmaps, as the screen-sized ones are.
+===============
+*/
+static void R_ResizeImage( image_t *image, int width, int height )
+{
+	if ( !image )
+		return;
+
+	width = MAX( 1, width );
+	height = MAX( 1, height );
+	image->width = image->uploadWidth = width;
+	image->height = image->uploadHeight = height;
+
+	qglTextureImage2DEXT( image->texnum, GL_TEXTURE_2D, 0, image->internalFormat, width, height, 0,
+		image->dataFormat, image->dataType, NULL );
+}
+
+/*
+===============
+R_ResizeScreenImages
+
+Resizes the images R_CreateBuiltinImages sizes from the screen, after the
+window changed size
+===============
+*/
+void R_ResizeScreenImages( void )
+{
+	int width = glConfig.vidWidth, height = glConfig.vidHeight;
+	int i;
+
+	R_ResizeImage( tr.renderImage, width, height );
+	R_ResizeImage( tr.screenScratchImage, width, height );
+	R_ResizeImage( tr.hdrDepthImage, width, height );
+	R_ResizeImage( tr.sunRaysImage, width, height );
+	R_ResizeImage( tr.renderDepthImage, width, height );
+	R_ResizeImage( tr.screenShadowImage, width, height );
+	for ( i = 0; i < 2; i++ )
+		R_ResizeImage( tr.quarterImage[i], width / 2, height / 2 );
+	R_ResizeImage( tr.screenSsaoImage, width / 2, height / 2 );
+}
 
 /*
 ===============

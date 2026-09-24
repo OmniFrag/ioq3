@@ -55,6 +55,7 @@ typedef struct image_s {
 	int			frameUsed;			// for texture usage in frame statistics
 
 	int			internalFormat;
+	GLenum		dataFormat, dataType;	// what renderergl2 allocated its storage with
 	int			TMU;				// only needed for voodoo2
 
 	imgType_t   type;
@@ -160,6 +161,7 @@ IMPLEMENTATION SPECIFIC FUNCTIONS
 void		GLimp_Init( qboolean fixedFunction );
 void		GLimp_Shutdown( void );
 void		GLimp_EndFrame( void );
+qboolean	GLimp_UpdateWindowSize( void );
 
 void		GLimp_LogComment( char *comment );
 void		GLimp_Minimize(void);

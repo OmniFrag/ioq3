@@ -296,6 +296,12 @@ static void InitOpenGL( void )
 			glRefConfig.glslMaxAnimatedBones = 0;
 		}
 	}
+	else
+	{
+		// the window outlived the last renderer (vid_restart on the web)
+		// and may have changed size since
+		GLimp_UpdateWindowSize();
+	}
 
 	// check for GLSL function textureCubeLod()
 	if ( r_cubeMapping->integer && !QGL_VERSION_ATLEAST( 3, 0 ) ) {
@@ -1583,6 +1589,30 @@ void R_Init( void ) {
 }
 
 /*
+=============
+RE_ResizeWindow
+
+Follows a change in the window's size: the images and framebuffers that
+cover the screen, if any, get new storage in place.
+=============
+*/
+static qboolean RE_ResizeWindow( glconfig_t *config ) {
+	// finish what was queued at the old size
+	R_IssuePendingRenderCommands();
+
+	if ( !GLimp_UpdateWindowSize() ) {
+		return qfalse;
+	}
+
+	R_ResizeScreenImages();
+	FBO_Resize();
+
+	ri.Printf( PRINT_ALL, "Window resized to %dx%d pixels\n", glConfig.vidWidth, glConfig.vidHeight );
+	*config = glConfig;
+	return qtrue;
+}
+
+/*
 ===============
 RE_Shutdown
 ===============
@@ -1676,6 +1706,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	// the RE_ functions are Renderer Entry points
 
 	re.Shutdown = RE_Shutdown;
+	re.ResizeWindow = RE_ResizeWindow;
 
 	re.BeginRegistration = RE_BeginRegistration;
 	re.RegisterModel = RE_RegisterModel;

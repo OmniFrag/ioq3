@@ -716,11 +716,18 @@ static int FloatAsInt( float f ) {
 ====================
 UI_GetValue
 
-Answers trap_GetValue for the ui module. Keys name engine extensions; there
-are none yet.
+Answers trap_GetValue for the ui module. Keys name engine extensions.
 ====================
 */
 static qboolean UI_GetValue( char *value, int valueSize, const char *key ) {
+	// Game code that reads glconfig every frame asks for this, which lets
+	// the window change size without a vid_restart (CL_ResizeWindow)
+	if ( !Q_stricmp( key, "resizeInPlace" ) ) {
+		cls.uiResizesInPlace = qtrue;
+		Q_strncpyz( value, "1", valueSize );
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
@@ -1131,6 +1138,7 @@ void CL_InitUI( void ) {
 			interpret = VMI_COMPILED;
 	}
 
+	cls.uiResizesInPlace = qfalse;
 	uivm = VM_Create( "ui", CL_UISystemCalls, interpret );
 	if ( !uivm ) {
 		Com_Error( ERR_FATAL, "VM_Create on UI failed" );
