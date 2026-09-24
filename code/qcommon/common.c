@@ -3078,6 +3078,98 @@ int Com_TimeVal(int minMsec)
 	return timeVal;
 }
 
+static int	com_lastFrameTime = 0;
+static int	com_frameMinMsec = -1;	// how long the frame Com_WaitFrame waits for takes
+
+/*
+=================
+Com_FrameMinMsec
+
+How long the next frame takes at least
+=================
+*/
+static int Com_FrameMinMsec( void ) {
+	static int	bias = 0;
+	int		minMsec, timeVal;
+
+	if(com_timedemo->integer)
+		return 1;
+
+	if(com_dedicated->integer)
+		return SV_FrameMsec();
+
+	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
+		minMsec = 1000 / com_maxfpsMinimized->integer;
+	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
+		minMsec = 1000 / com_maxfpsUnfocused->integer;
+	else if(com_maxfps->integer > 0)
+		minMsec = 1000 / com_maxfps->integer;
+	else
+		minMsec = 1;
+
+	timeVal = com_frameTime - com_lastFrameTime;
+	bias += timeVal - minMsec;
+
+	if(bias > minMsec)
+		bias = minMsec;
+
+	// Adjust minMsec if previous frame took too long to render so
+	// that framerate is stable at the requested value.
+	return minMsec - bias;
+}
+
+/*
+=================
+Com_FrameDue
+
+Whether the next frame is due, without waiting for it
+=================
+*/
+qboolean Com_FrameDue( void ) {
+	if(com_frameMinMsec < 0)
+		com_frameMinMsec = Com_FrameMinMsec();
+
+	return !Com_TimeVal(com_frameMinMsec);
+}
+
+/*
+=================
+Com_WaitFrame
+
+Sleeps toward the next frame, and returns whether it's due. The main loop
+calls it until it is, then Com_Frame, and can handle input in between. The
+last millisecond passes here.
+=================
+*/
+qboolean Com_WaitFrame( void ) {
+	int		timeVal, timeValSV;
+
+	if(com_frameMinMsec < 0)
+		com_frameMinMsec = Com_FrameMinMsec();
+
+	do
+	{
+		if(com_sv_running->integer)
+		{
+			timeValSV = SV_SendQueuedPackets();
+			
+			timeVal = Com_TimeVal(com_frameMinMsec);
+
+			if(timeValSV < timeVal)
+				timeVal = timeValSV;
+		}
+		else
+			timeVal = Com_TimeVal(com_frameMinMsec);
+		
+		if(com_busyWait->integer || timeVal < 1)
+			NET_Sleep(0);
+		else
+			NET_Sleep(timeVal - 1);
+	} while(timeVal < 2 && Com_TimeVal(com_frameMinMsec));
+
+	return !Com_TimeVal(com_frameMinMsec);
+}
+
 /*
 =================
 Com_Frame
@@ -3085,9 +3177,7 @@ Com_Frame
 */
 void Com_Frame( void ) {
 
-	int		msec, minMsec;
-	int		timeVal, timeValSV;
-	static int	lastTime = 0, bias = 0;
+	int		msec;
  
 	int		timeBeforeFirstEvents;
 	int		timeBeforeServer;
@@ -3116,62 +3206,15 @@ void Com_Frame( void ) {
 		timeBeforeFirstEvents = Sys_Milliseconds ();
 	}
 
-	// Figure out how much time we have
-	if(!com_timedemo->integer)
-	{
-		if(com_dedicated->integer)
-			minMsec = SV_FrameMsec();
-		else
-		{
-			if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
-				minMsec = 1000 / com_maxfpsMinimized->integer;
-			else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
-				minMsec = 1000 / com_maxfpsUnfocused->integer;
-			else if(com_maxfps->integer > 0)
-				minMsec = 1000 / com_maxfps->integer;
-			else
-				minMsec = 1;
-			
-			timeVal = com_frameTime - lastTime;
-			bias += timeVal - minMsec;
-			
-			if(bias > minMsec)
-				bias = minMsec;
-			
-			// Adjust minMsec if previous frame took too long to render so
-			// that framerate is stable at the requested value.
-			minMsec -= bias;
-		}
-	}
-	else
-		minMsec = 1;
-
-	do
-	{
-		if(com_sv_running->integer)
-		{
-			timeValSV = SV_SendQueuedPackets();
-			
-			timeVal = Com_TimeVal(minMsec);
-
-			if(timeValSV < timeVal)
-				timeVal = timeValSV;
-		}
-		else
-			timeVal = Com_TimeVal(minMsec);
-		
-		if(com_busyWait->integer || timeVal < 1)
-			NET_Sleep(0);
-		else
-			NET_Sleep(timeVal - 1);
-	} while(Com_TimeVal(minMsec));
+	// the next Com_WaitFrame waits for the next frame
+	com_frameMinMsec = -1;
 	
 	IN_Frame();
 
-	lastTime = com_frameTime;
+	com_lastFrameTime = com_frameTime;
 	com_frameTime = Com_EventLoop();
 	
-	msec = com_frameTime - lastTime;
+	msec = com_frameTime - com_lastFrameTime;
 
 	Cbuf_Execute ();
 
