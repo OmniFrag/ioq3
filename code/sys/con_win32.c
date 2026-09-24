@@ -193,7 +193,9 @@ static void CON_Show( void )
 	CHAR_INFO line[ MAX_EDIT_LINE ];
 	WORD attrib;
 
-	GetConsoleScreenBufferInfo( qconsole_hout, &binfo );
+	// output isn't a console, e.g. it's redirected to a file
+	if( !GetConsoleScreenBufferInfo( qconsole_hout, &binfo ) )
+		return;
 
 	// if we're in the middle of printf, don't bother writing the buffer
 	if( !qconsole_drawinput )
