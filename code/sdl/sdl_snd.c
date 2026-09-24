@@ -197,12 +197,17 @@ qboolean SNDDMA_Init(void)
 	if (!SDL_GetAudioDeviceFormat(sdlPlaybackDevice, &obtained, &sample_frames))
 	{
 		Com_Printf("SDL_GetAudioDeviceFormat() failed: %s\n", SDL_GetError());
-		// Use desired format if we can't get the actual format
-		obtained = desired;
 		sample_frames = 1024;
 	}
+	else
+		SNDDMA_PrintAudiospec("SDL_AudioSpec", &obtained);
 
-	SNDDMA_PrintAudiospec("SDL_AudioSpec", &obtained);
+	// Mix in the format the stream was opened for (s_sdlBits, s_sdlSpeed,
+	// s_sdlChannels); it converts that to the device's. The device's own
+	// format can be one the mixer doesn't write, and data mixed as floats
+	// but read as 16-bit integers is static. The device's buffer size
+	// still sizes ours.
+	obtained = desired;
 
 	// dma.samples needs to be big, or id's mixer will just refuse to
 	//  work at all; we need to keep it significantly bigger than the
@@ -324,6 +329,7 @@ Send sound to device if buffer isn't really the dma buffer
 */
 void SNDDMA_Submit(void)
 {
+	SDL_UnlockAudioStream(sdlPlaybackStream);
 }
 
 /*
@@ -333,6 +339,8 @@ SNDDMA_BeginPainting
 */
 void SNDDMA_BeginPainting (void)
 {
+	// the audio callback runs with the stream locked
+	SDL_LockAudioStream(sdlPlaybackStream);
 }
 
 
