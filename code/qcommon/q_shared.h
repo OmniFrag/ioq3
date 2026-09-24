@@ -152,11 +152,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   Remember, if you use a C library function that is not defined in bg_lib.c,
   you will have to add your own version for support in the VM.
 
+  bg_lib.h is found through the include path, so each game module uses its
+  own.
+
  **********************************************************************/
 
 #ifdef Q3_VM
 
-#include "../game/bg_lib.h"
+#include "bg_lib.h"
 
 typedef int intptr_t;
 
