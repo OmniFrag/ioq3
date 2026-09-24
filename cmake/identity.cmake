@@ -12,6 +12,8 @@ endmacro()
 
 set_identity(SERVER_NAME ioq3ded)
 set_identity(CLIENT_NAME ioquake3)
+# CLIENT_WINDOW_TITLE, the name on the window and in the taskbar, defaults to
+# the one in q_shared.h
 
 set(BASEGAME baseq3)
 
