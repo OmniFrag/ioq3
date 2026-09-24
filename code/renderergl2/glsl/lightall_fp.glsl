@@ -18,6 +18,7 @@ uniform sampler2D u_SpecularMap;
 
 #if defined(USE_SHADOWMAP)
 uniform sampler2D u_ShadowMap;
+uniform vec2 u_FBufScale;
 #endif
 
 #if defined(USE_CUBEMAP)
@@ -342,7 +343,7 @@ void main()
 	N = normalize(N);
 
   #if defined(USE_SHADOWMAP) 
-	vec2 shadowTex = gl_FragCoord.xy * r_FBufScale;
+	vec2 shadowTex = gl_FragCoord.xy * u_FBufScale;
 	float shadowValue = texture2D(u_ShadowMap, shadowTex).r;
 
 	// surfaces not facing the light are always shadowed

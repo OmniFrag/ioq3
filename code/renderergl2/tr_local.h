@@ -710,6 +710,8 @@ typedef enum
 
 	UNIFORM_GREYSCALE,
 
+	UNIFORM_FBUFSCALE, // 1 / the screen's width and height
+
 	UNIFORM_COUNT
 } uniform_t;
 
@@ -2003,6 +2005,7 @@ void	R_ScreenShot_f( void );
 void	R_InitFogTable( void );
 float	R_FogFactor( float s, float t );
 void	R_InitImages( void );
+void	R_ResizeScreenImages( void );
 void	R_DeleteTextures( void );
 int		R_SumOfUsedImages( void );
 void	R_InitSkins( void );

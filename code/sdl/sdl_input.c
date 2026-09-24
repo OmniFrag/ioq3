@@ -1000,6 +1000,54 @@ static void IN_JoyMove( void )
 
 /*
 ===============
+IN_WindowResized
+===============
+*/
+static void IN_WindowResized( void )
+{
+	int width, height;
+
+	// check if size actually changed; the renderer's size is in pixels
+	// (GLimp_SetMode)
+	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) ||
+		( cls.glconfig.vidWidth == width && cls.glconfig.vidHeight == height ) )
+	{
+		return;
+	}
+
+	// follow it without a restart if we can
+	if( CL_ResizeWindow( ) )
+	{
+		return;
+	}
+
+	// else restart. A window restarts at its new size; in fullscreen the
+	// size follows the display mode, so r_mode stays, but the renderer
+	// still needs the restart: toggling fullscreen changes the window's
+	// size (GLimp_EndFrame). Ask the window: IN_Frame sets
+	// cls.glconfig.isFullscreen from r_fullscreen, which on the web
+	// doesn't make the window fullscreen (GLimp_SetMode).
+	if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
+	{
+		// the window is created in screen coordinates
+		if( !SDL_GetWindowSize( SDL_window, &width, &height ) )
+		{
+			return;
+		}
+
+		Cvar_SetValue( "r_customwidth", width );
+		Cvar_SetValue( "r_customheight", height );
+		Cvar_Set( "r_mode", "-1" );
+	}
+
+	// Wait until user stops dragging for 1 second, so
+	// we aren't constantly recreating the GL context while
+	// they try to drag...
+	vidRestartTime = Sys_Milliseconds( ) + 1000;
+}
+
+/*
+===============
 IN_ProcessEvents
 ===============
 */
@@ -1008,6 +1056,7 @@ static void IN_ProcessEvents( void )
 	SDL_Event e;
 	keyNum_t key = 0;
 	static keyNum_t lastKeyDown = 0;
+	qboolean windowResized = qfalse;
 
 	if( !SDL_WasInit( SDL_INIT_VIDEO ) )
 			return;
@@ -1139,37 +1188,7 @@ static void IN_ProcessEvents( void )
 				break;
 
 			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-				{
-					int width, height;
-
-					// ignore this event on fullscreen
-					if( cls.glconfig.isFullscreen )
-					{
-						break;
-					}
-
-					// check if size actually changed; the renderer's size
-					// is in pixels (GLimp_SetMode)
-					if( cls.glconfig.vidWidth == e.window.data1 && cls.glconfig.vidHeight == e.window.data2 )
-					{
-						break;
-					}
-
-					// the window is created in screen coordinates
-					if( !SDL_GetWindowSize( SDL_window, &width, &height ) )
-					{
-						break;
-					}
-
-					Cvar_SetValue( "r_customwidth", width );
-					Cvar_SetValue( "r_customheight", height );
-					Cvar_Set( "r_mode", "-1" );
-
-					// Wait until user stops dragging for 1 second, so
-					// we aren't constantly recreating the GL context while
-					// they try to drag...
-					vidRestartTime = Sys_Milliseconds( ) + 1000;
-				}
+				windowResized = qtrue;
 				break;
 
 			case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
@@ -1202,6 +1221,10 @@ static void IN_ProcessEvents( void )
 				break;
 		}
 	}
+
+	// dragging a window's edge can bring several sizes in one frame
+	if( windowResized )
+		IN_WindowResized( );
 }
 
 /*

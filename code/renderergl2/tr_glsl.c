@@ -158,7 +158,9 @@ static uniformInfo_t uniformsInfo[] =
 	{ "u_AlphaTest", GLSL_INT },
 
 	{ "u_BoneMatrix", GLSL_MAT16_BONEMATRIX },
-	{ "u_Greyscale", GLSL_FLOAT }
+	{ "u_Greyscale", GLSL_FLOAT },
+
+	{ "u_FBufScale", GLSL_VEC2 }
 };
 
 typedef enum
@@ -245,8 +247,6 @@ static void GLSL_PrintLog(GLuint programOrShader, glslPrintLog_t type, qboolean 
 
 static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *dest, int size )
 {
-	float fbufWidthScale, fbufHeightScale;
-
 	dest[0] = '\0';
 
 	// HACK: abuse the GLSL preprocessor to turn GLSL 1.20 shaders into 1.30 ones
@@ -381,11 +381,6 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 								"#endif\n",
 								AGEN_LIGHTING_SPECULAR,
 								AGEN_PORTAL));
-
-	fbufWidthScale = 1.0f / ((float)glConfig.vidWidth);
-	fbufHeightScale = 1.0f / ((float)glConfig.vidHeight);
-	Q_strcat(dest, size,
-			 va("#ifndef r_FBufScale\n#define r_FBufScale vec2(%f, %f)\n#endif\n", fbufWidthScale, fbufHeightScale));
 
 	if (r_pbr->integer)
 		Q_strcat(dest, size, "#define USE_PBR\n");
@@ -1610,6 +1605,16 @@ void GLSL_BindProgram(shaderProgram_t * program)
 
 	if (GL_UseProgram(programObject))
 		backEnd.pc.c_glslShaderBinds++;
+
+	// the screen's size can change without recompiling the shaders
+	if (program && program->uniforms[UNIFORM_FBUFSCALE] != -1)
+	{
+		vec2_t fbufScale;
+
+		fbufScale[0] = 1.0f / glConfig.vidWidth;
+		fbufScale[1] = 1.0f / glConfig.vidHeight;
+		GLSL_SetUniformVec2(program, UNIFORM_FBUFSCALE, fbufScale);
+	}
 }
 
 
