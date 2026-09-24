@@ -53,7 +53,6 @@ SDL_Window *SDL_window = NULL;
 static SDL_GLContext SDL_glContext = NULL;
 
 cvar_t *r_allowSoftwareGL; // Don't abort out if a hardware visual can't be obtained
-cvar_t *r_allowResize; // make window resizable
 cvar_t *r_centerWindow;
 cvar_t *r_sdlDriver;
 cvar_t *r_preferOpenGLES;
@@ -408,6 +407,57 @@ static void GLimp_ClearProcAddresses( void ) {
 
 /*
 ===============
+GLimp_WindowedSize
+
+A window as big as the desktop looks fullscreen, so a window at the desktop
+resolution gets three quarters of the display's usable area
+===============
+*/
+static void GLimp_WindowedSize( SDL_DisplayID display, int *width, int *height )
+{
+	SDL_Rect usable;
+
+	if( display && SDL_GetDisplayUsableBounds( display, &usable ) )
+	{
+		*width = usable.w * 3 / 4;
+		*height = usable.h * 3 / 4;
+	}
+}
+
+/*
+===============
+GLimp_FitWindow
+
+Leaving fullscreen gives the window back its size from before, which may
+nearly cover the desktop (r_mode -2): shrink and center it
+===============
+*/
+static void GLimp_FitWindow( void )
+{
+	SDL_DisplayID display = SDL_GetDisplayForWindow( SDL_window );
+	SDL_Rect usable;
+	int width, height;
+
+	if( !display || !SDL_GetDisplayUsableBounds( display, &usable ) ||
+		!SDL_GetWindowSize( SDL_window, &width, &height ) )
+	{
+		return;
+	}
+
+	// window borders keep one a little smaller than the usable area
+	if( width < usable.w * 9 / 10 && height < usable.h * 9 / 10 )
+	{
+		return;
+	}
+
+	GLimp_WindowedSize( display, &width, &height );
+	SDL_SetWindowSize( SDL_window, width, height );
+	SDL_SetWindowPosition( SDL_window, SDL_WINDOWPOS_CENTERED_DISPLAY( display ),
+		SDL_WINDOWPOS_CENTERED_DISPLAY( display ) );
+}
+
+/*
+===============
 GLimp_SetMode
 ===============
 */
@@ -432,14 +482,10 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL display\n");
 
-#ifdef __EMSCRIPTEN__
-	// The page sizes the canvas, and SDL3 follows its size changes only for
-	// a resizable window.
+	// Windows resize in place, without a vid_restart. On the web, the page
+	// sizes the canvas, and SDL3 follows its size changes only for a
+	// resizable window.
 	flags |= SDL_WINDOW_RESIZABLE;
-#else
-	if ( r_allowResize->integer )
-		flags |= SDL_WINDOW_RESIZABLE;
-#endif
 
 #ifdef USE_ICON
 	icon = SDL_CreateSurfaceFrom(
@@ -486,6 +532,12 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 		{
 			glConfig.vidWidth = desktopMode->w;
 			glConfig.vidHeight = desktopMode->h;
+#ifndef __EMSCRIPTEN__
+			if( !fullscreen )
+			{
+				GLimp_WindowedSize( display, &glConfig.vidWidth, &glConfig.vidHeight );
+			}
+#endif
 		}
 		else
 		{
@@ -1112,7 +1164,6 @@ void GLimp_Init( qboolean fixedFunction )
 
 	r_allowSoftwareGL = ri.Cvar_Get( "r_allowSoftwareGL", "0", CVAR_LATCH );
 	r_sdlDriver = ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
-	r_allowResize = ri.Cvar_Get( "r_allowResize", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_preferOpenGLES = ri.Cvar_Get( "r_preferOpenGLES", "-1", CVAR_ARCHIVE | CVAR_LATCH );
 
@@ -1291,7 +1342,17 @@ void GLimp_EndFrame( void )
 			if( !sdlToggled )
 				ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
 			else
+			{
 				glConfig.isFullscreen = !!r_fullscreen->integer;
+
+				// the window gets back its size from before fullscreen,
+				// which may cover the desktop
+				if( !r_fullscreen->integer )
+				{
+					SDL_SyncWindow( SDL_window );
+					GLimp_FitWindow( );
+				}
+			}
 
 			ri.IN_Restart( );
 		}
