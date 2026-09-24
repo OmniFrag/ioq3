@@ -1197,6 +1197,11 @@ static void IN_ProcessEvents( void )
 			case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); break;
 			case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
 
+			// the window manager, the browser or its Esc key can change
+			// fullscreen too; keep r_fullscreen in step with the window
+			case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: Cvar_Set( "r_fullscreen", "1" ); break;
+			case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: Cvar_Set( "r_fullscreen", "0" ); break;
+
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
 			case SDL_EVENT_DROP_FILE:
 				{
