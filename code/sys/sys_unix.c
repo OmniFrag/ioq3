@@ -1310,6 +1310,16 @@ qboolean Sys_DllExtension( const char *name ) {
 
 /*
 ==============
+Sys_InModalLoop
+==============
+*/
+qboolean Sys_InModalLoop( void )
+{
+	return qfalse;
+}
+
+/*
+==============
 Sys_OpenFolderInPlatformFileManager
 ==============
 */

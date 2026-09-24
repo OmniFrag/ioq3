@@ -991,6 +991,8 @@ void Com_TouchMemory( void );
 
 // commandLine should not include the executable name (argv[0])
 void Com_Init( char *commandLine );
+qboolean Com_FrameDue( void );
+qboolean Com_WaitFrame( void );
 void Com_Frame( void );
 void Com_Shutdown( void );
 

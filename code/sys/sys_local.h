@@ -34,6 +34,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define MINSDL_MAJOR 3
 #define MINSDL_MINOR 2
 #define MINSDL_MICRO 0
+
+// Input
+union SDL_Event;
+void IN_ProcessEvent( const union SDL_Event *e );
 #endif
 
 // Console
@@ -67,6 +71,7 @@ qboolean Sys_PIDIsRunning( int pid );
 qboolean Sys_OpenFolderInPlatformFileManager( const char *path );
 
 qboolean Sys_SetMaxFileLimit( void );
+qboolean Sys_InModalLoop( void );
 
 #ifdef PROTOCOL_HANDLER
 char *Sys_ParseProtocolUri( const char *uri );

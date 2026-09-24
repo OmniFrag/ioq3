@@ -54,6 +54,10 @@ static cvar_t *in_joystickUseAnalog = NULL;
 
 static int vidRestartTime = 0;
 
+// the window's size changed since the last frame; dragging its edge can
+// bring several sizes between frames
+static qboolean windowResized = qfalse;
+
 static int in_eventTime = 0;
 
 static SDL_Window *SDL_window = NULL;
@@ -330,8 +334,9 @@ static void IN_GobbleMotionEvents( void )
 	SDL_Event dummy[ 1 ];
 	int val = 0;
 
-	// Gobble any mouse motion events
-	SDL_PumpEvents( );
+	// Gobble any mouse motion events. Don't pump for more: a frame that
+	// pumps events can start a Windows modal loop, which runs frames from
+	// inside it (sys_main.c).
 	while( ( val = SDL_PeepEvents( dummy, 1, SDL_GETEVENT,
 		SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_MOTION ) ) > 0 ) { }
 
@@ -1050,199 +1055,194 @@ static void IN_WindowResized( void )
 
 /*
 ===============
-IN_ProcessEvents
+IN_ProcessEvent
+
+SDL hands each event to the client between frames (sys_main.c)
 ===============
 */
-static void IN_ProcessEvents( void )
+void IN_ProcessEvent( const SDL_Event *e )
 {
-	SDL_Event e;
 	keyNum_t key = 0;
 	static keyNum_t lastKeyDown = 0;
-	qboolean windowResized = qfalse;
 
 	if( !SDL_WasInit( SDL_INIT_VIDEO ) )
 			return;
 
-	while( SDL_PollEvent( &e ) )
+	switch( e->type )
 	{
-		switch( e.type )
-		{
-			case SDL_EVENT_KEY_DOWN:
-				if ( e.key.repeat && Key_GetCatcher( ) == 0 )
-					break;
-
-				if( ( key = IN_TranslateSDLToQ3Key( &e.key, qtrue ) ) )
-					Com_QueueEvent( in_eventTime, SE_KEY, key, qtrue, 0, NULL );
-
-				if( key == K_BACKSPACE )
-					Com_QueueEvent( in_eventTime, SE_CHAR, CTRL('h'), 0, 0, NULL );
-				else if( keys[K_CTRL].down && key >= 'a' && key <= 'z' )
-					Com_QueueEvent( in_eventTime, SE_CHAR, CTRL(key), 0, 0, NULL );
-
-				lastKeyDown = key;
+		case SDL_EVENT_KEY_DOWN:
+			if ( e->key.repeat && Key_GetCatcher( ) == 0 )
 				break;
 
-			case SDL_EVENT_KEY_UP:
-				if( ( key = IN_TranslateSDLToQ3Key( &e.key, qfalse ) ) )
-					Com_QueueEvent( in_eventTime, SE_KEY, key, qfalse, 0, NULL );
+			if( ( key = IN_TranslateSDLToQ3Key( &e->key, qtrue ) ) )
+				Com_QueueEvent( in_eventTime, SE_KEY, key, qtrue, 0, NULL );
 
-				lastKeyDown = 0;
-				break;
+			if( key == K_BACKSPACE )
+				Com_QueueEvent( in_eventTime, SE_CHAR, CTRL('h'), 0, 0, NULL );
+			else if( keys[K_CTRL].down && key >= 'a' && key <= 'z' )
+				Com_QueueEvent( in_eventTime, SE_CHAR, CTRL(key), 0, 0, NULL );
 
-			case SDL_EVENT_TEXT_INPUT:
-				if( lastKeyDown != K_CONSOLE )
+			lastKeyDown = key;
+			break;
+
+		case SDL_EVENT_KEY_UP:
+			if( ( key = IN_TranslateSDLToQ3Key( &e->key, qfalse ) ) )
+				Com_QueueEvent( in_eventTime, SE_KEY, key, qfalse, 0, NULL );
+
+			lastKeyDown = 0;
+			break;
+
+		case SDL_EVENT_TEXT_INPUT:
+			if( lastKeyDown != K_CONSOLE )
+			{
+				const char *c = e->text.text;
+
+				// Quick and dirty UTF-8 to UTF-32 conversion
+				while( *c )
 				{
-					const char *c = e.text.text;
+					int utf32 = 0;
 
-					// Quick and dirty UTF-8 to UTF-32 conversion
-					while( *c )
+					if( ( *c & 0x80 ) == 0 )
+						utf32 = *c++;
+					else if( ( *c & 0xE0 ) == 0xC0 ) // 110x xxxx
 					{
-						int utf32 = 0;
+						utf32 |= ( *c++ & 0x1F ) << 6;
+						utf32 |= ( *c++ & 0x3F );
+					}
+					else if( ( *c & 0xF0 ) == 0xE0 ) // 1110 xxxx
+					{
+						utf32 |= ( *c++ & 0x0F ) << 12;
+						utf32 |= ( *c++ & 0x3F ) << 6;
+						utf32 |= ( *c++ & 0x3F );
+					}
+					else if( ( *c & 0xF8 ) == 0xF0 ) // 1111 0xxx
+					{
+						utf32 |= ( *c++ & 0x07 ) << 18;
+						utf32 |= ( *c++ & 0x3F ) << 12;
+						utf32 |= ( *c++ & 0x3F ) << 6;
+						utf32 |= ( *c++ & 0x3F );
+					}
+					else
+					{
+						Com_DPrintf( "Unrecognised UTF-8 lead byte: 0x%x\n", (unsigned int)*c );
+						c++;
+					}
 
-						if( ( *c & 0x80 ) == 0 )
-							utf32 = *c++;
-						else if( ( *c & 0xE0 ) == 0xC0 ) // 110x xxxx
+					if( utf32 != 0 )
+					{
+						if( IN_IsConsoleKey( 0, utf32 ) )
 						{
-							utf32 |= ( *c++ & 0x1F ) << 6;
-							utf32 |= ( *c++ & 0x3F );
-						}
-						else if( ( *c & 0xF0 ) == 0xE0 ) // 1110 xxxx
-						{
-							utf32 |= ( *c++ & 0x0F ) << 12;
-							utf32 |= ( *c++ & 0x3F ) << 6;
-							utf32 |= ( *c++ & 0x3F );
-						}
-						else if( ( *c & 0xF8 ) == 0xF0 ) // 1111 0xxx
-						{
-							utf32 |= ( *c++ & 0x07 ) << 18;
-							utf32 |= ( *c++ & 0x3F ) << 12;
-							utf32 |= ( *c++ & 0x3F ) << 6;
-							utf32 |= ( *c++ & 0x3F );
+							Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
+							Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
 						}
 						else
-						{
-							Com_DPrintf( "Unrecognised UTF-8 lead byte: 0x%x\n", (unsigned int)*c );
-							c++;
-						}
-
-						if( utf32 != 0 )
-						{
-							if( IN_IsConsoleKey( 0, utf32 ) )
-							{
-								Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
-								Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
-							}
-							else
-								Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
-						}
+							Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
 					}
 				}
-				break;
+			}
+			break;
 
-			case SDL_EVENT_MOUSE_MOTION:
-				if( mouseActive )
-				{
-					if( !e.motion.xrel && !e.motion.yrel )
-						break;
-					Com_QueueEvent( in_eventTime, SE_MOUSE, e.motion.xrel, e.motion.yrel, 0, NULL );
-				}
-				break;
-
-			case SDL_EVENT_MOUSE_BUTTON_DOWN:
-			case SDL_EVENT_MOUSE_BUTTON_UP:
-#ifndef __EMSCRIPTEN__
-				// in a window, the click that captures the mouse (IN_Frame)
-				// isn't a key press. Only that click: the mouse is also
-				// inactive with in_mouse 0, the console down, or loading.
-				if( !mouseClickedIn && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN )
-				{
-					mouseClickedIn = qtrue;
+		case SDL_EVENT_MOUSE_MOTION:
+			if( mouseActive )
+			{
+				if( !e->motion.xrel && !e->motion.yrel )
 					break;
-				}
+				Com_QueueEvent( in_eventTime, SE_MOUSE, e->motion.xrel, e->motion.yrel, 0, NULL );
+			}
+			break;
+
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+#ifndef __EMSCRIPTEN__
+			// in a window, the click that captures the mouse (IN_Frame)
+			// isn't a key press. Only that click: the mouse is also
+			// inactive with in_mouse 0, the console down, or loading.
+			if( !mouseClickedIn && e->type == SDL_EVENT_MOUSE_BUTTON_DOWN )
+			{
+				mouseClickedIn = qtrue;
+				break;
+			}
 #endif
 
+			{
+				int b;
+				switch( e->button.button )
 				{
-					int b;
-					switch( e.button.button )
-					{
-						case SDL_BUTTON_LEFT:   b = K_MOUSE1;     break;
-						case SDL_BUTTON_MIDDLE: b = K_MOUSE3;     break;
-						case SDL_BUTTON_RIGHT:  b = K_MOUSE2;     break;
-						case SDL_BUTTON_X1:     b = K_MOUSE4;     break;
-						case SDL_BUTTON_X2:     b = K_MOUSE5;     break;
-						default:                b = K_AUX1 + ( e.button.button - SDL_BUTTON_X2 + 1 ) % 16; break;
-					}
-					Com_QueueEvent( in_eventTime, SE_KEY, b,
-						( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? qtrue : qfalse ), 0, NULL );
+					case SDL_BUTTON_LEFT:   b = K_MOUSE1;     break;
+					case SDL_BUTTON_MIDDLE: b = K_MOUSE3;     break;
+					case SDL_BUTTON_RIGHT:  b = K_MOUSE2;     break;
+					case SDL_BUTTON_X1:     b = K_MOUSE4;     break;
+					case SDL_BUTTON_X2:     b = K_MOUSE5;     break;
+					default:                b = K_AUX1 + ( e->button.button - SDL_BUTTON_X2 + 1 ) % 16; break;
 				}
-				break;
+				Com_QueueEvent( in_eventTime, SE_KEY, b,
+					( e->type == SDL_EVENT_MOUSE_BUTTON_DOWN ? qtrue : qfalse ), 0, NULL );
+			}
+			break;
 
-			case SDL_EVENT_MOUSE_WHEEL:
-				if( e.wheel.y > 0 )
-				{
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
-				}
-				else if( e.wheel.y < 0 )
-				{
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
-				}
-				break;
+		case SDL_EVENT_MOUSE_WHEEL:
+			if( e->wheel.y > 0 )
+			{
+				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
+				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+			}
+			else if( e->wheel.y < 0 )
+			{
+				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
+				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
+			}
+			break;
 
-			case SDL_EVENT_GAMEPAD_ADDED:
-			case SDL_EVENT_GAMEPAD_REMOVED:
-				if (in_joystick->integer)
-					IN_InitJoystick();
-				break;
+		case SDL_EVENT_GAMEPAD_ADDED:
+		case SDL_EVENT_GAMEPAD_REMOVED:
+			if (in_joystick->integer)
+				IN_InitJoystick();
+			break;
 
-			case SDL_EVENT_QUIT:
-				Cbuf_ExecuteText(EXEC_NOW, "quit Closed window\n");
-				break;
+		case SDL_EVENT_QUIT:
+			// quit inside a frame (Com_Frame's Cbuf_Execute), where an
+			// ERR_DROP while shutting down has a frame to abort
+			Cbuf_ExecuteText(EXEC_APPEND, "quit Closed window\n");
+			break;
 
-			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-				windowResized = qtrue;
-				break;
+		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			windowResized = qtrue;
+			break;
 
-			case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
-			case SDL_EVENT_WINDOW_RESTORED:
-			case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
-			case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
-			case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
+		case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
+		case SDL_EVENT_WINDOW_RESTORED:
+		case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
+		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
+		case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
 
-			// the window manager, the browser or its Esc key can change
-			// fullscreen too; keep r_fullscreen in step with the window
-			case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: Cvar_Set( "r_fullscreen", "1" ); break;
-			case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: Cvar_Set( "r_fullscreen", "0" ); break;
+		// the window manager, the browser or its Esc key can change
+		// fullscreen too; keep r_fullscreen in step with the window
+		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: Cvar_Set( "r_fullscreen", "1" ); break;
+		case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: Cvar_Set( "r_fullscreen", "0" ); break;
 
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
-			case SDL_EVENT_DROP_FILE:
+		case SDL_EVENT_DROP_FILE:
+			{
+				const char *filename = e->drop.data;
+
+				// Handle macOS open URL event. URL protocol scheme must be set in Info.plist.
+				if( !Q_strncmp( filename, PROTOCOL_HANDLER ":", strlen( PROTOCOL_HANDLER ":" ) ) )
 				{
-					const char *filename = e.drop.data;
+					char *protocolCommand = Sys_ParseProtocolUri( filename );
 
-					// Handle macOS open URL event. URL protocol scheme must be set in Info.plist.
-					if( !Q_strncmp( filename, PROTOCOL_HANDLER ":", strlen( PROTOCOL_HANDLER ":" ) ) )
+					if( protocolCommand )
 					{
-						char *protocolCommand = Sys_ParseProtocolUri( filename );
-
-						if( protocolCommand )
-						{
-							Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", protocolCommand ) );
-							free( protocolCommand );
-						}
+						Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", protocolCommand ) );
+						free( protocolCommand );
 					}
 				}
-				break;
+			}
+			break;
 #endif
 
-			default:
-				break;
-		}
+		default:
+			break;
 	}
-
-	// dragging a window's edge can bring several sizes in one frame
-	if( windowResized )
-		IN_WindowResized( );
 }
 
 /*
@@ -1294,7 +1294,11 @@ void IN_Frame( void )
 	else
 		IN_ActivateMouse( cls.glconfig.isFullscreen );
 
-	IN_ProcessEvents( );
+	if( windowResized )
+	{
+		windowResized = qfalse;
+		IN_WindowResized( );
+	}
 
 	// Set event time for next frame to earliest possible time an event could happen
 	in_eventTime = Sys_Milliseconds( );
