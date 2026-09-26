@@ -422,11 +422,56 @@ intptr_t		QDECL VM_Call( vm_t *vm, int callNum, ... );
 
 void	VM_Debug( int level );
 
-void	*VM_ArgPtr( intptr_t intValue );
 intptr_t	VM_GetValue( intptr_t *args, const vmExtension_t *extensions );
-void	*VM_ExplicitArgPtr( vm_t *vm, intptr_t intValue );
+const char	*VM_ExplicitArgStr( vm_t *vm, intptr_t value, const char *what );
 
-#define	VMA(x) VM_ArgPtr(args[x])
+// Checked syscall arguments (vm_args.c): each macro decodes argument n of a
+// handler's args and says what it is. A QVM's pointers must lie inside its
+// memory; for every module, pointers that must be there aren't NULL, and
+// lengths, counts and numbers are in range. A bad one drops the module.
+// Numbers are ints: a native module passes them through "..." and the
+// engine reads intptr_t, so only the low 32 bits are defined.
+void		VM_SetSyscallNames( vm_t *vm, const char * const *names, int numNames );
+// an entry of a syscall name table: SYSCALL( G_PRINT ) names G_PRINT
+#define SYSCALL( x )				[x] = #x
+void		QDECL VM_ArgError( const intptr_t *args, int n, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(3, 4);
+void		*VM_ArgBuf( const intptr_t *args, int n, int64_t size, qboolean optional );
+char		*VM_ArgStrBuf( const intptr_t *args, int n, int64_t size );
+void		*VM_ArgArray( const intptr_t *args, int n, size_t elemSize, int count1, int count2 );
+const char	*VM_ArgStr( const intptr_t *args, int n, qboolean optional );
+int			VM_ArgInt( const intptr_t *args, int n, int lo, int hi );
+// whole handlers for syscalls every module has
+intptr_t	VM_Strncpy( const intptr_t *args );
+intptr_t	VM_FOpenFile( const intptr_t *args );
+
+// an input string, terminated inside module memory
+#define VMA_STR( n )				VM_ArgStr( args, n, qfalse )
+#define VMA_STR_OPT( n )			VM_ArgStr( args, n, qtrue )
+// one T the engine reads, writes, or both
+#define VMA_IN( n, T )				((const T *)VM_ArgBuf( args, n, sizeof( T ), qfalse ))
+#define VMA_OUT( n, T )				((T *)VM_ArgBuf( args, n, sizeof( T ), qfalse ))
+#define VMA_INOUT( n, T )			VMA_OUT( n, T )
+#define VMA_IN_OPT( n, T )			((const T *)VM_ArgBuf( args, n, sizeof( T ), qtrue ))
+#define VMA_OUT_OPT( n, T )			((T *)VM_ArgBuf( args, n, sizeof( T ), qtrue ))
+#define VMA_VEC3( n )				((float *)VM_ArgBuf( args, n, sizeof( vec3_t ), qfalse ))
+#define VMA_VEC3_OPT( n )			((float *)VM_ArgBuf( args, n, sizeof( vec3_t ), qtrue ))
+// len bytes, or len bytes that receive a terminated string (len >= 1)
+#define VMA_BUF( n, len )			VM_ArgBuf( args, n, (int)( len ), qfalse )
+#define VMA_BUF_OPT( n, len )		VM_ArgBuf( args, n, (int)( len ), qtrue )
+#define VMA_STRBUF( n, len )		VM_ArgStrBuf( args, n, (int)( len ) )
+// count elements of T, or count1 * count2 of them
+#define VMA_ARRAY( n, T, count )	((T *)VM_ArgArray( args, n, sizeof( T ), count, 1 ))
+#define VMA_ARRAY2( n, T, count1, count2 )	((T *)VM_ArgArray( args, n, sizeof( T ), count1, count2 ))
+// numbers: a count into an engine array, or any range
+#define VMV_COUNT( n, max )			VM_ArgInt( args, n, 0, max )
+#define VMV_RANGE( n, lo, hi )		VM_ArgInt( args, n, lo, hi )
+#define VMV_ENTITY( n )				VM_ArgInt( args, n, 0, MAX_GENTITIES - 1 )
+// an entity a trace passes through, or none: ENTITYNUM_NONE, or -1 as some
+// game code and botlib pass
+#define VMV_PASSENT( n )			VM_ArgInt( args, n, -1, MAX_GENTITIES - 1 )
+// a file handle the module opened, or 0
+int			VM_ArgFile( const intptr_t *args, int n );
+#define VMV_FILE( n )				VM_ArgFile( args, n )
 static ID_INLINE float _vmf(intptr_t x)
 {
 	floatint_t fi;
@@ -753,6 +798,10 @@ void 	QDECL FS_Printf( fileHandle_t f, const char *fmt, ... ) Q_PRINTF_FUNC(2, 3
 // like fprintf
 
 int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode );
+// a module's files: only the module that opened a handle may use it
+int		FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode );
+qboolean	FS_HandleOwnedBy( fileHandle_t f, const vm_t *vm );
+void	FS_VM_CloseFiles( const vm_t *vm );
 // opens a file for reading, writing, or appending depending on the value of mode
 
 int		FS_Seek( fileHandle_t f, long offset, int origin );

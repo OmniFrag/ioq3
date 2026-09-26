@@ -560,8 +560,7 @@ gotnewcl:
 	// get the game a chance to reject this connection or modify the userinfo
 	denied = VM_Call( gvm, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
 	if ( denied ) {
-		// we can't just use VM_ArgPtr, because that is only valid inside a VM_Call
-		char *str = VM_ExplicitArgPtr( gvm, denied );
+		const char *str = VM_ExplicitArgStr( gvm, denied, "GAME_CLIENT_CONNECT's result" );
 
 		NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
 		Com_DPrintf ("Game rejected a connection: %s.\n", str);

@@ -286,6 +286,7 @@ typedef struct {
 	int			zipFileLen;
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
+	const vm_t	*owner;			// the module that opened it (FS_VM_FOpenFile)
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
@@ -581,7 +582,7 @@ qboolean FS_CreatePath (const char *OSPath) {
 =================
 FS_CheckFilenameIsMutable
 
-ERR_FATAL if trying to maniuplate a file with the platform library, QVM, or pk3 extension
+ERR_DROP if trying to maniuplate a file with the platform library, QVM, or pk3 extension
 =================
  */
 static void FS_CheckFilenameIsMutable( const char *filename,
@@ -592,7 +593,7 @@ static void FS_CheckFilenameIsMutable( const char *filename,
 		|| COM_CompareExtension( filename, ".qvm" )
 		|| COM_CompareExtension( filename, ".pk3" ) )
 	{
-		Com_Error( ERR_FATAL, "%s: Not allowed to manipulate '%s' due "
+		Com_Error( ERR_DROP, "%s: Not allowed to manipulate '%s' due "
 			"to %s extension", function, filename, COM_GetExtension( filename ) );
 	}
 }
@@ -1670,7 +1671,7 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 				return offset;
 
 			default:
-				Com_Error( ERR_FATAL, "Bad origin in FS_Seek" );
+				Com_Error( ERR_DROP, "Bad origin in FS_Seek" );
 				return -1;
 		}
 	} else {
@@ -1688,7 +1689,7 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 			_origin = SEEK_SET;
 			break;
 		default:
-			Com_Error( ERR_FATAL, "Bad origin in FS_Seek" );
+			Com_Error( ERR_DROP, "Bad origin in FS_Seek" );
 			break;
 		}
 
@@ -4278,7 +4279,7 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 			}
 			break;
 		default:
-			Com_Error( ERR_FATAL, "FS_FOpenFileByMode: bad mode" );
+			Com_Error( ERR_DROP, "FS_FOpenFileByMode: bad mode" );
 			return -1;
 	}
 
@@ -4292,6 +4293,52 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 	fsh[*f].handleSync = sync;
 
 	return r;
+}
+
+/*
+===========
+FS_VM_FOpenFile
+
+A module's trap_FS_FOpenFile: the handle it gets is its own, and only it may
+use it (FS_HandleOwnedBy)
+===========
+*/
+int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+	int		r;
+
+	r = FS_FOpenFileByMode( qpath, f, mode );
+	if ( f && *f ) {
+		fsh[*f].owner = vm;
+	}
+	return r;
+}
+
+/*
+===========
+FS_HandleOwnedBy
+
+Whether f is open and vm opened it
+===========
+*/
+qboolean FS_HandleOwnedBy( fileHandle_t f, const vm_t *vm ) {
+	return f > 0 && f < MAX_FILE_HANDLES && fsh[f].handleFiles.file.o && fsh[f].owner == vm;
+}
+
+/*
+===========
+FS_VM_CloseFiles
+
+Closes the files a module left open, when it's freed
+===========
+*/
+void FS_VM_CloseFiles( const vm_t *vm ) {
+	int		i;
+
+	for ( i = 1; i < MAX_FILE_HANDLES; i++ ) {
+		if ( FS_HandleOwnedBy( i, vm ) ) {
+			FS_FCloseFile( i );
+		}
+	}
 }
 
 int		FS_FTell( fileHandle_t f ) {

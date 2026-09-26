@@ -197,6 +197,9 @@ struct vm_s {
 
 	byte		*jumpTableTargets;
 	int			numJumpTableTargets;
+
+	const char * const	*syscallNames;	// by number, for VM_ArgError
+	int			numSyscallNames;
 };
 
 
