@@ -1112,48 +1112,22 @@ void IN_ProcessEvent( const SDL_Event *e )
 			if( lastKeyDown != K_CONSOLE )
 			{
 				const char *c = e->text.text;
+				Uint32 utf32;
 
-				// Quick and dirty UTF-8 to UTF-32 conversion
-				while( *c )
+				// SDL_StepUTF8 stops at the end of the string, even partway
+				// through a sequence, and turns invalid bytes into U+FFFD,
+				// which are dropped as the old decoder dropped them
+				while( ( utf32 = SDL_StepUTF8( &c, NULL ) ) != 0 )
 				{
-					int utf32 = 0;
-
-					if( ( *c & 0x80 ) == 0 )
-						utf32 = *c++;
-					else if( ( *c & 0xE0 ) == 0xC0 ) // 110x xxxx
+					if( utf32 == SDL_INVALID_UNICODE_CODEPOINT )
+						continue;
+					if( IN_IsConsoleKey( 0, utf32 ) )
 					{
-						utf32 |= ( *c++ & 0x1F ) << 6;
-						utf32 |= ( *c++ & 0x3F );
-					}
-					else if( ( *c & 0xF0 ) == 0xE0 ) // 1110 xxxx
-					{
-						utf32 |= ( *c++ & 0x0F ) << 12;
-						utf32 |= ( *c++ & 0x3F ) << 6;
-						utf32 |= ( *c++ & 0x3F );
-					}
-					else if( ( *c & 0xF8 ) == 0xF0 ) // 1111 0xxx
-					{
-						utf32 |= ( *c++ & 0x07 ) << 18;
-						utf32 |= ( *c++ & 0x3F ) << 12;
-						utf32 |= ( *c++ & 0x3F ) << 6;
-						utf32 |= ( *c++ & 0x3F );
+						Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
+						Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
 					}
 					else
-					{
-						Com_DPrintf( "Unrecognised UTF-8 lead byte: 0x%x\n", (unsigned int)*c );
-						c++;
-					}
-
-					if( utf32 != 0 )
-					{
-						if( IN_IsConsoleKey( 0, utf32 ) )
-						{
-							Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
-							Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
-						}
-						else
-							Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
-					}
+						Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
 				}
 			}
 			break;
