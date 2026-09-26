@@ -68,7 +68,7 @@ qhandle_t R_RegisterMD3(const char *name, model_t *mod)
 			break;
 
 		if ( size >= (int)sizeof( md3Header_t ) && LittleLong( *buf.u ) == MD3_IDENT )
-			loaded = R_LoadMD3( mod, lod, buf.u, name );
+			loaded = R_ValidateMD3( buf.u, size, namebuf ) && R_LoadMD3( mod, lod, buf.u, name );
 		else
 			ri.Printf(PRINT_WARNING,"R_RegisterMD3: unknown fileid for %s\n", namebuf);
 
@@ -967,6 +967,9 @@ static md3Tag_t *R_GetTag( md3Header_t *mod, int frame, const char *tagName ) {
 	if ( frame >= mod->numFrames ) {
 		// it is possible to have a bad frame while changing models, so don't error
 		frame = mod->numFrames - 1;
+	}
+	if ( frame < 0 ) {
+		frame = 0;
 	}
 
 	tag = (md3Tag_t *)((byte *)mod + mod->ofsTags) + frame * mod->numTags;
