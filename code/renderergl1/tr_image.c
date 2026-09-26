@@ -1462,13 +1462,17 @@ static char *CommaParse( char **data_p ) {
 		data++;
 		while (1)
 		{
-			c = *data++;
+			c = *data;
 			if (c=='\"' || !c)
 			{
+				// step over the closing quote, but not the terminator
+				if (c)
+					data++;
 				com_token[len] = 0;
 				*data_p = ( char * ) data;
 				return com_token;
 			}
+			data++;
 			if (len < MAX_TOKEN_CHARS - 1)
 			{
 				com_token[len] = c;
