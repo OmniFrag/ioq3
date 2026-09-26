@@ -75,7 +75,9 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "2", CVAR_ARCHIVE );	// !@# SHIP WITH SET TO 2
 	Cvar_Get( "vm_game", "2", CVAR_ARCHIVE );	// !@# SHIP WITH SET TO 2
 	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE );		// !@# SHIP WITH SET TO 2
-	vm_linked = Cvar_Get( "vm_linked", "1", 0 );
+	// native code, so only the player or the operator chooses it, never a
+	// server or a game module
+	vm_linked = Cvar_Get( "vm_linked", "1", CVAR_PROTECTED );
 	Cvar_SetDescription( vm_linked, "Use the game modules linked into the executable when running the base game" );
 
 	Cmd_AddCommand ("vmprofile", VM_VmProfile_f );
