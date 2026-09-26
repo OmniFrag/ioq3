@@ -1065,6 +1065,14 @@ void Key_WriteBindings( fileHandle_t f ) {
 
 	for (i=0 ; i<MAX_KEYS ; i++) {
 		if (keys[i].binding && keys[i].binding[0] ) {
+			// a quote or a line break would end the binding early, and the
+			// rest of it would run when the config is executed. The console
+			// can't make such a binding; game code can
+			if ( strpbrk( keys[i].binding, "\"\r\n" ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: binding of %s has a quote "
+					"or a line break, not written to file\n", Key_KeynumToString(i) );
+				continue;
+			}
 			FS_Printf (f, "bind %s \"%s\"\n", Key_KeynumToString(i), keys[i].binding);
 
 		}
