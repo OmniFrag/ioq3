@@ -444,6 +444,12 @@ static void GLimp_FitWindow( void )
 		return;
 	}
 
+	// a maximized window is meant to fill the desktop
+	if( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_MAXIMIZED )
+	{
+		return;
+	}
+
 	// window borders keep one a little smaller than the usable area
 	if( width < usable.w * 9 / 10 && height < usable.h * 9 / 10 )
 	{
