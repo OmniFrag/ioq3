@@ -668,7 +668,17 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
 
 	linked = VM_FindLinked( module );
 	if ( linked ) {
+		fileHandle_t	f;
+
 		Com_Printf( "Using linked %s\n", module );
+
+		// A pure server checks the paks the client's cgame and ui came
+		// from, which the filesystem notes as it opens their QVMs. Open
+		// the QVM this module stands in for, so its pak is noted too.
+		FS_FOpenFileRead( va( "vm/%s.qvm", module ), &f, qfalse );
+		if ( f ) {
+			FS_FCloseFile( f );
+		}
 
 		VM_ResetLinked( linked );
 		vm->entryPoint = linked->vmMain;
