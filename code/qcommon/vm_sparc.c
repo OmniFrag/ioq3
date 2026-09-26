@@ -877,6 +877,8 @@ static int asmcall(int call, int pstack)
 	vm_t *savedVM = currentVM;
 	int i, ret;
 
+	VM_CheckSyscall( currentVM, pstack );
+
 	currentVM->programStack = pstack - 4;
 	if (sizeof(intptr_t) == sizeof(int)) {
 		intptr_t *argPosition = (intptr_t *)((byte *)currentVM->dataBase + pstack + 4);

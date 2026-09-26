@@ -228,6 +228,8 @@ static int asmcall(int call, int pstack)
 	vm_t *savedVM = currentVM;
 	int i, ret;
 
+	VM_CheckSyscall( currentVM, pstack );
+
 	// modify VM stack pointer for recursive VM entry
 	currentVM->programStack = pstack - 4;
 

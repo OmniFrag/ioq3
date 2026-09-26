@@ -415,8 +415,6 @@ static void DoSyscall(void)
 
 	// save currentVM so as to allow for recursive VM entry
 	savedVM = currentVM;
-	// modify VM stack pointer for recursive VM entry
-	currentVM->programStack = vm_programStack - 4;
 
 	if(vm_syscallNum < 0)
 	{
@@ -425,7 +423,12 @@ static void DoSyscall(void)
 		int index;
 		intptr_t args[MAX_VMSYSCALL_ARGS];
 #endif
-		
+
+		VM_CheckSyscall( savedVM, vm_programStack );
+		// modify VM stack pointer for recursive VM entry, which only a
+		// system call can make
+		currentVM->programStack = vm_programStack - 4;
+
 		data = (int *) (savedVM->dataBase + vm_programStack + 4);
 		ret = &vm_opStackBase[vm_opStackOfs + 1];
 

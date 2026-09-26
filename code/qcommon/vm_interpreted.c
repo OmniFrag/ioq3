@@ -307,6 +307,7 @@ int	VM_CallInterpreted( vm_t *vm, int *args ) {
 	int		programCounter;
 	int		programStack;
 	int		stackOnEntry;
+	int		stackTop;
 	byte	*image;
 	int		*codeImage;
 	int		v1;
@@ -332,7 +333,12 @@ int	VM_CallInterpreted( vm_t *vm, int *args ) {
 	image = vm->dataBase;
 	codeImage = (int *)vm->codeBase;
 	dataMask = vm->dataMask;
-	
+	// OP_ENTER and OP_LEAVE keep programStack between stackBottom and
+	// this, so the return address can be stored and read there unmasked.
+	// It's where vmMain's return address is, so a module that a system
+	// call reentered can't return into the frames of the call below it.
+	stackTop = stackOnEntry - ( 8 + 4 * MAX_VMMAIN_ARGS );
+
 	programCounter = 0;
 
 	programStack -= ( 8 + 4 * MAX_VMMAIN_ARGS );
@@ -372,7 +378,7 @@ nextInstruction2:
 			return 0;
 		}
 
-		if ( programStack <= vm->stackBottom ) {
+		if ( programStack < vm->stackBottom ) {
 			Com_Error( ERR_DROP, "VM stack overflow" );
 			return 0;
 		}
@@ -461,7 +467,8 @@ nextInstruction2:
 
 		case OP_CALL:
 			// save current program counter
-			*(int *)&image[ programStack ] = programCounter;
+			v1 = programCounter;
+			*(int *)&image[ programStack ] = v1;
 			
 			// jump to the location on the stack
 			programCounter = r0;
@@ -477,6 +484,8 @@ nextInstruction2:
 					Com_Printf( "%s---> systemcall(%i)\n", DEBUGSTR, -1 - programCounter );
 				}
 #endif
+				VM_CheckSyscall( vm, programStack );
+
 				// save the stack to allow recursive VM entry
 //				temp = vm->callLevel;
 				vm->programStack = programStack - 4;
@@ -512,7 +521,8 @@ nextInstruction2:
 				// save return value
 				opStackOfs++;
 				opStack[opStackOfs] = r;
-				programCounter = *(int *)&image[ programStack ];
+				// not the saved one, which the system call can write over
+				programCounter = v1;
 //				vm->callLevel = temp;
 #ifdef DEBUG_VM
 				if ( vm_debugLevel ) {
@@ -543,6 +553,11 @@ nextInstruction2:
 			v1 = r2;
 
 			programCounter += 1;
+			// the frame must fit between here and the stack's bottom
+			if ( (unsigned)v1 > (unsigned)( programStack - vm->stackBottom ) ) {
+				Com_Error( ERR_DROP, "VM stack overflow" );
+				return 0;
+			}
 			programStack -= v1;
 #ifdef DEBUG_VM
 			// save old stack frame for debugging traces
@@ -563,6 +578,12 @@ nextInstruction2:
 			// remove our stack frame
 			v1 = r2;
 
+			// a frame larger than OP_ENTER made would take the stack past
+			// its top, where the return address is read
+			if ( (unsigned)v1 > (unsigned)( stackTop - programStack ) ) {
+				Com_Error( ERR_DROP, "VM stack underflow" );
+				return 0;
+			}
 			programStack += v1;
 
 			// grab the saved program counter
@@ -577,7 +598,10 @@ nextInstruction2:
 			// check for leaving the VM
 			if ( programCounter == -1 ) {
 				goto done;
-			} else if ( (unsigned)programCounter >= vm->codeLength ) {
+			} else if ( programCounter < 1 || programCounter >= vm->codeLength
+				|| codeImage[ programCounter - 1 ] != OP_CALL ) {
+				// the module can write the saved program counter; OP_CALL
+				// saved one that follows it, and so starts an instruction
 				Com_Error( ERR_DROP, "VM program counter out of range in OP_LEAVE" );
 				return 0;
 			}

@@ -212,3 +212,4 @@ const char *VM_ValueToSymbol( vm_t *vm, int value );
 void VM_LogSyscalls( int *args );
 
 void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n);
+void VM_CheckSyscall( vm_t *vm, int programStack );
