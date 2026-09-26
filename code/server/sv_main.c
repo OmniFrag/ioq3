@@ -957,6 +957,8 @@ static void SV_CalcPings( void ) {
 	}
 }
 
+#define SV_SILENT_CONNECT_TIME	4000	// msec a new client has to send its first packet
+
 /*
 ==================
 SV_CheckTimeouts
@@ -990,6 +992,18 @@ static void SV_CheckTimeouts( void ) {
 			// using the client id cause the cl->name is empty at this point
 			Com_DPrintf( "Going from CS_ZOMBIE to CS_FREE for client %d\n", i );
 			cl->state = CS_FREE;	// can now be reused
+			continue;
+		}
+		// a client sends packets from the moment it connects, so one
+		// that has sent none since is holding the slot without playing.
+		// Free it quietly, well before the timeout
+		if ( cl->state == CS_CONNECTED && cl->netchan.incomingSequence == 0 &&
+			cl->netchan.remoteAddress.type != NA_BOT &&
+			cl->netchan.remoteAddress.type != NA_LOOPBACK &&
+			svs.time - cl->lastConnectTime > SV_SILENT_CONNECT_TIME ) {
+			Com_DPrintf( "Freeing client %d, which sent nothing after connecting\n", i );
+			SV_DropClient( cl, NULL );
+			cl->state = CS_FREE;	// don't bother with zombie state
 			continue;
 		}
 		if ( cl->state >= CS_CONNECTED && cl->lastPacketTime < droppoint) {

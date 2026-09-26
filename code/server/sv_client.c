@@ -631,6 +631,7 @@ SV_DropClient
 Called when the player is totally leaving the server, either willingly
 or unwillingly.  This is NOT called if the entire server is quiting
 or crashing -- SV_FinalMessage() will handle that
+With a NULL reason, no one is told
 =====================
 */
 void SV_DropClient( client_t *drop, const char *reason ) {
@@ -670,14 +671,18 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	drop->gamestateMessageNum = -1;
 
 	// tell everyone why they got dropped
-	SV_SendServerCommand( NULL, "print \"%s" S_COLOR_WHITE " %s\n\"", drop->name, reason );
+	if ( reason ) {
+		SV_SendServerCommand( NULL, "print \"%s" S_COLOR_WHITE " %s\n\"", drop->name, reason );
+	}
 
 	// call the prog function for removing a client
 	// this will remove the body, among other things
 	VM_Call( gvm, GAME_CLIENT_DISCONNECT, drop - svs.clients );
 
 	// add the disconnect command
-	SV_SendServerCommand( drop, "disconnect \"%s\"", reason);
+	if ( reason ) {
+		SV_SendServerCommand( drop, "disconnect \"%s\"", reason);
+	}
 
 	if ( isBot ) {
 		SV_BotFreeClient( drop - svs.clients );
