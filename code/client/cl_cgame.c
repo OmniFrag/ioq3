@@ -654,7 +654,7 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_PC_READ_TOKEN:
 		return botlib_export->PC_ReadTokenHandle( args[1], VMA(2) );
 	case CG_PC_SOURCE_FILE_AND_LINE:
-		return botlib_export->PC_SourceFileAndLine( args[1], VMA(2), VMA(3) );
+		return botlib_export->PC_SourceFileAndLine( args[1], VMA(2), PC_MODULE_FILENAME_SIZE, VMA(3) );
 
 	case CG_S_STOPBACKGROUNDTRACK:
 		S_StopBackgroundTrack();
