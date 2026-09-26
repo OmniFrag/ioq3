@@ -623,13 +623,16 @@ void	Cvar_SetSafe( const char *var_name, const char *value );
 // sometimes we set variables from an untrusted source: fail if flags &
 // CVAR_PROTECTED, or CVAR_PRIVATE (but for password)
 void	Cvar_ResetSafe( const char *var_name );
+void	Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed );
+void	Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed );
+// a game module's set: as Cvar_SetSafe, and an engine cvar that is read
+// only, set at startup or cheat protected keeps its value, unless its
+// name is in allowed
 
 void Cvar_SetLatched( const char *var_name, const char *value);
 // don't set the cvar immediately
 
 void	Cvar_SetValue( const char *var_name, float value );
-void	Cvar_SetValueSafe( const char *var_name, float value );
-// expands value to a string and calls Cvar_Set/Cvar_SetSafe
 
 float	Cvar_VariableValue( const char *var_name );
 int		Cvar_VariableIntegerValue( const char *var_name );
