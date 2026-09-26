@@ -1031,11 +1031,30 @@ static void IN_WindowResized( void )
 	int width, height;
 
 	// check if size actually changed; the renderer's size is in pixels
-	// (GLimp_SetMode)
-	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) ||
+	// (GLimp_SetMode). A minimized window can report no size at all.
+	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) || width <= 0 || height <= 0 ||
 		( cls.glconfig.vidWidth == width && cls.glconfig.vidHeight == height ) )
 	{
 		return;
+	}
+
+	// A window keeps its new size at the next start, however it's
+	// followed now. In fullscreen the size follows the display mode, so
+	// r_mode stays. Ask the window: IN_Frame sets cls.glconfig.isFullscreen
+	// from r_fullscreen, which on the web doesn't make the window
+	// fullscreen (GLimp_SetMode).
+	if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
+	{
+		int windowWidth, windowHeight;
+
+		// the window is created in screen coordinates
+		if( SDL_GetWindowSize( SDL_window, &windowWidth, &windowHeight ) &&
+			windowWidth > 0 && windowHeight > 0 )
+		{
+			Cvar_SetValue( "r_customwidth", windowWidth );
+			Cvar_SetValue( "r_customheight", windowHeight );
+			Cvar_Set( "r_mode", "-1" );
+		}
 	}
 
 	// follow it without a restart if we can
@@ -1044,25 +1063,8 @@ static void IN_WindowResized( void )
 		return;
 	}
 
-	// else restart. A window restarts at its new size; in fullscreen the
-	// size follows the display mode, so r_mode stays, but the renderer
-	// still needs the restart: toggling fullscreen changes the window's
-	// size (GLimp_EndFrame). Ask the window: IN_Frame sets
-	// cls.glconfig.isFullscreen from r_fullscreen, which on the web
-	// doesn't make the window fullscreen (GLimp_SetMode).
-	if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
-	{
-		// the window is created in screen coordinates
-		if( !SDL_GetWindowSize( SDL_window, &width, &height ) )
-		{
-			return;
-		}
-
-		Cvar_SetValue( "r_customwidth", width );
-		Cvar_SetValue( "r_customheight", height );
-		Cvar_Set( "r_mode", "-1" );
-	}
-
+	// else restart, which toggling fullscreen also needs: it changes the
+	// window's size (GLimp_EndFrame).
 	// Wait until user stops dragging for 1 second, so
 	// we aren't constantly recreating the GL context while
 	// they try to drag...
