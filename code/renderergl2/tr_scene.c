@@ -120,6 +120,11 @@ void RE_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts
 		return;
 	}
 
+	// a negative count would pass the room checks below
+	if ( numVerts < 0 || numPolys < 0 ) {
+		ri.Error( ERR_DROP, "RE_AddPolyToScene: %i vertices, %i polygons", numVerts, numPolys );
+	}
+
 	if ( !hShader ) {
 		// This isn't a useful warning, and an hShader of zero isn't a null shader, it's
 		// the default shader.
@@ -128,7 +133,9 @@ void RE_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts
 	}
 
 	for ( j = 0; j < numPolys; j++ ) {
-		if ( r_numpolyverts + numVerts > max_polyverts || r_numpolys >= max_polys ) {
+		// numVerts may be as large as the caller likes: keep the sum from
+		// overflowing
+		if ( numVerts > max_polyverts - r_numpolyverts || r_numpolys >= max_polys ) {
       /*
       NOTE TTimo this was initially a PRINT_WARNING
       but it happens a lot with high fighting scenes and particles

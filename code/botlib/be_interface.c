@@ -103,10 +103,10 @@ qboolean ValidClientNumber(int num, char *str)
 //===========================================================================
 qboolean ValidEntityNumber(int num, char *str)
 {
-	if (num < 0 || num > botlibglobals.maxentities)
+	if (num < 0 || num >= botlibglobals.maxentities)
 	{
 		botimport.Print(PRT_ERROR, "%s: invalid entity number %d, [0, %d]\n",
-										str, num, botlibglobals.maxentities);
+										str, num, botlibglobals.maxentities - 1);
 		return qfalse;
 	} //end if
 	return qtrue;
