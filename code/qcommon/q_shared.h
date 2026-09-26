@@ -960,6 +960,9 @@ struct cvar_s {
 	cvar_t *hashNext;
 	cvar_t *hashPrev;
 	int			hashIndex;
+
+	qboolean	untrusted;	// game code or a server created it, or they or restricted text set it
+						// last: see Cvar_RunsRestricted
 };
 
 #define	MAX_CVAR_VALUE_STRING	256

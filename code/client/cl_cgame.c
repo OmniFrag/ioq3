@@ -573,7 +573,7 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_FS_SEEK:
 		return FS_Seek( VMV_FILE( 1 ), args[2], args[3] );
 	case CG_SENDCONSOLECOMMAND:
-		Cbuf_AddText( VMA_STR( 1 ) );
+		Cbuf_ExecuteTextRestricted( EXEC_APPEND, VMA_STR( 1 ) );
 		return 0;
 	case CG_ADDCOMMAND:
 		CL_AddCgameCommand( VMA_STR( 1 ) );
@@ -1067,7 +1067,8 @@ void CL_FirstSnapshot( void ) {
 	// this is to allow scripting a timedemo to start right
 	// after loading
 	if ( cl_activeAction->string[0] ) {
-		Cbuf_AddText( cl_activeAction->string );
+		// with the rights of whoever set it
+		Cbuf_AddTextRestricted( cl_activeAction->string, Cvar_RunsRestricted( "activeAction" ) );
 		Cvar_Set( "activeAction", "" );
 	}
 

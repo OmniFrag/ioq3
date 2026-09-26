@@ -511,6 +511,20 @@ void Cbuf_AddText( const char *text );
 void Cbuf_ExecuteText( int exec_when, const char *text );
 // this can be used in place of either Cbuf_AddText or Cbuf_InsertText
 
+void Cbuf_ExecuteTextRestricted( int exec_when, const char *text );
+// the same for game code's text, which runs restricted (Cmd_IsRestricted)
+
+void Cbuf_AddTextRestricted( const char *text, qboolean restricted );
+void Cbuf_InsertTextRestricted( const char *text, qboolean restricted );
+// Cbuf_AddText and Cbuf_InsertText into game code's buffer, or the player's
+
+qboolean Cmd_IsRestricted( void );
+// whether the running command came from game code, or text it queued or
+// ran: it can't run the commands that reveal secrets or stop the process,
+// or use private and protected cvars
+void Cmd_EndRestricted( void );
+// an error ended the running command
+
 void Cbuf_Execute (void);
 // Pulls off \n terminated lines of text from the command buffer and sends
 // them through Cmd_ExecuteString.  Stops when the buffer is empty.
@@ -623,6 +637,12 @@ void	Cvar_SetSafe( const char *var_name, const char *value );
 // sometimes we set variables from an untrusted source: fail if flags &
 // CVAR_PROTECTED, or CVAR_PRIVATE (but for password)
 void	Cvar_ResetSafe( const char *var_name );
+qboolean Cvar_RunsRestricted( const char *var_name );
+// whether a cvar's value, run as commands, runs restricted: with the
+// rights of whoever set it
+qboolean Cvar_AllowedFromText( const char *var_name );
+// false, with a message, if the running command is restricted and the
+// cvar private or protected
 void	Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed );
 void	Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed );
 // a game module's set: as Cvar_SetSafe, and an engine cvar that is read

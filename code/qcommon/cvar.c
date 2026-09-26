@@ -372,6 +372,23 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	{
 		var_value = Cvar_Validate(var, var_value, qfalse);
 
+		// a protected or private cvar that game code, a server or restricted
+		// text created before the engine registered it takes the engine's
+		// value, as a read only one does
+		if ( ( flags & ( CVAR_PROTECTED | CVAR_PRIVATE ) ) && !( flags & CVAR_VM_CREATED ) &&
+			var->untrusted ) {
+			if ( strcmp( var->string, var_value ) ) {
+				Com_Printf( "%s can't be set by game code or game content.\n", var_name );
+			}
+			Z_Free( var->resetString );
+			var->resetString = CopyString( var_value );
+			if ( var->latchedString ) {
+				Z_Free( var->latchedString );
+			}
+			var->latchedString = CopyString( var_value );
+			var->untrusted = qfalse;
+		}
+
 		// Make sure the game code cannot mark engine-added variables as gamecode vars
 		if(var->flags & CVAR_VM_CREATED)
 		{
@@ -477,6 +494,8 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->resetString = CopyString( var_value );
 	var->validate = qfalse;
 	var->description = NULL;
+	// its value is game code's or a server's: see cvar_t's untrusted
+	var->untrusted = ( flags & ( CVAR_VM_CREATED | CVAR_SERVER_CREATED ) ) != 0;
 
 	// link the variable in
 	var->next = cvar_vars;
@@ -704,10 +723,26 @@ static void Cvar_CheckSafeSet( const char *var_name, const char *value )
 	}
 }
 
+/*
+============
+Cvar_SetUntrusted
+
+A set by game code or a server, which marks the cvar untrusted
+============
+*/
+static void Cvar_SetUntrusted( const char *var_name, const char *value, qboolean force )
+{
+	cvar_t	*var = Cvar_Set2( var_name, value, force );
+
+	if ( var ) {
+		var->untrusted = qtrue;
+	}
+}
+
 void Cvar_SetSafe( const char *var_name, const char *value )
 {
 	Cvar_CheckSafeSet( var_name, value );
-	Cvar_Set( var_name, value );
+	Cvar_SetUntrusted( var_name, value, qtrue );
 }
 
 /*
@@ -777,7 +812,7 @@ void Cvar_SetFromVM( const char *var_name, const char *value, const char * const
 			return;
 		}
 	}
-	Cvar_Set( var_name, value );
+	Cvar_SetUntrusted( var_name, value, qtrue );
 }
 
 void Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed )
@@ -801,7 +836,75 @@ private cvar
 */
 void Cvar_ResetSafe( const char *var_name ) {
 	Cvar_CheckSafeSet( var_name, NULL );
-	Cvar_Reset( var_name );
+	Cvar_SetUntrusted( var_name, NULL, qfalse );
+}
+
+/*
+============
+Cvar_RunsRestricted
+
+Whether a cvar's value, run as commands (vstr, nextdemo, activeAction),
+runs restricted (Cmd_IsRestricted), with the rights of whoever set it.
+
+From restricted text, a cvar keeps full rights only if it isn't
+untrusted and isn't archived, since an
+archived value comes back after a restart as though the player's config
+had set it; so an admin's map rotation (set m1 "map q3dm1; set nextmap
+vstr m2") works when qagame runs vstr nextmap. From anywhere else, it is
+restricted if it's untrusted.
+============
+*/
+qboolean Cvar_RunsRestricted( const char *var_name ) {
+	cvar_t	*var = Cvar_FindVar( var_name );
+
+	if ( !var ) {
+		return Cmd_IsRestricted();
+	}
+	if ( Cmd_IsRestricted() && ( var->flags & CVAR_ARCHIVE ) ) {
+		return qtrue;
+	}
+	return var->untrusted;
+}
+
+/*
+============
+Cvar_AllowedFromText
+
+Restricted text (Cmd_IsRestricted) can't use a private or protected
+cvar, whether to set, reset, toggle, unset, print or vstr it
+============
+*/
+qboolean Cvar_AllowedFromText( const char *var_name ) {
+	// CVAR_NONEXISTENT has neither flag
+	if ( Cmd_IsRestricted() && ( Cvar_Flags( var_name ) & ( CVAR_PRIVATE | CVAR_PROTECTED ) ) ) {
+		Com_Printf( "%s can't be used by game code or game content.\n", var_name );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+============
+Cvar_SetFromText
+
+A set by a command, which marks the cvar untrusted if the command is
+restricted, and clears the mark if it isn't and the cvar now holds the
+value it gave: a refused or latched set leaves the old value, and its
+mark, in place
+============
+*/
+static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
+{
+	cvar_t	*var = Cvar_Set2( var_name, value, qfalse );
+
+	if ( var ) {
+		if ( Cmd_IsRestricted() ) {
+			var->untrusted = qtrue;
+		} else if ( !strcmp( var->string, value ? value : var->resetString ) ) {
+			var->untrusted = qfalse;
+		}
+	}
+	return var;
 }
 
 /*
@@ -858,6 +961,9 @@ qboolean Cvar_Command( void ) {
 	if (!v) {
 		return qfalse;
 	}
+	if ( !Cvar_AllowedFromText( v->name ) ) {
+		return qtrue;
+	}
 
 	// perform a variable print or set
 	if ( Cmd_Argc() == 1 ) {
@@ -866,7 +972,7 @@ qboolean Cvar_Command( void ) {
 	}
 
 	// set the value if forcing isn't required
-	Cvar_Set2 (v->name, Cmd_Args(), qfalse);
+	Cvar_SetFromText (v->name, Cmd_Args());
 	return qtrue;
 }
 
@@ -916,11 +1022,13 @@ void Cvar_Toggle_f( void ) {
 		Com_Printf("usage: toggle <variable> [value1, value2, ...]\n");
 		return;
 	}
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return;
+	}
 
 	if(c == 2) {
-		Cvar_Set2(Cmd_Argv(1), va("%d", 
-			!Cvar_VariableValue(Cmd_Argv(1))), 
-			qfalse);
+		Cvar_SetFromText(Cmd_Argv(1), va("%d",
+			!Cvar_VariableValue(Cmd_Argv(1))));
 		return;
 	}
 
@@ -935,13 +1043,13 @@ void Cvar_Toggle_f( void ) {
 	// behaviour is the same as no match (set to the first argument)
 	for(i = 2; i + 1 < c; i++) {
 		if(strcmp(curval, Cmd_Argv(i)) == 0) {
-			Cvar_Set2(Cmd_Argv(1), Cmd_Argv(i + 1), qfalse);
+			Cvar_SetFromText(Cmd_Argv(1), Cmd_Argv(i + 1));
 			return;
 		}
 	}
 
 	// fallback
-	Cvar_Set2(Cmd_Argv(1), Cmd_Argv(2), qfalse);
+	Cvar_SetFromText(Cmd_Argv(1), Cmd_Argv(2));
 }
 
 /*
@@ -964,12 +1072,15 @@ void Cvar_Set_f( void ) {
 		Com_Printf ("usage: %s <variable> <value>\n", cmd);
 		return;
 	}
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return;
+	}
 	if ( c == 2 ) {
 		Cvar_Print_f();
 		return;
 	}
 
-	v = Cvar_Set2 (Cmd_Argv(1), Cmd_ArgsFrom(2), qfalse);
+	v = Cvar_SetFromText (Cmd_Argv(1), Cmd_ArgsFrom(2));
 	if( !v ) {
 		return;
 	}
@@ -1005,7 +1116,10 @@ void Cvar_Reset_f( void ) {
 		Com_Printf ("usage: reset <variable>\n");
 		return;
 	}
-	Cvar_Reset( Cmd_Argv( 1 ) );
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return;
+	}
+	Cvar_SetFromText( Cmd_Argv( 1 ), NULL );
 }
 
 /*
@@ -1292,7 +1406,10 @@ void Cvar_Unset_f(void)
 		Com_Printf("Usage: %s <varname>\n", Cmd_Argv(0));
 		return;
 	}
-	
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return;
+	}
+
 	cv = Cvar_FindVar(Cmd_Argv(1));
 
 	if(!cv)
@@ -1308,14 +1425,15 @@ void Cvar_Unset_f(void)
 
 /*
 ============
-Cvar_Restart
+Cvar_RestartKeeping
 
 Resets all cvars to their hardcoded values and removes userdefined variables
-and variables added via the VMs if requested.
+and variables added via the VMs if requested, but those with any of
+keepFlags
 ============
 */
 
-void Cvar_Restart(qboolean unsetVM)
+static void Cvar_RestartKeeping(qboolean unsetVM, int keepFlags)
 {
 	cvar_t	*curvar;
 
@@ -1323,6 +1441,11 @@ void Cvar_Restart(qboolean unsetVM)
 
 	while(curvar)
 	{
+		if ( curvar->flags & keepFlags ) {
+			curvar = curvar->next;
+			continue;
+		}
+
 		if((curvar->flags & CVAR_USER_CREATED) ||
 			(unsetVM && (curvar->flags & CVAR_VM_CREATED)))
 		{
@@ -1344,14 +1467,25 @@ void Cvar_Restart(qboolean unsetVM)
 
 /*
 ============
+Cvar_Restart
+============
+*/
+void Cvar_Restart(qboolean unsetVM)
+{
+	Cvar_RestartKeeping( unsetVM, 0 );
+}
+
+/*
+============
 Cvar_Restart_f
 
-Resets all cvars to their hardcoded values
+Resets all cvars to their hardcoded values; restricted text leaves the
+private and protected ones be
 ============
 */
 void Cvar_Restart_f(void)
 {
-	Cvar_Restart(qfalse);
+	Cvar_RestartKeeping( qfalse, Cmd_IsRestricted() ? CVAR_PRIVATE | CVAR_PROTECTED : 0 );
 }
 
 /*

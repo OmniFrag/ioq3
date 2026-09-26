@@ -3018,6 +3018,13 @@ void Com_WriteConfig_f( void ) {
 		return;
 	}
 
+	// restricted text can't replace the configs the engine runs at startup
+	if ( Cmd_IsRestricted() && ( FS_IsEngineFile( filename ) ||
+		!Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) ) ) {
+		Com_Printf( "%s can't be written by game code or game content.\n", filename );
+		return;
+	}
+
 	Com_Printf( "Writing %s.\n", filename );
 	Com_WriteConfigToFile( filename );
 }
@@ -3202,6 +3209,7 @@ void Com_Frame( void ) {
   
 
 	if ( setjmp (abortframe) ) {
+		Cmd_EndRestricted();
 		return;			// an ERR_DROP was thrown
 	}
 
