@@ -350,6 +350,9 @@ void SNDDMA_StartCapture(void)
 #ifdef USE_SDL_AUDIO_CAPTURE
 	if (sdlCaptureDevice)
 	{
+		// drop what was recorded since the last capture stopped
+		if (sdlCaptureStream)
+			SDL_ClearAudioStream(sdlCaptureStream);
 		SDL_ResumeAudioDevice(sdlCaptureDevice);
 	}
 #endif
