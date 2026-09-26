@@ -33,15 +33,15 @@ static float identityMatrix[12] = {
 	0, 0, 1, 0
 };
 
-static qboolean IQM_CheckRange( iqmHeader_t *header, int offset,
-				int count, int size ) {
+static qboolean IQM_CheckRange( iqmHeader_t *header, unsigned int offset,
+				unsigned int count, uint64_t size ) {
 	// return true if the range specified by offset, count and size
-	// doesn't fit into the file
-	return ( count <= 0 ||
-		 offset <= 0 ||
-		 offset > header->filesize ||
-		 offset + count * size < 0 ||
-		 offset + count * size > header->filesize );
+	// doesn't fit into the file; in 64 bits, where the product can't
+	// overflow once size fits in the file
+	return ( count == 0 ||
+		 offset == 0 ||
+		 size > header->filesize ||
+		 (uint64_t)offset + count * size > header->filesize );
 }
 // "multiply" 3x4 matrices, these are assumed to be the top 3 rows
 // of a 4x4 matrix with the last row = (0 0 0 1)
@@ -181,7 +181,8 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 	int			i, j, k;
 	iqmTransform_t		*transform;
 	float			*mat, *matInv;
-	size_t			size, joint_names;
+	uint64_t		size;
+	size_t			joint_names;
 	byte			*dataPtr;
 	iqmData_t		*iqmData;
 	srfIQModel_t		*surface;
@@ -248,6 +249,16 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 		return qfalse;
 	}
 
+	// meshes and joints name themselves with offsets into the text, which
+	// must end with a terminator
+	if ( header->num_meshes || header->num_joints ) {
+		if( IQM_CheckRange( header, header->ofs_text, header->num_text, 1 ) ||
+		    ((char *)header)[header->ofs_text + header->num_text - 1] != '\0' ) {
+			ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has bad text\n", mod_name );
+			return qfalse;
+		}
+	}
+
 	for ( i = 0; i < ARRAY_LEN( vertexArrayFormat ); i++ ) {
 		vertexArrayFormat[i] = -1;
 	}
@@ -273,15 +284,12 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 				return qfalse;
 			}
 
-			// total number of values
-			n = header->num_vertexes * vertexarray->size;
-
 			switch( vertexarray->format ) {
 			case IQM_BYTE:
 			case IQM_UBYTE:
 				// 1 byte, no swapping necessary
 				if( IQM_CheckRange( header, vertexarray->offset,
-						    n, sizeof(byte) ) ) {
+						    header->num_vertexes, vertexarray->size * sizeof(byte) ) ) {
 					return qfalse;
 				}
 				break;
@@ -290,9 +298,11 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			case IQM_FLOAT:
 				// 4-byte swap
 				if( IQM_CheckRange( header, vertexarray->offset,
-						    n, sizeof(float) ) ) {
+						    header->num_vertexes, vertexarray->size * sizeof(float) ) ) {
 					return qfalse;
 				}
+				// the file holds them all, so this can't overflow
+				n = header->num_vertexes * vertexarray->size;
 				intPtr = (int *)((byte *)header + vertexarray->offset);
 				for( j = 0; j < n; j++, intPtr++ ) {
 					LL( *intPtr );
@@ -368,6 +378,15 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 				ri.Printf( PRINT_WARNING, "R_LoadIQM: %s is missing IQM_BLENDINDEXES and/or IQM_BLENDWEIGHTS array.\n", mod_name );
 				return qfalse;
 			}
+
+			// each vertex's four indexes are read as bytes, whatever the
+			// format, and index the joints' matrices
+			for( i = 0; i < 4 * header->num_vertexes; i++ ) {
+				if( blendIndexes[i] >= header->num_joints ) {
+					ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has a bad blend index\n", mod_name );
+					return qfalse;
+				}
+			}
 		} else {
 			// ignore blend arrays if present
 			vertexArrayFormat[IQM_BLENDINDEXES] = -1;
@@ -388,9 +407,9 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( triangle->vertex[1] );
 			LL( triangle->vertex[2] );
 
-			if( triangle->vertex[0] > header->num_vertexes ||
-			    triangle->vertex[1] > header->num_vertexes ||
-			    triangle->vertex[2] > header->num_vertexes ) {
+			if( triangle->vertex[0] >= header->num_vertexes ||
+			    triangle->vertex[1] >= header->num_vertexes ||
+			    triangle->vertex[2] >= header->num_vertexes ) {
 				return qfalse;
 			}
 		}
@@ -422,7 +441,7 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 					  mesh->num_vertexes );
 				return qfalse;
 			}
-			if ( mesh->num_triangles*3 >= SHADER_MAX_INDEXES ) {
+			if ( mesh->num_triangles >= SHADER_MAX_INDEXES / 3 ) {
 				ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has more than %i triangles on %s (%i).\n",
 					  mod_name, ( SHADER_MAX_INDEXES / 3 ) - 1, meshName[0] ? meshName : "a surface",
 					  mesh->num_triangles );
@@ -430,12 +449,22 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			}
 
 			if( mesh->first_vertex >= header->num_vertexes ||
-			    mesh->first_vertex + mesh->num_vertexes > header->num_vertexes ||
+			    mesh->num_vertexes > header->num_vertexes - mesh->first_vertex ||
 			    mesh->first_triangle >= header->num_triangles ||
-			    mesh->first_triangle + mesh->num_triangles > header->num_triangles ||
+			    mesh->num_triangles > header->num_triangles - mesh->first_triangle ||
 			    mesh->name >= header->num_text ||
 			    mesh->material >= header->num_text ) {
 				return qfalse;
+			}
+
+			triangle = (iqmTriangle_t *)((byte *)header + header->ofs_triangles) + mesh->first_triangle;
+			for( j = 0; j < mesh->num_triangles; j++, triangle++ ) {
+				for( k = 0; k < 3; k++ ) {
+					if( triangle->vertex[k] - mesh->first_vertex >= mesh->num_vertexes ) {
+						ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has a triangle outside mesh %i\n", mod_name, i );
+						return qfalse;
+					}
+				}
 			}
 
 			// find number of unique blend influences per mesh
@@ -478,6 +507,14 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 		return qfalse;
 	}
 
+	// frame 0 is read whenever there are poses
+	if( header->num_poses && ( header->num_frames == 0 ||
+	    IQM_CheckRange( header, header->ofs_frames, header->num_frames,
+			    (uint64_t)header->num_framechannels * sizeof(unsigned short) ) ) ) {
+		ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has bad frames\n", mod_name );
+		return qfalse;
+	}
+
 	joint_names = 0;
 
 	if ( header->num_joints )
@@ -503,7 +540,7 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( joint->scale[2] );
 
 			if( joint->parent < -1 ||
-				joint->parent >= (int)header->num_joints ||
+				joint->parent >= i ||
 				joint->name >= (int)header->num_text ) {
 				return qfalse;
 			}
@@ -514,6 +551,8 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 
 	if ( header->num_poses )
 	{
+		unsigned int	channels = 0;
+
 		// check and swap poses
 		if( IQM_CheckRange( header, header->ofs_poses,
 					header->num_poses, sizeof(iqmPose_t) ) ) {
@@ -543,6 +582,16 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			LL( pose->channelscale[7] );
 			LL( pose->channelscale[8] );
 			LL( pose->channelscale[9] );
+
+			for( j = 0; j < 10; j++ ) {
+				if( pose->mask & ( 1 << j ) ) {
+					channels++;
+				}
+			}
+		}
+		if( channels > header->num_framechannels ) {
+			ri.Printf( PRINT_WARNING, "R_LoadIQM: %s has more channels than its frames\n", mod_name );
+			return qfalse;
 		}
 	}
 
@@ -609,6 +658,11 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 		size += header->num_frames * 6 * sizeof(float);		// model bounds
 	} else if( header->num_meshes && header->num_frames == 0 ) {
 		size += 6 * sizeof(float);							// model bounds
+	}
+
+	if( size > INT_MAX ) {
+		ri.Printf( PRINT_WARNING, "R_LoadIQM: %s is too large\n", mod_name );
+		return qfalse;
 	}
 
 	mod->type = MOD_IQM;
@@ -1071,7 +1125,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	// don't add third_person objects if not in a portal
 	personalModel = (ent->e.renderfx & RF_THIRD_PERSON) && !tr.viewParms.isPortal;
 
-	if ( ent->e.renderfx & RF_WRAP_FRAMES ) {
+	if ( ( ent->e.renderfx & RF_WRAP_FRAMES ) && data->num_frames ) {
 		ent->e.frame %= data->num_frames;
 		ent->e.oldframe %= data->num_frames;
 	}
@@ -1474,6 +1528,14 @@ int R_IQMLerpTag( orientation_t *tag, iqmData_t *data,
 		AxisClear( tag->axis );
 		VectorClear( tag->origin );
 		return qfalse;
+	}
+
+	// cgame chooses the frames
+	if( startFrame < 0 || startFrame >= data->num_frames ) {
+		startFrame = 0;
+	}
+	if( endFrame < 0 || endFrame >= data->num_frames ) {
+		endFrame = 0;
 	}
 
 	ComputeJointMats( data, startFrame, endFrame, frac, jointMats );
