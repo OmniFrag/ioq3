@@ -57,6 +57,7 @@ static cvar_t *in_joystickNo        = NULL;
 static cvar_t *in_joystickUseAnalog = NULL;
 
 static int vidRestartTime = 0;
+static int windowSizeSaveTime = 0;	// IN_SaveWindowSize once resizing settles
 
 // the window's size changed since the last frame; dragging its edge can
 // bring several sizes between frames
@@ -1023,6 +1024,37 @@ static void IN_JoyMove( void )
 
 /*
 ===============
+IN_SaveWindowSize
+
+Keeps a window's size for the next start and for a vid_restart. In
+fullscreen the size follows the display mode, so r_mode stays. A
+maximized window fills whatever desktop it's on, so its size is kept only
+for a restart, which recreates the window from it. Ask the window:
+IN_Frame sets cls.glconfig.isFullscreen from r_fullscreen, which on the web
+doesn't make the window fullscreen (GLimp_SetMode).
+===============
+*/
+static void IN_SaveWindowSize( qboolean restarting )
+{
+	SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+	int width, height;
+
+	if( ( flags & SDL_WINDOW_FULLSCREEN ) || ( !restarting && ( flags & SDL_WINDOW_MAXIMIZED ) ) )
+	{
+		return;
+	}
+
+	// the window is created in screen coordinates
+	if( SDL_GetWindowSize( SDL_window, &width, &height ) && width > 0 && height > 0 )
+	{
+		Cvar_SetValue( "r_customwidth", width );
+		Cvar_SetValue( "r_customheight", height );
+		Cvar_Set( "r_mode", "-1" );
+	}
+}
+
+/*
+===============
 IN_WindowResized
 ===============
 */
@@ -1031,12 +1063,15 @@ static void IN_WindowResized( void )
 	int width, height;
 
 	// check if size actually changed; the renderer's size is in pixels
-	// (GLimp_SetMode)
-	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) ||
+	// (GLimp_SetMode). A minimized window can report no size at all.
+	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) || width <= 0 || height <= 0 ||
 		( cls.glconfig.vidWidth == width && cls.glconfig.vidHeight == height ) )
 	{
 		return;
 	}
+
+	// the new size is kept once the player stops resizing (IN_Frame)
+	windowSizeSaveTime = Sys_Milliseconds( ) + 1000;
 
 	// follow it without a restart if we can
 	if( CL_ResizeWindow( ) )
@@ -1044,25 +1079,8 @@ static void IN_WindowResized( void )
 		return;
 	}
 
-	// else restart. A window restarts at its new size; in fullscreen the
-	// size follows the display mode, so r_mode stays, but the renderer
-	// still needs the restart: toggling fullscreen changes the window's
-	// size (GLimp_EndFrame). Ask the window: IN_Frame sets
-	// cls.glconfig.isFullscreen from r_fullscreen, which on the web
-	// doesn't make the window fullscreen (GLimp_SetMode).
-	if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
-	{
-		// the window is created in screen coordinates
-		if( !SDL_GetWindowSize( SDL_window, &width, &height ) )
-		{
-			return;
-		}
-
-		Cvar_SetValue( "r_customwidth", width );
-		Cvar_SetValue( "r_customheight", height );
-		Cvar_Set( "r_mode", "-1" );
-	}
-
+	// else restart, which toggling fullscreen also needs: it changes the
+	// window's size (GLimp_EndFrame).
 	// Wait until user stops dragging for 1 second, so
 	// we aren't constantly recreating the GL context while
 	// they try to drag...
@@ -1332,7 +1350,16 @@ void IN_Frame( void )
 	if( ( vidRestartTime != 0 ) && ( vidRestartTime < Sys_Milliseconds( ) ) )
 	{
 		vidRestartTime = 0;
+		windowSizeSaveTime = 0;
+		IN_SaveWindowSize( qtrue );
 		Cbuf_AddText( "vid_restart\n" );
+	}
+	else if( windowSizeSaveTime && windowSizeSaveTime < Sys_Milliseconds( ) )
+	{
+		// saved once, not on every step of a drag, which would write
+		// the config file each frame
+		windowSizeSaveTime = 0;
+		IN_SaveWindowSize( qfalse );
 	}
 }
 
