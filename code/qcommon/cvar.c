@@ -168,6 +168,37 @@ void Cvar_VariableStringBuffer( const char *var_name, char *buffer, int bufsize 
 
 /*
 ============
+Cvar_VariableValueSafe, Cvar_VariableIntegerValueSafe,
+Cvar_VariableStringBufferSafe
+
+Reads for game code: a cvar it may not read (VM_PrivateCvarFlag) reads
+as one that doesn't exist
+============
+*/
+float Cvar_VariableValueSafe( const char *var_name ) {
+	if ( Cvar_Flags( var_name ) & VM_PrivateCvarFlag() ) {
+		return 0;
+	}
+	return Cvar_VariableValue( var_name );
+}
+
+int Cvar_VariableIntegerValueSafe( const char *var_name ) {
+	if ( Cvar_Flags( var_name ) & VM_PrivateCvarFlag() ) {
+		return 0;
+	}
+	return Cvar_VariableIntegerValue( var_name );
+}
+
+void Cvar_VariableStringBufferSafe( const char *var_name, char *buffer, int bufsize ) {
+	if ( Cvar_Flags( var_name ) & VM_PrivateCvarFlag() ) {
+		Q_strncpyz( buffer, "", bufsize );
+		return;
+	}
+	Cvar_VariableStringBuffer( var_name, buffer, bufsize );
+}
+
+/*
+============
 Cvar_Flags
 ============
 */
@@ -641,11 +672,17 @@ void Cvar_Set( const char *var_name, const char *value) {
 Cvar_SetSafe
 ============
 */
-void Cvar_SetSafe( const char *var_name, const char *value )
+static void Cvar_CheckSafeSet( const char *var_name, const char *value )
 {
 	int flags = Cvar_Flags( var_name );
 
-	if((flags != CVAR_NONEXISTENT) && (flags & CVAR_PROTECTED))
+	if ( flags == CVAR_NONEXISTENT )
+		return;
+
+	// a private cvar can't be set either, but for a userinfo one the
+	// player types in, password, which a server browser's field writes
+	if( ( flags & CVAR_PROTECTED ) ||
+		( ( flags & CVAR_PRIVATE ) && ( flags & ( CVAR_USERINFO | CVAR_ROM ) ) != CVAR_USERINFO ) )
 	{
 		if( value )
 			Com_Error( ERR_DROP, "Restricted source tried to set "
@@ -653,8 +690,12 @@ void Cvar_SetSafe( const char *var_name, const char *value )
 		else
 			Com_Error( ERR_DROP, "Restricted source tried to "
 				"modify \"%s\"", var_name );
-		return;
 	}
+}
+
+void Cvar_SetSafe( const char *var_name, const char *value )
+{
+	Cvar_CheckSafeSet( var_name, value );
 	Cvar_Set( var_name, value );
 }
 
@@ -706,6 +747,19 @@ Cvar_Reset
 */
 void Cvar_Reset( const char *var_name ) {
 	Cvar_Set2( var_name, NULL, qfalse );
+}
+
+/*
+============
+Cvar_ResetSafe
+
+Cvar_Reset for a restricted source, which may not reset a protected or
+private cvar
+============
+*/
+void Cvar_ResetSafe( const char *var_name ) {
+	Cvar_CheckSafeSet( var_name, NULL );
+	Cvar_Reset( var_name );
 }
 
 /*
@@ -920,7 +974,7 @@ Appends lines containing "set variable value" for all variables
 with the archive flag set to qtrue.
 ============
 */
-void Cvar_WriteVariables(fileHandle_t f)
+void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
 {
 	cvar_t	*var;
 	char	buffer[1024];
@@ -930,6 +984,8 @@ void Cvar_WriteVariables(fileHandle_t f)
 		const char *value;
 
 		if(!var->name || Q_stricmp( var->name, "cl_cdkey" ) == 0)
+			continue;
+		if ( var->flags & hideFlags )
 			continue;
 
 		if( var->flags & CVAR_ARCHIVE ) {
@@ -1261,20 +1317,31 @@ void Cvar_Restart_f(void)
 Cvar_InfoString
 =====================
 */
-char *Cvar_InfoString(int bit)
+static char *Cvar_InfoStringHiding( int bit, int hideFlags )
 {
 	static char	info[MAX_INFO_STRING];
 	cvar_t	*var;
 
 	info[0] = 0;
 
+	// a private cvar goes only in the userinfo, to the server the player
+	// joins, never in what a server tells everyone
+	if ( bit != CVAR_USERINFO ) {
+		hideFlags |= CVAR_PRIVATE;
+	}
+
 	for(var = cvar_vars; var; var = var->next)
 	{
-		if(var->name && (var->flags & bit))
+		if(var->name && (var->flags & bit) && !(var->flags & hideFlags))
 			Info_SetValueForKey (info, var->name, var->string);
 	}
 
 	return info;
+}
+
+char *Cvar_InfoString(int bit)
+{
+	return Cvar_InfoStringHiding( bit, 0 );
 }
 
 /*
@@ -1293,7 +1360,7 @@ char *Cvar_InfoString_Big(int bit)
 
 	for (var = cvar_vars; var; var = var->next)
 	{
-		if(var->name && (var->flags & bit))
+		if(var->name && (var->flags & bit) && !(var->flags & CVAR_PRIVATE))
 			Info_SetValueForKey_Big (info, var->name, var->string);
 	}
 	return info;
@@ -1308,6 +1375,17 @@ Cvar_InfoStringBuffer
 */
 void Cvar_InfoStringBuffer( int bit, char* buff, int buffsize ) {
 	Q_strncpyz(buff,Cvar_InfoString(bit),buffsize);
+}
+
+/*
+=====================
+Cvar_InfoStringBufferSafe
+
+For game code, without the cvars it may not read (VM_PrivateCvarFlag)
+=====================
+*/
+void Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize ) {
+	Q_strncpyz( buff, Cvar_InfoStringHiding( bit, VM_PrivateCvarFlag() ), buffsize );
 }
 
 /*
@@ -1359,7 +1437,7 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 		return;
 
 	var = Cvar_FindVar( var_name );
-	if( var )
+	if( var && !( var->flags & CVAR_PRIVATE ) )
 		Cvar_SetDescription( var, var_description );
 }
 
@@ -1426,9 +1504,10 @@ void Cvar_Register(vmCvar_t *vmCvar, const char *varName, const char *defaultVal
 
 	cv = Cvar_FindVar(varName);
 
-	// Don't modify cvar if it's protected.
-	if ( cv && ( cv->flags & CVAR_PROTECTED ) ) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register protected cvar '%s' with value '%s'%s\n",
+	// Don't modify cvar if it's protected or private.
+	if ( cv && ( cv->flags & ( CVAR_PROTECTED | CVAR_PRIVATE ) ) ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register %s cvar '%s' with value '%s'%s\n",
+			( cv->flags & CVAR_PROTECTED ) ? "protected" : "private",
 			varName, defaultValue, ( flags & ~cv->flags ) != 0 ? " and new flags" : "" );
 	} else {
 		cv = Cvar_Get(varName, defaultValue, flags | CVAR_VM_CREATED);
@@ -1467,6 +1546,13 @@ void	Cvar_Update( vmCvar_t *vmCvar ) {
 		return;		// variable might have been cleared by a cvar_restart
 	}
 	vmCvar->modificationCount = cv->modificationCount;
+	// a cvar the module may not read reads as empty
+	if ( cv->flags & VM_PrivateCvarFlag() ) {
+		vmCvar->string[0] = '\0';
+		vmCvar->value = 0;
+		vmCvar->integer = 0;
+		return;
+	}
 	if ( strlen(cv->string)+1 > MAX_CVAR_VALUE_STRING ) 
 	  Com_Error( ERR_DROP, "Cvar_Update: src %s length %u exceeds MAX_CVAR_VALUE_STRING",
 		     cv->string, 

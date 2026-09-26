@@ -232,6 +232,19 @@ const char *VM_ExplicitArgStr( vm_t *vm, intptr_t value, const char *what ) {
 
 /*
 ============
+VM_PrivateCvarFlag
+
+The cvars the current module may not read: CVAR_PRIVATE ones, unless it
+is native code (a dll or a linked module), which shares the engine's
+process and could read them anyway
+============
+*/
+int VM_PrivateCvarFlag( void ) {
+	return currentVM && currentVM->entryPoint ? 0 : CVAR_PRIVATE;
+}
+
+/*
+============
 VM_ArgInt
 
 A number from lo to hi

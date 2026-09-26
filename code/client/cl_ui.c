@@ -862,10 +862,10 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_CVAR_VARIABLEVALUE:
-		return FloatAsInt( Cvar_VariableValue( VMA_STR( 1 ) ) );
+		return FloatAsInt( Cvar_VariableValueSafe( VMA_STR( 1 ) ) );
 
 	case UI_CVAR_VARIABLESTRINGBUFFER:
-		Cvar_VariableStringBuffer( VMA_STR( 1 ), VMA_STRBUF( 2, args[3] ), args[3] );
+		Cvar_VariableStringBufferSafe( VMA_STR( 1 ), VMA_STRBUF( 2, args[3] ), args[3] );
 		return 0;
 
 	case UI_CVAR_SETVALUE:
@@ -873,7 +873,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_CVAR_RESET:
-		Cvar_Reset( VMA_STR( 1 ) );
+		Cvar_ResetSafe( VMA_STR( 1 ) );
 		return 0;
 
 	case UI_CVAR_CREATE:
@@ -881,7 +881,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_CVAR_INFOSTRINGBUFFER:
-		Cvar_InfoStringBuffer( args[1], VMA_STRBUF( 2, args[3] ), args[3] );
+		Cvar_InfoStringBufferSafe( args[1], VMA_STRBUF( 2, args[3] ), args[3] );
 		return 0;
 
 	case UI_ARGC:

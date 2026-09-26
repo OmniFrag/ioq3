@@ -548,9 +548,9 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		Cvar_SetSafe( VMA_STR( 1 ), VMA_STR_OPT( 2 ) );
 		return 0;
 	case G_CVAR_VARIABLE_INTEGER_VALUE:
-		return Cvar_VariableIntegerValue( VMA_STR( 1 ) );
+		return Cvar_VariableIntegerValueSafe( VMA_STR( 1 ) );
 	case G_CVAR_VARIABLE_STRING_BUFFER:
-		Cvar_VariableStringBuffer( VMA_STR( 1 ), VMA_STRBUF( 2, args[3] ), args[3] );
+		Cvar_VariableStringBufferSafe( VMA_STR( 1 ), VMA_STRBUF( 2, args[3] ), args[3] );
 		return 0;
 	case G_ARGC:
 		return Cmd_Argc();

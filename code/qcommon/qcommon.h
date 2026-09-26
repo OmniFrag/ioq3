@@ -442,6 +442,7 @@ char		*VM_ArgStrBuf( const intptr_t *args, int n, int64_t size );
 void		*VM_ArgArray( const intptr_t *args, int n, size_t elemSize, int count1, int count2 );
 const char	*VM_ArgStr( const intptr_t *args, int n, qboolean optional );
 int			VM_ArgInt( const intptr_t *args, int n, int lo, int hi );
+int			VM_PrivateCvarFlag( void );
 // whole handlers for syscalls every module has
 intptr_t	VM_Strncpy( const intptr_t *args );
 intptr_t	VM_FOpenFile( const intptr_t *args );
@@ -609,7 +610,8 @@ void	Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultVa
 // basically a slightly modified Cvar_Get for the interpreted modules
 
 void	Cvar_Update( vmCvar_t *vmCvar );
-// updates an interpreted modules' version of a cvar
+// updates an interpreted modules' version of a cvar; one it may not read
+// (VM_PrivateCvarFlag) reads as empty
 
 void 	Cvar_Set( const char *var_name, const char *value );
 // will create the variable with no flags if it doesn't exist
@@ -618,7 +620,9 @@ cvar_t	*Cvar_Set2(const char *var_name, const char *value, qboolean force);
 // same as Cvar_Set, but allows more control over setting of cvar
 
 void	Cvar_SetSafe( const char *var_name, const char *value );
-// sometimes we set variables from an untrusted source: fail if flags & CVAR_PROTECTED
+// sometimes we set variables from an untrusted source: fail if flags &
+// CVAR_PROTECTED, or CVAR_PRIVATE (but for password)
+void	Cvar_ResetSafe( const char *var_name );
 
 void Cvar_SetLatched( const char *var_name, const char *value);
 // don't set the cvar immediately
@@ -634,6 +638,12 @@ int		Cvar_VariableIntegerValue( const char *var_name );
 char	*Cvar_VariableString( const char *var_name );
 void	Cvar_VariableStringBuffer( const char *var_name, char *buffer, int bufsize );
 // returns an empty string if not defined
+
+float	Cvar_VariableValueSafe( const char *var_name );
+int		Cvar_VariableIntegerValueSafe( const char *var_name );
+void	Cvar_VariableStringBufferSafe( const char *var_name, char *buffer, int bufsize );
+// for game code: a cvar it may not read (VM_PrivateCvarFlag) reads as one
+// that isn't defined
 
 int	Cvar_Flags(const char *var_name);
 // returns CVAR_NONEXISTENT if cvar doesn't exist or the flags of that particular CVAR.
@@ -652,9 +662,9 @@ qboolean Cvar_Command( void );
 // command.  Returns true if the command was a variable reference that
 // was handled. (print or change)
 
-void 	Cvar_WriteVariables( fileHandle_t f );
+void 	Cvar_WriteVariables( fileHandle_t f, int hideFlags );
 // writes lines containing "set variable value" for all variables
-// with the archive flag set to true.
+// with the archive flag set to true, but those with any of hideFlags
 
 void	Cvar_Init( void );
 
@@ -663,6 +673,9 @@ char	*Cvar_InfoString_Big( int bit );
 // returns an info string containing all the cvars that have the given bit set
 // in their flags ( CVAR_USERINFO, CVAR_SERVERINFO, CVAR_SYSTEMINFO, etc )
 void	Cvar_InfoStringBuffer( int bit, char *buff, int buffsize );
+void	Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize );
+// private cvars are only ever in the userinfo, and the Safe version, for
+// game code, leaves out the cvars it may not read (VM_PrivateCvarFlag)
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
 void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
