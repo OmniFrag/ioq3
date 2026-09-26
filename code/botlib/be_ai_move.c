@@ -317,6 +317,8 @@ int BotReachabilityArea(vec3_t origin, int client)
 		} //end if
 
 		modelnum = AAS_EntityModelindex(bsptrace.ent);
+		// game code sets the model index
+		if (modelnum < 0 || modelnum >= MAX_MODELS) return BotFuzzyPointReachabilityArea(origin);
 		modeltype = modeltypes[modelnum];
 
 		//if standing on a func_plat or func_bobbing then the bot is assumed to be

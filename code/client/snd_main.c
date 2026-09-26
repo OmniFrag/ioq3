@@ -77,11 +77,29 @@ static qboolean S_ValidSoundInterface( soundInterface_t *pSi )
 
 /*
 =================
+S_CheckEntityNum
+
+Entity numbers come from cgame and index the backends' per-entity arrays
+=================
+*/
+static void S_CheckEntityNum( const char *function, int entityNum )
+{
+	if( entityNum < 0 || entityNum >= MAX_GENTITIES ) {
+		Com_Error( ERR_DROP, "%s: bad entitynum %i", function, entityNum );
+	}
+}
+
+/*
+=================
 S_StartSound
 =================
 */
 void S_StartSound( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx )
 {
+	// with an origin, the entity is only compared (cgame passes -1)
+	if( !origin ) {
+		S_CheckEntityNum( "S_StartSound", entnum );
+	}
 	if( si.StartSound ) {
 		si.StartSound( origin, entnum, entchannel, sfx );
 	}
@@ -167,6 +185,7 @@ S_AddLoopingSound
 void S_AddLoopingSound( int entityNum, const vec3_t origin,
 		const vec3_t velocity, sfxHandle_t sfx )
 {
+	S_CheckEntityNum( "S_AddLoopingSound", entityNum );
 	if( si.AddLoopingSound ) {
 		si.AddLoopingSound( entityNum, origin, velocity, sfx );
 	}
@@ -180,6 +199,7 @@ S_AddRealLoopingSound
 void S_AddRealLoopingSound( int entityNum, const vec3_t origin,
 		const vec3_t velocity, sfxHandle_t sfx )
 {
+	S_CheckEntityNum( "S_AddRealLoopingSound", entityNum );
 	if( si.AddRealLoopingSound ) {
 		si.AddRealLoopingSound( entityNum, origin, velocity, sfx );
 	}
@@ -192,6 +212,7 @@ S_StopLoopingSound
 */
 void S_StopLoopingSound( int entityNum )
 {
+	S_CheckEntityNum( "S_StopLoopingSound", entityNum );
 	if( si.StopLoopingSound ) {
 		si.StopLoopingSound( entityNum );
 	}
@@ -205,6 +226,7 @@ S_Respatialize
 void S_Respatialize( int entityNum, const vec3_t origin,
 		vec3_t axis[3], int inwater )
 {
+	S_CheckEntityNum( "S_Respatialize", entityNum );
 	if( si.Respatialize ) {
 		si.Respatialize( entityNum, origin, axis, inwater );
 	}
@@ -217,6 +239,7 @@ S_UpdateEntityPosition
 */
 void S_UpdateEntityPosition( int entityNum, const vec3_t origin )
 {
+	S_CheckEntityNum( "S_UpdateEntityPosition", entityNum );
 	if( si.UpdateEntityPosition ) {
 		si.UpdateEntityPosition( entityNum, origin );
 	}

@@ -275,7 +275,8 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
 	vec3_t			projectionDir;
 	vec3_t			v1, v2;
 
-	if (numPoints <= 0) {
+	// a fragment is written before the room for it is checked
+	if (numPoints <= 0 || maxFragments <= 0) {
 		return 0;
 	}
 

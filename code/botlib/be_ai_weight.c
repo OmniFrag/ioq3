@@ -169,6 +169,11 @@ fuzzyseperator_t *ReadFuzzySeperators_r(source_t *source)
 	if (!PC_ExpectTokenString(source, "(")) return NULL;
 	if (!PC_ExpectTokenType(source, TT_NUMBER, TT_INTEGER, &token)) return NULL;
 	index = token.intvalue;
+	if (index < 0 || index >= BOT_MAX_INVENTORY)
+	{
+		SourceError(source, "inventory index %d outside 0 to %d", index, BOT_MAX_INVENTORY - 1);
+		return NULL;
+	} //end if
 	if (!PC_ExpectTokenString(source, ")")) return NULL;
 	if (!PC_ExpectTokenString(source, "{")) return NULL;
 	if (!PC_ExpectAnyToken(source, &token)) return NULL;
