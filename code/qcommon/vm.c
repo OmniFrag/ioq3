@@ -595,6 +595,44 @@ static vmLinkedModule_t *VM_FindLinked( const char *module ) {
 	return NULL;
 }
 
+// MSVC defines __SANITIZE_ADDRESS__ too, but has no __attribute__, and
+// can't build linked modules
+#if defined( __SANITIZE_ADDRESS__ ) && defined( __GNUC__ )
+#define VM_ADDRESS_SANITIZER
+#elif defined( __has_feature )
+#if __has_feature( address_sanitizer )
+#define VM_ADDRESS_SANITIZER
+#endif
+#endif
+
+/*
+================
+VM_CopyLinkedData
+
+Copies a linked module's data, or zeroes it when from is NULL. The data
+spans many objects, and AddressSanitizer puts redzones between them, which
+it would report the copy for crossing; they hold nothing the copy harms.
+================
+*/
+#ifdef VM_ADDRESS_SANITIZER
+__attribute__(( no_sanitize_address ))
+static void VM_CopyLinkedData( byte *to, const byte *from, size_t size ) {
+	volatile byte	*out = to;
+
+	while ( size-- ) {
+		*out++ = from ? *from++ : 0;
+	}
+}
+#else
+static void VM_CopyLinkedData( byte *to, const byte *from, size_t size ) {
+	if ( from ) {
+		Com_Memcpy( to, from, size );
+	} else {
+		Com_Memset( to, 0, size );
+	}
+}
+#endif
+
 /*
 ================
 VM_ResetLinked
@@ -614,12 +652,12 @@ static void VM_ResetLinked( vmLinkedModule_t *linked ) {
 
 	if ( !linked->initialData ) {
 		linked->initialData = Z_Malloc( dataSize );
-		Com_Memcpy( linked->initialData, linked->data, dataSize );
+		VM_CopyLinkedData( linked->initialData, linked->data, dataSize );
 		return;
 	}
 
-	Com_Memcpy( linked->data, linked->initialData, dataSize );
-	Com_Memset( linked->bss, 0, linked->bssEnd - linked->bss );
+	VM_CopyLinkedData( linked->data, linked->initialData, dataSize );
+	VM_CopyLinkedData( linked->bss, NULL, linked->bssEnd - linked->bss );
 }
 
 /*
