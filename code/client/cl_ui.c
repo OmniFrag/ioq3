@@ -1004,7 +1004,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_KEY_SETBINDING:
-		Key_SetBinding( args[1], VMA_STR( 2 ) );
+		Key_SetBindingRestricted( args[1], VMA_STR( 2 ) );
 		return 0;
 
 	case UI_KEY_ISDOWN:
