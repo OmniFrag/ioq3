@@ -400,25 +400,13 @@ static int	FloatAsInt( float f ) {
 	return fi.i;
 }
 
-/*
-====================
-CL_GetValue
-
-Answers trap_GetValue for the cgame module. Keys name engine extensions.
-====================
-*/
-static qboolean CL_GetValue( char *value, int valueSize, const char *key ) {
-	if ( !Q_stricmp( key, "trap_SetTextFocus_Q3F" ) ) {
-		Com_sprintf( value, valueSize, "%i", COM_TRAP_SETTEXTFOCUS );
-		return qtrue;
-	}
-	if ( !Q_stricmp( key, "trap_FollowWindowSize_Q3F" ) ) {
-		Com_sprintf( value, valueSize, "%i", COM_TRAP_FOLLOWWINDOWSIZE );
-		return qtrue;
-	}
-
-	return qfalse;
-}
+// the engine extensions cgame can look up with trap_GetValue; each has its
+// case in CL_CgameSystemCalls
+static const vmExtension_t cl_cgameExtensions[] = {
+	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
+	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ NULL, 0 }
+};
 
 /*
 ====================
@@ -714,7 +702,7 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return re.inPVS( VMA(1), VMA(2) );
 
 	case COM_TRAP_GETVALUE:
-		return CL_GetValue( VMA(1), args[2], VMA(3) );
+		return VM_GetValue( args, cl_cgameExtensions );
 
 	case COM_TRAP_SETTEXTFOCUS:
 		cls.cgameTextFocus = args[1] != 0;

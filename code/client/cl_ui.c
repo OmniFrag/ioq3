@@ -712,25 +712,13 @@ static int FloatAsInt( float f ) {
 	return fi.i;
 }
 
-/*
-====================
-UI_GetValue
-
-Answers trap_GetValue for the ui module. Keys name engine extensions.
-====================
-*/
-static qboolean UI_GetValue( char *value, int valueSize, const char *key ) {
-	if ( !Q_stricmp( key, "trap_SetTextFocus_Q3F" ) ) {
-		Com_sprintf( value, valueSize, "%i", COM_TRAP_SETTEXTFOCUS );
-		return qtrue;
-	}
-	if ( !Q_stricmp( key, "trap_FollowWindowSize_Q3F" ) ) {
-		Com_sprintf( value, valueSize, "%i", COM_TRAP_FOLLOWWINDOWSIZE );
-		return qtrue;
-	}
-
-	return qfalse;
-}
+// the engine extensions ui can look up with trap_GetValue; each has its case
+// in CL_UISystemCalls
+static const vmExtension_t cl_uiExtensions[] = {
+	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
+	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ NULL, 0 }
+};
 
 /*
 ====================
@@ -1093,7 +1081,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return CL_CDKeyValidate(VMA(1), VMA(2));
 		
 	case COM_TRAP_GETVALUE:
-		return UI_GetValue( VMA(1), args[2], VMA(3) );
+		return VM_GetValue( args, cl_uiExtensions );
 
 	case COM_TRAP_SETTEXTFOCUS:
 		cls.uiTextFocus = args[1] != 0;
