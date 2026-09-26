@@ -305,6 +305,9 @@ static void S_PaintChannelFrom16_scalar( channel_t *ch, const sfx_t *sc, int cou
 
 			if (sampleOffset == SND_CHUNK_SIZE) {
 				chunk = chunk->next;
+				if (!chunk) {
+					chunk = sc->soundData;
+				}
 				samples = chunk->sndChunk;
 				sampleOffset = 0;
 			}
@@ -442,6 +445,9 @@ void S_PaintChannelFromADPCM( channel_t *ch, sfx_t *sc, int count, int sampleOff
 
 		if (sampleOffset == SND_CHUNK_SIZE*4) {
 			chunk = chunk->next;
+			if (!chunk) {
+				chunk = sc->soundData;
+			}
 			S_AdpcmGetSamples( chunk, sfxScratchBuffer);
 			sampleOffset = 0;
 			sfxScratchIndex++;
@@ -478,8 +484,11 @@ void S_PaintChannelFromMuLaw( channel_t *ch, sfx_t *sc, int count, int sampleOff
 			samp[i].left += (data * leftvol)>>8;
 			samp[i].right += (data * rightvol)>>8;
 			samples++;
-			if (chunk != NULL && samples == (byte *)chunk->sndChunk+(SND_CHUNK_SIZE*2)) {
+			if (samples == (byte *)chunk->sndChunk+(SND_CHUNK_SIZE*2)) {
 				chunk = chunk->next;
+				if (!chunk) {
+					chunk = sc->soundData;
+				}
 				samples = (byte *)chunk->sndChunk;
 			}
 		}

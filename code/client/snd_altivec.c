@@ -102,6 +102,9 @@ void S_PaintChannelFrom16_altivec( portable_samplepair_t paintbuffer[PAINTBUFFER
 	
 				if (sampleOffset == SND_CHUNK_SIZE) {
 					chunk = chunk->next;
+					if (!chunk) {
+						chunk = sc->soundData;
+					}
 					samples = chunk->sndChunk;
 					sampleOffset = 0;
 				}
@@ -182,6 +185,9 @@ void S_PaintChannelFrom16_altivec( portable_samplepair_t paintbuffer[PAINTBUFFER
 				}
 				if (sampleOffset == SND_CHUNK_SIZE) {
 					chunk = chunk->next;
+					if (!chunk) {
+						chunk = sc->soundData;
+					}
 					samples = chunk->sndChunk;
 					sampleOffset = 0;
 				}
