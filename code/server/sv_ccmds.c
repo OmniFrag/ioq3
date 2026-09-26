@@ -1245,7 +1245,7 @@ static void SV_ConSay_f(void) {
 		return;
 	}
 
-	strcpy (text, "console: ");
+	Q_strncpyz( text, "console: ", sizeof( text ) );
 	p = Cmd_Args();
 
 	if ( *p == '"' ) {
@@ -1253,7 +1253,7 @@ static void SV_ConSay_f(void) {
 		p[strlen(p)-1] = 0;
 	}
 
-	strcat(text, p);
+	Q_strcat( text, sizeof( text ), p );
 
 	Com_Printf("%s\n", text);
 	SV_SendServerCommand(NULL, "chat \"%s\"", text);
@@ -1285,7 +1285,7 @@ static void SV_ConTell_f(void) {
 		return;
 	}
 
-	strcpy (text, "console_tell: ");
+	Q_strncpyz( text, "console_tell: ", sizeof( text ) );
 	p = Cmd_ArgsFrom(2);
 
 	if ( *p == '"' ) {
@@ -1293,7 +1293,7 @@ static void SV_ConTell_f(void) {
 		p[strlen(p)-1] = 0;
 	}
 
-	strcat(text, p);
+	Q_strcat( text, sizeof( text ), p );
 
 	Com_Printf("%s\n", text);
 	SV_SendServerCommand(cl, "chat \"%s\"", text);
@@ -1351,7 +1351,7 @@ static void SV_ConSayto_f(void) {
 		return;
 	}
 
-	strcpy (text, "console_sayto: ");
+	Q_strncpyz( text, "console_sayto: ", sizeof( text ) );
 	p = Cmd_ArgsFrom(2);
 
 	if ( *p == '"' ) {
@@ -1359,7 +1359,7 @@ static void SV_ConSayto_f(void) {
 		p[strlen(p)-1] = 0;
 	}
 
-	strcat(text, p);
+	Q_strcat( text, sizeof( text ), p );
 
 	Com_Printf("%s\n", text);
 	SV_SendServerCommand(saytocl, "chat \"%s\"", text);
