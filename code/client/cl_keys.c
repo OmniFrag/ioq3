@@ -927,12 +927,34 @@ void Key_SetBinding( int keynum, const char *binding ) {
 		
 	// allocate memory for new binding
 	keys[keynum].binding = CopyString( binding );
+	keys[keynum].restricted = qfalse;
 
 	// consider this like modifying an archived cvar, so the
 	// file write will be triggered at the next opportunity
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
 }
 
+
+/*
+===================
+Key_SetBindingRestricted
+
+A binding game code makes: its commands run restricted, and it can't hold
+a quote or a line break, which the config it's saved to couldn't hold
+===================
+*/
+void Key_SetBindingRestricted( int keynum, const char *binding ) {
+	if ( keynum < 0 || keynum >= MAX_KEYS ) {
+		return;
+	}
+	if ( strpbrk( binding, "\"\r\n" ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: game code's binding of %s has a quote "
+			"or a line break, ignored\n", Key_KeynumToString( keynum ) );
+		return;
+	}
+	Key_SetBinding( keynum, binding );
+	keys[keynum].restricted = qtrue;
+}
 
 /*
 ===================
@@ -1049,6 +1071,8 @@ void Key_Bind_f (void)
 	}
 
 	Key_SetBinding (b, cmd);
+	// a bind in restricted text runs restricted
+	keys[b].restricted = Cmd_IsRestricted();
 }
 
 /*
@@ -1227,15 +1251,15 @@ void CL_ParseBinding( int key, qboolean down, unsigned time )
 				char cmd[1024];
 				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n",
 					( down ) ? '+' : '-', p + 1, key, time );
-				Cbuf_AddText( cmd );
+				Cbuf_AddTextRestricted( cmd, keys[key].restricted );
 			}
 		}
 		else if( down )
 		{
 			// normal commands only execute on key press
 			if ( allCommands || CL_BindUICommand( p ) ) {
-				Cbuf_AddText( p );
-				Cbuf_AddText( "\n" );
+				Cbuf_AddTextRestricted( p, keys[key].restricted );
+				Cbuf_AddTextRestricted( "\n", keys[key].restricted );
 			}
 		}
 		if( !end )
