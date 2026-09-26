@@ -4610,6 +4610,7 @@ BotCheckConsoleMessages
 */
 void BotCheckConsoleMessages(bot_state_t *bs) {
 	char botname[MAX_NETNAME], message[MAX_MESSAGE_SIZE], netname[MAX_NETNAME], *ptr;
+	char text[MAX_MESSAGE_SIZE];
 	float chat_reply;
 	int context, handle;
 	bot_consolemessage_t m;
@@ -4634,11 +4635,16 @@ void BotCheckConsoleMessages(bot_state_t *bs) {
 				ptr = m.message + match.variables[MESSAGE].offset;
 			}
 		}
+		//synonyms can make the text longer. The engine keeps them within
+		//MAX_MESSAGE_SIZE, so expand them in a buffer that large rather than
+		//the rest of m.message after the name, then copy back what fits.
+		Q_strncpyz(text, ptr, sizeof(text));
 		//unify the white spaces in the message
-		trap_UnifyWhiteSpaces(ptr);
+		trap_UnifyWhiteSpaces(text);
 		//replace synonyms in the right context
 		context = BotSynonymContext(bs);
-		trap_BotReplaceSynonyms(ptr, context);
+		trap_BotReplaceSynonyms(text, context);
+		Q_strncpyz(ptr, text, sizeof(m.message) - (ptr - m.message));
 		//if there's no match
 		if (!BotMatchMessage(bs, m.message)) {
 			//if it is a chat message
