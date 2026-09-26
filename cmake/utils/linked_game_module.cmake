@@ -3,6 +3,7 @@ include_guard(GLOBAL)
 # add_linked_game_module(<module>
 #     [DEFINITIONS <definition>...]
 #     [INCLUDE_DIRECTORIES <directory>...]
+#     [COMPILE_OPTIONS <option>...]
 #     SOURCES <source>...)
 #
 # Builds a game module (${GAME_MODULE}, ${CGAME_MODULE} or ${UI_MODULE}) for
@@ -20,7 +21,7 @@ include_guard(GLOBAL)
 # lays out in object order, so VM_Create can reset them. That needs the
 # module built without LTO and without common symbols.
 function(add_linked_game_module MODULE)
-    cmake_parse_arguments(ARG "" "" "DEFINITIONS;INCLUDE_DIRECTORIES;SOURCES" ${ARGN})
+    cmake_parse_arguments(ARG "" "" "DEFINITIONS;INCLUDE_DIRECTORIES;COMPILE_OPTIONS;SOURCES" ${ARGN})
 
     if(MSVC)
         message(FATAL_ERROR "Linking game modules into the executable isn't supported with MSVC")
@@ -74,6 +75,10 @@ unsigned char @MODULE@_linkedBss@MARKER@[1];
         VERBATIM)
 
     target_compile_options(${TARGET} PRIVATE -include ${SYMBOLS_HEADER})
+    # after the renaming header, so a header these force in declares the
+    # renamed names
+    target_compile_options(${SCAN_TARGET} PRIVATE ${ARG_COMPILE_OPTIONS})
+    target_compile_options(${TARGET} PRIVATE ${ARG_COMPILE_OPTIONS})
 
     set_property(GLOBAL APPEND PROPERTY LINKED_GAME_MODULES ${MODULE})
 endfunction()
