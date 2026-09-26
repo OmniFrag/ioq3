@@ -25,10 +25,13 @@ typedef struct {
 	qboolean	down;
 	int			repeats;		// if > 1, it is autorepeating
 	char		*binding;
+	qboolean	restricted;		// game code bound it: its commands run restricted
 } qkey_t;
 
 extern	qboolean	key_overstrikeMode;
 extern	qkey_t		keys[MAX_KEYS];
+
+void Key_SetBindingRestricted( int keynum, const char *binding );
 
 // NOTE TTimo the declaration of field_t and Field_Clear is now in qcommon/qcommon.h
 void Field_KeyDownEvent( field_t *edit, int key );
