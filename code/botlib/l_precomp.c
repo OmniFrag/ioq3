@@ -3174,7 +3174,7 @@ int PC_ReadTokenHandle(int handle, pc_token_t *pc_token)
 		return 0;
 
 	ret = PC_ReadToken(sourceFiles[handle], &token);
-	strcpy(pc_token->string, token.string);
+	Q_strncpyz(pc_token->string, token.string, sizeof(pc_token->string));
 	pc_token->type = token.type;
 	pc_token->subtype = token.subtype;
 	pc_token->intvalue = token.intvalue;
@@ -3189,14 +3189,14 @@ int PC_ReadTokenHandle(int handle, pc_token_t *pc_token)
 // Returns:				-
 // Changes Globals:		-
 //============================================================================
-int PC_SourceFileAndLine(int handle, char *filename, int *line)
+int PC_SourceFileAndLine(int handle, char *filename, int size, int *line)
 {
 	if (handle < 1 || handle >= MAX_SOURCEFILES)
 		return qfalse;
 	if (!sourceFiles[handle])
 		return qfalse;
 
-	strcpy(filename, sourceFiles[handle]->filename);
+	Q_strncpyz(filename, sourceFiles[handle]->filename, size);
 	if (sourceFiles[handle]->scriptstack)
 		*line = sourceFiles[handle]->scriptstack->line;
 	else

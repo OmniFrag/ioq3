@@ -172,5 +172,5 @@ typedef struct pc_token_s
 int PC_LoadSourceHandle(const char *filename);
 int PC_FreeSourceHandle(int handle);
 int PC_ReadTokenHandle(int handle, pc_token_t *pc_token);
-int PC_SourceFileAndLine(int handle, char *filename, int *line);
+int PC_SourceFileAndLine(int handle, char *filename, int size, int *line);
 void PC_CheckOpenSourceHandles(void);
