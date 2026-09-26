@@ -987,6 +987,10 @@ SDL_AppInit
 */
 SDL_AppResult SDL_AppInit( void **appstate, int argc, char *argv[] )
 {
+	// The click that focuses a window also reaches the game, so it can be
+	// the click that captures the mouse rather than a click before it
+	SDL_SetHint( SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1" );
+
 	Sys_Start( argc, argv );
 
 #ifdef SDL_PLATFORM_WINDOWS
