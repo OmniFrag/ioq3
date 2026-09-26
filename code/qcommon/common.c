@@ -2775,7 +2775,7 @@ void Com_Init( char *commandLine ) {
 #endif
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
-	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP );
+	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP | CVAR_PROTECTED );
 
 	com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT | CVAR_SYSTEMINFO );
 	com_fixedtime = Cvar_Get ("fixedtime", "0", CVAR_CHEAT);
@@ -2878,7 +2878,7 @@ void Com_Init( char *commandLine ) {
 	Com_Printf ("Altivec support is %s\n", com_altivec->integer ? "enabled" : "disabled");
 #endif
 
-	com_pipefile = Cvar_Get( "com_pipefile", "", CVAR_ARCHIVE|CVAR_LATCH );
+	com_pipefile = Cvar_Get( "com_pipefile", "", CVAR_ARCHIVE|CVAR_LATCH|CVAR_PROTECTED );
 	if( com_pipefile->string[0] )
 	{
 		pipefile = FS_FCreateOpenPipeFile( com_pipefile->string );
