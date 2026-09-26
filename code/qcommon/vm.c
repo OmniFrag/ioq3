@@ -364,6 +364,79 @@ intptr_t QDECL VM_DllSyscall( intptr_t arg, ... ) {
 
 /*
 =================
+VM_ValidateHeader
+
+Byte swaps the header of a .qvm file and checks it against the file's
+length. Returns what's wrong with it, or NULL.
+=================
+*/
+static const char *VM_ValidateHeader( vmHeader_t *header, long fileLength )
+{
+	long	headerLength;
+	int		magic;
+	int		jtrgLength;
+	int		i;
+
+	if ( fileLength < (long)sizeof( int ) ) {
+		return "truncated header";
+	}
+
+	magic = LittleLong( header->vmMagic );
+	if ( magic == VM_MAGIC_VER2 ) {
+		headerLength = sizeof( vmHeader_t );
+	} else if ( magic == VM_MAGIC ) {
+		// the 1.32b header ends before jtrgLength
+		headerLength = sizeof( vmHeader_t ) - sizeof( int );
+	} else {
+		return "no recognisable magic number in its header";
+	}
+
+	if ( fileLength < headerLength ) {
+		return "truncated header";
+	}
+
+	// byte swap the header
+	for ( i = 0 ; i < headerLength / 4 ; i++ ) {
+		((int *)header)[i] = LittleLong( ((int *)header)[i] );
+	}
+
+	jtrgLength = magic == VM_MAGIC_VER2 ? header->jtrgLength : 0;
+
+	if ( jtrgLength < 0
+		|| header->bssLength < 0
+		|| header->dataLength < 0
+		|| header->litLength < 0
+		|| header->codeLength <= 0 ) {
+		return "negative segment length";
+	}
+
+	// each instruction takes at least a byte
+	if ( header->instructionCount <= 0 || header->instructionCount > header->codeLength ) {
+		return "bad instruction count";
+	}
+
+	// the segments must lie inside the file; the sums are in 64 bits so
+	// they can't overflow
+	if ( header->codeOffset < headerLength
+		|| (int64_t)header->codeOffset + header->codeLength > fileLength ) {
+		return "code segment outside the file";
+	}
+
+	if ( header->dataOffset < headerLength
+		|| (int64_t)header->dataOffset + header->dataLength + header->litLength + jtrgLength > fileLength ) {
+		return "data segment outside the file";
+	}
+
+	if ( header->codeLength > VM_MAX_CODE_LENGTH
+		|| (int64_t)header->dataLength + header->litLength + header->bssLength > VM_MAX_DATA_LENGTH ) {
+		return "segment too large";
+	}
+
+	return NULL;
+}
+
+/*
+=================
 VM_LoadQVM
 
 Load a .qvm file
@@ -373,6 +446,8 @@ vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc, qboolean unpure)
 {
 	int					dataLength;
 	int					i;
+	long				fileLength;
+	const char			*error;
 	char				filename[MAX_QPATH];
 	union {
 		vmHeader_t	*h;
@@ -383,7 +458,7 @@ vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc, qboolean unpure)
 	Com_sprintf( filename, sizeof(filename), "vm/%s.qvm", vm->name );
 	Com_Printf( "Loading vm file %s...\n", filename );
 
-	FS_ReadFileDir(filename, vm->searchPath, unpure, &header.v);
+	fileLength = FS_ReadFileDir(filename, vm->searchPath, unpure, &header.v);
 
 	if ( !header.h ) {
 		Com_Printf( "Failed.\n" );
@@ -397,59 +472,28 @@ vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc, qboolean unpure)
 	// show where the qvm was loaded from
 	FS_Which(filename, vm->searchPath);
 
-	if( LittleLong( header.h->vmMagic ) == VM_MAGIC_VER2 ) {
-		Com_Printf( "...which has vmMagic VM_MAGIC_VER2\n" );
-
-		// byte swap the header
-		for ( i = 0 ; i < sizeof( vmHeader_t ) / 4 ; i++ ) {
-			((int *)header.h)[i] = LittleLong( ((int *)header.h)[i] );
-		}
-
-		// validate
-		if ( header.h->jtrgLength < 0
-			|| header.h->bssLength < 0
-			|| header.h->dataLength < 0
-			|| header.h->litLength < 0
-			|| header.h->codeLength <= 0 )
-		{
-			VM_Free(vm);
-			FS_FreeFile(header.v);
-			
-			Com_Printf(S_COLOR_YELLOW "Warning: %s has bad header\n", filename);
-			return NULL;
-		}
-	} else if( LittleLong( header.h->vmMagic ) == VM_MAGIC ) {
-		// byte swap the header
-		// sizeof( vmHeader_t ) - sizeof( int ) is the 1.32b vm header size
-		for ( i = 0 ; i < ( sizeof( vmHeader_t ) - sizeof( int ) ) / 4 ; i++ ) {
-			((int *)header.h)[i] = LittleLong( ((int *)header.h)[i] );
-		}
-
-		// validate
-		if ( header.h->bssLength < 0
-			|| header.h->dataLength < 0
-			|| header.h->litLength < 0
-			|| header.h->codeLength <= 0 )
-		{
-			VM_Free(vm);
-			FS_FreeFile(header.v);
-
-			Com_Printf(S_COLOR_YELLOW "Warning: %s has bad header\n", filename);
-			return NULL;
-		}
-	} else {
+	error = VM_ValidateHeader( header.h, fileLength );
+	if ( error ) {
 		VM_Free( vm );
-		FS_FreeFile(header.v);
+		FS_FreeFile( header.v );
 
-		Com_Printf(S_COLOR_YELLOW "Warning: %s does not have a recognisable "
-				"magic number in its header\n", filename);
+		Com_Printf( S_COLOR_YELLOW "Warning: %s has a bad header: %s\n", filename, error );
 		return NULL;
+	}
+
+	if ( header.h->vmMagic == VM_MAGIC_VER2 ) {
+		Com_Printf( "...which has vmMagic VM_MAGIC_VER2\n" );
 	}
 
 	// round up to next power of 2 so all data operations can
 	// be mask protected
 	dataLength = header.h->dataLength + header.h->litLength +
 		header.h->bssLength;
+	// q3asm puts the stack at the end of bss, but a smaller file would
+	// put the stack below the start of the data
+	if ( dataLength < PROGRAM_STACK_SIZE ) {
+		dataLength = PROGRAM_STACK_SIZE;
+	}
 	for ( i = 0 ; dataLength > ( 1 << i ) ; i++ ) {
 	}
 	dataLength = 1 << i;
