@@ -827,6 +827,23 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 /*
 =================
+SV_ClientPacket
+
+A client's packet has passed the netchan's checks
+=================
+*/
+static void SV_ClientPacket( client_t *cl, msg_t *msg ) {
+	// zombie clients still need to do the Netchan_Process
+	// to make sure they don't need to retransmit the final
+	// reliable message, but they don't do any other processing
+	if ( cl->state != CS_ZOMBIE ) {
+		cl->lastPacketTime = svs.time;	// don't timeout
+		SV_ExecuteClientMessage( cl, msg );
+	}
+}
+
+/*
+=================
 SV_PacketEvent
 =================
 */
@@ -847,39 +864,41 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 	MSG_ReadLong( msg );				// sequence number
 	qport = MSG_ReadShort( msg ) & 0xffff;
 
-	// find which client the message is from
+	// it is possible to have multiple clients from a single IP
+	// address, so they are differentiated by the qport variable.
+	// A client whose address, port and qport all match gets the
+	// packet
 	for (i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
-		if (cl->state == CS_FREE) {
-			continue;
-		}
-		if ( !NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
-			continue;
-		}
-		// it is possible to have multiple clients from a single IP
-		// address, so they are differentiated by the qport variable
-		if (cl->netchan.qport != qport) {
-			continue;
-		}
-
-		// the IP port can't be used to differentiate them, because
-		// some address translating routers periodically change UDP
-		// port assignments
-		if (cl->netchan.remoteAddress.port != from.port) {
-			Com_Printf( "SV_PacketEvent: fixing up a translated port\n" );
-			cl->netchan.remoteAddress.port = from.port;
-		}
-
-		// make sure it is a valid, in sequence packet
-		if (SV_Netchan_Process(cl, msg)) {
-			// zombie clients still need to do the Netchan_Process
-			// to make sure they don't need to retransmit the final
-			// reliable message, but they don't do any other processing
-			if (cl->state != CS_ZOMBIE) {
-				cl->lastPacketTime = svs.time;	// don't timeout
-				SV_ExecuteClientMessage( cl, msg );
+		if ( cl->state != CS_FREE && cl->netchan.qport == qport &&
+			NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
+			// make sure it is a valid, in sequence packet
+			if ( SV_Netchan_Process( cl, msg ) ) {
+				SV_ClientPacket( cl, msg );
 			}
+			return;
 		}
-		return;
+	}
+
+	// the IP port can't be used to differentiate them, because
+	// some address translating routers periodically change UDP
+	// port assignments. Try each client with this address and
+	// qport, and move the one whose packet checks out to the new
+	// port, so a packet that doesn't can't redirect a client's
+	// messages
+	for (i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
+		if ( cl->state == CS_FREE || cl->netchan.qport != qport ||
+			!NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
+			continue;
+		}
+
+		if ( SV_Netchan_Process( cl, msg ) ) {
+			Com_Printf( "SV_PacketEvent: fixing up a translated port for client %i: %i to %i\n",
+				i, (unsigned short)BigShort( cl->netchan.remoteAddress.port ),
+				(unsigned short)BigShort( from.port ) );
+			cl->netchan.remoteAddress.port = from.port;
+			SV_ClientPacket( cl, msg );
+			return;
+		}
 	}
 }
 
