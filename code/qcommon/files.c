@@ -1392,6 +1392,34 @@ static qboolean FS_IsLocalConfig( const char *filename ) {
 
 /*
 ===========
+FS_IsGameContent
+
+Whether a search path is a pk3 or a pk3dir, which come with the game, a
+mod or a download, rather than a game directory, where the player keeps
+their own files
+===========
+*/
+static qboolean FS_IsGameContent( const searchpath_t *search ) {
+	return search->pack || FS_IsExt( search->dir->gamedir, ".pk3dir", strlen( search->dir->gamedir ) );
+}
+
+// whether the last file FS_FOpenFileRead found is in a pk3 or pk3dir
+static qboolean fs_lastFileIsGameContent;
+
+/*
+===========
+FS_LastFileIsGameContent
+
+Whether the last file FS_FOpenFileRead, and so FS_ReadFile, found is in
+a pk3 or a pk3dir
+===========
+*/
+qboolean FS_LastFileIsGameContent( void ) {
+	return fs_lastFileIsGameContent;
+}
+
+/*
+===========
 FS_FOpenFileRead
 
 Finds the file in the search path.
@@ -1409,26 +1437,21 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 	if(!fs_searchpaths)
 		Com_Error(ERR_FATAL, "Filesystem call made without initialization");
 
+	fs_lastFileIsGameContent = qfalse;
 	isLocalConfig = FS_IsLocalConfig( filename );
 	for(search = fs_searchpaths; search; search = search->next)
 	{
 		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
 		// files and pk3dirs, which come with the game, a mod or a download
-		if (isLocalConfig && (search->pack ||
-			FS_IsExt(search->dir->gamedir, ".pk3dir", strlen(search->dir->gamedir))))
+		if (isLocalConfig && FS_IsGameContent(search))
 			continue;
 
 		len = FS_FOpenFileReadDir(filename, search, file, uniqueFILE, qfalse);
 
-		if(file == NULL)
+		if(file == NULL ? len > 0 : len >= 0 && *file)
 		{
-			if(len > 0)
-				return len;
-		}
-		else
-		{
-			if(len >= 0 && *file)
-				return len;
+			fs_lastFileIsGameContent = FS_IsGameContent(search);
+			return len;
 		}
 
 	}
@@ -1862,6 +1885,9 @@ long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void *
 	if ( !qpath || !qpath[0] ) {
 		Com_Error( ERR_FATAL, "FS_ReadFile with empty name" );
 	}
+
+	// until FS_FOpenFileRead finds it: a journal's file wasn't searched for
+	fs_lastFileIsGameContent = qfalse;
 
 	buf = NULL;	// quiet compiler warning
 
