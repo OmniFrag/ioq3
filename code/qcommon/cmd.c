@@ -31,11 +31,25 @@ typedef struct {
 	byte	*data;
 	int		maxsize;
 	int		cursize;
+	int		wait;				// frames to wait before running more of it
+	qboolean	inStarComment;	// within one Cbuf_Execute: see Cbuf_ExecuteLine
+	qboolean	inSlashComment;
 } cmd_t;
 
-int			cmd_wait;
-cmd_t		cmd_text;
-byte		cmd_text_buf[MAX_CMD_BUFFER];
+static cmd_t	cmd_text;		// the player's, the configs' and the engine's
+static cmd_t	cmd_gameText;	// what game code queues, which runs restricted
+static byte		cmd_text_buf[MAX_CMD_BUFFER];
+static byte		cmd_gameText_buf[MAX_CMD_BUFFER];
+
+// the running command is restricted: it came from game code, or from text
+// that game code queued or ran
+static qboolean	cmd_restricted;
+
+// the buffer text a command adds goes to: text a restricted command adds
+// stays restricted
+static cmd_t *Cbuf_Current( void ) {
+	return cmd_restricted ? &cmd_gameText : &cmd_text;
+}
 
 
 //=============================================================================
@@ -50,12 +64,14 @@ bind g "cmd use rocket ; +attack ; wait ; -attack ; cmd use blaster"
 ============
 */
 void Cmd_Wait_f( void ) {
+	cmd_t	*buf = Cbuf_Current();
+
 	if ( Cmd_Argc() == 2 ) {
-		cmd_wait = atoi( Cmd_Argv( 1 ) );
-		if ( cmd_wait < 0 )
-			cmd_wait = 1; // ignore the argument
+		buf->wait = atoi( Cmd_Argv( 1 ) );
+		if ( buf->wait < 0 )
+			buf->wait = 1; // ignore the argument
 	} else {
-		cmd_wait = 1;
+		buf->wait = 1;
 	}
 }
 
@@ -78,6 +94,47 @@ void Cbuf_Init (void)
 	cmd_text.data = cmd_text_buf;
 	cmd_text.maxsize = MAX_CMD_BUFFER;
 	cmd_text.cursize = 0;
+	cmd_gameText.data = cmd_gameText_buf;
+	cmd_gameText.maxsize = MAX_CMD_BUFFER;
+	cmd_gameText.cursize = 0;
+}
+
+static void Cbuf_Add( cmd_t *buf, const char *text ) {
+	int		l;
+
+	l = strlen (text);
+
+	if (buf->cursize + l >= buf->maxsize)
+	{
+		Com_Printf ("Cbuf_AddText: overflow\n");
+		return;
+	}
+	Com_Memcpy(&buf->data[buf->cursize], text, l);
+	buf->cursize += l;
+}
+
+static void Cbuf_Insert( cmd_t *buf, const char *text ) {
+	int		len;
+	int		i;
+
+	len = strlen( text ) + 1;
+	if ( len + buf->cursize > buf->maxsize ) {
+		Com_Printf( "Cbuf_InsertText overflowed\n" );
+		return;
+	}
+
+	// move the existing command text
+	for ( i = buf->cursize - 1 ; i >= 0 ; i-- ) {
+		buf->data[ i + len ] = buf->data[ i ];
+	}
+
+	// copy the new text in
+	Com_Memcpy( buf->data, text, len - 1 );
+
+	// add a \n
+	buf->data[ len - 1 ] = '\n';
+
+	buf->cursize += len;
 }
 
 /*
@@ -88,17 +145,7 @@ Adds command text at the end of the buffer, does NOT add a final \n
 ============
 */
 void Cbuf_AddText( const char *text ) {
-	int		l;
-	
-	l = strlen (text);
-
-	if (cmd_text.cursize + l >= cmd_text.maxsize)
-	{
-		Com_Printf ("Cbuf_AddText: overflow\n");
-		return;
-	}
-	Com_Memcpy(&cmd_text.data[cmd_text.cursize], text, l);
-	cmd_text.cursize += l;
+	Cbuf_Add( Cbuf_Current(), text );
 }
 
 
@@ -111,37 +158,62 @@ Adds a \n to the text
 ============
 */
 void Cbuf_InsertText( const char *text ) {
-	int		len;
-	int		i;
+	Cbuf_Insert( Cbuf_Current(), text );
+}
 
-	len = strlen( text ) + 1;
-	if ( len + cmd_text.cursize > cmd_text.maxsize ) {
-		Com_Printf( "Cbuf_InsertText overflowed\n" );
-		return;
-	}
+/*
+============
+Cbuf_AddTextRestricted, Cbuf_InsertTextRestricted
 
-	// move the existing command text
-	for ( i = cmd_text.cursize - 1 ; i >= 0 ; i-- ) {
-		cmd_text.data[ i + len ] = cmd_text.data[ i ];
-	}
+The same, into game code's buffer if restricted, or else the player's
+============
+*/
+void Cbuf_AddTextRestricted( const char *text, qboolean restricted ) {
+	Cbuf_Add( restricted ? &cmd_gameText : &cmd_text, text );
+}
 
-	// copy the new text in
-	Com_Memcpy( cmd_text.data, text, len - 1 );
+void Cbuf_InsertTextRestricted( const char *text, qboolean restricted ) {
+	Cbuf_Insert( restricted ? &cmd_gameText : &cmd_text, text );
+}
 
-	// add a \n
-	cmd_text.data[ len - 1 ] = '\n';
+/*
+============
+Cmd_IsRestricted
 
-	cmd_text.cursize += len;
+Whether the running command is restricted: game code queued or ran it,
+or it came from text that did. Restricted commands can't run the ones
+that reveal secrets or stop the process, or touch private and protected
+cvars
+============
+*/
+qboolean Cmd_IsRestricted( void ) {
+	return cmd_restricted;
+}
+
+/*
+============
+Cmd_EndRestricted
+
+An error ended the running command
+============
+*/
+void Cmd_EndRestricted( void ) {
+	cmd_restricted = qfalse;
 }
 
 
 /*
 ============
-Cbuf_ExecuteText
+Cbuf_ExecuteTextWithRights
+
+Cbuf_ExecuteText, restricted or not, whatever the running command is
 ============
 */
-void Cbuf_ExecuteText (int exec_when, const char *text)
+static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolean restricted )
 {
+	qboolean	running = cmd_restricted;
+
+	cmd_restricted = restricted;
 	switch (exec_when)
 	{
 	case EXEC_NOW:
@@ -162,6 +234,112 @@ void Cbuf_ExecuteText (int exec_when, const char *text)
 	default:
 		Com_Error (ERR_DROP, "Cbuf_ExecuteText: bad exec_when");
 	}
+	cmd_restricted = running;
+}
+
+/*
+============
+Cbuf_ExecuteText
+
+The engine's text, which runs with full rights even when a restricted
+command made the engine run it (a vid_restart that restarts the game
+runs the player's configs)
+============
+*/
+void Cbuf_ExecuteText( int exec_when, const char *text )
+{
+	Cbuf_ExecuteTextWithRights( exec_when, text, qfalse );
+}
+
+/*
+============
+Cbuf_ExecuteTextRestricted
+
+Game code's command text, which runs restricted: see Cmd_IsRestricted
+============
+*/
+void Cbuf_ExecuteTextRestricted( int exec_when, const char *text )
+{
+	Cbuf_ExecuteTextWithRights( exec_when, text, qtrue );
+}
+
+/*
+============
+Cbuf_ExecuteLine
+
+Runs the next command in a buffer, with the buffer's rights
+============
+*/
+static void Cbuf_ExecuteLine( cmd_t *buf )
+{
+	int		i;
+	char	*text;
+	char	line[MAX_CMD_LINE];
+	int		quotes;
+	qboolean	restricted;
+
+	// find a \n or ; line break or comment: // or /* */
+	// This will keep // style comments all on one line by not breaking on
+	// a semicolon.  It will keep /* ... */ style comments all on one line by not
+	// breaking it for semicolon or newline.
+	text = (char *)buf->data;
+
+	quotes = 0;
+	for (i=0 ; i< buf->cursize ; i++)
+	{
+		if (text[i] == '"')
+			quotes++;
+
+		if ( !(quotes&1)) {
+			if (i < buf->cursize - 1) {
+				if (! buf->inStarComment && text[i] == '/' && text[i+1] == '/')
+					buf->inSlashComment = qtrue;
+				else if (! buf->inSlashComment && text[i] == '/' && text[i+1] == '*')
+					buf->inStarComment = qtrue;
+				else if (buf->inStarComment && text[i] == '*' && text[i+1] == '/') {
+					buf->inStarComment = qfalse;
+					// If we are in a star comment, then the part after it is valid
+					// Note: This will cause it to NUL out the terminating '/'
+					// but ExecuteString doesn't require it anyway.
+					i++;
+					break;
+				}
+			}
+			if (! buf->inSlashComment && ! buf->inStarComment && text[i] == ';')
+				break;
+		}
+		if (! buf->inStarComment && (text[i] == '\n' || text[i] == '\r')) {
+			buf->inSlashComment = qfalse;
+			break;
+		}
+	}
+
+	if( i >= (MAX_CMD_LINE - 1)) {
+		i = MAX_CMD_LINE - 1;
+	}
+
+	Com_Memcpy (line, text, i);
+	line[i] = 0;
+
+// delete the text from the command buffer and move remaining commands down
+// this is necessary because commands (exec) can insert data at the
+// beginning of the text buffer
+
+	if (i == buf->cursize)
+		buf->cursize = 0;
+	else
+	{
+		i++;
+		buf->cursize -= i;
+		memmove (text, text+i, buf->cursize);
+	}
+
+// execute the command line, restricted if it's game code's
+
+	restricted = cmd_restricted;
+	cmd_restricted = buf == &cmd_gameText;
+	Cmd_ExecuteString (line);
+	cmd_restricted = restricted;
 }
 
 /*
@@ -171,81 +349,27 @@ Cbuf_Execute
 */
 void Cbuf_Execute (void)
 {
-	int		i;
-	char	*text;
-	char	line[MAX_CMD_LINE];
-	int		quotes;
+	// a comment runs to the end of what one call executes, as it always has
+	cmd_text.inStarComment = cmd_text.inSlashComment = qfalse;
+	cmd_gameText.inStarComment = cmd_gameText.inSlashComment = qfalse;
 
-	// This will keep // style comments all on one line by not breaking on
-	// a semicolon.  It will keep /* ... */ style comments all on one line by not
-	// breaking it for semicolon or newline.
-	qboolean in_star_comment = qfalse;
-	qboolean in_slash_comment = qfalse;
-	while (cmd_text.cursize)
-	{
-		if ( cmd_wait > 0 ) {
-			// skip out while text still remains in buffer, leaving it
-			// for next frame
-			cmd_wait--;
+	// the player's commands first, then game code's, while neither waits
+	for ( ;; ) {
+		if ( cmd_text.cursize && cmd_text.wait <= 0 ) {
+			Cbuf_ExecuteLine( &cmd_text );
+		} else if ( cmd_gameText.cursize && cmd_gameText.wait <= 0 ) {
+			Cbuf_ExecuteLine( &cmd_gameText );
+		} else {
 			break;
 		}
+	}
 
-		// find a \n or ; line break or comment: // or /* */
-		text = (char *)cmd_text.data;
-
-		quotes = 0;
-		for (i=0 ; i< cmd_text.cursize ; i++)
-		{
-			if (text[i] == '"')
-				quotes++;
-
-			if ( !(quotes&1)) {
-				if (i < cmd_text.cursize - 1) {
-					if (! in_star_comment && text[i] == '/' && text[i+1] == '/')
-						in_slash_comment = qtrue;
-					else if (! in_slash_comment && text[i] == '/' && text[i+1] == '*')
-						in_star_comment = qtrue;
-					else if (in_star_comment && text[i] == '*' && text[i+1] == '/') {
-						in_star_comment = qfalse;
-						// If we are in a star comment, then the part after it is valid
-						// Note: This will cause it to NUL out the terminating '/'
-						// but ExecuteString doesn't require it anyway.
-						i++;
-						break;
-					}
-				}
-				if (! in_slash_comment && ! in_star_comment && text[i] == ';')
-					break;
-			}
-			if (! in_star_comment && (text[i] == '\n' || text[i] == '\r')) {
-				in_slash_comment = qfalse;
-				break;
-			}
-		}
-
-		if( i >= (MAX_CMD_LINE - 1)) {
-			i = MAX_CMD_LINE - 1;
-		}
-				
-		Com_Memcpy (line, text, i);
-		line[i] = 0;
-		
-// delete the text from the command buffer and move remaining commands down
-// this is necessary because commands (exec) can insert data at the
-// beginning of the text buffer
-
-		if (i == cmd_text.cursize)
-			cmd_text.cursize = 0;
-		else
-		{
-			i++;
-			cmd_text.cursize -= i;
-			memmove (text, text+i, cmd_text.cursize);
-		}
-
-// execute the command line
-
-		Cmd_ExecuteString (line);		
+	// a buffer still holding text after a wait runs it a frame later
+	if ( cmd_text.cursize && cmd_text.wait > 0 ) {
+		cmd_text.wait--;
+	}
+	if ( cmd_gameText.cursize && cmd_gameText.wait > 0 ) {
+		cmd_gameText.wait--;
 	}
 }
 
@@ -311,8 +435,14 @@ void Cmd_Vstr_f( void ) {
 		return;
 	}
 
+	// restricted text can't run, and so read, a private or protected cvar
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return;
+	}
+
+	// with the rights of whoever set it: see Cvar_RunsRestricted
 	v = Cvar_VariableString( Cmd_Argv( 1 ) );
-	Cbuf_InsertText( va("%s\n", v ) );
+	Cbuf_InsertTextRestricted( va("%s\n", v ), Cvar_RunsRestricted( Cmd_Argv( 1 ) ) );
 }
 
 
@@ -763,9 +893,23 @@ void	Cmd_ExecuteString( const char *text ) {
 	cmd_function_t	*cmd, **prev;
 
 	// execute the command line
-	Cmd_TokenizeString( text );		
+	Cmd_TokenizeString( text );
 	if ( !Cmd_Argc() ) {
 		return;		// no tokens
+	}
+
+	// game code's text can't run the commands that send or print secrets,
+	// or stop the process
+	if ( cmd_restricted ) {
+		static const char *denied[] = { "rcon", "condump", "setenv", "error", "crash", "freeze" };
+		int		i;
+
+		for ( i = 0; i < ARRAY_LEN( denied ); i++ ) {
+			if ( !Q_stricmp( cmd_argv[0], denied[i] ) ) {
+				Com_Printf( "%s can't be run by game code or game content.\n", cmd_argv[0] );
+				return;
+			}
+		}
 	}
 
 	// check registered command functions	
