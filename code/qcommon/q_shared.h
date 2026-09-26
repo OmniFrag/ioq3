@@ -769,6 +769,10 @@ typedef struct pc_token_s
 	char string[MAX_TOKENLENGTH];
 } pc_token_t;
 
+// the file name buffer modules give trap_PC_SourceFileAndLine, which has
+// no size: missionpack's ui_shared.c declares 128 bytes
+#define PC_MODULE_FILENAME_SIZE	128
+
 // data is an in/out parm, returns a parsed out token
 
 void	COM_MatchToken( char**buf_p, char *match );
