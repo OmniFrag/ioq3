@@ -437,6 +437,85 @@ static const char *VM_ValidateHeader( vmHeader_t *header, long fileLength )
 
 /*
 =================
+VM_OperandLength
+
+The length in bytes of an opcode's operand in a .qvm file
+=================
+*/
+int VM_OperandLength( int op )
+{
+	switch ( op ) {
+	case OP_ENTER:
+	case OP_CONST:
+	case OP_LOCAL:
+	case OP_LEAVE:
+	case OP_EQ:
+	case OP_NE:
+	case OP_LTI:
+	case OP_LEI:
+	case OP_GTI:
+	case OP_GEI:
+	case OP_LTU:
+	case OP_LEU:
+	case OP_GTU:
+	case OP_GEU:
+	case OP_EQF:
+	case OP_NEF:
+	case OP_LTF:
+	case OP_LEF:
+	case OP_GTF:
+	case OP_GEF:
+	case OP_BLOCK_COPY:
+		return 4;
+	case OP_ARG:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/*
+=================
+VM_ValidateCode
+
+Checks, for every backend, that each instruction is one the VM defines
+and lies inside the code, and that the code ends with OP_LEAVE or
+OP_JUMP, as q3asm's always does, so that no backend runs on past it.
+Returns what's wrong with the code, or NULL.
+=================
+*/
+static const char *VM_ValidateCode( const vmHeader_t *header )
+{
+	const byte	*code = (const byte *)header + header->codeOffset;
+	int			pc = 0;
+	int			op = OP_UNDEF;
+	int			i;
+
+	for ( i = 0 ; i < header->instructionCount ; i++ ) {
+		if ( pc >= header->codeLength ) {
+			return "fewer instructions than its header says";
+		}
+
+		op = code[pc];
+		if ( op >= OP_MAX ) {
+			return "undefined opcode";
+		}
+
+		pc += 1 + VM_OperandLength( op );
+		if ( pc > header->codeLength ) {
+			return "operand past the end of the code";
+		}
+	}
+
+	if ( op != OP_LEAVE && op != OP_JUMP ) {
+		return "doesn't end with OP_LEAVE or OP_JUMP";
+	}
+
+	return NULL;
+}
+
+/*
+=================
 VM_LoadQVM
 
 Load a .qvm file
@@ -478,6 +557,15 @@ vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc, qboolean unpure)
 		FS_FreeFile( header.v );
 
 		Com_Printf( S_COLOR_YELLOW "Warning: %s has a bad header: %s\n", filename, error );
+		return NULL;
+	}
+
+	error = VM_ValidateCode( header.h );
+	if ( error ) {
+		VM_Free( vm );
+		FS_FreeFile( header.v );
+
+		Com_Printf( S_COLOR_YELLOW "Warning: %s has bad code: %s\n", filename, error );
 		return NULL;
 	}
 

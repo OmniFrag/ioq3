@@ -1149,7 +1149,8 @@ void VM_Compile(vm_t *vm, vmHeader_t *header)
 		op = code[ pc ];
 		pc++;
 		switch ( op ) {
-		case 0:
+		case OP_UNDEF:
+		case OP_IGNORE:
 			break;
 		case OP_BREAK:
 			EmitString("CC");				// int 3

@@ -131,7 +131,9 @@ typedef enum {
 	OP_MULF,
 
 	OP_CVIF,
-	OP_CVFI
+	OP_CVFI,
+
+	OP_MAX
 } opcode_t;
 
 
@@ -198,6 +200,8 @@ extern	int		vm_debugLevel;
 
 void VM_Compile( vm_t *vm, vmHeader_t *header );
 int	VM_CallCompiled( vm_t *vm, int *args );
+
+int VM_OperandLength( int op );
 
 void VM_PrepareInterpreter( vm_t *vm, vmHeader_t *header );
 int	VM_CallInterpreted( vm_t *vm, int *args );
