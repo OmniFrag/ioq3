@@ -1451,6 +1451,25 @@ int Key_GetCatcher( void ) {
 
 /*
 ====================
+CL_WantsTextInput
+
+Whether something takes text now: the console, the chat line, or a text
+field in cgame or ui with focus. A ui that doesn't say when its fields have
+focus (trap_SetTextFocus) takes text whenever it's up.
+====================
+*/
+qboolean CL_WantsTextInput( void ) {
+	if ( keyCatchers & ( KEYCATCH_CONSOLE | KEYCATCH_MESSAGE ) ) {
+		return qtrue;
+	}
+	if ( keyCatchers & KEYCATCH_UI ) {
+		return cls.uiDeclaresTextFocus ? cls.uiTextFocus : qtrue;
+	}
+	return cls.cgameStarted && cls.cgameTextFocus;
+}
+
+/*
+====================
 Key_SetCatcher
 ====================
 */

@@ -727,6 +727,10 @@ static qboolean UI_GetValue( char *value, int valueSize, const char *key ) {
 		Q_strncpyz( value, "1", valueSize );
 		return qtrue;
 	}
+	if ( !Q_stricmp( key, "trap_SetTextFocus_Q3F" ) ) {
+		Com_sprintf( value, valueSize, "%i", COM_TRAP_SETTEXTFOCUS );
+		return qtrue;
+	}
 
 	return qfalse;
 }
@@ -1094,6 +1098,11 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case COM_TRAP_GETVALUE:
 		return UI_GetValue( VMA(1), args[2], VMA(3) );
 
+	case COM_TRAP_SETTEXTFOCUS:
+		cls.uiTextFocus = args[1] != 0;
+		cls.uiDeclaresTextFocus = qtrue;
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad UI system trap: %ld", (long int) args[0] );
 
@@ -1139,6 +1148,8 @@ void CL_InitUI( void ) {
 	}
 
 	cls.uiResizesInPlace = qfalse;
+	cls.uiTextFocus = qfalse;
+	cls.uiDeclaresTextFocus = qfalse;
 	uivm = VM_Create( "ui", CL_UISystemCalls, interpret );
 	if ( !uivm ) {
 		Com_Error( ERR_FATAL, "VM_Create on UI failed" );

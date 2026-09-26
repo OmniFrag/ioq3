@@ -1270,6 +1270,17 @@ void IN_Frame( void )
 
 	IN_JoyMove( );
 
+	// Text input runs only while something takes text: on phones it brings
+	// up the on-screen keyboard, and an input method would swallow the
+	// keys that move the player
+	if( CL_WantsTextInput( ) != SDL_TextInputActive( SDL_window ) )
+	{
+		if( SDL_TextInputActive( SDL_window ) )
+			SDL_StopTextInput( SDL_window );
+		else
+			SDL_StartTextInput( SDL_window );
+	}
+
 	// If not DISCONNECTED (main menu) or ACTIVE (in game), we're loading
 	loading = ( clc.state != CA_DISCONNECTED && clc.state != CA_ACTIVE );
 
@@ -1356,8 +1367,6 @@ void IN_Init( void *windowData )
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
 	SDL_SetEventEnabled( SDL_EVENT_DROP_FILE, true );
 #endif
-
-	SDL_StartTextInput( SDL_window );
 
 	mouseAvailable = ( in_mouse->value != 0 );
 	IN_DeactivateMouse( Cvar_VariableIntegerValue( "r_fullscreen" ) != 0 );
