@@ -286,6 +286,7 @@ static int	FloatAsInt( float f ) {
 // the engine extensions the game module can look up with trap_GetValue;
 // each has its case in SV_GameSystemCalls
 static const vmExtension_t sv_gameExtensions[] = {
+	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ NULL, 0 }
 };
 
@@ -856,6 +857,10 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_GETVALUE:
 		return VM_GetValue( args, sv_gameExtensions );
+
+	case COM_TRAP_CVAR_SETDESCRIPTION:
+		Cvar_SetDescriptionByName( VMA(1), VMA(2) );
+		return 0;
 
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );

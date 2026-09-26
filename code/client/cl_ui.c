@@ -717,6 +717,7 @@ static int FloatAsInt( float f ) {
 static const vmExtension_t cl_uiExtensions[] = {
 	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
 	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ NULL, 0 }
 };
 
@@ -1091,6 +1092,10 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case COM_TRAP_FOLLOWWINDOWSIZE:
 		// the window can change size without a vid_restart (CL_ResizeWindow)
 		cls.uiResizesInPlace = qtrue;
+		return 0;
+
+	case COM_TRAP_CVAR_SETDESCRIPTION:
+		Cvar_SetDescriptionByName( VMA(1), VMA(2) );
 		return 0;
 
 	default:
