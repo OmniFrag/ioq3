@@ -111,8 +111,8 @@ typedef struct {
 
 	int			numClusters;
 	int			clusterBytes;
-	byte		*visibility;
-	qboolean	vised;			// if false, visibility is just a single cluster of ffs
+	byte		*visibility;	// NULL if the map has none
+	byte		*novis;			// a row of ffs, for no cluster or no visibility
 
 	int			numEntityChars;
 	char		*entityString;
