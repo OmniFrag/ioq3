@@ -619,6 +619,7 @@ void	Cvar_InfoStringBuffer( int bit, char *buff, int buffsize );
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
 void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
+void Cvar_ForgetOldDefault( const char *var_name, const char *old_default );
 
 void	Cvar_Restart(qboolean unsetVM);
 void	Cvar_Restart_f( void );
