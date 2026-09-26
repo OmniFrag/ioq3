@@ -461,12 +461,16 @@ void SV_DirectConnect( netadr_t from ) {
 			Com_Printf ("%s:reconnect\n", NET_AdrToString (from));
 			newcl = cl;
 
-			// this doesn't work because it nukes the players userinfo
+			if ( newcl->state >= CS_CONNECTED ) {
+				// disconnect the client from the game first so any flags the
+				// player might have are dropped, and the game doesn't keep
+				// the player if it refuses the connect
+				VM_Call( gvm, GAME_CLIENT_DISCONNECT, newcl - svs.clients );
 
-//			// disconnect the client from the game first so any flags the
-//			// player might have are dropped
-//			VM_Call( gvm, GAME_CLIENT_DISCONNECT, newcl - svs.clients );
-			//
+				// free what the old connection holds, such as a download's
+				// file handle, before the slot is cleared
+				SV_FreeClient( newcl );
+			}
 			goto gotnewcl;
 		}
 	}
