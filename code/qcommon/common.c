@@ -2729,6 +2729,11 @@ void Com_Init( char *commandLine ) {
 
 	Com_ExecuteCfg();
 
+	// defaults that changed after the configs holding them were written
+	Cvar_ForgetOldDefault( "snaps", "20" );
+	Cvar_ForgetOldDefault( "cl_maxpackets", "30" );
+	Cvar_ForgetOldDefault( "s_mixPreStep", "0.05" );
+
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
 

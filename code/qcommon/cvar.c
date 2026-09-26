@@ -1343,6 +1343,24 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 
 /*
 =====================
+Cvar_ForgetOldDefault
+
+Configs written before a cvar became CVAR_NODEFAULT hold its old default,
+since every archived cvar was written. Forget a value the config files set
+that matches it, so the cvar starts at the new default when it's
+registered. Command line settings come after, and stand.
+=====================
+*/
+void Cvar_ForgetOldDefault( const char *var_name, const char *old_default )
+{
+	cvar_t *var = Cvar_FindVar( var_name );
+
+	if( var && ( var->flags & CVAR_USER_CREATED ) && !strcmp( var->string, old_default ) )
+		Cvar_Unset( var );
+}
+
+/*
+=====================
 Cvar_Register
 
 basically a slightly modified Cvar_Get for the interpreted modules
