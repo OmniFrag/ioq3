@@ -103,7 +103,7 @@ void BotMatchVariable(bot_match_t *match, int variable, char *buf, int size);
 //unify all the white spaces in the string
 void UnifyWhiteSpaces(char *string);
 //replace all the context related synonyms in the string
-void BotReplaceSynonyms(char *string, unsigned long int context);
+void BotReplaceSynonyms(char *string, int size, unsigned long int context);
 //loads a chat file for the chat state
 int BotLoadChatFile(int chatstate, char *chatfile, char *chatname);
 //store the gender of the bot in the chat state

@@ -547,9 +547,12 @@ char *StringContainsWord(char *str1, char *str2, int casesensitive)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
-void StringReplaceWords(char *string, char *synonym, char *replacement)
+// replaces the synonym with the replacement wherever it's a whole word, as
+// long as the string still fits in size bytes
+void StringReplaceWords(char *string, int size, char *synonym, char *replacement)
 {
 	char *str, *str2;
+	int len = strlen(string), synlen = strlen(synonym), replen = strlen(replacement);
 
 	//find the synonym in the string
 	str = StringContainsWord(string, synonym, qfalse);
@@ -561,17 +564,22 @@ void StringReplaceWords(char *string, char *synonym, char *replacement)
 		str2 = StringContainsWord(string, replacement, qfalse);
 		while(str2)
 		{
-			if (str2 <= str && str < str2 + strlen(replacement)) break;
+			if (str2 <= str && str < str2 + replen) break;
 			str2 = StringContainsWord(str2+1, replacement, qfalse);
 		} //end while
 		if (!str2)
 		{
-			memmove(str + strlen(replacement), str+strlen(synonym), strlen(str+strlen(synonym))+1);
+			//leave the rest if the replacement doesn't fit
+			if (len - synlen + replen >= size) break;
+			memmove(str + replen, str + synlen, strlen(str + synlen) + 1);
 			//append the synonum replacement
-			Com_Memcpy(str, replacement, strlen(replacement));
+			Com_Memcpy(str, replacement, replen);
+			len += replen - synlen;
 		} //end if
-		//find the next synonym in the string
-		str = StringContainsWord(str+strlen(replacement), synonym, qfalse);
+		//find the next synonym after the replacement, whether it was just
+		//put in or was already there; a synonym partway through one that
+		//was there isn't a replacement's length from the string's end
+		str = StringContainsWord((str2 ? str2 : str) + replen, synonym, qfalse);
 	} //end if
 } //end of the function StringReplaceWords
 //===========================================================================
@@ -774,7 +782,7 @@ bot_synonymlist_t *BotLoadSynonyms(char *filename)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
-void BotReplaceSynonyms(char *string, unsigned long int context)
+void BotReplaceSynonyms(char *string, int size, unsigned long int context)
 {
 	bot_synonymlist_t *syn;
 	bot_synonym_t *synonym;
@@ -784,7 +792,7 @@ void BotReplaceSynonyms(char *string, unsigned long int context)
 		if (!(syn->context & context)) continue;
 		for (synonym = syn->firstsynonym->next; synonym; synonym = synonym->next)
 		{
-			StringReplaceWords(string, synonym->string, syn->firstsynonym->string);
+			StringReplaceWords(string, size, synonym->string, syn->firstsynonym->string);
 		} //end for
 	} //end for
 } //end of the function BotReplaceSynonyms
@@ -794,7 +802,7 @@ void BotReplaceSynonyms(char *string, unsigned long int context)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
-void BotReplaceWeightedSynonyms(char *string, unsigned long int context)
+void BotReplaceWeightedSynonyms(char *string, int size, unsigned long int context)
 {
 	bot_synonymlist_t *syn;
 	bot_synonym_t *synonym, *replacement;
@@ -817,7 +825,7 @@ void BotReplaceWeightedSynonyms(char *string, unsigned long int context)
 		for (synonym = syn->firstsynonym; synonym; synonym = synonym->next)
 		{
 			if (synonym == replacement) continue;
-			StringReplaceWords(string, synonym->string, replacement->string);
+			StringReplaceWords(string, size, synonym->string, replacement->string);
 		} //end for
 	} //end for
 } //end of the function BotReplaceWeightedSynonyms
@@ -827,7 +835,7 @@ void BotReplaceWeightedSynonyms(char *string, unsigned long int context)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
-void BotReplaceReplySynonyms(char *string, unsigned long int context)
+void BotReplaceReplySynonyms(char *string, int size, unsigned long int context)
 {
 	char *str1, *str2, *replacement;
 	bot_synonymlist_t *syn;
@@ -852,6 +860,8 @@ void BotReplaceReplySynonyms(char *string, unsigned long int context)
 				//if the replacement IS in front of the string continue
 				str2 = StringContainsWord(str1, replacement, qfalse);
 				if (str2 && str2 == str1) continue;
+				//leave it if the replacement doesn't fit
+				if ((int)(strlen(string) - strlen(synonym->string) + strlen(replacement)) >= size) continue;
 				//
 				memmove(str1 + strlen(replacement), str1+strlen(synonym->string),
 							strlen(str1+strlen(synonym->string)) + 1);
@@ -2323,12 +2333,12 @@ int BotExpandChatMessage(char *outmessage, char *message, unsigned long mcontext
 						if (reply)
 						{
 							//replace the reply synonyms in the variables
-							BotReplaceReplySynonyms(temp, vcontext);
+							BotReplaceReplySynonyms(temp, sizeof(temp), vcontext);
 						} //end if
 						else 
 						{
 							//replace synonyms in the variable context
-							BotReplaceSynonyms(temp, vcontext);
+							BotReplaceSynonyms(temp, sizeof(temp), vcontext);
 						} //end else
 						//
 						if (len + strlen(temp) >= MAX_MESSAGE_SIZE)
@@ -2378,7 +2388,7 @@ int BotExpandChatMessage(char *outmessage, char *message, unsigned long mcontext
 		else
 		{
 			outputbuf[len++] = *msgptr++;
-			if (len >= MAX_MESSAGE_SIZE)
+			if (len >= MAX_MESSAGE_SIZE - 1)
 			{
 				botimport.Print(PRT_ERROR, "BotConstructChat: message \"%s\" too long\n", message);
 				break;
@@ -2387,7 +2397,7 @@ int BotExpandChatMessage(char *outmessage, char *message, unsigned long mcontext
 	} //end while
 	outputbuf[len] = '\0';
 	//replace synonyms weighted in the message context
-	BotReplaceWeightedSynonyms(outputbuf, mcontext);
+	BotReplaceWeightedSynonyms(outputbuf, MAX_MESSAGE_SIZE, mcontext);
 	//return true if a random was expanded
 	return expansion;
 } //end of the function BotExpandChatMessage

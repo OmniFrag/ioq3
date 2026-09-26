@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server.h"
 
 #include "../botlib/botlib.h"
+#include "../botlib/be_ai_chat.h"
 
 botlib_export_t	*botlib_export;
 
@@ -674,7 +675,11 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		botlib_export->ai.UnifyWhiteSpaces( VMA(1) );
 		return 0;
 	case BOTLIB_AI_REPLACE_SYNONYMS:
-		botlib_export->ai.BotReplaceSynonyms( VMA(1), args[2] );
+		// the syscall has no size, so assume a whole console message's,
+		// the buffer game code expands synonyms in. Older game code passes
+		// a pointer into a console message, past the sender's name, which
+		// leaves less room.
+		botlib_export->ai.BotReplaceSynonyms( VMA(1), MAX_MESSAGE_SIZE, args[2] );
 		return 0;
 	case BOTLIB_AI_LOAD_CHAT_FILE:
 		return botlib_export->ai.BotLoadChatFile( args[1], VMA(2), VMA(3) );
