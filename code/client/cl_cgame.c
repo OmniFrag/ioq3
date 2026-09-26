@@ -415,6 +415,10 @@ static qboolean CL_GetValue( char *value, int valueSize, const char *key ) {
 		Q_strncpyz( value, "1", valueSize );
 		return qtrue;
 	}
+	if ( !Q_stricmp( key, "trap_SetTextFocus_Q3F" ) ) {
+		Com_sprintf( value, valueSize, "%i", COM_TRAP_SETTEXTFOCUS );
+		return qtrue;
+	}
 
 	return qfalse;
 }
@@ -715,6 +719,10 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case COM_TRAP_GETVALUE:
 		return CL_GetValue( VMA(1), args[2], VMA(3) );
 
+	case COM_TRAP_SETTEXTFOCUS:
+		cls.cgameTextFocus = args[1] != 0;
+		return 0;
+
 	default:
 	        assert(0);
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
@@ -756,6 +764,7 @@ void CL_InitCGame( void ) {
 	}
 
 	cls.cgameResizesInPlace = qfalse;
+	cls.cgameTextFocus = qfalse;
 	cgvm = VM_Create( "cgame", CL_CgameSystemCalls, interpret );
 	if ( !cgvm ) {
 		Com_Error( ERR_DROP, "VM_Create on cgame failed" );

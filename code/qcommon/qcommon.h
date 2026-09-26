@@ -382,6 +382,14 @@ extern vmLinkedModule_t vm_linkedModules[];
 // so the fixed syscall numbers don't change.
 #define	COM_TRAP_GETVALUE	700
 
+// Extension syscalls, found through trap_GetValue, are numbered from 800 up,
+// clear of every fixed table, and a number is never reused.
+
+// trap_SetTextFocus( qboolean focused ): a cgame or ui text field has taken
+// or lost focus. A module that calls it gets text input (and a phone's
+// on-screen keyboard) only while it says a field has focus.
+#define	COM_TRAP_SETTEXTFOCUS	800
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );

@@ -318,6 +318,13 @@ typedef struct {
 	qboolean	uiResizesInPlace;
 	qboolean	cgameResizesInPlace;
 
+	// the modules' text fields: whether one has focus, and whether the ui
+	// says so itself (trap_SetTextFocus) rather than the engine assuming
+	// its menus type whenever they're up
+	qboolean	uiTextFocus;
+	qboolean	uiDeclaresTextFocus;
+	qboolean	cgameTextFocus;
+
 	int			framecount;
 	int			frametime;			// msec since last frame
 
@@ -483,6 +490,7 @@ int CL_GetPingQueueCount( void );
 
 void CL_ShutdownRef( void );
 qboolean CL_ResizeWindow( void );
+qboolean CL_WantsTextInput( void );
 void CL_InitRef( void );
 qboolean CL_CDKeyValidate( const char *key, const char *checksum );
 int CL_ServerStatus( char *serverAddress, char *serverStatusString, int maxLen );
