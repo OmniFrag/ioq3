@@ -60,6 +60,7 @@ cvar_t	*com_developer;
 cvar_t	*com_dedicated;
 cvar_t	*com_timescale;
 cvar_t	*com_fixedtime;
+cvar_t	*com_randomSeed;
 cvar_t	*com_journal;
 cvar_t	*com_maxfps;
 cvar_t	*com_altivec;
@@ -2736,6 +2737,14 @@ void Com_Init( char *commandLine ) {
 
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
+
+	// a fixed seed, and fixedtime, make a server's matches repeat exactly
+	// under the same commands, which tests compare
+	com_randomSeed = Cvar_Get( "com_randomSeed", "0", CVAR_INIT | CVAR_PROTECTED );
+	Cvar_SetDescription( com_randomSeed, "Seed random numbers with this rather than the time, so matches repeat (for tests); 0 for the time" );
+	if ( com_randomSeed->integer ) {
+		srand( com_randomSeed->integer );
+	}
 
   // get dedicated here for proper hunk megs initialization
 #ifdef DEDICATED
