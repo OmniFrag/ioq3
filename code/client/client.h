@@ -313,8 +313,8 @@ typedef struct {
 	qboolean	uiStarted;
 	qboolean	cgameStarted;
 
-	// the game modules asked for "resizeInPlace": they read glconfig every
-	// frame, so the window can change size without a vid_restart
+	// the game modules called trap_FollowWindowSize: they read glconfig
+	// every frame, so the window can change size without a vid_restart
 	qboolean	uiResizesInPlace;
 	qboolean	cgameResizesInPlace;
 
