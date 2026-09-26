@@ -382,6 +382,12 @@ extern vmLinkedModule_t vm_linkedModules[];
 // so the fixed syscall numbers don't change.
 #define	COM_TRAP_GETVALUE	700
 
+// an extension a module can look up: its key and syscall number
+typedef struct {
+	const char	*key;
+	int			trap;
+} vmExtension_t;
+
 // Extension syscalls, found through trap_GetValue, are numbered from 800 up,
 // clear of every fixed table, and a number is never reused.
 
@@ -410,6 +416,7 @@ intptr_t		QDECL VM_Call( vm_t *vm, int callNum, ... );
 void	VM_Debug( int level );
 
 void	*VM_ArgPtr( intptr_t intValue );
+intptr_t	VM_GetValue( intptr_t *args, const vmExtension_t *extensions );
 void	*VM_ExplicitArgPtr( vm_t *vm, intptr_t intValue );
 
 #define	VMA(x) VM_ArgPtr(args[x])
