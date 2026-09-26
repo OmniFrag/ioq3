@@ -54,6 +54,7 @@ static SDL_AudioStream *sdlPlaybackStream;
 static SDL_AudioDeviceID sdlCaptureDevice;
 static SDL_AudioStream *sdlCaptureStream;
 static cvar_t *s_sdlCapture;
+static qboolean sdlCaptureWanted;	// SNDDMA_StartCapture opens the device
 #endif
 
 
@@ -244,26 +245,13 @@ qboolean SNDDMA_Init(void)
 #endif
 	else
 	{
-		/* !!! FIXME: list available devices and let cvar specify one, like OpenAL does */
-		SDL_AudioSpec spec;
-		SDL_zero(spec);
-		spec.freq = 48000;
-		spec.format = SDL_AUDIO_S16;
-		spec.channels = 1;
-		sdlCaptureStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, NULL, NULL);
-		if (sdlCaptureStream != NULL) {
-			sdlCaptureDevice = SDL_GetAudioStreamDevice(sdlCaptureStream);
-		} else {
-			sdlCaptureDevice = 0;
-		}
-		Com_Printf( "SDL capture device %s.\n",
-				    (sdlCaptureDevice == 0) ? "failed to open" : "opened");
+		sdlCaptureWanted = qtrue;
 	}
 #endif
 
 	Com_Printf("Starting SDL audio stream...\n");
 	SDL_ResumeAudioDevice(sdlPlaybackDevice);
-	// don't unpause the capture device; we'll do that in StartCapture.
+	// the capture device opens, unpaused, in StartCapture
 
 	Com_Printf("SDL audio initialized.\n");
 	snd_inited = qtrue;
@@ -305,6 +293,7 @@ void SNDDMA_Shutdown(void)
 		sdlCaptureStream = NULL;
 		sdlCaptureDevice = 0;
 	}
+	sdlCaptureWanted = qfalse;
 #endif
 
 	SDL_QuitSubSystem(SDL_INIT_AUDIO);
@@ -343,6 +332,28 @@ void SNDDMA_BeginPainting (void)
 void SNDDMA_StartCapture(void)
 {
 #ifdef USE_SDL_AUDIO_CAPTURE
+	// The microphone opens the first time the player talks, not when the
+	// game starts: opening it can ask the player for permission, as
+	// browsers do, and a game that asks before anyone talks looks wrong
+	if (sdlCaptureWanted)
+	{
+		/* !!! FIXME: list available devices and let cvar specify one, like OpenAL does */
+		SDL_AudioSpec spec;
+		SDL_zero(spec);
+		spec.freq = 48000;
+		spec.format = SDL_AUDIO_S16;
+		spec.channels = 1;
+		sdlCaptureWanted = qfalse;
+		sdlCaptureStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, NULL, NULL);
+		if (sdlCaptureStream != NULL) {
+			sdlCaptureDevice = SDL_GetAudioStreamDevice(sdlCaptureStream);
+		} else {
+			sdlCaptureDevice = 0;
+		}
+		Com_Printf( "SDL capture device %s.\n",
+				    (sdlCaptureDevice == 0) ? "failed to open" : "opened");
+	}
+
 	if (sdlCaptureDevice)
 	{
 		// drop what was recorded since the last capture stopped
