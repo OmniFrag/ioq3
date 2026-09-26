@@ -1485,11 +1485,11 @@ static qboolean NET_GetCvars( void ) {
 	modified += net_socksPort->modified;
 	net_socksPort->modified = qfalse;
 
-	net_socksUsername = Cvar_Get( "net_socksUsername", "", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
+	net_socksUsername = Cvar_Get( "net_socksUsername", "", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_PRIVATE );
 	modified += net_socksUsername->modified;
 	net_socksUsername->modified = qfalse;
 
-	net_socksPassword = Cvar_Get( "net_socksPassword", "", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
+	net_socksPassword = Cvar_Get( "net_socksPassword", "", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_PRIVATE );
 	modified += net_socksPassword->modified;
 	net_socksPassword->modified = qfalse;
 
