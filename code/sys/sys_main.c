@@ -939,6 +939,7 @@ static void Sys_Frame( void )
 // runs a frame from Sys_WindowsMessageHook
 #define SYS_FRAME_MESSAGE ( WM_APP + 0x51 )
 static qboolean framePosted = qfalse;
+static HWND framePostedTo = NULL;
 
 /*
 =================
@@ -975,9 +976,17 @@ static bool SDLCALL Sys_WindowsMessageHook( void *userdata, MSG *msg )
 		return false;
 	}
 
+	// a window destroyed with the message waiting (vid_restart) took it
+	// along, and it will never come
+	if( framePosted && framePostedTo && !IsWindow( framePostedTo ) )
+	{
+		framePosted = qfalse;
+	}
+
 	if( !framePosted && !inFrame && Com_FrameDue( ) && Sys_InModalLoop( ) )
 	{
 		framePosted = PostMessage( msg->hwnd, SYS_FRAME_MESSAGE, 0, 0 ) != 0;
+		framePostedTo = msg->hwnd;
 	}
 
 	return true;
