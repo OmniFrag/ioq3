@@ -405,6 +405,8 @@ static int	FloatAsInt( float f ) {
 static const vmExtension_t cl_cgameExtensions[] = {
 	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
 	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_IsRecordingDemo", COM_TRAP_ISRECORDINGDEMO },
 	{ NULL, 0 }
 };
 
@@ -712,6 +714,13 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		// the window can change size without a vid_restart (CL_ResizeWindow)
 		cls.cgameResizesInPlace = qtrue;
 		return 0;
+
+	case COM_TRAP_CVAR_SETDESCRIPTION:
+		Cvar_SetDescriptionByName( VMA(1), VMA(2) );
+		return 0;
+
+	case COM_TRAP_ISRECORDINGDEMO:
+		return clc.demorecording;
 
 	default:
 	        assert(0);
