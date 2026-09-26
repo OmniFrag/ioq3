@@ -999,6 +999,11 @@ SV_BeginDownload_f
 ==================
 */
 static void SV_BeginDownload_f( client_t *cl ) {
+	// a player in the game would stop getting snapshots, and leave
+	// the game without the game knowing
+	if ( cl->state == CS_ACTIVE ) {
+		return;
+	}
 
 	// Kill any existing download
 	SV_CloseDownload( cl );
@@ -1006,6 +1011,28 @@ static void SV_BeginDownload_f( client_t *cl ) {
 	// cl->downloadName is non-zero now, SV_WriteDownloadToClient will see this and open
 	// the file itself
 	Q_strncpyz( cl->downloadName, Cmd_Argv(1), sizeof(cl->downloadName) );
+}
+
+/*
+==================
+SV_DownloadsFull
+
+Whether sv_maxDownloads clients are downloading already. Each download
+holds one of the file handles everything else shares.
+==================
+*/
+static qboolean SV_DownloadsFull( void ) {
+	int		i, count = 0;
+
+	if ( sv_maxDownloads->integer <= 0 ) {
+		return qfalse;
+	}
+	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
+		if ( svs.clients[i].download ) {
+			count++;
+		}
+	}
+	return count >= sv_maxDownloads->integer;
 }
 
 /*
@@ -1023,6 +1050,7 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 	char errorMessage[1024];
 	char pakbuf[MAX_QPATH], *pakptr;
 	int numRefPaks;
+	qboolean full = qfalse;
 
 	if (!*cl->downloadName)
 		return 0;	// Nothing being downloaded
@@ -1034,6 +1062,13 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 		qboolean missionPack = qfalse;
 		#endif
 	
+		// a download asked for just before entering the game, as in
+		// the same packet as the first usercmd, is ignored too
+		if ( cl->state == CS_ACTIVE ) {
+			*cl->downloadName = 0;
+			return 0;
+		}
+
  		// Chop off filename extension.
 		Com_sprintf(pakbuf, sizeof(pakbuf), "%s", cl->downloadName);
 		pakptr = strrchr(pakbuf, '.');
@@ -1078,6 +1113,7 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 		if ( !(sv_allowDownload->integer & DLF_ENABLE) ||
 			(sv_allowDownload->integer & DLF_NO_UDP) ||
 			idPack || unreferenced ||
+			( full = SV_DownloadsFull() ) ||
 			( cl->downloadSize = FS_BaseDir_FOpenFileRead( cl->downloadName, &cl->download ) ) < 0 ) {
 			// cannot auto-download file
 			if(unreferenced)
@@ -1113,6 +1149,10 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
                     "set autodownload to No in your settings and you might be "
                     "able to join the game anyway.\n", cl->downloadName);
 				}
+			} else if ( full ) {
+				Com_Printf("clientDownload: %d : \"%s\" refused, %d downloads already\n", (int) (cl - svs.clients), cl->downloadName, sv_maxDownloads->integer);
+				Com_sprintf(errorMessage, sizeof(errorMessage), "The server is sending too many downloads to download \"%s\" now. "
+					"Try again in a moment.\n", cl->downloadName);
 			} else {
         // NOTE TTimo this is NOT supposed to happen unless bug in our filesystem scheme?
         //   if the pk3 is referenced, it must have been found somewhere in the filesystem
@@ -1134,6 +1174,11 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
  
 		Com_Printf( "clientDownload: %d : beginning \"%s\"\n", (int) (cl - svs.clients), cl->downloadName );
 		
+		// server commands wouldn't reach the client until it's done,
+		// so don't queue them; donedl sends a new gamestate
+		Com_DPrintf( "Going to CS_CONNECTED for %s\n", cl->name );
+		cl->state = CS_CONNECTED;
+
 		// Init
 		cl->downloadCurrentBlock = cl->downloadClientBlock = cl->downloadXmitBlock = 0;
 		cl->downloadCount = 0;
