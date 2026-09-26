@@ -1079,10 +1079,13 @@ SDL_AppResult SDL_AppEvent( void *appstate, SDL_Event *event )
 =================
 SDL_AppQuit
 
-Unused: the engine quits through Sys_Quit, which exits
+The engine quits through Sys_Quit, which exits before SDL gets here. SDL
+calls this when the system ends the app, as phones do: quit as the quit
+command does, shutting the game down.
 =================
 */
 void SDL_AppQuit( void *appstate, SDL_AppResult result )
 {
+	Cbuf_ExecuteText( EXEC_NOW, "quit\n" );
 }
 #endif
