@@ -280,6 +280,7 @@ extern	cvar_t	*sv_zombietime;
 extern	cvar_t	*sv_rconPassword;
 extern	cvar_t	*sv_privatePassword;
 extern	cvar_t	*sv_allowDownload;
+extern	cvar_t	*sv_maxDownloads;
 extern	cvar_t	*sv_maxclients;
 
 // the points a bot debug polygon holds (sv_bot.c)
