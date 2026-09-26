@@ -283,17 +283,11 @@ static int	FloatAsInt( float f ) {
 	return fi.i;
 }
 
-/*
-====================
-SV_GetValue
-
-Answers trap_GetValue for the game module. Keys name engine extensions; there
-are none yet.
-====================
-*/
-static qboolean SV_GetValue( char *value, int valueSize, const char *key ) {
-	return qfalse;
-}
+// the engine extensions the game module can look up with trap_GetValue;
+// each has its case in SV_GameSystemCalls
+static const vmExtension_t sv_gameExtensions[] = {
+	{ NULL, 0 }
+};
 
 /*
 ====================
@@ -861,7 +855,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 
 
 	case COM_TRAP_GETVALUE:
-		return SV_GetValue( VMA(1), args[2], VMA(3) );
+		return VM_GetValue( args, sv_gameExtensions );
 
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );

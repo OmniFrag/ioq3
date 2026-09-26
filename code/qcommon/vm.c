@@ -838,6 +838,38 @@ void *VM_ArgPtr( intptr_t intValue ) {
 	}
 }
 
+/*
+============
+VM_GetValue
+
+Answers trap_GetValue( char *value, int valueSize, const char *key ) for the
+current module from its extensions, a table that ends with a NULL key. A
+QVM's buffer must lie inside its memory; native and linked modules have no
+bounds to check it against. A missing or empty buffer drops the module.
+============
+*/
+intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions ) {
+	intptr_t	value = args[1];
+	intptr_t	valueSize = args[2];
+	const char	*key = VMA(3);
+
+	if ( !value || valueSize < 1 ) {
+		Com_Error( ERR_DROP, "%s: trap_GetValue was given no buffer", currentVM->name );
+	}
+	if ( !currentVM->entryPoint && ( value < 0 || valueSize > (intptr_t)currentVM->dataMask + 1 ||
+		value > (intptr_t)currentVM->dataMask + 1 - valueSize ) ) {
+		Com_Error( ERR_DROP, "%s: trap_GetValue's buffer lies outside the module's memory", currentVM->name );
+	}
+
+	for ( ; extensions->key; extensions++ ) {
+		if ( !Q_stricmp( key, extensions->key ) ) {
+			Com_sprintf( (char *)(currentVM->dataBase + value), valueSize, "%i", extensions->trap );
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 void *VM_ExplicitArgPtr( vm_t *vm, intptr_t intValue ) {
 	if ( !intValue ) {
 		return NULL;
