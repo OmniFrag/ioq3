@@ -390,6 +390,10 @@ extern vmLinkedModule_t vm_linkedModules[];
 // on-screen keyboard) only while it says a field has focus.
 #define	COM_TRAP_SETTEXTFOCUS	800
 
+// trap_FollowWindowSize(): a cgame or ui module reads glconfig every frame,
+// so the window can change size without restarting it
+#define	COM_TRAP_FOLLOWWINDOWSIZE	801
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );

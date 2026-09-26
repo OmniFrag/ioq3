@@ -408,15 +408,12 @@ Answers trap_GetValue for the cgame module. Keys name engine extensions.
 ====================
 */
 static qboolean CL_GetValue( char *value, int valueSize, const char *key ) {
-	// Game code that reads glconfig every frame asks for this, which lets
-	// the window change size without a vid_restart (CL_ResizeWindow)
-	if ( !Q_stricmp( key, "resizeInPlace" ) ) {
-		cls.cgameResizesInPlace = qtrue;
-		Q_strncpyz( value, "1", valueSize );
-		return qtrue;
-	}
 	if ( !Q_stricmp( key, "trap_SetTextFocus_Q3F" ) ) {
 		Com_sprintf( value, valueSize, "%i", COM_TRAP_SETTEXTFOCUS );
+		return qtrue;
+	}
+	if ( !Q_stricmp( key, "trap_FollowWindowSize_Q3F" ) ) {
+		Com_sprintf( value, valueSize, "%i", COM_TRAP_FOLLOWWINDOWSIZE );
 		return qtrue;
 	}
 
@@ -721,6 +718,11 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_SETTEXTFOCUS:
 		cls.cgameTextFocus = args[1] != 0;
+		return 0;
+
+	case COM_TRAP_FOLLOWWINDOWSIZE:
+		// the window can change size without a vid_restart (CL_ResizeWindow)
+		cls.cgameResizesInPlace = qtrue;
 		return 0;
 
 	default:
