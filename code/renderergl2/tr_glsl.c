@@ -715,7 +715,10 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 		}
 	}
 
+	// GL starts uniforms at zero, and the cache must match, or setting
+	// one to what stale memory happens to hold skips the upload
 	program->uniformBuffer = ri.Malloc(size);
+	Com_Memset(program->uniformBuffer, 0, size);
 }
 
 void GLSL_FinishGPUShader(shaderProgram_t *program)
