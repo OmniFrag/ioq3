@@ -3294,6 +3294,28 @@ int CL_ScaledMilliseconds(void) {
 CL_InitRef
 ============
 */
+#ifdef USE_RENDERER_DLOPEN
+/*
+============
+CL_ValidRendererName
+
+Letters, digits and underscores only
+============
+*/
+static qboolean CL_ValidRendererName( const char *s ) {
+	if ( !*s ) {
+		return qfalse;
+	}
+	for ( ; *s; s++ ) {
+		if ( !( *s >= 'a' && *s <= 'z' ) && !( *s >= 'A' && *s <= 'Z' ) &&
+			!( *s >= '0' && *s <= '9' ) && *s != '_' ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+#endif
+
 void CL_InitRef( void ) {
 	refimport_t	ri;
 	refexport_t	*ret;
@@ -3306,6 +3328,14 @@ void CL_InitRef( void ) {
 
 #ifdef USE_RENDERER_DLOPEN
 	cl_renderer = Cvar_Get("cl_renderer", "opengl2", CVAR_ARCHIVE | CVAR_LATCH);
+
+	// the name becomes part of a library's file name, which must stay in
+	// the engine's directory
+	if ( !CL_ValidRendererName( cl_renderer->string ) ) {
+		Com_Printf( "cl_renderer \"%s\" isn't a renderer's name, using %s\n",
+			cl_renderer->string, cl_renderer->resetString );
+		Cvar_ForceReset( "cl_renderer" );
+	}
 
 	Com_sprintf(dllName, sizeof(dllName), "renderer_%s" DLL_EXT, cl_renderer->string);
 
@@ -3705,7 +3735,7 @@ void CL_Init( void ) {
 
 	cl_lanForcePackets = Cvar_Get ("cl_lanForcePackets", "1", CVAR_ARCHIVE);
 
-	cl_guidServerUniq = Cvar_Get ("cl_guidServerUniq", "1", CVAR_ARCHIVE);
+	cl_guidServerUniq = Cvar_Get ("cl_guidServerUniq", "1", CVAR_ARCHIVE | CVAR_PROTECTED);
 
 	// ~ and `, as keys and characters
 	cl_consoleKeys = Cvar_Get( "cl_consoleKeys", "~ ` 0x7e 0x60", CVAR_ARCHIVE);
