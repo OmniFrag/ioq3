@@ -1322,6 +1322,40 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 /*
 ===========
+FS_SkipPathPrefix
+
+A game path without its leading slashes and "./", which the search
+ignores
+===========
+*/
+const char *FS_SkipPathPrefix( const char *qpath ) {
+	for ( ;; ) {
+		if ( qpath[0] == '/' || qpath[0] == '\\' ) {
+			qpath++;
+		} else if ( qpath[0] == '.' && ( qpath[1] == '/' || qpath[1] == '\\' ) ) {
+			qpath += 2;
+		} else {
+			return qpath;
+		}
+	}
+}
+
+/*
+===========
+FS_IsLocalConfig
+
+Whether a file is autoexec.cfg or q3config.cfg, which only the player
+writes, named as the search would find it: ignoring case, leading
+slashes and "./"
+===========
+*/
+static qboolean FS_IsLocalConfig( const char *filename ) {
+	filename = FS_SkipPathPrefix( filename );
+	return !Q_stricmp( filename, "autoexec.cfg" ) || !Q_stricmp( filename, Q3CONFIG_CFG );
+}
+
+/*
+===========
 FS_FOpenFileRead
 
 Finds the file in the search path.
@@ -1339,11 +1373,13 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 	if(!fs_searchpaths)
 		Com_Error(ERR_FATAL, "Filesystem call made without initialization");
 
-	isLocalConfig = !strcmp(filename, "autoexec.cfg") || !strcmp(filename, Q3CONFIG_CFG);
+	isLocalConfig = FS_IsLocalConfig( filename );
 	for(search = fs_searchpaths; search; search = search->next)
 	{
-		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3 files.
-		if (isLocalConfig && search->pack)
+		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
+		// files and pk3dirs, which come with the game, a mod or a download
+		if (isLocalConfig && (search->pack ||
+			FS_IsExt(search->dir->gamedir, ".pk3dir", strlen(search->dir->gamedir))))
 			continue;
 
 		len = FS_FOpenFileReadDir(filename, search, file, uniqueFILE, qfalse);
