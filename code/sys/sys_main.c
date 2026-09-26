@@ -56,6 +56,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 
+#ifndef APP_ID // the build sets it (cmake/identity.cmake)
+#define APP_ID "org.ioquake3.ioquake3"
+#endif
+
 static char binaryPath[ MAX_OSPATH ] = { 0 };
 static char installPath[ MAX_OSPATH ] = { 0 };
 
@@ -987,6 +991,10 @@ SDL_AppInit
 */
 SDL_AppResult SDL_AppInit( void **appstate, int argc, char *argv[] )
 {
+	// Before SDL starts: desktops find the app's icon by its ID, and name
+	// its audio streams and windows after it
+	SDL_SetAppMetadata( CLIENT_WINDOW_TITLE, PRODUCT_VERSION, APP_ID );
+
 	// The click that focuses a window also reaches the game, so it can be
 	// the click that captures the mouse rather than a click before it
 	SDL_SetHint( SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1" );
