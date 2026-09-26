@@ -778,6 +778,11 @@ long		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFI
 const char	*FS_SkipPathPrefix( const char *qpath );
 // a game path without its leading slashes and "./", which the search ignores
 
+qboolean	FS_IsEngineFile( const char *qpath );
+// whether the file is one the engine keeps for itself in a game directory:
+// the configs it runs at startup, the console and crash logs, the CD key
+// and the command pipe
+
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
 
