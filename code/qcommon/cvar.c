@@ -920,11 +920,17 @@ void Cvar_WriteVariables(fileHandle_t f)
 
 	for (var = cvar_vars; var; var = var->next)
 	{
+		const char *value;
+
 		if(!var->name || Q_stricmp( var->name, "cl_cdkey" ) == 0)
 			continue;
 
 		if( var->flags & CVAR_ARCHIVE ) {
 			// write the latched value, even if it hasn't taken effect yet
+			value = var->latchedString ? var->latchedString : var->string;
+			if ( ( var->flags & CVAR_NODEFAULT ) && !strcmp( value, var->resetString ) ) {
+				continue;
+			}
 			if ( var->latchedString ) {
 				if( strlen( var->name ) + strlen( var->latchedString ) + 10 > sizeof( buffer ) ) {
 					Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
