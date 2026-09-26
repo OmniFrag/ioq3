@@ -49,6 +49,7 @@ static qboolean enumeration_ext = qfalse;
 static qboolean enumeration_all_ext = qfalse;
 #ifdef USE_VOIP
 static qboolean capture_ext = qfalse;
+static qboolean captureOpenTried = qfalse;
 #endif
 
 /*
@@ -2383,6 +2384,26 @@ void S_AL_SoundList( void )
 static
 void S_AL_StartCapture( void )
 {
+	// The microphone opens the first time the player talks, not when the
+	// game starts: opening it can ask the player for permission, as
+	// browsers do, and a game that asks before anyone talks looks wrong
+	if (alCaptureDevice == NULL && capture_ext && !captureOpenTried)
+	{
+		const char *inputdevice = s_alInputDevice->string;
+
+		captureOpenTried = qtrue;
+		if (!*inputdevice)
+			inputdevice = NULL;
+		alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+		if( !alCaptureDevice && inputdevice )
+		{
+			Com_Printf( "Failed to open OpenAL Input device '%s', trying default.\n", inputdevice );
+			alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+		}
+		Com_Printf( "OpenAL capture device %s.\n",
+			    (alCaptureDevice == NULL) ? "failed to open" : "opened");
+	}
+
 	if (alCaptureDevice != NULL)
 		qalcCaptureStart(alCaptureDevice);
 }
@@ -2479,6 +2500,7 @@ void S_AL_Shutdown( void )
 		alCaptureDevice = NULL;
 		Com_Printf( "OpenAL capture device closed.\n" );
 	}
+	captureOpenTried = qfalse;
 #endif
 
 	for (i = 0; i < MAX_RAW_STREAMS; i++) {
@@ -2501,7 +2523,6 @@ qboolean S_AL_Init( soundInterface_t *si )
 {
 #ifdef USE_OPENAL
 	const char* device = NULL;
-	const char* inputdevice = NULL;
 	int i;
 
 	if( !si ) {
@@ -2544,10 +2565,6 @@ qboolean S_AL_Init( soundInterface_t *si )
 	device = s_alDevice->string;
 	if(device && !*device)
 		device = NULL;
-
-	inputdevice = s_alInputDevice->string;
-	if(inputdevice && !*inputdevice)
-		inputdevice = NULL;
 
 
 	// Device enumeration support
@@ -2697,14 +2714,7 @@ qboolean S_AL_Init( soundInterface_t *si )
 			s_alAvailableInputDevices = Cvar_Get("s_alAvailableInputDevices", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
 
 			Com_Printf("OpenAL default capture device is '%s'\n", defaultinputdevice ? defaultinputdevice : "none");
-			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
-			if( !alCaptureDevice && inputdevice )
-			{
-				Com_Printf( "Failed to open OpenAL Input device '%s', trying default.\n", inputdevice );
-				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
-			}
-			Com_Printf( "OpenAL capture device %s.\n",
-				    (alCaptureDevice == NULL) ? "failed to open" : "opened");
+			// S_AL_StartCapture opens it
 		}
 	}
 #endif
