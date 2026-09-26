@@ -75,12 +75,16 @@ function(add_qvm MODULE_NAME)
 
         get_filename_component(BASE_FILE ${SOURCE} NAME_WE)
         set(ASM_FILE ${QVM_ASM_DIR}/${BASE_FILE}.asm)
+        set(DEP_FILE ${QVM_ASM_DIR}/${BASE_FILE}.d)
         string(REPLACE "${CMAKE_BINARY_DIR}/" "" ASM_FILE_COMMENT ${ASM_FILE})
 
+        # q3cpp writes the headers the source includes to DEP_FILE, so
+        # editing a header rebuilds the sources that include it
         add_custom_command(
             OUTPUT ${ASM_FILE}
-            COMMAND ${Q3LCC} ${LCC_FLAGS} -o ${ASM_FILE} ${SOURCE}
+            COMMAND ${Q3LCC} ${LCC_FLAGS} -Wp-d${DEP_FILE} -Wp-t${ASM_FILE} -o ${ASM_FILE} ${SOURCE}
             DEPENDS ${SOURCE} qvm_tools ${Q3RCC} ${Q3CPP} ${Q3LCC}
+            DEPFILE ${DEP_FILE}
             COMMENT "Building C object ${ASM_FILE_COMMENT}")
 
         list(APPEND ASM_FILES ${ASM_FILE})

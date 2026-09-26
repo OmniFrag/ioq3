@@ -139,6 +139,8 @@ int	newhideset(int, Nlist *);
 int	unionhideset(int, int);
 void	iniths(void);
 void	setobjname(char *);
+void	adddepend(char *);
+void	writedepends(void);
 #define	rowlen(tokrow)	((tokrow)->lp - (tokrow)->bp)
 
 char *basepath( char *fname );
@@ -151,6 +153,8 @@ extern	int incdepth;
 extern	int ifdepth;
 extern	int ifsatisfied[NIF];
 extern	int Mflag;
+extern	char *depfile;
+extern	char *deptarget;
 extern	int skipping;
 extern	int verbose;
 extern	int Cplusplus;
