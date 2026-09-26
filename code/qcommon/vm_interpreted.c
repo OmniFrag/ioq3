@@ -169,13 +169,15 @@ VM_PrepareInterpreter
 */
 void VM_PrepareInterpreter( vm_t *vm, vmHeader_t *header ) {
 	int		op;
+	int		operandLength;
 	int		byte_pc;
 	int		int_pc;
 	byte	*code;
 	int		instruction;
 	int		*codeBase;
 
-	vm->codeBase = Hunk_Alloc( vm->codeLength*4, h_high );			// we're now int aligned
+	// an int per byte of code, and two for the OP_MAX that ends it
+	vm->codeBase = Hunk_Alloc( ( vm->codeLength + 2 ) * 4, h_high );			// we're now int aligned
 //	memcpy( vm->codeBase, (byte *)header + header->codeOffset, vm->codeLength );
 
 	// we don't need to translate the instructions, but we still need
@@ -190,51 +192,41 @@ void VM_PrepareInterpreter( vm_t *vm, vmHeader_t *header ) {
 		vm->instructionPointers[ instruction ] = int_pc;
 		instruction++;
 
-		op = (int)code[ byte_pc ];
-		codeBase[int_pc] = op;
-		if(byte_pc > header->codeLength)
-			Com_Error(ERR_DROP, "VM_PrepareInterpreter: pc > header->codeLength");
+		if ( byte_pc >= header->codeLength )
+			Com_Error( ERR_DROP, "VM_PrepareInterpreter: pc >= header->codeLength" );
 
+		op = (int)code[ byte_pc ];
+		if ( op >= OP_MAX )
+			Com_Error( ERR_DROP, "VM_PrepareInterpreter: bad opcode %i at offset %i", op, byte_pc );
+		operandLength = VM_OperandLength( op );
+		if ( byte_pc + 1 + operandLength > header->codeLength )
+			Com_Error( ERR_DROP, "VM_PrepareInterpreter: operand past the end of the code at offset %i", byte_pc );
+
+		codeBase[int_pc] = op;
 		byte_pc++;
 		int_pc++;
 
-		// these are the only opcodes that aren't a single byte
-		switch ( op ) {
-		case OP_ENTER:
-		case OP_CONST:
-		case OP_LOCAL:
-		case OP_LEAVE:
-		case OP_EQ:
-		case OP_NE:
-		case OP_LTI:
-		case OP_LEI:
-		case OP_GTI:
-		case OP_GEI:
-		case OP_LTU:
-		case OP_LEU:
-		case OP_GTU:
-		case OP_GEU:
-		case OP_EQF:
-		case OP_NEF:
-		case OP_LTF:
-		case OP_LEF:
-		case OP_GTF:
-		case OP_GEF:
-		case OP_BLOCK_COPY:
+		switch ( operandLength ) {
+		case 4:
 			codeBase[int_pc] = loadWord(&code[byte_pc]);
 			byte_pc += 4;
 			int_pc++;
 			break;
-		case OP_ARG:
+		case 1:
 			codeBase[int_pc] = (int)code[byte_pc];
 			byte_pc++;
 			int_pc++;
 			break;
-		default:
-			break;
 		}
 
 	}
+
+	// stop the interpreter if it ever runs on past the last instruction,
+	// where an opcode could take its operand from the int after it
+	while ( int_pc < vm->codeLength + 2 ) {
+		codeBase[int_pc++] = OP_MAX;
+	}
+
 	int_pc = 0;
 	instruction = 0;
 	
@@ -263,7 +255,7 @@ void VM_PrepareInterpreter( vm_t *vm, vmHeader_t *header ) {
 		case OP_LEF:
 		case OP_GTF:
 		case OP_GEF:
-			if(codeBase[int_pc] < 0 || codeBase[int_pc] > vm->instructionCount)
+			if(codeBase[int_pc] < 0 || codeBase[int_pc] >= vm->instructionCount)
 				Com_Error(ERR_DROP, "VM_PrepareInterpreter: Jump to invalid instruction number");
 
 			// codeBase[pc] is the instruction index. Convert that into an offset into
@@ -272,17 +264,10 @@ void VM_PrepareInterpreter( vm_t *vm, vmHeader_t *header ) {
 			int_pc++;
 			break;
 
-		// These opcodes have an operand that isn't an instruction index
-		case OP_ENTER:
-		case OP_CONST:
-		case OP_LOCAL:
-		case OP_LEAVE:
-		case OP_BLOCK_COPY:
-		case OP_ARG:
-			int_pc++;
-			break;
-
+		// the other operands aren't instruction indexes
 		default:
+			if ( VM_OperandLength( op ) )
+				int_pc++;
 			break;
 		}
 
@@ -405,11 +390,14 @@ nextInstruction2:
 		opcode = codeImage[ programCounter++ ];
 
 		switch ( opcode ) {
-#ifdef DEBUG_VM
 		default:
-			Com_Error( ERR_DROP, "Bad VM instruction" );  // this should be scanned on load!
+			// VM_PrepareInterpreter checked the opcodes and ended the
+			// code with OP_MAX
+			Com_Error( ERR_DROP, "VM program counter out of range" );
 			return 0;
-#endif
+		case OP_UNDEF:
+		case OP_IGNORE:
+			goto nextInstruction2;
 		case OP_BREAK:
 			vm->breakCount++;
 			goto nextInstruction2;
