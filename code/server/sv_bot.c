@@ -524,6 +524,25 @@ void SV_BotInitCvars(void) {
 
 /*
 ==================
+BotImport_FOpenFile
+
+Game code names the files botlib opens (PC_LoadSource, #include, chat
+and character files), so the engine's own files are kept from it as in
+FS_VM_FOpenFile
+==================
+*/
+static int BotImport_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+	if ( FS_IsEngineFile( qpath ) || strchr( qpath, ':' ) ) {
+		if ( f ) {
+			*f = 0;
+		}
+		return -1;
+	}
+	return FS_FOpenFileByMode( qpath, f, mode );
+}
+
+/*
+==================
 SV_BotInitBotLib
 ==================
 */
@@ -550,7 +569,7 @@ void SV_BotInitBotLib(void) {
 	botlib_import.HunkAlloc = BotImport_HunkAlloc;
 
 	// file system access
-	botlib_import.FS_FOpenFile = FS_FOpenFileByMode;
+	botlib_import.FS_FOpenFile = BotImport_FOpenFile;
 	botlib_import.FS_Read = FS_Read;
 	botlib_import.FS_Write = FS_Write;
 	botlib_import.FS_FCloseFile = FS_FCloseFile;

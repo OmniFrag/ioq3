@@ -580,18 +580,54 @@ qboolean FS_CreatePath (const char *OSPath) {
 
 /*
 =================
+FS_IsCodeFile
+
+Whether a file name has the extension of a library, program or game
+module on any platform, or of a pk3, which can hold game modules. Files
+written on one platform can be copied to, or shared with, another.
+=================
+*/
+static qboolean FS_IsCodeFile( const char *filename )
+{
+	static const char *extensions[] = { ".dll", ".exe", ".so", ".dylib", ".qvm", ".wasm", ".pk3" };
+	const char *so;
+	int i;
+
+	for ( i = 0; i < ARRAY_LEN( extensions ); i++ ) {
+		if ( COM_CompareExtension( filename, extensions[i] ) ) {
+			return qtrue;
+		}
+	}
+
+	// versioned Unix libraries: .so.1, .so.1.2.3
+	for ( so = Q_stristr( filename, ".so." ); so; so = Q_stristr( so + 1, ".so." ) ) {
+		const char *p = so + 4;
+
+		if ( *p < '0' || *p > '9' ) {
+			continue;
+		}
+		while ( ( *p >= '0' && *p <= '9' ) || *p == '.' ) {
+			p++;
+		}
+		if ( !*p ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+=================
 FS_CheckFilenameIsMutable
 
-ERR_DROP if trying to maniuplate a file with the platform library, QVM, or pk3 extension
+ERR_DROP if trying to maniuplate a file with a library, program, QVM, or pk3 extension
 =================
  */
 static void FS_CheckFilenameIsMutable( const char *filename,
 		const char *function )
 {
-	// Check if the filename ends with the library, QVM, or pk3 extension
-	if( Sys_DllExtension( filename )
-		|| COM_CompareExtension( filename, ".qvm" )
-		|| COM_CompareExtension( filename, ".pk3" ) )
+	// Check if the filename ends with a library, program, QVM, or pk3 extension
+	if( FS_IsCodeFile( filename ) )
 	{
 		Com_Error( ERR_DROP, "%s: Not allowed to manipulate '%s' due "
 			"to %s extension", function, filename, COM_GetExtension( filename ) );
@@ -4333,6 +4369,46 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 
 /*
 ===========
+FS_IsEngineFile
+
+Whether a game directory's file is one the engine keeps for itself: the
+player's settings and CD key, the console log, the crash log and the
+command pipe. Named as the search would find it: ignoring case, leading
+slashes and "./"
+===========
+*/
+qboolean FS_IsEngineFile( const char *qpath ) {
+	// the client's and the dedicated server's configs, whichever this is
+	static const char *names[] = { CONFIG_PREFIX ".cfg", CONFIG_PREFIX "_server.cfg",
+		"autoexec.cfg", "qconsole.log", "crashlog.txt", "q3key" };
+	const char *pipe = Cvar_VariableString( "com_pipefile" );
+	int		i;
+
+	qpath = FS_SkipPathPrefix( qpath );
+	for ( i = 0; i < ARRAY_LEN( names ); i++ ) {
+		if ( !Q_stricmp( qpath, names[i] ) ) {
+			return qtrue;
+		}
+	}
+
+	// Windows also finds a file by its 8.3 short name (Q3CONF~1.CFG), so
+	// a name in the directory itself with a "~" and a digit may be one of
+	// the above
+	if ( !strpbrk( qpath, "/\\" ) ) {
+		const char *tilde;
+
+		for ( tilde = strchr( qpath, '~' ); tilde; tilde = strchr( tilde + 1, '~' ) ) {
+			if ( tilde[1] >= '0' && tilde[1] <= '9' ) {
+				return qtrue;
+			}
+		}
+	}
+
+	return pipe[0] && !Q_stricmp( qpath, FS_SkipPathPrefix( pipe ) );
+}
+
+/*
+===========
 FS_VM_FOpenFile
 
 A module's trap_FS_FOpenFile: the handle it gets is its own, and only it may
@@ -4341,6 +4417,21 @@ use it (FS_HandleOwnedBy)
 */
 int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 	int		r;
+
+	// the engine's own files hold the player's settings and secrets, or
+	// run with full rights; reading one fails as for a missing file. A
+	// ':' names another drive or an NTFS stream. Nor may it write any
+	// other config, which someone may exec later with full rights
+	if ( FS_IsEngineFile( qpath ) || strchr( qpath, ':' ) ||
+		( mode != FS_READ && COM_CompareExtension( qpath, ".cfg" ) ) ) {
+		if ( mode != FS_READ ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: game code may not write %s\n", qpath );
+		}
+		if ( f ) {
+			*f = 0;
+		}
+		return -1;
+	}
 
 	r = FS_FOpenFileByMode( qpath, f, mode );
 	if ( f && *f ) {
