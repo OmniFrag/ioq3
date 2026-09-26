@@ -25,6 +25,9 @@ set_identity(WINDOWS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/windows/quake3.i
 
 set_identity(MACOS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/macos/quake3_flat.icns)
 set_identity(MACOS_BUNDLE_ID org.ioquake.${CLIENT_NAME})
+# The client's reverse-DNS ID, which desktops match to its .desktop file and
+# metainfo (misc/linux) to find its icon and name
+set_identity(APP_ID org.ioquake3.${CLIENT_NAME})
 
 set_identity(COPYRIGHT "QUAKE III ARENA Copyright © 1999-2000 id Software, Inc. All rights reserved.")
 
