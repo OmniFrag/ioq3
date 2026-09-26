@@ -546,6 +546,13 @@ CMod_LoadVisibility
 =================
 */
 #define	VIS_HEADER	8
+static void CMod_AllocNoVis( void ) {
+	int		bytes = ( cm.numClusters + 7 ) >> 3;
+
+	cm.novis = Hunk_Alloc( bytes, h_high );
+	Com_Memset( cm.novis, 255, bytes );
+}
+
 void CMod_LoadVisibility( lump_t *l ) {
 	int		len;
 	int		numClusters, clusterBytes;
@@ -553,9 +560,7 @@ void CMod_LoadVisibility( lump_t *l ) {
 
     len = l->filelen;
 	if ( !len ) {
-		cm.clusterBytes = ( cm.numClusters + 31 ) & ~31;
-		cm.visibility = Hunk_Alloc( cm.clusterBytes, h_high );
-		Com_Memset( cm.visibility, 255, cm.clusterBytes );
+		CMod_AllocNoVis();
 		return;
 	}
 	if ( len < VIS_HEADER ) {
@@ -572,11 +577,11 @@ void CMod_LoadVisibility( lump_t *l ) {
 			numClusters, clusterBytes );
 	}
 
-	cm.vised = qtrue;
 	cm.visibility = Hunk_Alloc( len, h_high );
 	cm.numClusters = numClusters;
 	cm.clusterBytes = clusterBytes;
 	Com_Memcpy (cm.visibility, buf + VIS_HEADER, len - VIS_HEADER );
+	CMod_AllocNoVis();
 }
 
 //==================================================================

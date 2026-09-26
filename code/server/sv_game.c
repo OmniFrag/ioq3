@@ -151,13 +151,18 @@ qboolean SV_inPVS (const vec3_t p1, const vec3_t p2)
 	int		area1, area2;
 	byte	*mask;
 
+	// a point in solid, in no cluster, sees nothing and isn't seen
 	leafnum = CM_PointLeafnum (p1);
 	cluster = CM_LeafCluster (leafnum);
+	if ( cluster < 0 )
+		return qfalse;
 	area1 = CM_LeafArea (leafnum);
 	mask = CM_ClusterPVS (cluster);
 
 	leafnum = CM_PointLeafnum (p2);
 	cluster = CM_LeafCluster (leafnum);
+	if ( cluster < 0 )
+		return qfalse;
 	area2 = CM_LeafArea (leafnum);
 	if ( mask && (!(mask[cluster>>3] & (1<<(cluster&7)) ) ) )
 		return qfalse;
@@ -180,12 +185,17 @@ qboolean SV_inPVSIgnorePortals( const vec3_t p1, const vec3_t p2)
 	int		cluster;
 	byte	*mask;
 
+	// a point in solid, in no cluster, sees nothing and isn't seen
 	leafnum = CM_PointLeafnum (p1);
 	cluster = CM_LeafCluster (leafnum);
+	if ( cluster < 0 )
+		return qfalse;
 	mask = CM_ClusterPVS (cluster);
 
 	leafnum = CM_PointLeafnum (p2);
 	cluster = CM_LeafCluster (leafnum);
+	if ( cluster < 0 )
+		return qfalse;
 
 	if ( mask && (!(mask[cluster>>3] & (1<<(cluster&7)) ) ) )
 		return qfalse;

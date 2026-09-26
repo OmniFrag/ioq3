@@ -637,9 +637,14 @@ qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
 	mnode_t *leaf;
 	byte	*vis;
 
+	// a point in solid, in no cluster, sees nothing and isn't seen
 	leaf = R_PointInLeaf( p1 );
+	if ( leaf->cluster < 0 )
+		return qfalse;
 	vis = ri.CM_ClusterPVS( leaf->cluster ); // why not R_ClusterPVS ??
 	leaf = R_PointInLeaf( p2 );
+	if ( leaf->cluster < 0 )
+		return qfalse;
 
 	if ( !(vis[leaf->cluster>>3] & (1<<(leaf->cluster&7))) ) {
 		return qfalse;
