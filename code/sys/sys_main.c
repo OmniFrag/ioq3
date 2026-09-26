@@ -1071,6 +1071,22 @@ SDL_AppEvent
 */
 SDL_AppResult SDL_AppEvent( void *appstate, SDL_Event *event )
 {
+	switch( event->type )
+	{
+		// SDL sends these as they happen, on phones from the system's own
+		// thread, even while a frame runs. Nothing handles them yet.
+		case SDL_EVENT_TERMINATING:
+		case SDL_EVENT_LOW_MEMORY:
+		case SDL_EVENT_WILL_ENTER_BACKGROUND:
+		case SDL_EVENT_DID_ENTER_BACKGROUND:
+		case SDL_EVENT_WILL_ENTER_FOREGROUND:
+		case SDL_EVENT_DID_ENTER_FOREGROUND:
+			return SDL_APP_CONTINUE;
+
+		default:
+			break;
+	}
+
 	IN_ProcessEvent( event );
 	return SDL_APP_CONTINUE;
 }
