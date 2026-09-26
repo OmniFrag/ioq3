@@ -151,6 +151,16 @@ void R_LoadPVR( const char *name, byte **pic, int *width, int *height );
 void R_LoadTGA( const char *name, byte **pic, int *width, int *height );
 
 /*
+=============================================================
+
+MODEL CHECKS
+
+=============================================================
+*/
+
+qboolean R_ValidateMD3( const void *buffer, int fileSize, const char *name );
+
+/*
 ====================================================================
 
 IMPLEMENTATION SPECIFIC FUNCTIONS
