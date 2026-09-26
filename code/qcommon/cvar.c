@@ -74,6 +74,13 @@ static qboolean Cvar_ValidateString( const char *s ) {
 	if ( strchr( s, ';' ) ) {
 		return qfalse;
 	}
+	// a space or a control character would split the line the name is
+	// written on in a config
+	for ( ; *s; s++ ) {
+		if ( (unsigned char)*s <= ' ' || *s == 0x7f ) {
+			return qfalse;
+		}
+	}
 	return qtrue;
 }
 
@@ -929,6 +936,21 @@ void Cvar_WriteVariables(fileHandle_t f)
 			// write the latched value, even if it hasn't taken effect yet
 			value = var->latchedString ? var->latchedString : var->string;
 			if ( ( var->flags & CVAR_NODEFAULT ) && !strcmp( value, var->resetString ) ) {
+				continue;
+			}
+			// a quote or a line break would end the value early, and the
+			// rest of it would run as commands when the config is executed
+			if ( strpbrk( value, "\"\r\n" ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
+						"\"%s\" has a quote or a line break, not written to file\n", var->name );
+				continue;
+			}
+			// and a comment in the name would hide the rest of the line, or
+			// with /* the lines after it (engine cvars such as
+			// //trap_GetValue aren't archived)
+			if ( strstr( var->name, "//" ) || strstr( var->name, "/*" ) || strstr( var->name, "*/" ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: name of variable "
+						"\"%s\" has a comment, not written to file\n", var->name );
 				continue;
 			}
 			if ( var->latchedString ) {
