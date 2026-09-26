@@ -98,8 +98,11 @@ if(DEFINED CLIENT_WINDOW_TITLE)
             code/client/cl_cgame.c
             code/sdl/sdl_glimp.c
             code/sys/con_win32.c
+            code/sys/sys_main.c
         APPEND PROPERTY COMPILE_DEFINITIONS CLIENT_WINDOW_TITLE="${CLIENT_WINDOW_TITLE}")
 endif()
+set_property(SOURCE code/sys/sys_main.c
+    APPEND PROPERTY COMPILE_DEFINITIONS APP_ID="${APP_ID}")
 
 # For CI to read from
 file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/version.txt CONTENT ${PRODUCT_VERSION})
