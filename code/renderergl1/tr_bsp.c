@@ -137,6 +137,7 @@ static	void R_LoadLightmaps( lump_t *l ) {
 	int			len;
 	byte		image[LIGHTMAP_SIZE*LIGHTMAP_SIZE*4];
 	int			i, j;
+	int			numLightmaps;
 	float maxIntensity = 0;
 
 	len = l->filelen;
@@ -149,7 +150,8 @@ static	void R_LoadLightmaps( lump_t *l ) {
 	R_IssuePendingRenderCommands();
 
 	// create all the lightmaps
-	tr.numLightmaps = len / (LIGHTMAP_SIZE * LIGHTMAP_SIZE * 3);
+	numLightmaps = len / (LIGHTMAP_SIZE * LIGHTMAP_SIZE * 3);
+	tr.numLightmaps = numLightmaps;
 	if ( tr.numLightmaps == 1 ) {
 		//FIXME: HACK: maps with only one lightmap turn up fullbright for some reason.
 		//this avoids this, but isn't the correct solution.
@@ -162,7 +164,11 @@ static	void R_LoadLightmaps( lump_t *l ) {
 	}
 
 	tr.lightmaps = ri.Hunk_Alloc( tr.numLightmaps * sizeof(image_t *), h_low );
-	for ( i = 0 ; i < tr.numLightmaps ; i++ ) {
+	// the hack's extra lightmap isn't in the lump
+	if ( tr.numLightmaps > numLightmaps ) {
+		tr.lightmaps[numLightmaps] = tr.whiteImage;
+	}
+	for ( i = 0 ; i < numLightmaps ; i++ ) {
 		// expand the 24 bit on-disk to 32 bit
 		buf_p = buf + i * LIGHTMAP_SIZE*LIGHTMAP_SIZE * 3;
 
@@ -230,6 +236,7 @@ R_LoadVisibility
 */
 static	void R_LoadVisibility( lump_t *l ) {
 	int		len;
+	int		numClusters, clusterBytes;
 	byte	*buf;
 
 	len = ( s_worldData.numClusters + 63 ) & ~63;
@@ -240,10 +247,22 @@ static	void R_LoadVisibility( lump_t *l ) {
 	if ( !len ) {
 		return;
 	}
+	if ( len < 8 ) {
+		ri.Error( ERR_DROP, "R_LoadVisibility: lump too short in %s", s_worldData.name );
+	}
 	buf = fileBase + l->fileofs;
 
-	s_worldData.numClusters = LittleLong( ((int *)buf)[0] );
-	s_worldData.clusterBytes = LittleLong( ((int *)buf)[1] );
+	numClusters = LittleLong( ((int *)buf)[0] );
+	clusterBytes = LittleLong( ((int *)buf)[1] );
+
+	// a row of a bit per cluster for each cluster, including the leafs'
+	if ( numClusters < s_worldData.numClusters || clusterBytes < ( (int64_t)numClusters + 7 ) >> 3
+		|| (int64_t)numClusters * clusterBytes > len - 8 ) {
+		ri.Error( ERR_DROP, "R_LoadVisibility: bad size (%i clusters of %i bytes) in %s",
+			numClusters, clusterBytes, s_worldData.name );
+	}
+	s_worldData.numClusters = numClusters;
+	s_worldData.clusterBytes = clusterBytes;
 
 	// CM_Load should have given us the vis data to share, so
 	// we don't need to allocate another copy
@@ -294,6 +313,24 @@ static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum ) {
 	return shader;
 }
 
+static surfaceType_t	skipData = SF_SKIP;
+
+/*
+===============
+R_SurfaceFogIndex
+===============
+*/
+static int R_SurfaceFogIndex( dsurface_t *ds ) {
+	int		fogNum = LittleLong( ds->fogNum );
+
+	// -1 is no fog, fog index 0
+	if ( fogNum < -1 || fogNum >= s_worldData.numfogs - 1 ) {
+		ri.Printf( PRINT_WARNING, "WARNING: bad fog %i in %s\n", fogNum, s_worldData.name );
+		return 0;
+	}
+	return fogNum + 1;
+}
+
 /*
 ===============
 ParseFace
@@ -309,7 +346,7 @@ static void ParseFace( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int 
 	lightmapNum = LittleLong( ds->lightmapNum );
 
 	// get fog volume
-	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
+	surf->fogIndex = R_SurfaceFogIndex( ds );
 
 	// get shader value
 	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum );
@@ -319,9 +356,15 @@ static void ParseFace( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int 
 
 	numPoints = LittleLong( ds->numVerts );
 	if (numPoints > MAX_FACE_POINTS) {
+		// cutting the points short would leave indexes past them
 		ri.Printf( PRINT_WARNING, "WARNING: MAX_FACE_POINTS exceeded: %i\n", numPoints);
-    numPoints = MAX_FACE_POINTS;
-    surf->shader = tr.defaultShader;
+		surf->data = &skipData;
+		return;
+	}
+	if ( numPoints < 1 ) {
+		// nothing to draw, and the plane is taken from the first point
+		surf->data = &skipData;
+		return;
 	}
 
 	numIndexes = LittleLong( ds->numIndexes );
@@ -351,7 +394,12 @@ static void ParseFace( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int 
 
 	indexes += LittleLong( ds->firstIndex );
 	for ( i = 0 ; i < numIndexes ; i++ ) {
-		((int *)((byte *)cv + cv->ofsIndices ))[i] = LittleLong( indexes[ i ] );
+		int		index = LittleLong( indexes[ i ] );
+
+		if ( (unsigned)index >= numPoints ) {
+			ri.Error( ERR_DROP, "ParseFace: bad index %i in %s", index, s_worldData.name );
+		}
+		((int *)((byte *)cv + cv->ofsIndices ))[i] = index;
 	}
 
 	// take the plane information from the lightmap vector
@@ -379,12 +427,11 @@ static void ParseMesh ( dsurface_t *ds, drawVert_t *verts, msurface_t *surf ) {
 	int				lightmapNum;
 	vec3_t			bounds[2];
 	vec3_t			tmpVec;
-	static surfaceType_t	skipData = SF_SKIP;
 
 	lightmapNum = LittleLong( ds->lightmapNum );
 
 	// get fog volume
-	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
+	surf->fogIndex = R_SurfaceFogIndex( ds );
 
 	// get shader value
 	surf->shader = ShaderForShaderNum( ds->shaderNum, lightmapNum );
@@ -444,7 +491,7 @@ static void ParseTriSurf( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, i
 	int				numVerts, numIndexes;
 
 	// get fog volume
-	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
+	surf->fogIndex = R_SurfaceFogIndex( ds );
 
 	// get shader
 	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX );
@@ -502,7 +549,7 @@ static void ParseFlare( dsurface_t *ds, drawVert_t *verts, msurface_t *surf, int
 	int				i;
 
 	// get fog volume
-	surf->fogIndex = LittleLong( ds->fogNum ) + 1;
+	surf->fogIndex = R_SurfaceFogIndex( ds );
 
 	// get shader
 	surf->shader = ShaderForShaderNum( ds->shaderNum, LIGHTMAP_BY_VERTEX );
@@ -1220,6 +1267,53 @@ void R_MovePatchSurfacesToHunk(void) {
 
 /*
 ===============
+R_CheckSurface
+
+Checks a surface's vertexes and indexes lie inside their lumps, and a
+patch's size, before a parser reads them
+===============
+*/
+static void R_CheckSurface( dsurface_t *ds, int surfNum, int numVerts, int numIndexes ) {
+	int		firstVert = LittleLong( ds->firstVert );
+
+	switch ( LittleLong( ds->surfaceType ) ) {
+	case MST_PATCH: {
+		int		width = LittleLong( ds->patchWidth );
+		int		height = LittleLong( ds->patchHeight );
+
+		// as the collision map requires, which q3map follows
+		if ( width < 3 || width > MAX_PATCH_SIZE || !( width & 1 )
+			|| height < 3 || height > MAX_PATCH_SIZE || !( height & 1 ) ) {
+			ri.Error( ERR_DROP, "R_CheckSurface: bad patch size %i by %i in surface %i of %s",
+				width, height, surfNum, s_worldData.name );
+		}
+		if ( !Com_RangeInTable( firstVert, width * height, numVerts ) ) {
+			ri.Error( ERR_DROP, "R_CheckSurface: bad vertexes in surface %i of %s", surfNum, s_worldData.name );
+		}
+		break;
+	}
+	case MST_PLANAR:
+	case MST_TRIANGLE_SOUP: {
+		int		numIndexesHere = LittleLong( ds->numIndexes );
+
+		if ( !Com_RangeInTable( firstVert, LittleLong( ds->numVerts ), numVerts )
+			|| !Com_RangeInTable( LittleLong( ds->firstIndex ), numIndexesHere, numIndexes ) ) {
+			ri.Error( ERR_DROP, "R_CheckSurface: bad vertexes or indexes in surface %i of %s",
+				surfNum, s_worldData.name );
+		}
+		// triangles only
+		if ( numIndexesHere % 3 ) {
+			ri.Printf( PRINT_WARNING, "WARNING: %i indexes in surface %i of %s\n",
+				numIndexesHere, surfNum, s_worldData.name );
+			ds->numIndexes = LittleLong( numIndexesHere - numIndexesHere % 3 );
+		}
+		break;
+	}
+	}
+}
+
+/*
+===============
 R_LoadSurfaces
 ===============
 */
@@ -1256,6 +1350,7 @@ static	void R_LoadSurfaces( lump_t *surfs, lump_t *verts, lump_t *indexLump ) {
 	s_worldData.numsurfaces = count;
 
 	for ( i = 0 ; i < count ; i++, in++, out++ ) {
+		R_CheckSurface( in, i, verts->filelen / sizeof( *dv ), indexLump->filelen / sizeof( *indexes ) );
 		switch ( LittleLong( in->surfaceType ) ) {
 		case MST_PATCH:
 			ParseMesh ( in, dv, out );
@@ -1308,11 +1403,15 @@ static	void R_LoadSubmodels( lump_t *l ) {
 	if (l->filelen % sizeof(*in))
 		ri.Error (ERR_DROP, "LoadMap: funny lump size in %s",s_worldData.name);
 	count = l->filelen / sizeof(*in);
+	if ( count < 1 ) {
+		ri.Error( ERR_DROP, "R_LoadSubmodels: no models in %s", s_worldData.name );
+	}
 
 	s_worldData.bmodels = out = ri.Hunk_Alloc( count * sizeof(*out), h_low );
 
 	for ( i=0 ; i<count ; i++, in++, out++ ) {
 		model_t *model;
+		int		firstSurface;
 
 		model = R_AllocModel();
 
@@ -1330,8 +1429,12 @@ static	void R_LoadSubmodels( lump_t *l ) {
 			out->bounds[1][j] = LittleFloat (in->maxs[j]);
 		}
 
-		out->firstSurface = s_worldData.surfaces + LittleLong( in->firstSurface );
+		firstSurface = LittleLong( in->firstSurface );
 		out->numSurfaces = LittleLong( in->numSurfaces );
+		if ( !Com_RangeInTable( firstSurface, out->numSurfaces, s_worldData.numsurfaces ) ) {
+			ri.Error( ERR_DROP, "R_LoadSubmodels: bad surfaces in model %i of %s", i, s_worldData.name );
+		}
+		out->firstSurface = s_worldData.surfaces + firstSurface;
 	}
 }
 
@@ -1344,13 +1447,21 @@ static	void R_LoadSubmodels( lump_t *l ) {
 R_SetParent
 =================
 */
-static	void R_SetParent (mnode_t *node, mnode_t *parent)
+static	void R_SetParent (mnode_t *node, mnode_t *parent, int depth)
 {
+	// a node reached twice would make the recursive walks loop forever
+	if ( node->contents == CONTENTS_NODE
+		&& ( node->parent || ( parent && node == s_worldData.nodes ) ) ) {
+		ri.Error( ERR_DROP, "R_SetParent: a node is reached twice in %s", s_worldData.name );
+	}
+	if ( depth > MAX_MAP_NODE_DEPTH ) {
+		ri.Error( ERR_DROP, "R_SetParent: tree deeper than %i nodes in %s", MAX_MAP_NODE_DEPTH, s_worldData.name );
+	}
 	node->parent = parent;
 	if (node->contents != -1)
 		return;
-	R_SetParent (node->children[0], node);
-	R_SetParent (node->children[1], node);
+	R_SetParent (node->children[0], node, depth + 1);
+	R_SetParent (node->children[1], node, depth + 1);
 }
 
 /*
@@ -1372,6 +1483,9 @@ static	void R_LoadNodesAndLeafs (lump_t *nodeLump, lump_t *leafLump) {
 	}
 	numNodes = nodeLump->filelen / sizeof(dnode_t);
 	numLeafs = leafLump->filelen / sizeof(dleaf_t);
+	if ( numNodes < 1 || numLeafs < 1 ) {
+		ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: no nodes or leafs in %s", s_worldData.name );
+	}
 
 	out = ri.Hunk_Alloc ( (numNodes + numLeafs) * sizeof(*out), h_low);	
 
@@ -1389,6 +1503,9 @@ static	void R_LoadNodesAndLeafs (lump_t *nodeLump, lump_t *leafLump) {
 		}
 	
 		p = LittleLong(in->planeNum);
+		if ( (unsigned)p >= s_worldData.numplanes ) {
+			ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: bad planeNum %i in %s", p, s_worldData.name );
+		}
 		out->plane = s_worldData.planes + p;
 
 		out->contents = CONTENTS_NODE;	// differentiate from leafs
@@ -1396,6 +1513,10 @@ static	void R_LoadNodesAndLeafs (lump_t *nodeLump, lump_t *leafLump) {
 		for (j=0 ; j<2 ; j++)
 		{
 			p = LittleLong (in->children[j]);
+			// a negative child is leaf -1 - p
+			if ( p >= 0 ? p >= numNodes : (unsigned)( -1 - p ) >= numLeafs ) {
+				ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: bad child %i in %s", p, s_worldData.name );
+			}
 			if (p >= 0)
 				out->children[j] = s_worldData.nodes + p;
 			else
@@ -1416,17 +1537,29 @@ static	void R_LoadNodesAndLeafs (lump_t *nodeLump, lump_t *leafLump) {
 		out->cluster = LittleLong(inLeaf->cluster);
 		out->area = LittleLong(inLeaf->area);
 
+		// -1 is a solid leaf's; the cluster count sizes the visibility,
+		// and an area indexes the 32-byte area mask
+		if ( out->cluster < -1 || out->cluster >= INT_MAX - 64 ) {
+			ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: bad cluster %i in %s", out->cluster, s_worldData.name );
+		}
+		if ( out->area < -1 || out->area >= MAX_MAP_AREAS ) {
+			ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: bad area %i in %s", out->area, s_worldData.name );
+		}
+
 		if ( out->cluster >= s_worldData.numClusters ) {
 			s_worldData.numClusters = out->cluster + 1;
 		}
 
-		out->firstmarksurface = s_worldData.marksurfaces +
-			LittleLong(inLeaf->firstLeafSurface);
+		p = LittleLong(inLeaf->firstLeafSurface);
 		out->nummarksurfaces = LittleLong(inLeaf->numLeafSurfaces);
+		if ( !Com_RangeInTable( p, out->nummarksurfaces, s_worldData.nummarksurfaces ) ) {
+			ri.Error( ERR_DROP, "R_LoadNodesAndLeafs: bad surfaces in leaf %i of %s", i, s_worldData.name );
+		}
+		out->firstmarksurface = s_worldData.marksurfaces + p;
 	}	
 
 	// chain descendants
-	R_SetParent (s_worldData.nodes, NULL);
+	R_SetParent (s_worldData.nodes, NULL, 0);
 }
 
 //=============================================================================
@@ -1452,6 +1585,7 @@ static	void R_LoadShaders( lump_t *l ) {
 	Com_Memcpy( out, in, count*sizeof(*out) );
 
 	for ( i=0 ; i<count ; i++ ) {
+		out[i].shader[sizeof( out[i].shader ) - 1] = '\0';
 		out[i].surfaceFlags = LittleLong( out[i].surfaceFlags );
 		out[i].contentFlags = LittleLong( out[i].contentFlags );
 	}
@@ -1481,6 +1615,13 @@ static	void R_LoadMarksurfaces (lump_t *l)
 	for ( i=0 ; i<count ; i++)
 	{
 		j = LittleLong(in[i]);
+		// as the collision map does for a released map with -1 here
+		if ( j == -1 ) {
+			j = 0;
+		}
+		if ( (unsigned)j >= s_worldData.numsurfaces ) {
+			ri.Error( ERR_DROP, "R_LoadMarksurfaces: bad surface %i in %s", j, s_worldData.name );
+		}
 		out[i] = s_worldData.surfaces + j;
 	}
 }
@@ -1569,6 +1710,8 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 	sidesCount = sidesLump->filelen / sizeof(*sides);
 
 	for ( i=0 ; i<count ; i++, fogs++) {
+		char	shaderName[MAX_QPATH];
+
 		out->originalBrushNumber = LittleLong( fogs->brushNum );
 
 		if ( (unsigned)out->originalBrushNumber >= brushesCount ) {
@@ -1578,8 +1721,15 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 
 		firstSide = LittleLong( brush->firstSide );
 
-			if ( (unsigned)firstSide > sidesCount - 6 ) {
+		// the six axial sides come first
+		if ( !Com_RangeInTable( firstSide, 6, sidesCount ) ) {
 			ri.Error( ERR_DROP, "fog brush sideNumber out of range" );
+		}
+		for ( sideNum = firstSide ; sideNum < firstSide + 6 ; sideNum++ ) {
+			planeNum = LittleLong( sides[ sideNum ].planeNum );
+			if ( (unsigned)planeNum >= s_worldData.numplanes ) {
+				ri.Error( ERR_DROP, "fog brush planeNum %i out of range", planeNum );
+			}
 		}
 
 		// brushes are always sorted with the axial sides first
@@ -1608,7 +1758,9 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 		out->bounds[1][2] = s_worldData.planes[ planeNum ].dist;
 
 		// get information from the shader for fog parameters
-		shader = R_FindShader( fogs->shader, LIGHTMAP_NONE, qtrue );
+		// the name isn't terminated in the file
+		Q_strncpyz( shaderName, fogs->shader, sizeof( shaderName ) );
+		shader = R_FindShader( shaderName, LIGHTMAP_NONE, qtrue );
 
 		out->parms = shader->fogParms;
 
@@ -1622,11 +1774,19 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 		// set the gradient vector
 		sideNum = LittleLong( fogs->visibleSide );
 
+		if ( sideNum != -1 && ( sideNum < 0 || sideNum >= sidesCount - firstSide ) ) {
+			ri.Printf( PRINT_WARNING, "WARNING: bad visible side %i of fog %i in %s\n",
+				sideNum, i, s_worldData.name );
+			sideNum = -1;
+		}
 		if ( sideNum == -1 ) {
 			out->hasSurface = qfalse;
 		} else {
 			out->hasSurface = qtrue;
 			planeNum = LittleLong( sides[ firstSide + sideNum ].planeNum );
+			if ( (unsigned)planeNum >= s_worldData.numplanes ) {
+				ri.Error( ERR_DROP, "fog visible side planeNum %i out of range", planeNum );
+			}
 			VectorSubtract( vec3_origin, s_worldData.planes[ planeNum ].normal, out->surface );
 			out->surface[3] = -s_worldData.planes[ planeNum ].dist;
 		}
@@ -1647,6 +1807,7 @@ void R_LoadLightGrid( lump_t *l ) {
 	int		i;
 	vec3_t	maxs;
 	int		numGridPoints;
+	double	gridPoints;
 	world_t	*w;
 	float	*wMins, *wMaxs;
 
@@ -1660,18 +1821,26 @@ void R_LoadLightGrid( lump_t *l ) {
 	wMaxs = w->bmodels[0].bounds[1];
 
 	for ( i = 0 ; i < 3 ; i++ ) {
+		double	bounds;
+
 		w->lightGridOrigin[i] = w->lightGridSize[i] * ceil( wMins[i] / w->lightGridSize[i] );
 		maxs[i] = w->lightGridSize[i] * floor( wMaxs[i] / w->lightGridSize[i] );
-		w->lightGridBounds[i] = (maxs[i] - w->lightGridOrigin[i])/w->lightGridSize[i] + 1;
+		// in double, so a bad size or bounds can't overflow the int
+		bounds = (maxs[i] - w->lightGridOrigin[i])/w->lightGridSize[i] + 1;
+		w->lightGridBounds[i] = bounds >= 1 && bounds <= l->filelen ? bounds : 0;
 	}
 
-	numGridPoints = w->lightGridBounds[0] * w->lightGridBounds[1] * w->lightGridBounds[2];
+	// in double, where a product too large to be exact can't match the lump
+	gridPoints = (double)w->lightGridBounds[0] * w->lightGridBounds[1] * w->lightGridBounds[2];
 
-	if ( l->filelen != numGridPoints * 8 ) {
-		ri.Printf( PRINT_WARNING, "WARNING: light grid mismatch\n" );
+	if ( !l->filelen || l->filelen != gridPoints * 8 ) {
+		if ( l->filelen ) {
+			ri.Printf( PRINT_WARNING, "WARNING: light grid mismatch\n" );
+		}
 		w->lightGridData = NULL;
 		return;
 	}
+	numGridPoints = gridPoints;
 
 	w->lightGridData = ri.Hunk_Alloc( l->filelen, h_low );
 	Com_Memcpy( w->lightGridData, (void *)(fileBase + l->fileofs), l->filelen );
@@ -1699,12 +1868,12 @@ void R_LoadEntities( lump_t *l ) {
 	w->lightGridSize[1] = 64;
 	w->lightGridSize[2] = 128;
 
-	p = (char *)(fileBase + l->fileofs);
-
-	// store for reference by the cgame
+	// store for reference by the cgame; the lump needn't be terminated
 	w->entityString = ri.Hunk_Alloc( l->filelen + 1, h_low );
-	strcpy( w->entityString, p );
+	Com_Memcpy( w->entityString, fileBase + l->fileofs, l->filelen );
+	w->entityString[l->filelen] = '\0';
 	w->entityParsePoint = w->entityString;
+	p = w->entityString;
 
 	token = COM_ParseExt( &p, qtrue );
 	if (!*token || *token != '{') {
@@ -1757,7 +1926,15 @@ void R_LoadEntities( lump_t *l ) {
 		}
 		// check for a different grid size
 		if (!Q_stricmp(keyname, "gridsize")) {
-			sscanf(value, "%f %f %f", &w->lightGridSize[0], &w->lightGridSize[1], &w->lightGridSize[2] );
+			vec3_t	size;
+
+			if ( sscanf( value, "%f %f %f", &size[0], &size[1], &size[2] ) != 3
+				|| !( size[0] >= 1 && size[1] >= 1 && size[2] >= 1 )
+				|| !( size[0] < 65536 && size[1] < 65536 && size[2] < 65536 ) ) {
+				ri.Printf( PRINT_WARNING, "WARNING: bad gridsize '%s' in %s\n", value, s_worldData.name );
+				continue;
+			}
+			VectorCopy( size, w->lightGridSize );
 			continue;
 		}
 	}
@@ -1790,6 +1967,7 @@ Called directly from cgame
 */
 void RE_LoadWorldMap( const char *name ) {
 	int			i;
+	int			length;
 	dheader_t	*header;
 	union {
 		byte *b;
@@ -1812,9 +1990,12 @@ void RE_LoadWorldMap( const char *name ) {
 	tr.worldMapLoaded = qtrue;
 
 	// load it
-    ri.FS_ReadFile( name, &buffer.v );
+	length = ri.FS_ReadFile( name, &buffer.v );
 	if ( !buffer.b ) {
 		ri.Error (ERR_DROP, "RE_LoadWorldMap: %s not found", name);
+	}
+	if ( length < (int)sizeof( dheader_t ) ) {
+		ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has a truncated header", name );
 	}
 
 	// clear tr.world so if the level fails to load, the next
@@ -1842,6 +2023,12 @@ void RE_LoadWorldMap( const char *name ) {
 	// swap all the lumps
 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++) {
 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+	}
+
+	for ( i = 0 ; i < HEADER_LUMPS ; i++ ) {
+		if ( !Com_RangeInTable( header->lumps[i].fileofs, header->lumps[i].filelen, length ) ) {
+			ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has lump %i outside the file", name, i );
+		}
 	}
 
 	// load into heap

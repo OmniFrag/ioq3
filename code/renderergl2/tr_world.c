@@ -722,8 +722,9 @@ static void R_MarkLeaves (void) {
 			continue;
 		}
 
-		// check for door connection
-		if ( (tr.refdef.areamask[leaf->area>>3] & (1<<(leaf->area&7)) ) ) {
+		// check for door connection; a leaf with a cluster can still
+		// have area -1 in a malformed map
+		if ( leaf->area >= 0 && (tr.refdef.areamask[leaf->area>>3] & (1<<(leaf->area&7)) ) ) {
 			continue;		// not visible
 		}
 
