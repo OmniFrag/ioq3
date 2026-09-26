@@ -64,33 +64,28 @@ SNDDMA_AudioCallback
 */
 static void SDLCALL SNDDMA_AudioCallback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
-	if (!snd_inited || additional_amount <= 0) {
+	if (!snd_inited || additional_amount <= 0 || dmasize <= 0) {
 		return;
 	}
 
-	int pos = (dmapos * (dma.samplebits/8));
-	if (pos >= dmasize)
-		dmapos = pos = 0;
-
-	int tobufend = dmasize - pos;  /* bytes to buffer's end. */
-	int len1 = additional_amount;
-	int len2 = 0;
-
-	if (len1 > tobufend)
+	/* copy from the ring buffer, wrapping at its end as often as needed:
+	   SDL can ask for more than the whole buffer at once */
+	while (additional_amount > 0)
 	{
-		len1 = tobufend;
-		len2 = additional_amount - len1;
-	}
-	SDL_PutAudioStreamData(stream, dma.buffer + pos, len1);
-	if (len2 <= 0)
-		dmapos += (len1 / (dma.samplebits/8));
-	else  /* wraparound? */
-	{
-		SDL_PutAudioStreamData(stream, dma.buffer, len2);
-		dmapos = (len2 / (dma.samplebits/8));
+		int pos = (dmapos * (dma.samplebits/8));
+		if (pos >= dmasize)
+			dmapos = pos = 0;
+
+		int len = dmasize - pos;  /* bytes to buffer's end. */
+		if (len > additional_amount)
+			len = additional_amount;
+
+		SDL_PutAudioStreamData(stream, dma.buffer + pos, len);
+		dmapos += (len / (dma.samplebits/8));
+		additional_amount -= len;
 	}
 
-	if (dmapos >= dmasize)
+	if (dmapos * (dma.samplebits/8) >= dmasize)
 		dmapos = 0;
 }
 
