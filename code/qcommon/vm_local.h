@@ -40,6 +40,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define	PROGRAM_STACK_SIZE	0x10000
 #define	PROGRAM_STACK_MASK	(PROGRAM_STACK_SIZE-1)
 
+// limits on a .qvm's code, and on its data, lit and bss together, that
+// keep the sizes computed from them (the compilers' buffers take up to 8
+// bytes per byte of code; the data is rounded up to a power of 2) inside
+// an int
+#define	VM_MAX_CODE_LENGTH	(1 << 26)
+#define	VM_MAX_DATA_LENGTH	(1 << 30)
+
 typedef enum {
 	OP_UNDEF, 
 
