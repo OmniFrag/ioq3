@@ -1444,6 +1444,8 @@ VM_AsmCall( int callSyscallInvNum, int callProgramStack )
 	times( &start_time );
 #endif
 
+	VM_CheckSyscall( currentVM, callProgramStack );
+
 	// save the stack to allow recursive VM entry
 	currentVM->programStack = callProgramStack - 4;
 

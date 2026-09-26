@@ -1102,6 +1102,13 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
 	  Com_Printf( "VM_Call( %d )\n", callnum );
 	}
 
+	// a QVM's vmMain gets its arguments and return address below
+	// programStack, which a system call that reenters the VM leaves where
+	// the caller had it
+	if ( !vm->entryPoint && vm->programStack - ( 8 + 4 * MAX_VMMAIN_ARGS ) < vm->stackBottom ) {
+		Com_Error( ERR_DROP, "VM_Call: %s's program stack overflowed", vm->name );
+	}
+
 	++vm->callLevel;
 	// if we have a dll loaded, call it directly
 	if ( vm->entryPoint ) {
@@ -1288,4 +1295,21 @@ void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n)
 	}
 
 	Com_Memcpy(currentVM->dataBase + dest, currentVM->dataBase + src, n);
+}
+
+/*
+=================
+VM_CheckSyscall
+
+Called when a QVM makes a system call, before the syscall number is
+written above programStack and the arguments are read from there. The
+compiled code doesn't check the stack, so programStack can be anything.
+=================
+*/
+void VM_CheckSyscall( vm_t *vm, int programStack )
+{
+	// the return address, then the syscall number and its arguments
+	if ( (unsigned)programStack - (unsigned)vm->stackBottom > PROGRAM_STACK_SIZE - 4 * ( 1 + MAX_VMSYSCALL_ARGS ) ) {
+		Com_Error( ERR_DROP, "VM_CheckSyscall: %s's program stack is out of range", vm->name );
+	}
 }
