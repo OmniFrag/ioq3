@@ -514,7 +514,10 @@ static void SV_ClipMoveToEntities( moveclip_t *clip ) {
 
 	num = SV_AreaEntities( clip->boxmins, clip->boxmaxs, touchlist, MAX_GENTITIES);
 
-	if ( clip->passEntityNum != ENTITYNUM_NONE ) {
+	// botlib passes -1 for no entity too. The world (often past the count
+	// the game gave G_LOCATE_GAME_DATA) owns nothing: game code sets its
+	// ownerNum to ENTITYNUM_NONE
+	if ( clip->passEntityNum >= 0 && clip->passEntityNum < ENTITYNUM_MAX_NORMAL ) {
 		passOwnerNum = ( SV_GentityNum( clip->passEntityNum ) )->r.ownerNum;
 		if ( passOwnerNum == ENTITYNUM_NONE ) {
 			passOwnerNum = -1;

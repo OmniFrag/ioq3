@@ -29,7 +29,7 @@ typedef struct bot_debugpoly_s
 	int inuse;
 	int color;
 	int numPoints;
-	vec3_t points[128];
+	vec3_t points[MAX_DEBUGPOLYGON_POINTS];
 } bot_debugpoly_t;
 
 static bot_debugpoly_t *debugpolygons;
@@ -322,6 +322,8 @@ int BotImport_DebugPolygonCreate(int color, int numPoints, vec3_t *points) {
 
 	if (!debugpolygons)
 		return 0;
+	if (numPoints < 0 || numPoints > MAX_DEBUGPOLYGON_POINTS)
+		Com_Error(ERR_DROP, "BotImport_DebugPolygonCreate: %i points, not 0 to %i", numPoints, MAX_DEBUGPOLYGON_POINTS);
 
 	for (i = 1; i < bot_maxdebugpolys; i++) 	{
 		if (!debugpolygons[i].inuse)
@@ -347,6 +349,10 @@ static void BotImport_DebugPolygonShow(int id, int color, int numPoints, vec3_t 
 	bot_debugpoly_t *poly;
 
 	if (!debugpolygons) return;
+	if (id < 1 || id >= bot_maxdebugpolys)
+		Com_Error(ERR_DROP, "BotImport_DebugPolygonShow: polygon %i, not 1 to %i", id, bot_maxdebugpolys - 1);
+	if (numPoints < 0 || numPoints > MAX_DEBUGPOLYGON_POINTS)
+		Com_Error(ERR_DROP, "BotImport_DebugPolygonShow: %i points, not 0 to %i", numPoints, MAX_DEBUGPOLYGON_POINTS);
 	poly = &debugpolygons[id];
 	poly->inuse = qtrue;
 	poly->color = color;
@@ -362,6 +368,8 @@ BotImport_DebugPolygonDelete
 void BotImport_DebugPolygonDelete(int id)
 {
 	if (!debugpolygons) return;
+	// ids come from game code and botlib; an unknown one deletes nothing
+	if (id < 1 || id >= bot_maxdebugpolys) return;
 	debugpolygons[id].inuse = qfalse;
 }
 

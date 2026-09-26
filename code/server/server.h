@@ -268,6 +268,12 @@ extern	cvar_t	*sv_privatePassword;
 extern	cvar_t	*sv_allowDownload;
 extern	cvar_t	*sv_maxclients;
 
+// the points a bot debug polygon holds (sv_bot.c)
+#define MAX_DEBUGPOLYGON_POINTS		128
+
+// a client slot, for syscall handlers (qcommon.h)
+#define VMV_CLIENT( n )				VM_ArgInt( args, n, 0, sv_maxclients->integer - 1 )
+
 extern	cvar_t	*sv_privateClients;
 extern	cvar_t	*sv_hostname;
 extern	cvar_t	*sv_master[MAX_MASTER_SERVERS];

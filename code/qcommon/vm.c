@@ -979,6 +979,8 @@ void VM_Free( vm_t *vm ) {
 		}
 	}
 
+	FS_VM_CloseFiles( vm );
+
 	if(vm->destroy)
 		vm->destroy(vm);
 
@@ -999,8 +1001,14 @@ void VM_Free( vm_t *vm ) {
 #endif
 	Com_Memset( vm, 0, sizeof( *vm ) );
 
-	currentVM = NULL;
-	lastVM = NULL;
+	// another module's call can free this one (ui running "disconnect"
+	// frees cgame); that module still makes syscalls, which need currentVM
+	if ( currentVM == vm ) {
+		currentVM = NULL;
+	}
+	if ( lastVM == vm ) {
+		lastVM = NULL;
+	}
 }
 
 void VM_Clear(void) {
@@ -1018,72 +1026,32 @@ void VM_Forced_Unload_Done(void) {
 	forced_unload = 0;
 }
 
-void *VM_ArgPtr( intptr_t intValue ) {
-	if ( !intValue ) {
-		return NULL;
-	}
-	// currentVM is missing on reconnect
-	if ( currentVM==NULL )
-	  return NULL;
-
-	if ( currentVM->entryPoint ) {
-		return (void *)(currentVM->dataBase + intValue);
-	}
-	else {
-		return (void *)(currentVM->dataBase + (intValue & currentVM->dataMask));
-	}
-}
-
 /*
 ============
 VM_GetValue
 
 Answers trap_GetValue( char *value, int valueSize, const char *key ) for the
-current module from its extensions, a table that ends with a NULL key. A
-QVM's buffer must lie inside its memory; native and linked modules have no
-bounds to check it against. A missing or empty buffer drops the module.
+current module from its extensions, a table that ends with a NULL key. The
+buffer is checked as any syscall's is (VMA_STRBUF), so a missing, empty or
+out-of-bounds one drops the module.
 ============
 */
 intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions ) {
-	intptr_t	value = args[1];
-	intptr_t	valueSize = args[2];
-	const char	*key = VMA(3);
+	int			valueSize = args[2];
+	char		*value = VMA_STRBUF( 1, valueSize );
+	const char	*key = VMA_STR_OPT( 3 );
 
-	if ( !value || valueSize < 1 ) {
-		Com_Error( ERR_DROP, "%s: trap_GetValue was given no buffer", currentVM->name );
+	if ( !key ) {
+		return qfalse;
 	}
-	if ( !currentVM->entryPoint && ( value < 0 || valueSize > (intptr_t)currentVM->dataMask + 1 ||
-		value > (intptr_t)currentVM->dataMask + 1 - valueSize ) ) {
-		Com_Error( ERR_DROP, "%s: trap_GetValue's buffer lies outside the module's memory", currentVM->name );
-	}
-
 	for ( ; extensions->key; extensions++ ) {
 		if ( !Q_stricmp( key, extensions->key ) ) {
-			Com_sprintf( (char *)(currentVM->dataBase + value), valueSize, "%i", extensions->trap );
+			Com_sprintf( value, valueSize, "%i", extensions->trap );
 			return qtrue;
 		}
 	}
 	return qfalse;
 }
-
-void *VM_ExplicitArgPtr( vm_t *vm, intptr_t intValue ) {
-	if ( !intValue ) {
-		return NULL;
-	}
-
-	// currentVM is missing on reconnect here as well?
-	if ( currentVM==NULL )
-	  return NULL;
-
-	//
-	if ( vm->entryPoint ) {
-		return (void *)(vm->dataBase + intValue);
-	}
-	else {
-		return (void *)(vm->dataBase + (intValue & vm->dataMask));
-	}
-}
-
 
 /*
 ==============
