@@ -533,13 +533,17 @@ char *COM_ParseExt( char **data_p, qboolean allowLineBreaks )
 		data++;
 		while (1)
 		{
-			c = *data++;
+			c = *data;
 			if (c=='\"' || !c)
 			{
+				// step over the closing quote, but not the terminator
+				if (c)
+					data++;
 				com_token[len] = 0;
 				*data_p = ( char * ) data;
 				return com_token;
 			}
+			data++;
 			if ( c == '\n' )
 			{
 				com_lines++;
@@ -626,7 +630,9 @@ void SkipRestOfLine ( char **data ) {
 	if ( !*p )
 		return;
 
-	while ( (c = *p++) != 0 ) {
+	// stop at the terminator, not past it, if the last line has no newline
+	while ( (c = *p) != 0 ) {
+		p++;
 		if ( c == '\n' ) {
 			com_lines++;
 			break;
