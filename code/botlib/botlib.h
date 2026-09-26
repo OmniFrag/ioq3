@@ -44,6 +44,10 @@ struct bot_initmove_s;
 struct weaponinfo_s;
 
 #define BOTFILESBASEFOLDER		"botfiles"
+
+// the entries of a bot's inventory, which weight files index: the game's
+// int inventory[MAX_ITEMS] (ai_main.h)
+#define BOT_MAX_INVENTORY		256
 //debug line colors
 #define LINECOLOR_NONE			-1
 #define LINECOLOR_RED			1//0xf2f2f0f0L

@@ -994,6 +994,10 @@ md3Tag_t *R_GetAnimTag( mdrHeader_t *mod, int framenum, const char *tagName, md3
 		// it is possible to have a bad frame while changing models, so don't error
 		framenum = mod->numFrames - 1;
 	}
+	if ( framenum < 0 )
+	{
+		framenum = 0;
+	}
 
 	tag = (mdrTag_t *)((byte *)mod + mod->ofsTags);
 	for ( i = 0 ; i < mod->numTags ; i++, tag++ )
