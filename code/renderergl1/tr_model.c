@@ -40,63 +40,55 @@ qhandle_t R_RegisterMD3(const char *name, model_t *mod)
 		void *v;
 	} buf;
 	int			lod;
-	int			ident;
-	qboolean	loaded = qfalse;
-	int			numLoaded;
-	char filename[MAX_QPATH], namebuf[MAX_QPATH+20];
-	char *fext, defex[] = "md3";
+	int			size;
+	char		filename[MAX_QPATH], namebuf[MAX_QPATH+20];
+	const char	*fext;
 
-	numLoaded = 0;
-
-	strcpy(filename, name);
-
-	fext = strchr(filename, '.');
-	if(!fext)
-		fext = defex;
-	else
-	{
-		*fext = '\0';
-		fext++;
+	// only the last dot starts the extension; a directory can have one
+	COM_StripExtension( name, filename, sizeof( filename ) );
+	fext = COM_GetExtension( name );
+	if ( !*fext ) {
+		fext = "md3";
 	}
 
-	for (lod = MD3_MAX_LODS - 1 ; lod >= 0 ; lod--)
+	// LOD 0 is the model, and each LOD after it has less detail. Load them
+	// in order and stop at the first that's missing or fails, so that
+	// R_ComputeLOD finds a loaded model in every slot below numLods.
+	for ( lod = 0 ; lod < MD3_MAX_LODS ; lod++ )
 	{
+		qboolean	loaded = qfalse;
+
 		if(lod)
 			Com_sprintf(namebuf, sizeof(namebuf), "%s_%d.%s", filename, lod, fext);
 		else
 			Com_sprintf(namebuf, sizeof(namebuf), "%s.%s", filename, fext);
 
-		ri.FS_ReadFile( namebuf, &buf.v );
+		size = ri.FS_ReadFile( namebuf, &buf.v );
 		if(!buf.u)
-			continue;
-		
-		ident = LittleLong(* (unsigned *) buf.u);
-		if (ident == MD3_IDENT)
-			loaded = R_LoadMD3(mod, lod, buf.u, name);
+			break;
+
+		if ( size >= (int)sizeof( md3Header_t ) && LittleLong( *buf.u ) == MD3_IDENT )
+			loaded = R_LoadMD3( mod, lod, buf.u, name );
 		else
-			ri.Printf(PRINT_WARNING,"R_RegisterMD3: unknown fileid for %s\n", name);
-		
+			ri.Printf(PRINT_WARNING,"R_RegisterMD3: unknown fileid for %s\n", namebuf);
+
 		ri.FS_FreeFile(buf.v);
 
-		if(loaded)
-		{
-			mod->numLods++;
-			numLoaded++;
+		// frames are clamped to LOD 0's before any LOD is drawn
+		if ( loaded && lod && mod->md3[lod]->numFrames < mod->md3[0]->numFrames ) {
+			ri.Printf( PRINT_WARNING, "R_RegisterMD3: %s has fewer frames than %s\n", namebuf, name );
+			loaded = qfalse;
 		}
-		else
+
+		if ( !loaded ) {
+			mod->md3[lod] = NULL;
 			break;
+		}
+		mod->numLods++;
 	}
 
-	if(numLoaded)
-	{
-		// duplicate into higher lod spots that weren't
-		// loaded, in case the user changes r_lodbias on the fly
-		for(lod--; lod >= 0; lod--)
-		{
-			mod->numLods++;
-			mod->md3[lod] = mod->md3[lod + 1];
-		}
-
+	if ( mod->numLods ) {
+		mod->type = MOD_MESH;
 		return mod->index;
 	}
 
@@ -239,6 +231,25 @@ model_t *R_AllocModel( void ) {
 
 /*
 ====================
+R_ResetModel
+
+Clears what a loader fills in, keeping the name and index, so a loader
+never starts from what one that failed left behind
+====================
+*/
+static void R_ResetModel( model_t *mod ) {
+	char	name[MAX_QPATH];
+	int		index = mod->index;
+
+	Q_strncpyz( name, mod->name, sizeof( name ) );
+	Com_Memset( mod, 0, sizeof( *mod ) );
+	Q_strncpyz( mod->name, name, sizeof( mod->name ) );
+	mod->index = index;
+	mod->type = MOD_BAD;
+}
+
+/*
+====================
 RE_RegisterModel
 
 Loads in a model for the given name
@@ -313,6 +324,7 @@ qhandle_t RE_RegisterModel( const char *name ) {
 			if( !Q_stricmp( ext, modelLoaders[ i ].ext ) )
 			{
 				// Load
+				R_ResetModel( mod );
 				hModel = modelLoaders[ i ].ModelLoader( localName, mod );
 				break;
 			}
@@ -347,6 +359,7 @@ qhandle_t RE_RegisterModel( const char *name ) {
 		Com_sprintf( altName, sizeof (altName), "%s.%s", localName, modelLoaders[ i ].ext );
 
 		// Load
+		R_ResetModel( mod );
 		hModel = modelLoaders[ i ].ModelLoader( altName, mod );
 
 		if( hModel )
