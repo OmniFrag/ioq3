@@ -60,7 +60,7 @@ x86_64:
 
 */
 
-#define VMFREE_BUFFERS() do {Z_Free(buf); Z_Free(jused);} while(0)
+#define VMFREE_BUFFERS() do {Z_Free(buf); Z_Free(jused); Z_Free(code);} while(0)
 static	byte	*buf = NULL;
 static	byte	*jused = NULL;
 static	int		jusedSize = 0;
@@ -1082,8 +1082,10 @@ void VM_Compile(vm_t *vm, vmHeader_t *header)
 
 	jusedSize = header->instructionCount + 2;
 
-	// allocate a very large temp buffer, we will shrink it later
-	maxLength = header->codeLength * 8 + 64;
+	// allocate a very large temp buffer, we will shrink it later; the last
+	// 64 bytes hold the instruction that crosses into them and the jump
+	// that ends the code
+	maxLength = header->codeLength * 8 + 112;
 	buf = Z_Malloc(maxLength);
 	jused = Z_Malloc(jusedSize);
 	code = Z_Malloc(header->codeLength+32);
@@ -1128,7 +1130,7 @@ void VM_Compile(vm_t *vm, vmHeader_t *header)
 
 	while(instruction < header->instructionCount)
 	{
-		if(compiledOfs > maxLength - 16)
+		if(compiledOfs > maxLength - 64)
 		{
 	        	VMFREE_BUFFERS();
 			Com_Error(ERR_DROP, "VM_CompileX86: maxLength exceeded");
@@ -1649,6 +1651,10 @@ void VM_Compile(vm_t *vm, vmHeader_t *header)
 		pop0 = pop1;
 		pop1 = op;
 	}
+
+	// VM_LoadQVM makes the code end with OP_JUMP or OP_LEAVE; as a second
+	// guard, stop code that runs on past its last instruction
+	EmitCallErrJump(vm, callDoSyscallOfs);
 	}
 
 	// copy to an exact sized buffer with the appropriate permission bits
