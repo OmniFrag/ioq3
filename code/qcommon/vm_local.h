@@ -47,6 +47,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define	VM_MAX_CODE_LENGTH	(1 << 26)
 #define	VM_MAX_DATA_LENGTH	(1 << 30)
 
+// a module that makes more system calls than this in one VM_Call is
+// taken to be stuck in a loop
+#define	VM_MAX_SYSCALLS		(1024 * 1024)
+
 typedef enum {
 	OP_UNDEF, 
 
@@ -187,6 +191,7 @@ struct vm_s {
 	struct vmSymbol_s	*symbols;
 
 	int			callLevel;		// counts recursive VM_Call
+	int			syscallCount;		// since the outermost VM_Call began
 	int			breakFunction;		// increment breakCount on function entry to this
 	int			breakCount;
 

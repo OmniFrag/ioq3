@@ -305,6 +305,27 @@ void VM_LoadSymbols( vm_t *vm ) {
 
 /*
 ============
+VM_CountSyscall
+
+Stops a module that seems stuck in a loop, such as stock 1.32 qagame's
+ClientSpawn when no spawn point is free. Quake3e stops qagame at the
+same count; this counts every module's calls, since a stuck cgame or ui
+hangs the client as a stuck qagame hangs the server.
+============
+*/
+static void VM_CountSyscall( vm_t *vm ) {
+	if ( ++vm->syscallCount > VM_MAX_SYSCALLS ) {
+		// the error skips VM_Call's return, so callLevel stays up and the
+		// next VM_Call, such as the shutdown the error makes, won't reset
+		// the count
+		vm->syscallCount = 0;
+		Com_Error( ERR_DROP, "%s made over %d system calls in one call; it may be stuck in a loop",
+			vm->name, VM_MAX_SYSCALLS );
+	}
+}
+
+/*
+============
 VM_DllSyscall
 
 Dlls will call this directly
@@ -354,9 +375,12 @@ intptr_t QDECL VM_DllSyscall( intptr_t arg, ... ) {
   for (i = 1; i < ARRAY_LEN (args); i++)
     args[i] = va_arg(ap, intptr_t);
   va_end(ap);
-  
+
+  VM_CountSyscall( currentVM );
+
   return currentVM->systemCall( args );
 #else // original id code
+	VM_CountSyscall( currentVM );
 	return currentVM->systemCall( &arg );
 #endif
 }
@@ -1109,6 +1133,10 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
 		Com_Error( ERR_DROP, "VM_Call: %s's program stack overflowed", vm->name );
 	}
 
+	if ( vm->callLevel == 0 ) {
+		vm->syscallCount = 0;
+	}
+
 	++vm->callLevel;
 	// if we have a dll loaded, call it directly
 	if ( vm->entryPoint ) {
@@ -1312,4 +1340,6 @@ void VM_CheckSyscall( vm_t *vm, int programStack )
 	if ( (unsigned)programStack - (unsigned)vm->stackBottom > PROGRAM_STACK_SIZE - 4 * ( 1 + MAX_VMSYSCALL_ARGS ) ) {
 		Com_Error( ERR_DROP, "VM_CheckSyscall: %s's program stack is out of range", vm->name );
 	}
+
+	VM_CountSyscall( vm );
 }
