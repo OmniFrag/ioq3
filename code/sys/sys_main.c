@@ -994,6 +994,11 @@ SDL_AppResult SDL_AppInit( void **appstate, int argc, char *argv[] )
 	// Before SDL starts: desktops find the app's icon by its ID, and name
 	// its audio streams and windows after it
 	SDL_SetAppMetadata( CLIENT_WINDOW_TITLE, PRODUCT_VERSION, APP_ID );
+#ifdef __EMSCRIPTEN__
+	// keys go to the game only while its canvas has focus, not from the
+	// whole page, which may have fields of its own
+	SDL_SetHint( SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas" );
+#endif
 
 	// The click that focuses a window also reaches the game, so it can be
 	// the click that captures the mouse rather than a click before it
