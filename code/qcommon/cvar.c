@@ -536,6 +536,27 @@ void Cvar_Print( cvar_t *v ) {
 
 /*
 ============
+Cvar_Refusal
+
+Why a set that isn't forced leaves a cvar alone: it is read only, can't
+be set after startup, or is cheat protected with cheats off. NULL if none
+============
+*/
+static const char *Cvar_Refusal( const cvar_t *var ) {
+	if ( var->flags & CVAR_ROM ) {
+		return "read only";
+	}
+	if ( var->flags & CVAR_INIT ) {
+		return "write protected";
+	}
+	if ( ( var->flags & CVAR_CHEAT ) && !cvar_cheats->integer ) {
+		return "cheat protected";
+	}
+	return NULL;
+}
+
+/*
+============
 Cvar_Set2
 ============
 */
@@ -595,21 +616,11 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 
 	if (!force)
 	{
-		if (var->flags & CVAR_ROM)
-		{
-			Com_Printf ("%s is read only.\n", var_name);
-			return var;
-		}
+		const char *refusal = Cvar_Refusal( var );
 
-		if (var->flags & CVAR_INIT)
+		if ( refusal )
 		{
-			Com_Printf ("%s is write protected.\n", var_name);
-			return var;
-		}
-
-		if ((var->flags & CVAR_CHEAT) && !cvar_cheats->integer)
-		{
-			Com_Printf ("%s is cheat protected.\n", var_name);
+			Com_Printf ("%s is %s.\n", var_name, refusal);
 			return var;
 		}
 		
@@ -726,10 +737,50 @@ void Cvar_SetValue( const char *var_name, float value) {
 
 /*
 ============
-Cvar_SetValueSafe
+Cvar_Reset
 ============
 */
-void Cvar_SetValueSafe( const char *var_name, float value )
+void Cvar_Reset( const char *var_name ) {
+	Cvar_Set2( var_name, NULL, qfalse );
+}
+
+/*
+============
+Cvar_SetFromVM
+
+A game module's set. As Cvar_SetSafe, and an engine cvar (one no module,
+user or server created) that is read only, can't be set after startup,
+or is cheat protected with cheats off, keeps its value, as it would from
+the console, unless its name is in allowed, which lists the ones stock
+game code sets. CVAR_LATCH cvars are still set at once.
+============
+*/
+void Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed )
+{
+	cvar_t *var;
+
+	Cvar_CheckSafeSet( var_name, value );
+
+	// the value it has already needs no refusal
+	var = Cvar_FindVar( var_name );
+	if ( var && !( var->flags & ( CVAR_VM_CREATED | CVAR_USER_CREATED | CVAR_SERVER_CREATED ) ) &&
+		( !value || strcmp( value, var->string ) ) ) {
+		const char *refusal = Cvar_Refusal( var );
+
+		for ( ; refusal && allowed && *allowed; allowed++ ) {
+			if ( !Q_stricmp( var_name, *allowed ) && !( var->flags & CVAR_CHEAT ) ) {
+				refusal = NULL;
+			}
+		}
+		if ( refusal ) {
+			Com_Printf( "%s is %s.\n", var_name, refusal );
+			return;
+		}
+	}
+	Cvar_Set( var_name, value );
+}
+
+void Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed )
 {
 	char val[32];
 
@@ -737,16 +788,7 @@ void Cvar_SetValueSafe( const char *var_name, float value )
 		Com_sprintf( val, sizeof(val), "%i", (int)value );
 	else
 		Com_sprintf( val, sizeof(val), "%f", value );
-	Cvar_SetSafe( var_name, val );
-}
-
-/*
-============
-Cvar_Reset
-============
-*/
-void Cvar_Reset( const char *var_name ) {
-	Cvar_Set2( var_name, NULL, qfalse );
+	Cvar_SetFromVM( var_name, val, allowed );
 }
 
 /*
@@ -1436,8 +1478,9 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 	if( !var_name || !var_description || strlen( var_description ) >= MAX_STRING_CHARS )
 		return;
 
+	// only a cvar the game code created itself
 	var = Cvar_FindVar( var_name );
-	if( var && !( var->flags & CVAR_PRIVATE ) )
+	if( var && ( var->flags & CVAR_VM_CREATED ) )
 		Cvar_SetDescription( var, var_description );
 }
 

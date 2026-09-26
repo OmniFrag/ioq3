@@ -545,7 +545,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		Cvar_Update( VMA_INOUT( 1, vmCvar_t ) );
 		return 0;
 	case G_CVAR_SET:
-		Cvar_SetSafe( VMA_STR( 1 ), VMA_STR_OPT( 2 ) );
+		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), NULL );
 		return 0;
 	case G_CVAR_VARIABLE_INTEGER_VALUE:
 		return Cvar_VariableIntegerValueSafe( VMA_STR( 1 ) );

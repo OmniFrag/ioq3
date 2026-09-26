@@ -828,6 +828,11 @@ static const char * const cl_uiSyscallNames[] = {
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION )
 };
 
+// the engine's read-only and startup cvars q3_ui sets: it clears the
+// error message (ui_menu.c), pauses (ui_atoms.c) and switches mods
+// (ui_mods.c, ui_menu.c)
+static const char * const uiSetCvars[] = { "com_errorMessage", "cl_paused", "fs_game", NULL };
+
 /*
 ====================
 CL_UISystemCalls
@@ -858,7 +863,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case UI_CVAR_SET:
 		// no value resets the cvar
-		Cvar_SetSafe( VMA_STR( 1 ), VMA_STR_OPT( 2 ) );
+		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), uiSetCvars );
 		return 0;
 
 	case UI_CVAR_VARIABLEVALUE:
@@ -869,7 +874,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_CVAR_SETVALUE:
-		Cvar_SetValueSafe( VMA_STR( 1 ), VMF(2) );
+		Cvar_SetValueFromVM( VMA_STR( 1 ), VMF(2), uiSetCvars );
 		return 0;
 
 	case UI_CVAR_RESET:
