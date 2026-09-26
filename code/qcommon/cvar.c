@@ -420,7 +420,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	if(index >= MAX_CVARS)
 	{
 		if(!com_errorEntered)
-			Com_Error(ERR_FATAL, "Error: Too many cvars, cannot create a new one!");
+			Com_Error(ERR_DROP, "Error: Too many cvars, cannot create a new one!");
 
 		return NULL;
 	}
