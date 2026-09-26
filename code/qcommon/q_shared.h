@@ -930,6 +930,8 @@ default values.
 #define CVAR_NODEFAULT		0x4000	// not written to the config while it holds its
 					// default, so a later default reaches it
 #define CVAR_ARCHIVE_ND		(CVAR_ARCHIVE | CVAR_NODEFAULT)	// Quake3e's name and value
+#define CVAR_PRIVATE		0x8000	// game code can't read or change it (a path, a
+					// password); Quake3e's name and value
 // These flags are only returned by the Cvar_Flags() function
 #define CVAR_MODIFIED		0x40000000	// Cvar was modified
 #define CVAR_NONEXISTENT	0x80000000	// Cvar doesn't exist.
