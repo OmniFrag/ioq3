@@ -413,8 +413,16 @@ void Cmd_Exec_f( void ) {
 	}
 	if (!quiet)
 		Com_Printf ("execing %s\n", filename);
-	
-	Cbuf_InsertText (f.c);
+
+	// a config from a pk3 or pk3dir, which a download can bring, runs
+	// restricted in the client; a dedicated server doesn't download.
+	// The first configs run before com_dedicated exists
+#ifdef DEDICATED
+	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() );
+#else
+	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() ||
+		( !Cvar_VariableIntegerValue( "dedicated" ) && FS_LastFileIsGameContent() ) );
+#endif
 
 	FS_FreeFile (f.v);
 }

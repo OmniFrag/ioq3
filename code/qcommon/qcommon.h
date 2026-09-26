@@ -803,6 +803,10 @@ qboolean	FS_IsEngineFile( const char *qpath );
 // the configs it runs at startup, the console and crash logs, the CD key
 // and the command pipe
 
+qboolean	FS_LastFileIsGameContent( void );
+// whether the last file FS_FOpenFileRead, and so FS_ReadFile, found is in a
+// pk3 or a pk3dir, not a game directory
+
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
 
