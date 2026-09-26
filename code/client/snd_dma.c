@@ -1321,7 +1321,7 @@ void S_Update_(void) {
 	}
 
 	ma = s_mixahead->value * dma.speed;
-	op = s_mixPreStep->value + sane*dma.speed*0.01;
+	op = s_mixPreStep->value * dma.speed + sane*dma.speed*0.01;
 
 	if (op < ma) {
 		ma = op;
@@ -1565,7 +1565,7 @@ qboolean S_Base_Init( soundInterface_t *si ) {
 	}
 
 	s_mixahead = Cvar_Get ("s_mixahead", "0.2", CVAR_ARCHIVE);
-	s_mixPreStep = Cvar_Get ("s_mixPreStep", "0.05", CVAR_ARCHIVE);
+	s_mixPreStep = Cvar_Get ("s_mixPreStep", "0", CVAR_ARCHIVE_ND);
 	s_show = Cvar_Get ("s_show", "0", CVAR_CHEAT);
 	s_testsound = Cvar_Get ("s_testsound", "0", CVAR_CHEAT);
 
