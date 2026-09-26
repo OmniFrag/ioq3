@@ -43,6 +43,10 @@ static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
 // in a window, the player clicked into the game since it last lost focus
 static qboolean mouseClickedIn = qfalse;
+// what SDL reported beyond the whole pixels and wheel notches sent so far
+static float mouseMotionRemainder[2];
+static float mouseWheelRemainder;
+static int mouseWheelTime;
 
 static cvar_t *in_mouse             = NULL;
 static cvar_t *in_nograb;
@@ -1157,9 +1161,17 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_MOUSE_MOTION:
 			if( mouseActive )
 			{
-				if( !e->motion.xrel && !e->motion.yrel )
+				// SDL3 reports fractions of a pixel, which slow motion
+				// is made of on some platforms; carry them over
+				float dx = e->motion.xrel + mouseMotionRemainder[0];
+				float dy = e->motion.yrel + mouseMotionRemainder[1];
+				int x = (int)dx, y = (int)dy;
+
+				mouseMotionRemainder[0] = dx - x;
+				mouseMotionRemainder[1] = dy - y;
+				if( !x && !y )
 					break;
-				Com_QueueEvent( in_eventTime, SE_MOUSE, e->motion.xrel, e->motion.yrel, 0, NULL );
+				Com_QueueEvent( in_eventTime, SE_MOUSE, x, y, 0, NULL );
 			}
 			break;
 
@@ -1193,12 +1205,28 @@ void IN_ProcessEvent( const SDL_Event *e )
 			break;
 
 		case SDL_EVENT_MOUSE_WHEEL:
-			if( e->wheel.y > 0 )
+			// high-resolution wheels and touchpads report fractions of a
+			// notch; press the key once per whole notch, as SDL 3.2.12's
+			// integer_y counts them. Some browsers report less than a whole
+			// notch per click, so a scroll's first event presses at once,
+			// and a pause or a change of direction starts a new scroll.
+			if( !e->wheel.y )
+				break;
+			if( in_eventTime - mouseWheelTime > 250
+				|| ( e->wheel.y > 0 && mouseWheelRemainder < 0 ) || ( e->wheel.y < 0 && mouseWheelRemainder > 0 ) )
+			{
+				mouseWheelRemainder = 0;
+				if( fabs( e->wheel.y ) < 1.0f )
+					mouseWheelRemainder = ( e->wheel.y > 0 ? 1.0f : -1.0f ) - e->wheel.y;
+			}
+			mouseWheelTime = in_eventTime;
+			mouseWheelRemainder += e->wheel.y;
+			for( ; mouseWheelRemainder >= 1.0f; mouseWheelRemainder -= 1.0f )
 			{
 				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
 				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
 			}
-			else if( e->wheel.y < 0 )
+			for( ; mouseWheelRemainder <= -1.0f; mouseWheelRemainder += 1.0f )
 			{
 				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
 				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
