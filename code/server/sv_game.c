@@ -559,7 +559,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		return 0;
 	case G_SEND_CONSOLE_COMMAND:
 		// EXEC_NOW takes NULL for the current command line
-		Cbuf_ExecuteText( args[1], (int)args[1] == EXEC_NOW ? VMA_STR_OPT( 2 ) : VMA_STR( 2 ) );
+		Cbuf_ExecuteTextRestricted( args[1], (int)args[1] == EXEC_NOW ? VMA_STR_OPT( 2 ) : VMA_STR( 2 ) );
 		return 0;
 
 	case G_FS_FOPEN_FILE:

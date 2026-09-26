@@ -1184,6 +1184,7 @@ If the "nextdemo" cvar is set, that command will be issued
 */
 void CL_NextDemo( void ) {
 	char	v[MAX_STRING_CHARS];
+	qboolean	restricted;
 
 	Q_strncpyz( v, Cvar_VariableString ("nextdemo"), sizeof(v) );
 	v[MAX_STRING_CHARS-1] = 0;
@@ -1192,9 +1193,11 @@ void CL_NextDemo( void ) {
 		return;
 	}
 
+	// with the rights of whoever set it
+	restricted = Cvar_RunsRestricted( "nextdemo" );
 	Cvar_Set ("nextdemo","");
-	Cbuf_AddText (v);
-	Cbuf_AddText ("\n");
+	Cbuf_AddTextRestricted( v, restricted );
+	Cbuf_AddTextRestricted( "\n", restricted );
 	Cbuf_Execute();
 }
 

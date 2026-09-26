@@ -4274,7 +4274,9 @@ void FS_Restart( int checksumFeed ) {
 
 		// skip the q3config.cfg if "safe" is on the command line
 		if ( !Com_SafeMode() ) {
-			Cbuf_AddText ("exec " Q3CONFIG_CFG "\n");
+			// the player's config, with full rights even when restricted
+			// text (a ui's mods menu running vid_restart) caused the restart
+			Cbuf_AddTextRestricted( "exec " Q3CONFIG_CFG "\n", qfalse );
 		}
 	}
 

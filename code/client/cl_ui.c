@@ -907,7 +907,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 			Com_Printf (S_COLOR_YELLOW "turning EXEC_NOW '%.11s' into EXEC_INSERT\n", text);
 			args[1] = EXEC_INSERT;
 		}
-		Cbuf_ExecuteText( args[1], text );
+		Cbuf_ExecuteTextRestricted( args[1], text );
 		return 0;
 	}
 
