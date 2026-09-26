@@ -47,6 +47,8 @@ main(int argc, char **argv)
 	genline();
 	process(&tr);
 	flushout();
+	if (nerrs == 0)
+		writedepends();
 	fflush(stderr);
 	exit(nerrs > 0);
 	return 0;

@@ -11,6 +11,8 @@ extern	int	optind;
 int	verbose;
 int	Mflag;	/* only print active include files */
 char	*objname; /* "src.$O: " */
+char	*depfile; /* -d: write a Makefile rule for the includes here */
+char	*deptarget; /* -t: the rule's target */
 int	Cplusplus = 1;
 
 void
@@ -24,7 +26,7 @@ setup(int argc, char **argv)
 	int   numIncludeDirs = 0;
 
 	setup_kwtab();
-	while ((c = lcc_getopt(argc, argv, "MNOVv+I:D:U:F:lg")) != -1)
+	while ((c = lcc_getopt(argc, argv, "MNOVv+I:D:U:F:lgd:t:")) != -1)
 		switch (c) {
 		case 'N':
 			for (i=0; i<NINCLUDE; i++)
@@ -44,6 +46,12 @@ setup(int argc, char **argv)
 			break;
 		case 'M':
 			Mflag++;
+			break;
+		case 'd':
+			depfile = optarg;
+			break;
+		case 't':
+			deptarget = optarg;
 			break;
 		case 'v':
 			fprintf(stderr, "%s %s\n", argv[0], rcsid);
@@ -85,6 +93,12 @@ setup(int argc, char **argv)
 	}
 	if(Mflag)
 		setobjname(fp);
+	if (depfile) {
+		if (deptarget==NULL)
+			error(FATAL, "-d needs the rule's target from -t");
+		if (optind<argc)
+			adddepend(fp);
+	}
 	includelist[NINCLUDE-1].always = 0;
 	includelist[NINCLUDE-1].file = dp;
 

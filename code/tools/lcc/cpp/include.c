@@ -112,6 +112,7 @@ doinclude(Tokenrow *trp)
 		// Let the included file's own includes resolve relative to where
 		// it was actually found, which may be through a -I directory
 		addToIncludeList( basepath( iname ) );
+		adddepend( iname );
 		if (++incdepth > 10)
 			error(FATAL, "#include too deeply nested");
 		setsource((char*)newstring((uchar*)iname, strlen(iname), 0), fd, NULL);
@@ -152,6 +153,70 @@ genline(void)
 	outbufp = (char*)p;
 	tr.tp = tr.bp;
 	puttokens(&tr);
+}
+
+static char	**depends;
+static int	ndepends;
+
+/*
+ * Remember a file the output depends on, for -d
+ */
+void
+adddepend(char *f)
+{
+	int i;
+
+	if (depfile==NULL)
+		return;
+	for (i=0; i<ndepends; i++)
+		if (strcmp(depends[i], f)==0)
+			return;
+	if (ndepends%64==0) {
+		depends = realloc(depends, (ndepends+64)*sizeof(char *));
+		if (depends==NULL)
+			error(FATAL, "Out of memory from realloc");
+	}
+	depends[ndepends++] = (char*)newstring((uchar*)f, strlen(f), 0);
+}
+
+/*
+ * Write a file name into a Makefile rule
+ */
+static void
+putdepend(FILE *fp, char *f)
+{
+	for (; *f; f++) {
+		if (*f==' ' || *f=='#')
+			putc('\\', fp);
+		else if (*f=='$')
+			putc('$', fp);
+		putc(*f, fp);
+	}
+}
+
+/*
+ * Write -d's file: a Makefile rule making -t's target depend on
+ * the source and every file it included
+ */
+void
+writedepends(void)
+{
+	FILE *fp;
+	int i;
+
+	if (depfile==NULL)
+		return;
+	if ((fp = fopen(depfile, "w"))==NULL)
+		error(FATAL, "Can't open dependency file %s", depfile);
+	putdepend(fp, deptarget);
+	putc(':', fp);
+	for (i=0; i<ndepends; i++) {
+		fputs(" \\\n  ", fp);
+		putdepend(fp, depends[i]);
+	}
+	putc('\n', fp);
+	if (fclose(fp)!=0)
+		error(FATAL, "Can't write dependency file %s", depfile);
 }
 
 void
