@@ -174,6 +174,152 @@ void AAS_SwapAASData(void)
 	} //end for
 } //end of the function AAS_SwapAASData
 //===========================================================================
+// the magnitude of an index whose sign says which side or which table,
+// as an unsigned, so that INT_MIN can't stay negative
+#define AAS_UABS(v)	((v) < 0 ? 0u - (unsigned)(v) : (unsigned)(v))
+//===========================================================================
+// checks every index in the loaded file against its table, before anything
+// follows one; returns what's wrong, or NULL
+//
+// Parameter:				-
+// Returns:					-
+// Changes Globals:		-
+//===========================================================================
+static const char *AAS_ValidateAASData(void)
+{
+	int i, j, c, end, numclusterareas, numclusterreachabilityareas;
+
+	for (i = 0; i < aasworld.numedges; i++)
+	{
+		for (j = 0; j < 2; j++)
+		{
+			if ((unsigned)aasworld.edges[i].v[j] >= aasworld.numvertexes) return "edge with a bad vertex";
+		} //end for
+	} //end for
+	for (i = 0; i < aasworld.edgeindexsize; i++)
+	{
+		if (AAS_UABS(aasworld.edgeindex[i]) >= aasworld.numedges) return "bad edge index";
+	} //end for
+	for (i = 0; i < aasworld.numfaces; i++)
+	{
+		aas_face_t *face = &aasworld.faces[i];
+
+		//the plane is used from either side, planenum ^ 1
+		if ((unsigned)(face->planenum | 1) >= aasworld.numplanes) return "face with a bad plane";
+		if (!Com_RangeInTable(face->firstedge, face->numedges, aasworld.edgeindexsize)) return "face with bad edges";
+		if ((unsigned)face->frontarea >= aasworld.numareas || (unsigned)face->backarea >= aasworld.numareas)
+			return "face with a bad area";
+	} //end for
+	for (i = 0; i < aasworld.faceindexsize; i++)
+	{
+		if (AAS_UABS(aasworld.faceindex[i]) >= aasworld.numfaces) return "bad face index";
+	} //end for
+	for (i = 0; i < aasworld.numareas; i++)
+	{
+		if (!Com_RangeInTable(aasworld.areas[i].firstface, aasworld.areas[i].numfaces, aasworld.faceindexsize))
+			return "area with bad faces";
+	} //end for
+	//the router indexes tables sized by either count with area numbers
+	if (aasworld.numareasettings != aasworld.numareas) return "area settings don't match the areas";
+	//the reachabilities of each area follow the last area's, as bspc
+	//stores them, and the router allows at most 128 from an area
+	end = 0;
+	for (i = 0; i < aasworld.numareasettings; i++)
+	{
+		aas_areasettings_t *settings = &aasworld.areasettings[i];
+
+		if (!Com_RangeInTable(settings->firstreachablearea, settings->numreachableareas, aasworld.reachabilitysize)
+			|| settings->firstreachablearea < end || settings->numreachableareas > 128)
+			return "area settings with bad reachabilities";
+		end = settings->firstreachablearea + settings->numreachableareas;
+		//a negative cluster is a portal
+		c = settings->cluster;
+		if (c < 0)
+		{
+			if (AAS_UABS(c) >= aasworld.numportals) return "area settings with a bad portal";
+		} //end if
+		else
+		{
+			if (c >= aasworld.numclusters) return "area settings with a bad cluster";
+			//cluster 0 isn't a cluster
+			if ((unsigned)settings->clusterareanum >= (c ? aasworld.clusters[c].numareas : 1))
+				return "area settings with a bad cluster area";
+		} //end else
+	} //end for
+	for (i = 0; i < aasworld.reachabilitysize; i++)
+	{
+		aas_reachability_t *reach = &aasworld.reachability[i];
+
+		if ((unsigned)reach->areanum >= aasworld.numareas) return "reachability with a bad area";
+		//movers keep a model number in facenum, and no edge
+		switch (reach->traveltype & TRAVELTYPE_MASK)
+		{
+			case TRAVEL_ELEVATOR: case TRAVEL_JUMPPAD: case TRAVEL_FUNCBOB: continue;
+		} //end switch
+		if (AAS_UABS(reach->facenum) >= aasworld.numfaces || AAS_UABS(reach->edgenum) >= aasworld.numedges)
+			return "reachability with a bad face or edge";
+	} //end for
+	//node 0 is a dummy, and every walk of the tree starts at node 1
+	if (aasworld.numnodes < 2) return "no root node";
+	for (i = 0; i < aasworld.numnodes; i++)
+	{
+		if ((unsigned)aasworld.nodes[i].planenum >= aasworld.numplanes) return "node with a bad plane";
+		for (j = 0; j < 2; j++)
+		{
+			//a negative child is an area, and 0 is solid; bspc stores a
+			//node's children after it, which rules out a cycle, which would
+			//loop forever in AAS_PointAreaNum
+			c = aasworld.nodes[i].children[j];
+			if (c < 0)
+			{
+				if (AAS_UABS(c) >= aasworld.numareas) return "node with a bad area";
+			} //end if
+			else if (c && (c <= i || c >= aasworld.numnodes)) return "node with a bad child";
+		} //end for
+	} //end for
+	for (i = 0; i < aasworld.numportals; i++)
+	{
+		aas_portal_t *portal = &aasworld.portals[i];
+
+		if ((unsigned)portal->areanum >= aasworld.numareas) return "portal with a bad area";
+		for (j = 0; j < 2; j++)
+		{
+			c = j ? portal->backcluster : portal->frontcluster;
+			if ((unsigned)c >= aasworld.numclusters) return "portal with a bad cluster";
+			if ((unsigned)portal->clusterareanum[j] >= (c ? aasworld.clusters[c].numareas : 1))
+				return "portal with a bad cluster area";
+		} //end for
+	} //end for
+	for (i = 0; i < aasworld.portalindexsize; i++)
+	{
+		if ((unsigned)aasworld.portalindex[i] >= aasworld.numportals) return "bad portal index";
+	} //end for
+	numclusterareas = numclusterreachabilityareas = 0;
+	for (i = 0; i < aasworld.numclusters; i++)
+	{
+		aas_cluster_t *cluster = &aasworld.clusters[i];
+
+		//the router's caches are sized by these
+		if (cluster->numareas < 0 || cluster->numareas > 0xffff - numclusterareas
+			|| cluster->numreachabilityareas < 0 || cluster->numreachabilityareas > cluster->numareas
+			|| cluster->numreachabilityareas > 0xffff - numclusterreachabilityareas)
+			return "cluster with bad areas";
+		numclusterareas += cluster->numareas;
+		numclusterreachabilityareas += cluster->numreachabilityareas;
+		if (!Com_RangeInTable(cluster->firstportal, cluster->numportals, aasworld.portalindexsize))
+			return "cluster with bad portals";
+		//AAS_ClusterAreaNum takes a portal's other side for any that
+		//doesn't face this cluster
+		for (j = 0; j < cluster->numportals; j++)
+		{
+			aas_portal_t *portal = &aasworld.portals[aasworld.portalindex[cluster->firstportal + j]];
+
+			if (portal->frontcluster != i && portal->backcluster != i) return "cluster with another's portal";
+		} //end for
+	} //end for
+	return NULL;
+} //end of the function AAS_ValidateAASData
+//===========================================================================
 // dump the current loaded aas file
 //
 // Parameter:				-
@@ -287,7 +433,7 @@ void AAS_FileInfo(void)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
-char *AAS_LoadAASLump(fileHandle_t fp, int offset, int length, int *lastoffset, int size)
+char *AAS_LoadAASLump(fileHandle_t fp, int offset, int length, int *lastoffset, int filelength, int size)
 {
 	char *buf;
 	//
@@ -295,6 +441,13 @@ char *AAS_LoadAASLump(fileHandle_t fp, int offset, int length, int *lastoffset, 
 	{
 		//just alloc a dummy
 		return (char *) GetClearedHunkMemory(size+1);
+	} //end if
+	if (!Com_RangeInTable(offset, length, filelength) || length % size)
+	{
+		AAS_Error("bad aas lump\n");
+		AAS_DumpAASData();
+		botimport.FS_FCloseFile(fp);
+		return NULL;
 	} //end if
 	//seek to the data
 	if (offset != *lastoffset)
@@ -311,11 +464,15 @@ char *AAS_LoadAASLump(fileHandle_t fp, int offset, int length, int *lastoffset, 
 	//allocate memory
 	buf = (char *) GetClearedHunkMemory(length+1);
 	//read the data
-	if (length)
+	if (botimport.FS_Read(buf, length, fp ) != length)
 	{
-		botimport.FS_Read(buf, length, fp );
-		*lastoffset += length;
+		AAS_Error("can't read aas lump\n");
+		FreeMemory(buf);
+		AAS_DumpAASData();
+		botimport.FS_FCloseFile(fp);
+		return NULL;
 	} //end if
+	*lastoffset = offset + length;
 	return buf;
 } //end of the function AAS_LoadAASLump
 //===========================================================================
@@ -344,20 +501,26 @@ int AAS_LoadAASFile(char *filename)
 {
 	fileHandle_t fp;
 	aas_header_t header;
-	int offset, length, lastoffset;
+	int offset, length, lastoffset, filelength;
+	const char *error;
 
 	botimport.Print(PRT_MESSAGE, "trying to load %s\n", filename);
 	//dump current loaded aas file
 	AAS_DumpAASData();
 	//open the file
-	botimport.FS_FOpenFile( filename, &fp, FS_READ );
+	filelength = botimport.FS_FOpenFile( filename, &fp, FS_READ );
 	if (!fp)
 	{
 		AAS_Error("can't open %s\n", filename);
 		return BLERR_CANNOTOPENAASFILE;
 	} //end if
 	//read the header
-	botimport.FS_Read(&header, sizeof(aas_header_t), fp );
+	if (botimport.FS_Read(&header, sizeof(aas_header_t), fp ) != sizeof(aas_header_t))
+	{
+		AAS_Error("%s is too short\n", filename);
+		botimport.FS_FCloseFile(fp);
+		return BLERR_CANNOTOPENAASFILE;
+	} //end if
 	lastoffset = sizeof(aas_header_t);
 	//check header identification
 	header.ident = LittleLong(header.ident);
@@ -389,93 +552,102 @@ int AAS_LoadAASFile(char *filename)
 		botimport.FS_FCloseFile(fp);
 		return BLERR_WRONGAASFILEVERSION;
 	} //end if
-	//load the lumps:
+	//load the lumps; a lump that fails comes back NULL with the file
+	//closed, whatever its count, and an empty one as a dummy
 	//bounding boxes
 	offset = LittleLong(header.lumps[AASLUMP_BBOXES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_BBOXES].filelen);
-	aasworld.bboxes = (aas_bbox_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_bbox_t));
+	aasworld.bboxes = (aas_bbox_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_bbox_t));
 	aasworld.numbboxes = length / sizeof(aas_bbox_t);
-	if (aasworld.numbboxes && !aasworld.bboxes) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.bboxes) return BLERR_CANNOTREADAASLUMP;
 	//vertexes
 	offset = LittleLong(header.lumps[AASLUMP_VERTEXES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_VERTEXES].filelen);
-	aasworld.vertexes = (aas_vertex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_vertex_t));
+	aasworld.vertexes = (aas_vertex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_vertex_t));
 	aasworld.numvertexes = length / sizeof(aas_vertex_t);
-	if (aasworld.numvertexes && !aasworld.vertexes) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.vertexes) return BLERR_CANNOTREADAASLUMP;
 	//planes
 	offset = LittleLong(header.lumps[AASLUMP_PLANES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_PLANES].filelen);
-	aasworld.planes = (aas_plane_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_plane_t));
+	aasworld.planes = (aas_plane_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_plane_t));
 	aasworld.numplanes = length / sizeof(aas_plane_t);
-	if (aasworld.numplanes && !aasworld.planes) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.planes) return BLERR_CANNOTREADAASLUMP;
 	//edges
 	offset = LittleLong(header.lumps[AASLUMP_EDGES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_EDGES].filelen);
-	aasworld.edges = (aas_edge_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_edge_t));
+	aasworld.edges = (aas_edge_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_edge_t));
 	aasworld.numedges = length / sizeof(aas_edge_t);
-	if (aasworld.numedges && !aasworld.edges) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.edges) return BLERR_CANNOTREADAASLUMP;
 	//edgeindex
 	offset = LittleLong(header.lumps[AASLUMP_EDGEINDEX].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_EDGEINDEX].filelen);
-	aasworld.edgeindex = (aas_edgeindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_edgeindex_t));
+	aasworld.edgeindex = (aas_edgeindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_edgeindex_t));
 	aasworld.edgeindexsize = length / sizeof(aas_edgeindex_t);
-	if (aasworld.edgeindexsize && !aasworld.edgeindex) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.edgeindex) return BLERR_CANNOTREADAASLUMP;
 	//faces
 	offset = LittleLong(header.lumps[AASLUMP_FACES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_FACES].filelen);
-	aasworld.faces = (aas_face_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_face_t));
+	aasworld.faces = (aas_face_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_face_t));
 	aasworld.numfaces = length / sizeof(aas_face_t);
-	if (aasworld.numfaces && !aasworld.faces) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.faces) return BLERR_CANNOTREADAASLUMP;
 	//faceindex
 	offset = LittleLong(header.lumps[AASLUMP_FACEINDEX].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_FACEINDEX].filelen);
-	aasworld.faceindex = (aas_faceindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_faceindex_t));
+	aasworld.faceindex = (aas_faceindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_faceindex_t));
 	aasworld.faceindexsize = length / sizeof(aas_faceindex_t);
-	if (aasworld.faceindexsize && !aasworld.faceindex) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.faceindex) return BLERR_CANNOTREADAASLUMP;
 	//convex areas
 	offset = LittleLong(header.lumps[AASLUMP_AREAS].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_AREAS].filelen);
-	aasworld.areas = (aas_area_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_area_t));
+	aasworld.areas = (aas_area_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_area_t));
 	aasworld.numareas = length / sizeof(aas_area_t);
-	if (aasworld.numareas && !aasworld.areas) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.areas) return BLERR_CANNOTREADAASLUMP;
 	//area settings
 	offset = LittleLong(header.lumps[AASLUMP_AREASETTINGS].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_AREASETTINGS].filelen);
-	aasworld.areasettings = (aas_areasettings_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_areasettings_t));
+	aasworld.areasettings = (aas_areasettings_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_areasettings_t));
 	aasworld.numareasettings = length / sizeof(aas_areasettings_t);
-	if (aasworld.numareasettings && !aasworld.areasettings) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.areasettings) return BLERR_CANNOTREADAASLUMP;
 	//reachability list
 	offset = LittleLong(header.lumps[AASLUMP_REACHABILITY].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_REACHABILITY].filelen);
-	aasworld.reachability = (aas_reachability_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_reachability_t));
+	aasworld.reachability = (aas_reachability_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_reachability_t));
 	aasworld.reachabilitysize = length / sizeof(aas_reachability_t);
-	if (aasworld.reachabilitysize && !aasworld.reachability) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.reachability) return BLERR_CANNOTREADAASLUMP;
 	//nodes
 	offset = LittleLong(header.lumps[AASLUMP_NODES].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_NODES].filelen);
-	aasworld.nodes = (aas_node_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_node_t));
+	aasworld.nodes = (aas_node_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_node_t));
 	aasworld.numnodes = length / sizeof(aas_node_t);
-	if (aasworld.numnodes && !aasworld.nodes) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.nodes) return BLERR_CANNOTREADAASLUMP;
 	//cluster portals
 	offset = LittleLong(header.lumps[AASLUMP_PORTALS].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_PORTALS].filelen);
-	aasworld.portals = (aas_portal_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_portal_t));
+	aasworld.portals = (aas_portal_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_portal_t));
 	aasworld.numportals = length / sizeof(aas_portal_t);
-	if (aasworld.numportals && !aasworld.portals) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.portals) return BLERR_CANNOTREADAASLUMP;
 	//cluster portal index
 	offset = LittleLong(header.lumps[AASLUMP_PORTALINDEX].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_PORTALINDEX].filelen);
-	aasworld.portalindex = (aas_portalindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_portalindex_t));
+	aasworld.portalindex = (aas_portalindex_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_portalindex_t));
 	aasworld.portalindexsize = length / sizeof(aas_portalindex_t);
-	if (aasworld.portalindexsize && !aasworld.portalindex) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.portalindex) return BLERR_CANNOTREADAASLUMP;
 	//clusters
 	offset = LittleLong(header.lumps[AASLUMP_CLUSTERS].fileofs);
 	length = LittleLong(header.lumps[AASLUMP_CLUSTERS].filelen);
-	aasworld.clusters = (aas_cluster_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, sizeof(aas_cluster_t));
+	aasworld.clusters = (aas_cluster_t *) AAS_LoadAASLump(fp, offset, length, &lastoffset, filelength, sizeof(aas_cluster_t));
 	aasworld.numclusters = length / sizeof(aas_cluster_t);
-	if (aasworld.numclusters && !aasworld.clusters) return BLERR_CANNOTREADAASLUMP;
+	if (!aasworld.clusters) return BLERR_CANNOTREADAASLUMP;
 	//swap everything
 	AAS_SwapAASData();
+	error = AAS_ValidateAASData();
+	if (error)
+	{
+		AAS_Error("aas file %s is corrupt: %s\n", filename, error);
+		AAS_DumpAASData();
+		botimport.FS_FCloseFile(fp);
+		return BLERR_CANNOTREADAASLUMP;
+	} //end if
 	//aas file is loaded
 	aasworld.loaded = qtrue;
 	//close the file
