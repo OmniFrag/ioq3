@@ -321,6 +321,8 @@ typedef struct {
 #define	MAX_MAP_FOGS		0x100
 #define	MAX_MAP_PLANES		0x20000
 #define	MAX_MAP_NODES		0x20000
+#define	MAX_MAP_NODE_DEPTH	1024	// far deeper than q3map makes
+#define	MAX_MAP_PATCH_SIZE	32		// a patch's width or height, as q3map allows
 #define	MAX_MAP_BRUSHSIDES	0x20000
 #define	MAX_MAP_LEAFS		0x20000
 #define	MAX_MAP_LEAFFACES	0x20000

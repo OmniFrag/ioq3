@@ -230,6 +230,14 @@ typedef int		clipHandle_t;
 #define ARRAY_LEN(x)			(sizeof(x) / sizeof(*(x)))
 #define STRARRAY_LEN(x)			(ARRAY_LEN(x) - 1)
 
+#ifndef Q3_VM
+// whether count entries from first, both read from a file, lie inside a
+// table (or a file) of size entries; not in QVMs, which have no int64_t
+static ID_INLINE qboolean Com_RangeInTable( int first, int count, int size ) {
+	return first >= 0 && count >= 0 && (int64_t)first + count <= size;
+}
+#endif
+
 // angle indexes
 #define	PITCH				0		// up / down
 #define	YAW					1		// left / right
