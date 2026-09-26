@@ -445,6 +445,7 @@ static void IN_InitJoystick( void )
 	int total = 0;
 	char buf[16384] = "";
 	SDL_JoystickID *joysticks = NULL;
+	SDL_JoystickID id;
 	const char *joystickName = NULL;
 
 	if (gamepad)
@@ -469,18 +470,17 @@ static void IN_InitJoystick( void )
 	}
 
 	joysticks = SDL_GetJoysticks(&total);
+	if (!joysticks)
+		total = 0;
 	Com_DPrintf("%d possible joysticks\n", total);
 
 	// Print list and build cvar to allow ui to select joystick.
-	while (joysticks[i] != 0)
+	for (i = 0; i < total; i++)
 	{
 		const char *name = SDL_GetJoystickNameForID(joysticks[i]);
 		Q_strcat(buf, sizeof(buf), name ? name : "Unknown");
 		Q_strcat(buf, sizeof(buf), "\n");
-		i++;
 	}
-
-	SDL_free(joysticks);
 
 	Cvar_Get( "in_availableJoysticks", "", CVAR_ROM );
 
@@ -489,7 +489,15 @@ static void IN_InitJoystick( void )
 
 	if( !in_joystick->integer ) {
 		Com_DPrintf( "Joystick is not active.\n" );
+		SDL_free(joysticks);
 		SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+		return;
+	}
+
+	// keep the subsystem, so a gamepad plugged in later is found
+	if( total == 0 ) {
+		Com_DPrintf( "No joysticks found.\n" );
+		SDL_free(joysticks);
 		return;
 	}
 
@@ -499,17 +507,21 @@ static void IN_InitJoystick( void )
 
 	in_joystickUseAnalog = Cvar_Get( "in_joystickUseAnalog", "0", CVAR_ARCHIVE );
 
-	stick = SDL_OpenJoystick( in_joystickNo->integer );
+	// SDL3 opens devices by their instance ID, not by their place in the list
+	id = joysticks[in_joystickNo->integer];
+	SDL_free(joysticks);
+
+	stick = SDL_OpenJoystick( id );
 
 	if (stick == NULL) {
 		Com_DPrintf( "No joystick opened: %s\n", SDL_GetError() );
 		return;
 	}
 
-	if (SDL_IsGamepad(in_joystickNo->integer))
-		gamepad = SDL_OpenGamepad(in_joystickNo->integer);
+	if (SDL_IsGamepad(id))
+		gamepad = SDL_OpenGamepad(id);
 
-	joystickName = SDL_GetJoystickNameForID(in_joystickNo->integer);
+	joystickName = SDL_GetJoystickNameForID(id);
 	Com_DPrintf( "Joystick %d opened\n", in_joystickNo->integer );
 	Com_DPrintf( "Name:       %s\n", joystickName ? joystickName : "Unknown" );
 	Com_DPrintf( "Axes:       %d\n", SDL_GetNumJoystickAxes(stick) );
