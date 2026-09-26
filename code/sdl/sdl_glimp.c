@@ -878,6 +878,9 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 		SDL_SetWindowIcon( SDL_window, icon );
 
+		// smaller, and the console and menus have no room to draw in
+		SDL_SetWindowMinimumSize( SDL_window, 320, 240 );
+
 		qglClearColor( 0, 0, 0, 1 );
 		qglClear( GL_COLOR_BUFFER_BIT );
 		SDL_GL_SwapWindow( SDL_window );

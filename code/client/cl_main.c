@@ -3181,7 +3181,8 @@ Fits the console's input line to the screen
 ============
 */
 static void CL_SetConsoleFieldWidth( void ) {
-	g_console_field_width = cls.glconfig.vidWidth / g_smallchar_width - 2;
+	// at least one character, however narrow the window
+	g_console_field_width = MAX( 1, cls.glconfig.vidWidth / g_smallchar_width - 2 );
 	g_consoleField.widthInChars = g_console_field_width;
 }
 
@@ -3200,7 +3201,7 @@ qboolean CL_ResizeWindow( void ) {
 	if ( ( cls.uiStarted && !cls.uiResizesInPlace ) || ( cls.cgameStarted && !cls.cgameResizesInPlace ) ) {
 		return qfalse;
 	}
-	if ( !re.ResizeWindow( &cls.glconfig ) ) {
+	if ( !re.ResizeWindow || !re.ResizeWindow( &cls.glconfig ) ) {
 		return qfalse;
 	}
 
