@@ -72,9 +72,20 @@ Element.prototype.requestPointerLock = function (options) {
 
 // The page owns browser fullscreen; the engine follows the canvas's size.
 // Entering it also locks the pointer, which fails if asked for during the
-// fullscreen change. Clicking the game enters it, unless ?fullscreen=0, and
-// r_fullscreen toggles it (GLimp_EndFrame).
+// fullscreen change. The first click into the game enters it, unless
+// ?fullscreen=0, and r_fullscreen toggles it (GLimp_EndFrame). A player who
+// leaves it, with Esc or the browser, wants a window, so later clicks don't
+// go back in. iOS gets none: its fullscreen ends on a downward swipe, which
+// playing by touch does all the time.
+const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let wantFullscreen = urlParams.get('fullscreen') !== '0' && !iOS;
+document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) wantFullscreen = false;
+});
 const setFullscreen = (on) => {
+    wantFullscreen = on && !iOS;
+    if (iOS) return;
     if (on && !document.fullscreenElement)
         document.documentElement.requestFullscreen?.()
             .then(() => canvas.requestPointerLock())
@@ -82,8 +93,7 @@ const setFullscreen = (on) => {
     else if (!on && document.fullscreenElement)
         document.exitFullscreen().catch(() => {});
 };
-if (urlParams.get('fullscreen') !== '0')
-    canvas.addEventListener('pointerdown', () => setFullscreen(true));
+canvas.addEventListener('pointerdown', () => { if (wantFullscreen) setFullscreen(true); });
 
 const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
 ioquake3({
