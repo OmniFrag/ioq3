@@ -400,6 +400,13 @@ typedef struct {
 // so the window can change size without restarting it
 #define	COM_TRAP_FOLLOWWINDOWSIZE	801
 
+// Quake3e's, under its key names, so mods written for it take the same
+// paths here: trap_Cvar_SetDescription_Q3E( const char *name, const char
+// *description ) in every module, and qboolean trap_IsRecordingDemo() in
+// cgame
+#define	COM_TRAP_CVAR_SETDESCRIPTION	802
+#define	COM_TRAP_ISRECORDINGDEMO	803
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );
@@ -611,6 +618,7 @@ char	*Cvar_InfoString_Big( int bit );
 void	Cvar_InfoStringBuffer( int bit, char *buff, int buffsize );
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
+void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
 
 void	Cvar_Restart(qboolean unsetVM);
 void	Cvar_Restart_f( void );

@@ -1317,6 +1317,26 @@ void Cvar_SetDescription( cvar_t *var, const char *var_description )
 
 /*
 =====================
+Cvar_SetDescriptionByName
+
+Describes an existing cvar, for game modules, which name cvars rather
+than hold them
+=====================
+*/
+void Cvar_SetDescriptionByName( const char *var_name, const char *var_description )
+{
+	cvar_t *var;
+
+	if( !var_name || !var_description || strlen( var_description ) >= MAX_STRING_CHARS )
+		return;
+
+	var = Cvar_FindVar( var_name );
+	if( var )
+		Cvar_SetDescription( var, var_description );
+}
+
+/*
+=====================
 Cvar_Register
 
 basically a slightly modified Cvar_Get for the interpreted modules
