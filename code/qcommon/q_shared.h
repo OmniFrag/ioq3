@@ -839,6 +839,9 @@ void	Q_strcat( char *dest, int size, const char *src );
 int Q_PrintStrlen( const char *string );
 // removes color sequences from string
 char *Q_CleanStr( char *string );
+// copies text for a terminal or a log without the bytes that control a
+// terminal, returning how much of text it took
+int Q_FilterTerminalText( char *out, int size, const char *text );
 // Count the number of char tocount encountered in string
 int Q_CountChar(const char *string, char tocount);
 

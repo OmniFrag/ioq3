@@ -982,6 +982,43 @@ int Q_PrintStrlen( const char *string ) {
 }
 
 
+/*
+==================
+Q_FilterTerminalText
+
+Copies text for a terminal or a log, with each byte that controls a
+terminal replaced by '.': the C0 controls but tab and newline (so ESC,
+which starts escape sequences, and CR, which rewrites a line), DEL, and
+the C1 controls in their UTF-8 form (C2 80 to C2 9F), which some
+terminals also take as escape sequences. Every other byte from 0x80 up
+is kept, so UTF-8 text prints. Copies at most size - 1 bytes, not
+splitting a C1 control, and returns how many bytes of text it took, so
+a caller can filter any length a chunk at a time.
+==================
+*/
+int Q_FilterTerminalText( char *out, int size, const char *text ) {
+	const unsigned char	*in = (const unsigned char *)text;
+	int		n = 0;
+
+	while ( *in && n < size - 1 ) {
+		if ( in[0] == 0xc2 && in[1] >= 0x80 && in[1] <= 0x9f ) {
+			if ( n + 2 > size - 1 ) {
+				break;
+			}
+			out[n++] = '.';
+			out[n++] = '.';
+			in += 2;
+		} else if ( ( in[0] < ' ' && in[0] != '\t' && in[0] != '\n' ) || in[0] == 0x7f ) {
+			out[n++] = '.';
+			in++;
+		} else {
+			out[n++] = *in++;
+		}
+	}
+	out[n] = '\0';
+	return (const char *)in - text;
+}
+
 char *Q_CleanStr( char *string ) {
 	char*	d;
 	char*	s;
