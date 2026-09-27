@@ -136,6 +136,12 @@ static weaponconfig_t *weaponconfig;
 //========================================================================
 int BotValidWeaponNumber(int weaponnum)
 {
+	// none before BotSetupWeaponAI loads the weapon configuration
+	if (!weaponconfig)
+	{
+		botimport.Print(PRT_ERROR, "no weapon configuration\n");
+		return qfalse;
+	} //end if
 	if (weaponnum <= 0 || weaponnum >= weaponconfig->numweapons)
 	{
 		botimport.Print(PRT_ERROR, "weapon number out of range\n");
