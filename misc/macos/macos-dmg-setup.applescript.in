@@ -20,7 +20,9 @@ tell application "Finder"
 
             move item "@MACOS_APP_NAME@.app" to folder "@CPACK_DMG_SUBDIRECTORY@"
             move item "@SERVER_NAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
-            move item "@BASEGAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
+            if exists item "@BASEGAME@" then
+                move item "@BASEGAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
+            end if
 
             if exists item "missionpack" then
                 move item "missionpack" to folder "@CPACK_DMG_SUBDIRECTORY@"
@@ -31,7 +33,9 @@ tell application "Finder"
         else
             set position of item "@MACOS_APP_NAME@.app" to {100, 80}
             set position of item "@SERVER_NAME@" to {100, 260}
-            set position of item "@BASEGAME@" to {250, 260}
+            if exists item "@BASEGAME@" then
+                set position of item "@BASEGAME@" to {250, 260}
+            end if
 
             if exists item "missionpack" then
                 set position of item "missionpack" to {400, 260}
