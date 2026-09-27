@@ -82,31 +82,12 @@ function(finish_macos_app)
     endif()
 endfunction()
 
-if(NOT "$ENV{APPLE_CERTIFICATE_ID}" STREQUAL "")
-    list(APPEND POST_CONFIGURE_FUNCTIONS codesign)
-
-    function(codesign)
-        set(DEV_ID "Developer ID Application")
-
-        get_directory_property(INSTALL_TARGETS DIRECTORY
-            ${PROJECT_SOURCE_DIR} BUILDSYSTEM_TARGETS)
-
-        # Code sign everything that will be installed
-        foreach(TARGET IN LISTS INSTALL_TARGETS)
-            get_target_property(DESTINATION ${TARGET} INSTALL_DESTINATION)
-            if(NOT DESTINATION)
-                continue()
-            endif()
-
-            add_custom_command(TARGET ${TARGET} POST_BUILD
-                COMMAND codesign --force --deep --options runtime
-                    --entitlements ${PROJECT_SOURCE_DIR}/cmake/entitlements.plist
-                    --sign "$ENV{APPLE_CERTIFICATE_ID}"
-                    "$<TARGET_FILE:${TARGET}>"
-                COMMENT "Code Signing for macOS: $<TARGET_FILE_BASE_NAME:${TARGET}>")
-        endforeach()
-    endfunction()
-endif()
+# The package's files are signed where CPack stages them, after they're
+# installed, so nothing changes them afterwards, and then the disk image
+# (cmake/utils/macos_codesign.cmake): as APPLE_CERTIFICATE_ID when it's
+# set, or else ad hoc
+set(CPACK_PRE_BUILD_SCRIPTS ${PROJECT_SOURCE_DIR}/cmake/utils/macos_codesign.cmake)
+set(CPACK_POST_BUILD_SCRIPTS ${PROJECT_SOURCE_DIR}/cmake/utils/macos_codesign.cmake)
 
 set(CPACK_GENERATOR "DragNDrop")
 
