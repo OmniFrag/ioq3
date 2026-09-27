@@ -35,6 +35,10 @@ botlib_export_t	*botlib_export;
 // the number of game clients G_LOCATE_GAME_DATA's array was checked for
 static int	sv_numGameClients;
 
+// the game set botlib up and hasn't shut it down; a game freed after an
+// error never does, and the next game's setup would start from its state
+static qboolean	sv_gameBotLibSetUp;
+
 // these functions must be used instead of pointer arithmetic, because
 // the game allocates gentities with private information after the server shared part
 int	SV_NumForGentity( sharedEntity_t *ent ) {
@@ -698,8 +702,14 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		//====================================
 
 	case BOTLIB_SETUP:
-		return SV_BotLibSetup();
+		{
+			int		result = SV_BotLibSetup();
+
+			sv_gameBotLibSetUp = result == 0;
+			return result;
+		}
 	case BOTLIB_SHUTDOWN:
+		sv_gameBotLibSetUp = qfalse;
 		return SV_BotLibShutdown();
 	case BOTLIB_LIBVAR_SET:
 		return botlib_export->BotLibVarSet( VMA_STR( 1 ), VMA_STR( 2 ) );
@@ -1197,6 +1207,10 @@ void SV_ShutdownGameProgs( void ) {
 		return;
 	}
 	VM_Call( gvm, GAME_SHUTDOWN, qfalse );
+	if ( sv_gameBotLibSetUp ) {
+		SV_BotLibShutdown();
+		sv_gameBotLibSetUp = qfalse;
+	}
 	VM_Free( gvm );
 	gvm = NULL;
 	sv_numGameClients = 0;
