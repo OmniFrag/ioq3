@@ -717,8 +717,8 @@ static int FloatAsInt( float f ) {
 // the engine extensions ui can look up with trap_GetValue; each has its case
 // in CL_UISystemCalls
 static const vmExtension_t cl_uiExtensions[] = {
-	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
-	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ "trap_SetTextFocus_OF", COM_TRAP_SETTEXTFOCUS },
+	{ "trap_FollowWindowSize_OF", COM_TRAP_FOLLOWWINDOWSIZE },
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ NULL, 0 }
 };
