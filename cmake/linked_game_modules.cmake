@@ -50,6 +50,26 @@ vmLinkedModule_t vm_linkedModules[] = {
                 -f ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/utils/check_linked_layout.awk ${MAP}
             COMMENT "Checking the linked modules' layout in ${EXECUTABLE}"
             VERBATIM)
+    elseif(ARGN AND APPLE)
+        # Apple's linker writes a map for only one of several architectures,
+        # so compare the executable's symbols with the modules' objects
+        # (check_linked_layout_macho.cmake)
+        set(OBJECT_ARGS "")
+        foreach(MODULE IN LISTS ARGN)
+            list(APPEND OBJECT_ARGS "-DOBJECTS_${MODULE}=$<JOIN:$<TARGET_OBJECTS:${MODULE}_linked>,|>")
+        endforeach()
+        list(JOIN ARGN "|" MODULE_LIST)
+        list(JOIN CMAKE_OSX_ARCHITECTURES "|" ARCH_LIST)
+        add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                -DNM=${CMAKE_NM}
+                -DBINARY=$<TARGET_FILE:${EXECUTABLE}>
+                "-DARCHS=${ARCH_LIST}"
+                "-DMODULES=${MODULE_LIST}"
+                ${OBJECT_ARGS}
+                -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/utils/check_linked_layout_macho.cmake
+            COMMENT "Checking the linked modules' layout in ${EXECUTABLE}"
+            VERBATIM)
     endif()
 endfunction()
 
