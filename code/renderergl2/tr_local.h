@@ -54,7 +54,7 @@ typedef unsigned short glIndex_t;
 
 typedef unsigned int vaoCacheGlIndex_t;
 
-#define BUFFER_OFFSET(i) ((char *)NULL + (i))
+#define BUFFER_OFFSET(i) ((void *)(uintptr_t)(i))
 
 // 14 bits
 // can't be increased without changing bit packing for drawsurfs
