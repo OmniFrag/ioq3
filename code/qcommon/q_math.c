@@ -1016,6 +1016,24 @@ int Q_isnan( float x )
 
 	return (int)( (unsigned int)fi.ui >> 31 );
 }
+
+#if !defined( Q3_VM ) && !idx64 && !id386
+/*
+================
+Q_ftolTruncate
+
+Q_ftol where there's no x86 version: truncates toward zero, as cvttss2si
+does, and gives LONG_MIN for NaN and values out of range, as it does too.
+================
+*/
+long Q_ftolTruncate( float f )
+{
+	if ( !( f >= (float)LONG_MIN && f < -(float)LONG_MIN ) ) {
+		return LONG_MIN;
+	}
+	return (long)f;
+}
+#endif
 //------------------------------------------------------------------------
 
 #ifndef Q3_VM

@@ -477,8 +477,9 @@ int Q_isnan(float x);
   extern void (QDECL *Q_SnapVector)(vec3_t vec);
 #else
   // Q_ftol must expand to a function name so the pluggable renderer can take
-  // its address
-  #define Q_ftol lrintf
+  // its address. It truncates toward zero, as the x86 versions do.
+  long Q_ftolTruncate( float f );
+  #define Q_ftol Q_ftolTruncate
   #define Q_SnapVector(vec)\
 	do\
 	{\
