@@ -18,7 +18,7 @@ tell application "Finder"
                 make new folder at container window with properties {name:"@CPACK_DMG_SUBDIRECTORY@"}
             end if
 
-            move item "@CLIENT_NAME@.app" to folder "@CPACK_DMG_SUBDIRECTORY@"
+            move item "@MACOS_APP_NAME@.app" to folder "@CPACK_DMG_SUBDIRECTORY@"
             move item "@SERVER_NAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
             move item "@BASEGAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
 
@@ -29,7 +29,7 @@ tell application "Finder"
             set position of item "@CPACK_DMG_SUBDIRECTORY@" to {100, 80}
             set bounds of container window to {100, 100, 600, 320}
         else
-            set position of item "@CLIENT_NAME@.app" to {100, 80}
+            set position of item "@MACOS_APP_NAME@.app" to {100, 80}
             set position of item "@SERVER_NAME@" to {100, 260}
             set position of item "@BASEGAME@" to {250, 260}
 
