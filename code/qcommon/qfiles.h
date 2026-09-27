@@ -250,6 +250,9 @@ typedef struct {
 	mdrBone_t	bones[1];		// [numBones]
 } mdrFrame_t;
 
+// the size of a frame of numBones bones
+#define	MDR_FRAME_SIZE( numBones )	( offsetof( mdrFrame_t, bones ) + ( numBones ) * sizeof( mdrBone_t ) )
+
 typedef struct {
         unsigned char Comp[24]; // MC_COMP_BYTES is in MatComp.h, but don't want to couple
 } mdrCompBone_t;
