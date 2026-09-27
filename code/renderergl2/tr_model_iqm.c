@@ -550,6 +550,9 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			joint_names += strlen( (char *)header + header->ofs_text +
 						   joint->name ) + 1;
 		}
+
+		// the joint parents' ints follow the names
+		joint_names = PAD( joint_names, sizeof( int ) );
 	}
 
 	if ( header->num_poses )
