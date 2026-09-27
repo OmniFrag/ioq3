@@ -28,7 +28,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 // A QVM's pointers must lie inside its memory, start and end. Linked and dll
 // modules (entryPoint set) have no bounds to check pointers against, so only
-// the rest applies to them: NULL, lengths, counts and ranges.
+// the rest applies to them: NULL, lengths, counts and ranges. Their pointers
+// are addresses already: they have no dataBase to add them to.
 
 #include "vm_local.h"
 
@@ -119,7 +120,7 @@ void *VM_ArgBuf( const intptr_t *args, int n, int64_t size, qboolean optional ) 
 		VM_ArgError( args, n, "has a negative length (%lld)", (long long)size );
 	}
 	if ( currentVM->entryPoint ) {
-		return (void *)( currentVM->dataBase + ptr );
+		return (void *)ptr;
 	}
 	if ( size > VM_MemoryLeft( currentVM, ptr ) ) {
 		VM_ArgError( args, n, "%lld bytes at %lld run past the module's memory (%i bytes)",
@@ -182,7 +183,7 @@ const char *VM_ArgStr( const intptr_t *args, int n, qboolean optional ) {
 		VM_ArgError( args, n, "is NULL" );
 	}
 	if ( currentVM->entryPoint ) {
-		return (const char *)( currentVM->dataBase + ptr );
+		return (const char *)ptr;
 	}
 	if ( !VM_StringInside( currentVM, ptr ) ) {
 		VM_ArgError( args, n, "string at %lld isn't terminated inside the module's memory (%i bytes)",
@@ -222,7 +223,7 @@ const char *VM_ExplicitArgStr( vm_t *vm, intptr_t value, const char *what ) {
 		return NULL;
 	}
 	if ( vm->entryPoint ) {
-		return (const char *)( vm->dataBase + value );
+		return (const char *)value;
 	}
 	if ( !VM_StringInside( vm, value ) ) {
 		Com_Error( ERR_DROP, "%s: %s isn't a string inside the module's memory", vm->name, what );
