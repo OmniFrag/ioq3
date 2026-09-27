@@ -447,8 +447,14 @@ Sys_Print
 */
 void Sys_Print( const char *msg )
 {
-	CON_LogWrite( msg );
-	CON_Print( msg );
+	char	buffer[MAXPRINTMSG];
+
+	// names and chat reach here too: no bytes that control the terminal
+	while ( *msg ) {
+		msg += Q_FilterTerminalText( buffer, sizeof( buffer ), msg );
+		CON_LogWrite( buffer );
+		CON_Print( buffer );
+	}
 }
 
 /*

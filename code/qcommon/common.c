@@ -228,7 +228,14 @@ void QDECL Com_Printf( const char *fmt, ... ) {
       opening_qconsole = qfalse;
 		}
 		if ( logfile && FS_Initialized()) {
-			FS_Write(msg, strlen(msg), logfile);
+			// without the bytes that control a terminal, as Sys_Print
+			const char	*text = msg;
+			char		buffer[MAXPRINTMSG];
+
+			while ( *text ) {
+				text += Q_FilterTerminalText( buffer, sizeof( buffer ), text );
+				FS_Write( buffer, strlen( buffer ), logfile );
+			}
 		}
 	}
 }
