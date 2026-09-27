@@ -243,6 +243,7 @@ Sys_LegacyHomePath
 static char *Sys_LegacyHomePath(void)
 {
 	static char homePath[ MAX_OSPATH ] = { 0 };
+#ifdef HOMEPATH_NAME_UNIX_LEGACY
 	char *p;
 
 	if( ( p = getenv( "FLATPAK_ID" ) ) != NULL && *p != '\0' )
@@ -259,6 +260,7 @@ static char *Sys_LegacyHomePath(void)
 				p, PATH_SEP, HOMEPATH_NAME_UNIX_LEGACY);
 		}
 	}
+#endif
 
 	return homePath;
 }

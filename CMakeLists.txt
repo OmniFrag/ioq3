@@ -101,6 +101,14 @@ if(DEFINED CLIENT_WINDOW_TITLE)
             code/sys/sys_main.c
         APPEND PROPERTY COMPILE_DEFINITIONS CLIENT_WINDOW_TITLE="${CLIENT_WINDOW_TITLE}")
 endif()
+# The product's name and home directory seldom change, so every file gets
+# them, and a new use can't miss them
+if(DEFINED PRODUCT_NAME)
+    add_compile_definitions(PRODUCT_NAME="${PRODUCT_NAME}")
+endif()
+if(DEFINED HOMEPATH_NAME)
+    add_compile_definitions(HOMEPATH_NAME="${HOMEPATH_NAME}")
+endif()
 set_property(SOURCE code/sys/sys_main.c
     APPEND PROPERTY COMPILE_DEFINITIONS APP_ID="${APP_ID}")
 
