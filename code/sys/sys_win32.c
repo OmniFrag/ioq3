@@ -85,6 +85,29 @@ void Sys_SetFloatEnv(void)
 
 /*
 ================
+Sys_AppDataPath
+
+The directory name in the user's application data, or qfalse if Windows
+can't say where that is
+================
+*/
+static qboolean Sys_AppDataPath( char *path, int size, const char *name )
+{
+	TCHAR szPath[MAX_PATH];
+
+	if( !SUCCEEDED( SHGetFolderPathA( NULL, CSIDL_APPDATA,
+					NULL, 0, szPath ) ) )
+	{
+		Com_Printf("Unable to detect CSIDL_APPDATA\n");
+		return qfalse;
+	}
+
+	Com_sprintf(path, size, "%s%c%s", szPath, PATH_SEP, name);
+	return qtrue;
+}
+
+/*
+================
 Sys_DefaultHomePath
 ================
 */
@@ -94,21 +117,9 @@ static char *Sys_DefaultHomePath( void )
 
 	if(!*homePath && com_homepath)
 	{
-		TCHAR szPath[MAX_PATH];
-
-		if( !SUCCEEDED( SHGetFolderPathA( NULL, CSIDL_APPDATA,
-						NULL, 0, szPath ) ) )
-		{
-			Com_Printf("Unable to detect CSIDL_APPDATA\n");
+		if( !Sys_AppDataPath( homePath, sizeof( homePath ),
+				com_homepath->string[0] ? com_homepath->string : HOMEPATH_NAME ) )
 			return NULL;
-		}
-		
-		Com_sprintf(homePath, sizeof(homePath), "%s%c", szPath, PATH_SEP);
-
-		if(com_homepath->string[0])
-			Q_strcat(homePath, sizeof(homePath), com_homepath->string);
-		else
-			Q_strcat(homePath, sizeof(homePath), HOMEPATH_NAME);
 	}
 
 	return homePath;
@@ -117,6 +128,33 @@ static char *Sys_DefaultHomePath( void )
 char *Sys_DefaultHomeConfigPath(void) { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeDataPath(void)   { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeStatePath(void)  { return Sys_DefaultHomePath(); }
+
+/*
+================
+Sys_PredecessorHomePaths
+
+The home directory of the product this build succeeds, for both its config
+and its data, named by HOMEPATH_NAME_PREDECESSOR, in the same place as
+ours; "" where the build names none, or it doesn't exist
+================
+*/
+void Sys_PredecessorHomePaths( const char **configPath, const char **dataPath )
+{
+	static char predPath[ MAX_OSPATH ];
+
+#ifdef HOMEPATH_NAME_PREDECESSOR
+	DWORD attributes;
+
+	if( Sys_AppDataPath( predPath, sizeof( predPath ), HOMEPATH_NAME_PREDECESSOR ) )
+	{
+		attributes = GetFileAttributesA( predPath );
+		if( attributes == INVALID_FILE_ATTRIBUTES || !( attributes & FILE_ATTRIBUTE_DIRECTORY ) )
+			predPath[0] = '\0';
+	}
+#endif
+
+	*configPath = *dataPath = predPath;
+}
 
 /*
 ================

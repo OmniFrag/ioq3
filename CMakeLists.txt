@@ -103,12 +103,11 @@ if(DEFINED CLIENT_WINDOW_TITLE)
 endif()
 # The product's name and home directory seldom change, so every file gets
 # them, and a new use can't miss them
-if(DEFINED PRODUCT_NAME)
-    add_compile_definitions(PRODUCT_NAME="${PRODUCT_NAME}")
-endif()
-if(DEFINED HOMEPATH_NAME)
-    add_compile_definitions(HOMEPATH_NAME="${HOMEPATH_NAME}")
-endif()
+foreach(NAME PRODUCT_NAME HOMEPATH_NAME HOMEPATH_NAME_PREDECESSOR HOMEPATH_NAME_PREDECESSOR_UNIX)
+    if(DEFINED ${NAME})
+        add_compile_definitions(${NAME}="${${NAME}}")
+    endif()
+endforeach()
 set_property(SOURCE code/sys/sys_main.c
     APPEND PROPERTY COMPILE_DEFINITIONS APP_ID="${APP_ID}")
 

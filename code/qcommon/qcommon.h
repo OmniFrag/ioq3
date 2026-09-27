@@ -1291,6 +1291,9 @@ char    *Sys_DefaultAppPath(void);
 char	*Sys_DefaultHomeConfigPath(void);
 char	*Sys_DefaultHomeDataPath(void);
 char	*Sys_DefaultHomeStatePath(void);
+// the config and data homes of the product this build succeeds
+// (HOMEPATH_NAME_PREDECESSOR), or ""
+void	Sys_PredecessorHomePaths( const char **configPath, const char **dataPath );
 const char *Sys_Dirname( char *path );
 const char *Sys_Basename( char *path );
 char *Sys_ConsoleInput(void);
