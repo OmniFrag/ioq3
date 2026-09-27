@@ -279,6 +279,15 @@ static void CM_SubdivideGridColumns( cGrid_t *grid ) {
 		}
 
 		//
+		// if the grid is full, keep the aproximating column as it is and
+		// go to the next curve segment, as the renderer does
+		//
+		if ( grid->width + 2 > MAX_GRID_SIZE ) {
+			i += 2;
+			continue;
+		}
+
+		//
 		// we need to subdivide the curve
 		//
 		for ( j = 0 ; j < grid->height ; j++ ) {
