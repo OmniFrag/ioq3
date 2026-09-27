@@ -768,6 +768,10 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		if ( !Com_RangeInTable( header.lumps[i].fileofs, header.lumps[i].filelen, length ) ) {
 			Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i outside the file", name, i );
 		}
+		// the lumps are read in place, as ints and floats
+		if ( header.lumps[i].fileofs & 3 ) {
+			Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i at an unaligned offset", name, i );
+		}
 	}
 
 	cmod_base = (byte *)buf.i;
