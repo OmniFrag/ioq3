@@ -58,6 +58,12 @@ unsigned char @MODULE@_linkedBss@MARKER@[1];
         target_compile_definitions( ${PASS_TARGET} PRIVATE ${ARG_DEFINITIONS})
         target_include_directories( ${PASS_TARGET} PRIVATE ${ARG_INCLUDE_DIRECTORIES})
         target_compile_options(     ${PASS_TARGET} PRIVATE -fno-common)
+        if(APPLE)
+            # Mach-O puts zeroed statics in __bss, apart from __common, so
+            # keep the module's zeroed data in __data, which the reset
+            # restores (the bss markers stay zero-fill)
+            target_compile_options( ${PASS_TARGET} PRIVATE -fno-zero-initialized-in-bss)
+        endif()
         set_target_properties(      ${PASS_TARGET} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
     endforeach()
 
@@ -79,6 +85,13 @@ unsigned char @MODULE@_linkedBss@MARKER@[1];
     # renamed names
     target_compile_options(${SCAN_TARGET} PRIVATE ${ARG_COMPILE_OPTIONS})
     target_compile_options(${TARGET} PRIVATE ${ARG_COMPILE_OPTIONS})
+
+    if(APPLE)
+        set_source_files_properties(
+            ${LINKED_DIR}/${MODULE}_linkedBegin.c ${LINKED_DIR}/${MODULE}_linkedEnd.c
+            TARGET_DIRECTORY ${TARGET}
+            PROPERTIES COMPILE_OPTIONS -fzero-initialized-in-bss)
+    endif()
 
     set_property(GLOBAL APPEND PROPERTY LINKED_GAME_MODULES ${MODULE})
 endfunction()
