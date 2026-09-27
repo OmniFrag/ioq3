@@ -26,13 +26,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 /*
 =================
-R_MD3BlockInside
+R_ModelBlockInside
 
 Whether count elements of size bytes from offset lie inside end bytes,
 at an offset the loaders can read ints and floats from in place
 =================
 */
-static qboolean R_MD3BlockInside( int offset, int64_t count, int size, int end ) {
+qboolean R_ModelBlockInside( int64_t offset, int64_t count, int64_t size, int64_t end ) {
 	return offset >= 0 && !( offset & 3 ) && count >= 0 && offset <= end && count * size <= end - offset;
 }
 
@@ -84,9 +84,9 @@ qboolean R_ValidateMD3( const void *buffer, int fileSize, const char *name ) {
 	}
 
 	if ( header.numFrames < 1
-		|| !R_MD3BlockInside( header.ofsFrames, header.numFrames, sizeof( md3Frame_t ), end )
-		|| !R_MD3BlockInside( header.ofsTags, (int64_t)header.numTags * header.numFrames, sizeof( md3Tag_t ), end )
-		|| !R_MD3BlockInside( header.ofsSurfaces, header.numSurfaces, sizeof( md3Surface_t ), end ) ) {
+		|| !R_ModelBlockInside( header.ofsFrames, header.numFrames, sizeof( md3Frame_t ), end )
+		|| !R_ModelBlockInside( header.ofsTags, (int64_t)header.numTags * header.numFrames, sizeof( md3Tag_t ), end )
+		|| !R_ModelBlockInside( header.ofsSurfaces, header.numSurfaces, sizeof( md3Surface_t ), end ) ) {
 		ri.Printf( PRINT_WARNING, "R_ValidateMD3: %s has bad frames, tags or surfaces\n", name );
 		return qfalse;
 	}
@@ -108,7 +108,7 @@ qboolean R_ValidateMD3( const void *buffer, int fileSize, const char *name ) {
 		const byte		*surfBase;
 		int				bytesToEnd;
 
-		if ( !R_MD3BlockInside( offset, 1, sizeof( surf ), end ) ) {
+		if ( !R_ModelBlockInside( offset, 1, sizeof( surf ), end ) ) {
 			ri.Printf( PRINT_WARNING, "R_ValidateMD3: %s has surface %i past its end\n", name, i );
 			return qfalse;
 		}
@@ -128,10 +128,10 @@ qboolean R_ValidateMD3( const void *buffer, int fileSize, const char *name ) {
 
 		// draws index a surface's vertexes by the model's frame
 		if ( !R_MD3NameTerminated( surf.name ) || surf.numFrames < header.numFrames
-			|| !R_MD3BlockInside( surf.ofsShaders, surf.numShaders, sizeof( md3Shader_t ), bytesToEnd )
-			|| !R_MD3BlockInside( surf.ofsTriangles, surf.numTriangles, sizeof( md3Triangle_t ), bytesToEnd )
-			|| !R_MD3BlockInside( surf.ofsSt, surf.numVerts, sizeof( md3St_t ), bytesToEnd )
-			|| !R_MD3BlockInside( surf.ofsXyzNormals, (int64_t)surf.numVerts * surf.numFrames,
+			|| !R_ModelBlockInside( surf.ofsShaders, surf.numShaders, sizeof( md3Shader_t ), bytesToEnd )
+			|| !R_ModelBlockInside( surf.ofsTriangles, surf.numTriangles, sizeof( md3Triangle_t ), bytesToEnd )
+			|| !R_ModelBlockInside( surf.ofsSt, surf.numVerts, sizeof( md3St_t ), bytesToEnd )
+			|| !R_ModelBlockInside( surf.ofsXyzNormals, (int64_t)surf.numVerts * surf.numFrames,
 				sizeof( md3XyzNormal_t ), bytesToEnd )
 			|| surf.ofsEnd < (int)sizeof( surf ) || surf.ofsEnd > bytesToEnd ) {
 			ri.Printf( PRINT_WARNING, "R_ValidateMD3: %s has a bad surface %i\n", name, i );
