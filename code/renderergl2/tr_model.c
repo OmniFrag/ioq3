@@ -111,7 +111,6 @@ qhandle_t R_RegisterMDR(const char *name, model_t *mod)
 		unsigned *u;
 		void *v;
 	} buf;
-	int	ident;
 	qboolean loaded = qfalse;
 	int filesize;
 
@@ -122,9 +121,8 @@ qhandle_t R_RegisterMDR(const char *name, model_t *mod)
 		return 0;
 	}
 	
-	ident = LittleLong(*(unsigned *)buf.u);
-	if(ident == MDR_IDENT)
-		loaded = R_LoadMDR(mod, buf.u, filesize, name);
+	if ( filesize >= (int)sizeof( mdrHeader_t ) && LittleLong( *buf.u ) == MDR_IDENT )
+		loaded = R_ValidateMDR( buf.u, filesize, name ) && R_LoadMDR( mod, buf.u, filesize, name );
 
 	ri.FS_FreeFile (buf.v);
 	
