@@ -1600,6 +1600,13 @@ int FS_Read( void *buffer, int len, fileHandle_t f ) {
 		return 0;
 	}
 
+	// fread and unzReadCurrentFile would take it as a huge count, and
+	// read the rest of the file over the buffer
+	if ( len < 0 ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: FS_Read: negative length %i\n", len );
+		return 0;
+	}
+
 	buf = (byte *)buffer;
 	fs_readCount += len;
 
