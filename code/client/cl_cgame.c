@@ -403,8 +403,8 @@ static int	FloatAsInt( float f ) {
 // the engine extensions cgame can look up with trap_GetValue; each has its
 // case in CL_CgameSystemCalls
 static const vmExtension_t cl_cgameExtensions[] = {
-	{ "trap_SetTextFocus_Q3F", COM_TRAP_SETTEXTFOCUS },
-	{ "trap_FollowWindowSize_Q3F", COM_TRAP_FOLLOWWINDOWSIZE },
+	{ "trap_SetTextFocus_OF", COM_TRAP_SETTEXTFOCUS },
+	{ "trap_FollowWindowSize_OF", COM_TRAP_FOLLOWWINDOWSIZE },
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_IsRecordingDemo", COM_TRAP_ISRECORDINGDEMO },
 	{ NULL, 0 }
