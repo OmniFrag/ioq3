@@ -750,8 +750,8 @@ int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 	int i, t, besttime, bestreachnum, reachnum;
 	aas_reachability_t reach;
 
-	//if not in a valid area
-	if (!areanum) return 0;
+	//if not in a valid area, or the goal isn't; the game module may pass any
+	if (!AAS_AreaNumValid(areanum) || !AAS_AreaNumValid(goal->areanum)) return 0;
 	//
 	if (AAS_AreaDoNotEnter(areanum) || AAS_AreaDoNotEnter(goal->areanum))
 	{

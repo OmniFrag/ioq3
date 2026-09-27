@@ -519,6 +519,16 @@ void AAS_FreeReachability(aas_lreachability_t *lreach)
 // Returns:					-
 // Changes Globals:		-
 //===========================================================================
+int AAS_AreaNumValid(int areanum)
+{
+	return aasworld.loaded && areanum > 0 && areanum < aasworld.numareas;
+} //end of the function AAS_AreaNumValid
+//===========================================================================
+//
+// Parameter:				-
+// Returns:					-
+// Changes Globals:		-
+//===========================================================================
 int AAS_AreaReachability(int areanum)
 {
 	if (areanum < 0 || areanum >= aasworld.numareas)
