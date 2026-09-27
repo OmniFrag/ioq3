@@ -113,7 +113,38 @@ static int Sys_Exec( void )
 	}
 }
 
+/*
+==================
+Sys_HomeName
+
+The name of our directory in the home
+==================
+*/
+static const char *Sys_HomeName(void)
+{
+	if( com_homepath && com_homepath->string[0] )
+		return com_homepath->string;
+
+	return HOMEPATH_NAME;
+}
+
 #ifdef __APPLE__
+
+/*
+==================
+Sys_AppSupportPath
+
+The directory name in ~/Library/Application Support, or "" without a HOME
+==================
+*/
+static void Sys_AppSupportPath( char *path, int size, const char *name )
+{
+	char *p;
+
+	path[0] = '\0';
+	if( ( p = getenv( "HOME" ) ) != NULL )
+		Com_sprintf( path, size, "%s%cLibrary/Application Support/%s", p, PATH_SEP, name );
+}
 
 /*
 ==================
@@ -123,21 +154,9 @@ Sys_DefaultHomePath
 static char *Sys_DefaultHomePath(void)
 {
 	static char homePath[ MAX_OSPATH ] = { 0 };
-	char *p;
 
 	if( !*homePath )
-	{
-		if( ( p = getenv( "HOME" ) ) != NULL )
-		{
-			Com_sprintf( homePath, sizeof(homePath), "%s%c%s",
-				p, PATH_SEP, "Library/Application Support/" );
-
-			if( com_homepath && com_homepath->string[0] )
-				Q_strcat(homePath, sizeof(homePath), com_homepath->string);
-			else
-				Q_strcat(homePath, sizeof(homePath), HOMEPATH_NAME);
-		}
-	}
+		Sys_AppSupportPath( homePath, sizeof( homePath ), Sys_HomeName( ) );
 
 	return homePath;
 }
@@ -150,29 +169,34 @@ char *Sys_DefaultHomeStatePath(void)  { return Sys_DefaultHomePath(); }
 
 /*
 ==================
+Sys_XDGPath
+
+The directory name in the XDG base directory xdgVar names, or without it
+in fallback under the home; "" with neither
+==================
+*/
+static void Sys_XDGPath( char *path, int size, const char *xdgVar, const char *fallback, const char *name )
+{
+	char *p;
+
+	path[0] = '\0';
+	if( ( p = getenv( xdgVar ) ) != NULL && *p != '\0' )
+		Com_sprintf( path, size, "%s%c%s", p, PATH_SEP, name );
+	else if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
+		Com_sprintf( path, size, "%s%c%s%c%s", p, PATH_SEP, fallback, PATH_SEP, name );
+}
+
+/*
+==================
 Sys_HomeConfigPath
 ==================
 */
 char *Sys_HomeConfigPath(void)
 {
 	static char homeConfigPath[ MAX_OSPATH ] = { 0 };
-	char *p;
 
 	if( !*homeConfigPath )
-	{
-		if( ( p = getenv( "XDG_CONFIG_HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeConfigPath, sizeof(homeConfigPath), "%s%c", p, PATH_SEP);
-		else if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeConfigPath, sizeof(homeConfigPath), "%s%c.config%c", p, PATH_SEP, PATH_SEP);
-
-		if( *homeConfigPath )
-		{
-			if( com_homepath && com_homepath->string[0] )
-				Q_strcat(homeConfigPath, sizeof(homeConfigPath), com_homepath->string);
-			else
-				Q_strcat(homeConfigPath, sizeof(homeConfigPath), HOMEPATH_NAME);
-		}
-	}
+		Sys_XDGPath( homeConfigPath, sizeof( homeConfigPath ), "XDG_CONFIG_HOME", ".config", Sys_HomeName( ) );
 
 	return homeConfigPath;
 }
@@ -185,23 +209,9 @@ Sys_HomeDataPath
 char *Sys_HomeDataPath(void)
 {
 	static char homeDataPath[ MAX_OSPATH ] = { 0 };
-	char *p;
 
 	if( !*homeDataPath )
-	{
-		if( ( p = getenv( "XDG_DATA_HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeDataPath, sizeof(homeDataPath), "%s%c", p, PATH_SEP);
-		else if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeDataPath, sizeof(homeDataPath), "%s%c.local%cshare%c", p, PATH_SEP, PATH_SEP, PATH_SEP);
-
-		if( *homeDataPath )
-		{
-			if( com_homepath && com_homepath->string[0] )
-				Q_strcat(homeDataPath, sizeof(homeDataPath), com_homepath->string);
-			else
-				Q_strcat(homeDataPath, sizeof(homeDataPath), HOMEPATH_NAME);
-		}
-	}
+		Sys_XDGPath( homeDataPath, sizeof( homeDataPath ), "XDG_DATA_HOME", ".local/share", Sys_HomeName( ) );
 
 	return homeDataPath;
 }
@@ -214,26 +224,34 @@ Sys_HomeStatePath
 char *Sys_HomeStatePath(void)
 {
 	static char homeStatePath[ MAX_OSPATH ] = { 0 };
-	char *p;
 
 	if( !*homeStatePath )
-	{
-		if( ( p = getenv( "XDG_STATE_HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeStatePath, sizeof(homeStatePath), "%s%c", p, PATH_SEP);
-		else if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
-			Com_sprintf(homeStatePath, sizeof(homeStatePath), "%s%c.local%cstate%c", p, PATH_SEP, PATH_SEP, PATH_SEP);
-
-		if( *homeStatePath )
-		{
-			if( com_homepath && com_homepath->string[0] )
-				Q_strcat(homeStatePath, sizeof(homeStatePath), com_homepath->string);
-			else
-				Q_strcat(homeStatePath, sizeof(homeStatePath), HOMEPATH_NAME);
-		}
-	}
+		Sys_XDGPath( homeStatePath, sizeof( homeStatePath ), "XDG_STATE_HOME", ".local/state", Sys_HomeName( ) );
 
 	return homeStatePath;
 }
+
+#if defined( HOMEPATH_NAME_UNIX_LEGACY ) || \
+	( defined( HOMEPATH_NAME_PREDECESSOR ) && defined( HOMEPATH_NAME_PREDECESSOR_UNIX ) )
+/*
+==================
+Sys_OldHomePath
+
+The directory name in the home, where files went before XDG, or "" in a
+Flatpak, which always uses XDG
+==================
+*/
+static void Sys_OldHomePath( char *path, int size, const char *name )
+{
+	char *p;
+
+	path[0] = '\0';
+	if( ( p = getenv( "FLATPAK_ID" ) ) != NULL && *p != '\0' )
+		return;
+	if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
+		Com_sprintf( path, size, "%s%c%s", p, PATH_SEP, name );
+}
+#endif
 
 /*
 ==================
@@ -243,23 +261,10 @@ Sys_LegacyHomePath
 static char *Sys_LegacyHomePath(void)
 {
 	static char homePath[ MAX_OSPATH ] = { 0 };
+
 #ifdef HOMEPATH_NAME_UNIX_LEGACY
-	char *p;
-
-	if( ( p = getenv( "FLATPAK_ID" ) ) != NULL && *p != '\0' )
-	{
-		// Flatpaks always use XDG
-		return "";
-	}
-
 	if( !*homePath )
-	{
-		if( ( p = getenv( "HOME" ) ) != NULL && *p != '\0' )
-		{
-			Com_sprintf(homePath, sizeof(homePath), "%s%c%s",
-				p, PATH_SEP, HOMEPATH_NAME_UNIX_LEGACY);
-		}
-	}
+		Sys_OldHomePath( homePath, sizeof( homePath ), HOMEPATH_NAME_UNIX_LEGACY );
 #endif
 
 	return homePath;
@@ -479,6 +484,67 @@ char *Sys_DefaultHomeStatePath(void)
 }
 
 #endif
+
+#ifdef HOMEPATH_NAME_PREDECESSOR
+/*
+==================
+Sys_IsDirectory
+==================
+*/
+static qboolean Sys_IsDirectory( const char *path )
+{
+	struct stat st;
+
+	return !stat( path, &st ) && S_ISDIR( st.st_mode );
+}
+#endif
+
+/*
+==================
+Sys_PredecessorHomePaths
+
+The config and data homes of the product this build succeeds, named by
+HOMEPATH_NAME_PREDECESSOR, found where that product keeps them; "" where
+the build names none, or they don't exist. On Linux that's the XDG layout
+if its config directory exists, as ioquake3 decides, or else the old
+directory HOMEPATH_NAME_PREDECESSOR_UNIX names.
+==================
+*/
+void Sys_PredecessorHomePaths( const char **configPath, const char **dataPath )
+{
+	static char predConfigPath[ MAX_OSPATH ];
+	static char predDataPath[ MAX_OSPATH ];
+
+#ifdef HOMEPATH_NAME_PREDECESSOR
+#ifdef __APPLE__
+	Sys_AppSupportPath( predConfigPath, sizeof( predConfigPath ), HOMEPATH_NAME_PREDECESSOR );
+	Q_strncpyz( predDataPath, predConfigPath, sizeof( predDataPath ) );
+#else
+	Sys_XDGPath( predConfigPath, sizeof( predConfigPath ), "XDG_CONFIG_HOME", ".config", HOMEPATH_NAME_PREDECESSOR );
+	Sys_XDGPath( predDataPath, sizeof( predDataPath ), "XDG_DATA_HOME", ".local/share", HOMEPATH_NAME_PREDECESSOR );
+#ifdef HOMEPATH_NAME_PREDECESSOR_UNIX
+	if( !Sys_IsDirectory( predConfigPath ) )
+	{
+		char oldPath[ MAX_OSPATH ];
+
+		Sys_OldHomePath( oldPath, sizeof( oldPath ), HOMEPATH_NAME_PREDECESSOR_UNIX );
+		if( Sys_IsDirectory( oldPath ) )
+		{
+			Q_strncpyz( predConfigPath, oldPath, sizeof( predConfigPath ) );
+			Q_strncpyz( predDataPath, oldPath, sizeof( predDataPath ) );
+		}
+	}
+#endif
+#endif
+	if( !Sys_IsDirectory( predConfigPath ) )
+		predConfigPath[0] = '\0';
+	if( !Sys_IsDirectory( predDataPath ) )
+		predDataPath[0] = '\0';
+#endif
+
+	*configPath = predConfigPath;
+	*dataPath = predDataPath;
+}
 
 /*
 ================

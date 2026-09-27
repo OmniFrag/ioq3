@@ -16,6 +16,10 @@ set_identity(CLIENT_NAME ioquake3)
 # the name in the version string; and HOMEPATH_NAME, the directory in the
 # user's home that holds configs and downloads, default to the ones in
 # q_shared.h. The web client's page title follows the window title.
+# A product that succeeds another may set HOMEPATH_NAME_PREDECESSOR, the
+# other's HOMEPATH_NAME (Quake3), and HOMEPATH_NAME_PREDECESSOR_UNIX, its
+# HOMEPATH_NAME_UNIX_LEGACY (.q3a) on Linux: its players' paks there are read,
+# and its config copied on the first run (files.c).
 if(DEFINED CLIENT_WINDOW_TITLE)
     set_identity(WEB_PAGE_TITLE ${CLIENT_WINDOW_TITLE})
 else()
