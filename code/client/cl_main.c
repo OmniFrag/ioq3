@@ -1947,18 +1947,6 @@ void CL_Vid_Restart_f( void ) {
 
 	if(!FS_ConditionalRestart(clc.checksumFeed, qtrue))
 	{
-		// if not running a server clear the whole hunk
-		if(com_sv_running->integer)
-		{
-			// clear all the client data on the hunk
-			Hunk_ClearToMark();
-		}
-		else
-		{
-			// clear the whole hunk
-			Hunk_Clear();
-		}
-	
 		// shutdown the UI
 		CL_ShutdownUI();
 		// shutdown the CGame
@@ -1972,6 +1960,22 @@ void CL_Vid_Restart_f( void ) {
 #else
 		CL_ShutdownRef();
 #endif
+
+		// then free their memory, which they read as they shut down
+		// if not running a server clear the whole hunk
+		if(com_sv_running->integer)
+		{
+			// clear all the client data on the hunk
+			Hunk_ClearToMark();
+		}
+		else
+		{
+			// clear the whole hunk
+			Hunk_Clear();
+			// and the collision map the cgame loaded on it, which it
+			// would otherwise find still loaded and use from freed memory
+			CM_ClearMap();
+		}
 		// client is no longer pure until new checksums are sent
 		CL_ResetPureClientAtServer();
 		// clear pak references

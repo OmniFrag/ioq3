@@ -777,6 +777,31 @@ all big things are allocated on the hunk.
 #define	ZONEID	0x1d4a11
 #define MINFRAGMENT	64
 
+// Under AddressSanitizer, the zone and the hunk mark what they haven't
+// handed out, and a redzone after each block, as unaddressable, so a read
+// or write past a block or into freed memory is reported, as it would be
+// for malloc's blocks. Elsewhere these do nothing.
+#if defined( __SANITIZE_ADDRESS__ )
+#define MEM_ASAN
+#elif defined( __has_feature )
+#if __has_feature( address_sanitizer )
+#define MEM_ASAN
+#endif
+#endif
+
+#ifdef MEM_ASAN
+#include <sanitizer/asan_interface.h>
+#define MEM_POISON( p, n )		ASAN_POISON_MEMORY_REGION( ( p ), ( n ) )
+#define MEM_UNPOISON( p, n )	ASAN_UNPOISON_MEMORY_REGION( ( p ), ( n ) )
+#define ZONE_REDZONE	16
+#define HUNK_REDZONE	32
+#else
+#define MEM_POISON( p, n )		( (void)( p ), (void)( n ) )
+#define MEM_UNPOISON( p, n )	( (void)( p ), (void)( n ) )
+#define ZONE_REDZONE	0
+#define HUNK_REDZONE	0
+#endif
+
 typedef struct zonedebug_s {
 	char *label;
 	char *file;
@@ -832,6 +857,7 @@ static void Z_ClearZone( memzone_t *zone, int size ) {
 	block->tag = 0;			// free block
 	block->id = ZONEID;
 	block->size = size - sizeof(memzone_t);
+	MEM_POISON( block + 1, block->size - sizeof( memblock_t ) );
 }
 
 /*
@@ -892,7 +918,9 @@ void Z_Free( void *ptr ) {
 	zone->used -= block->size;
 	// set the block to something that should cause problems
 	// if it is referenced...
+	MEM_UNPOISON( ptr, block->size - sizeof( *block ) );
 	Com_Memset( ptr, 0xaa, block->size - sizeof( *block ) );
+	MEM_POISON( ptr, block->size - sizeof( *block ) );
 
 	block->tag = 0;		// mark as free
 	
@@ -905,6 +933,8 @@ void Z_Free( void *ptr ) {
 		if (block == zone->rover) {
 			zone->rover = other;
 		}
+		// its header is part of the free space now
+		MEM_POISON( block, sizeof( *block ) );
 		block = other;
 	}
 
@@ -916,6 +946,7 @@ void Z_Free( void *ptr ) {
 		block->size += other->size;
 		block->next = other->next;
 		block->next->prev = block;
+		MEM_POISON( other, sizeof( *other ) );
 	}
 }
 
@@ -958,7 +989,7 @@ void *Z_TagMallocDebug( int size, int tag, char *label, char *file, int line ) {
 #else
 void *Z_TagMalloc( int size, int tag ) {
 #endif
-	int		extra;
+	int		extra, request;
 	memblock_t	*start, *rover, *new, *base;
 	memzone_t *zone;
 
@@ -985,8 +1016,10 @@ void *Z_TagMalloc( int size, int tag ) {
 	// scan through the block list looking for the first free block
 	// of sufficient size
 	//
+	request = size;
 	size += sizeof(memblock_t);	// account for size of block header
 	size += 4;					// space for memory trash tester
+	size += ZONE_REDZONE;		// before the trash tester
 	size = PAD(size, sizeof(intptr_t));		// align to 32/64 bit boundary
 	
 	base = rover = zone->rover;
@@ -1020,6 +1053,7 @@ void *Z_TagMalloc( int size, int tag ) {
 	if (extra > MINFRAGMENT) {
 		// there will be a free fragment after the allocated block
 		new = (memblock_t *) ((byte *)base + size );
+		MEM_UNPOISON( new, sizeof( *new ) );
 		new->size = extra;
 		new->tag = 0;			// free block
 		new->prev = base;
@@ -1043,6 +1077,12 @@ void *Z_TagMalloc( int size, int tag ) {
 	base->d.line = line;
 	base->d.allocSize = allocSize;
 #endif
+
+	// only what was asked for is addressable, and the trash tester's last
+	// 8 bytes (a poisoned region can't end part way into them)
+	MEM_POISON( base + 1, base->size - sizeof( memblock_t ) );
+	MEM_UNPOISON( base + 1, request );
+	MEM_UNPOISON( (byte *)base + base->size - 8, 8 );
 
 	// marker for memory trash testing
 	*(int *)((byte *)base + base->size - 4) = ZONEID;
@@ -1394,6 +1434,11 @@ void Com_TouchMemory( void ) {
 
 	Z_CheckHeap();
 
+#ifdef MEM_ASAN
+	// it reads every page of the hunk and the zone, redzones included
+	return;
+#endif
+
 	start = Sys_Milliseconds();
 
 	sum = 0;
@@ -1643,6 +1688,14 @@ The client calls this before starting a vid_restart or snd_restart
 =================
 */
 void Hunk_ClearToMark( void ) {
+	if ( s_hunkData != NULL ) {
+		// what's released is unaddressable until it's handed out again
+		int		low = hunk_low.permanent > hunk_low.temp ? hunk_low.permanent : hunk_low.temp;
+		int		high = hunk_high.permanent > hunk_high.temp ? hunk_high.permanent : hunk_high.temp;
+
+		MEM_POISON( s_hunkData + hunk_low.mark, low - hunk_low.mark );
+		MEM_POISON( s_hunkData + s_hunkTotal - high, high - hunk_high.mark );
+	}
 	hunk_low.permanent = hunk_low.temp = hunk_low.mark;
 	hunk_high.permanent = hunk_high.temp = hunk_high.mark;
 }
@@ -1693,6 +1746,10 @@ void Hunk_Clear( void ) {
 	hunk_permanent = &hunk_low;
 	hunk_temp = &hunk_high;
 
+	if ( s_hunkData != NULL ) {
+		MEM_POISON( s_hunkData, s_hunkTotal );
+	}
+
 	Com_Printf( "Hunk_Clear: reset the hunk ok\n" );
 	VM_Clear();
 #ifdef HUNK_DEBUG
@@ -1731,6 +1788,7 @@ void *Hunk_AllocDebug( int size, ha_pref preference, char *label, char *file, in
 void *Hunk_Alloc( int size, ha_pref preference ) {
 #endif
 	void	*buf;
+	int		request;
 
 	if ( s_hunkData == NULL)
 	{
@@ -1756,6 +1814,8 @@ void *Hunk_Alloc( int size, ha_pref preference ) {
 #ifdef HUNK_DEBUG
 	size += sizeof(hunkblock_t);
 #endif
+	request = size;
+	size += HUNK_REDZONE;
 
 	// round to cacheline
 	size = (size+31)&~31;
@@ -1783,7 +1843,10 @@ void *Hunk_Alloc( int size, ha_pref preference ) {
 
 	hunk_permanent->temp = hunk_permanent->permanent;
 
+	// the rest, the rounding and the redzone, stays unaddressable
+	MEM_UNPOISON( buf, size );
 	Com_Memset( buf, 0, size );
+	MEM_POISON( (byte *)buf + request, size - request );
 
 #ifdef HUNK_DEBUG
 	{
@@ -1814,6 +1877,7 @@ When the files-in-use count reaches zero, all temp memory will be deleted
 void *Hunk_AllocateTempMemory( int size ) {
 	void		*buf;
 	hunkHeader_t	*hdr;
+	int			request;
 
 	// a negative size, or one so large the header's room would wrap it
 	if ( size < 0 || ( s_hunkData != NULL && size > s_hunkTotal ) ) {
@@ -1831,7 +1895,8 @@ void *Hunk_AllocateTempMemory( int size ) {
 
 	Hunk_SwapBanks();
 
-	size = PAD(size, sizeof(intptr_t)) + sizeof( hunkHeader_t );
+	request = size;
+	size = PAD(size + HUNK_REDZONE, sizeof(intptr_t)) + sizeof( hunkHeader_t );
 
 	// against what's left: adding the size to what's in use can overflow
 	// on a hunk of 1 GB or more
@@ -1853,6 +1918,7 @@ void *Hunk_AllocateTempMemory( int size ) {
 
 	hdr = (hunkHeader_t *)buf;
 	buf = (void *)(hdr+1);
+	MEM_UNPOISON( hdr, sizeof( *hdr ) + request );
 
 	hdr->magic = HUNK_MAGIC;
 	hdr->size = size;
@@ -1903,6 +1969,8 @@ void Hunk_FreeTempMemory( void *buf ) {
 			Com_Printf( "Hunk_FreeTempMemory: not the final block\n" );
 		}
 	}
+	// freed, even when it stays in place: using it again is an error
+	MEM_POISON( hdr, hdr->size );
 }
 
 
@@ -1917,6 +1985,11 @@ permanent allocs use this side.
 */
 void Hunk_ClearTempMemory( void ) {
 	if ( s_hunkData != NULL ) {
+		if ( hunk_temp == &hunk_low ) {
+			MEM_POISON( s_hunkData + hunk_temp->permanent, hunk_temp->temp - hunk_temp->permanent );
+		} else {
+			MEM_POISON( s_hunkData + s_hunkTotal - hunk_temp->temp, hunk_temp->temp - hunk_temp->permanent );
+		}
 		hunk_temp->temp = hunk_temp->permanent;
 	}
 }
