@@ -26,15 +26,22 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // q_shared.h -- included first by ALL program modules.
 // A user mod should never modify this file
 
+// the build can set PRODUCT_NAME, CLIENT_WINDOW_TITLE and HOMEPATH_NAME
+// (cmake/identity.cmake); a build that sets its own home directory has no
+// legacy one to prefer or migrate from
 #ifdef STANDALONE
+  #ifndef PRODUCT_NAME
   #define PRODUCT_NAME				"iofoo3"
+  #endif
   #define BASEGAME					"foobar"
-  #ifndef CLIENT_WINDOW_TITLE // the build can set it (cmake/identity.cmake)
+  #ifndef CLIENT_WINDOW_TITLE
   #define CLIENT_WINDOW_TITLE		"changeme"
   #endif
   #define CLIENT_WINDOW_MIN_TITLE	"changeme2"
+  #ifndef HOMEPATH_NAME
   #define HOMEPATH_NAME_UNIX_LEGACY	".foo"
   #define HOMEPATH_NAME				"FooBar"
+  #endif
   #define GAMENAME_FOR_MASTER		"foobar"	// must NOT contain whitespace
   #define CINEMATICS_LOGO		"foologo.roq"
   #define CINEMATICS_INTRO		"intro.roq"
@@ -42,14 +49,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  #define PROTOCOL_HANDLER		"foobar"
   #define CONFIG_PREFIX			"fooconfig"
 #else
+  #ifndef PRODUCT_NAME
   #define PRODUCT_NAME				"ioq3"
+  #endif
   #define BASEGAME					"baseq3"
-  #ifndef CLIENT_WINDOW_TITLE // the build can set it (cmake/identity.cmake)
+  #ifndef CLIENT_WINDOW_TITLE
   #define CLIENT_WINDOW_TITLE		"ioquake3"
   #endif
   #define CLIENT_WINDOW_MIN_TITLE	"ioq3"
+  #ifndef HOMEPATH_NAME
   #define HOMEPATH_NAME_UNIX_LEGACY	".q3a"
   #define HOMEPATH_NAME				"Quake3"
+  #endif
   #define GAMENAME_FOR_MASTER		"Quake3Arena"
   #define CINEMATICS_LOGO		"idlogo.RoQ"
   #define CINEMATICS_INTRO		"intro.RoQ"

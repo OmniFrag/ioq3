@@ -12,8 +12,15 @@ endmacro()
 
 set_identity(SERVER_NAME ioq3ded)
 set_identity(CLIENT_NAME ioquake3)
-# CLIENT_WINDOW_TITLE, the name on the window and in the taskbar, defaults to
-# the one in q_shared.h
+# CLIENT_WINDOW_TITLE, the name on the window and in the taskbar; PRODUCT_NAME,
+# the name in the version string; and HOMEPATH_NAME, the directory in the
+# user's home that holds configs and downloads, default to the ones in
+# q_shared.h. The web client's page title follows the window title.
+if(DEFINED CLIENT_WINDOW_TITLE)
+    set_identity(WEB_PAGE_TITLE ${CLIENT_WINDOW_TITLE})
+else()
+    set_identity(WEB_PAGE_TITLE "${CLIENT_NAME} Emscripten demo")
+endif()
 
 set(BASEGAME baseq3)
 
