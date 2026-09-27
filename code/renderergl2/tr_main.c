@@ -1902,7 +1902,7 @@ void R_RenderPshadowMaps(const refdef_t *fd)
 				{
 					// FIXME: never actually tested this
 					mdrHeader_t *header = model->modelData;
-					int frameSize = (size_t)( &((mdrFrame_t *)0)->bones[ header->numBones ] );
+					int frameSize = MDR_FRAME_SIZE( header->numBones );
 					mdrFrame_t *frame = ( mdrFrame_t * ) ( ( byte * ) header + header->ofsFrames + frameSize * ent->e.frame);
 
 					radius = frame->radius;
