@@ -28,11 +28,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 =================
 R_MD3BlockInside
 
-Whether count elements of size bytes from offset lie inside end bytes
+Whether count elements of size bytes from offset lie inside end bytes,
+at an offset the loaders can read ints and floats from in place
 =================
 */
 static qboolean R_MD3BlockInside( int offset, int64_t count, int size, int end ) {
-	return offset >= 0 && count >= 0 && offset <= end && count * size <= end - offset;
+	return offset >= 0 && !( offset & 3 ) && count >= 0 && offset <= end && count * size <= end - offset;
 }
 
 /*
