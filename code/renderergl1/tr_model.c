@@ -775,7 +775,7 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 				LL(curv->numWeights);
 			
 				// simple bounds check
-				if(curv->numWeights < 0 || (byte *) (v + 1) + (curv->numWeights - 1) * sizeof(*weight) > (byte *) mdr + size)
+				if(curv->numWeights < 0 || (byte *) &v->weights[curv->numWeights] > (byte *) mdr + size)
 				{
 					ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has broken structure.\n", mod_name);
 					return qfalse;
