@@ -1463,10 +1463,15 @@ int StringsMatch(bot_matchpiece_t *pieces, bot_match_t *match)
 //===========================================================================
 int BotFindMatch(char *str, bot_match_t *match, unsigned long int context)
 {
-	int i;
+	int i, len;
 	bot_matchtemplate_t *ms;
 
-	Q_strncpyz(match->string, str, MAX_MESSAGE_SIZE);
+	// str and the match are both the game module's, and may overlap
+	len = strlen(str);
+	if (len > MAX_MESSAGE_SIZE - 1)
+		len = MAX_MESSAGE_SIZE - 1;
+	memmove(match->string, str, len);
+	match->string[len] = '\0';
 	//remove any trailing enters
 	while(strlen(match->string) &&
 			match->string[strlen(match->string)-1] == '\n')
@@ -1506,10 +1511,19 @@ void BotMatchVariable(bot_match_t *match, int variable, char *buf, int size)
 
 	if (match->variables[variable].offset >= 0)
 	{
+		const char *src;
+		int len;
+
 		if (match->variables[variable].length < size)
 			size = match->variables[variable].length+1;
 		assert( match->variables[variable].offset >= 0 );
-		Q_strncpyz(buf, &match->string[ (int) match->variables[variable].offset], size);
+		// buf and the match are both the game module's, and may overlap;
+		// its string may be unterminated, so stop at the end of it
+		src = &match->string[ (int) match->variables[variable].offset];
+		for (len = 0; len < size - 1 && src + len < match->string + MAX_MESSAGE_SIZE && src[len]; len++)
+			;
+		memmove(buf, src, len);
+		buf[len] = '\0';
 	} //end if
 	else
 	{
