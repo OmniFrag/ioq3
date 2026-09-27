@@ -189,7 +189,10 @@ static const char *AAS_ValidateAASData(void)
 {
 	int i, j, c, end, numclusterareas, numclusterreachabilityareas;
 
-	for (i = 0; i < aasworld.numedges; i++)
+	//edge 0 is unused, since edge indexes carry a side in their sign; the
+	//optimized files of point release 1.27 (pak4.pk3) store only it, with
+	//no vertexes
+	for (i = 1; i < aasworld.numedges; i++)
 	{
 		for (j = 0; j < 2; j++)
 		{
