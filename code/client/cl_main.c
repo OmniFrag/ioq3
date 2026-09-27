@@ -969,8 +969,9 @@ void CL_ReadDemoMessage( void ) {
 		CL_DemoCompleted ();
 		return;
 	}
-	if ( buf.cursize > buf.maxsize ) {
-		Com_Error (ERR_DROP, "CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN");
+	// FS_Read would take a negative length as all the rest of the file
+	if ( buf.cursize < 0 || buf.cursize > buf.maxsize ) {
+		Com_Error (ERR_DROP, "CL_ReadDemoMessage: demoMsglen %i is out of range", buf.cursize);
 	}
 	r = FS_Read( buf.data, buf.cursize, clc.demofile );
 	if ( r != buf.cursize ) {
