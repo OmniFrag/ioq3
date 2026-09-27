@@ -2029,6 +2029,10 @@ void RE_LoadWorldMap( const char *name ) {
 		if ( !Com_RangeInTable( header->lumps[i].fileofs, header->lumps[i].filelen, length ) ) {
 			ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has lump %i outside the file", name, i );
 		}
+		// the lumps are read in place, as ints and floats
+		if ( header->lumps[i].fileofs & 3 ) {
+			ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has lump %i at an unaligned offset", name, i );
+		}
 	}
 
 	// load into heap
