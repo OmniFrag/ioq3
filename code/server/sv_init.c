@@ -436,7 +436,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// allocate the snapshot entities on the hunk
 	svs.snapshotEntities = Hunk_Alloc( sizeof(entityState_t)*svs.numSnapshotEntities, h_high );
-	// q3fusion's tests start the index near its limit, to test that
+	// OmniFrag's tests start the index near its limit, to test that
 	// SV_BuildClientSnapshot lowers it; otherwise it starts at 0
 	svs.nextSnapshotEntities = Cvar_Get( "sv_snapshotEntitiesStart", "0", CVAR_INIT )->integer;
 	if ( svs.nextSnapshotEntities < 0 ) {
