@@ -26,7 +26,7 @@ function(finish_macos_app)
     get_filename_component(MACOS_ICON_FILE ${MACOS_ICON_PATH} NAME)
 
     set(MACOS_APP_BUNDLE_NAME ${MACOS_BUNDLE_NAME})
-    set(MACOS_APP_EXECUTABLE_NAME ${CLIENT_BINARY})
+    set(MACOS_APP_EXECUTABLE_NAME ${MACOS_APP_NAME})
     set(MACOS_APP_GUI_IDENTIFIER ${MACOS_BUNDLE_ID})
     set(MACOS_APP_ICON_FILE ${MACOS_ICON_FILE})
     # macOS wants numbers here, a version like 1.2.3 and a build number that
@@ -59,6 +59,7 @@ function(finish_macos_app)
         ${CMAKE_BINARY_DIR}/Info.plist @ONLY)
 
     set_target_properties(${CLIENT_BINARY} PROPERTIES
+        OUTPUT_NAME ${MACOS_APP_NAME}
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/Info.plist)
 
     set(RESOURCES_DIR $<TARGET_FILE_DIR:${CLIENT_BINARY}>/../Resources)
@@ -67,7 +68,7 @@ function(finish_macos_app)
         COMMAND ${CMAKE_COMMAND} -E copy ${MACOS_ICON_PATH} ${RESOURCES_DIR})
 
     if(USE_RENDERER_DLOPEN)
-        set(MACOS_APP_BINARY_DIR ${CLIENT_BINARY}.app/Contents/MacOS)
+        set(MACOS_APP_BINARY_DIR ${MACOS_APP_NAME}.app/Contents/MacOS)
 
         if(BUILD_RENDERER_GL1)
             set_output_dirs(${RENDERER_GL1_BINARY} SUBDIRECTORY ${MACOS_APP_BINARY_DIR})
@@ -111,7 +112,7 @@ set(CPACK_GENERATOR "DragNDrop")
 
 set(CPACK_DMG_VOLUME_NAME "${PROJECT_NAME} Installer")
 set(CPACK_DMG_BACKGROUND_IMAGE "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-background.png")
-set(CPACK_DMG_SUBDIRECTORY "${CLIENT_NAME}")
+set(CPACK_DMG_SUBDIRECTORY "${MACOS_APP_NAME}")
 
 configure_file(
   "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-setup.applescript.in"
