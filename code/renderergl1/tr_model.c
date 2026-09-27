@@ -1008,7 +1008,7 @@ md3Tag_t *R_GetAnimTag( mdrHeader_t *mod, int framenum, const char *tagName, md3
 
 			// uncompressed model...
 			//
-			frameSize = (intptr_t)( &((mdrFrame_t *)0)->bones[ mod->numBones ] );
+			frameSize = MDR_FRAME_SIZE( mod->numBones );
 			frame = (mdrFrame_t *)((byte *)mod + mod->ofsFrames + framenum * frameSize );
 
 			for (j = 0; j < 3; j++)
