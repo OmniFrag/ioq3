@@ -25,6 +25,15 @@ set_identity(WINDOWS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/windows/quake3.i
 
 set_identity(MACOS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/macos/quake3_flat.icns)
 set_identity(MACOS_BUNDLE_ID org.ioquake.${CLIENT_NAME})
+# The app's name in the menu bar and About box, where SDL also uses
+# CLIENT_WINDOW_TITLE; the .app and its executable keep CLIENT_NAME.
+# MACOS_BUNDLE_SHORT_VERSION and MACOS_BUNDLE_VERSION may be set too
+# (macos.cmake), and default to PRODUCT_VERSION.
+if(DEFINED CLIENT_WINDOW_TITLE)
+    set_identity(MACOS_BUNDLE_NAME ${CLIENT_WINDOW_TITLE})
+else()
+    set_identity(MACOS_BUNDLE_NAME ${CLIENT_NAME})
+endif()
 # The client's reverse-DNS ID, which desktops match to its .desktop file and
 # metainfo (misc/linux) to find its icon and name
 set_identity(APP_ID org.ioquake3.${CLIENT_NAME})
