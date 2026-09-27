@@ -40,6 +40,8 @@ int AAS_BestReachableLinkArea(aas_link_t *areas);
 
 //returns true if the are has reachabilities to other areas
 int AAS_AreaReachability(int areanum);
+//returns true if the area number is an area of the loaded map, not 0
+int AAS_AreaNumValid(int areanum);
 //returns the best reachable area and goal origin for a bounding box at the given origin
 int AAS_BestReachableArea(vec3_t origin, vec3_t mins, vec3_t maxs, vec3_t goalorigin);
 //returns the best jumppad area from which the bbox at origin is reachable
