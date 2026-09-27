@@ -28,7 +28,7 @@ endforeach()
 
 # Some platforms (Mach-O, 32-bit Windows) give C names a leading underscore
 if("_vmMain" IN_LIST SYMBOLS)
-    list(TRANSFORM SYMBOLS REPLACE "^_" "")
+    list(TRANSFORM SYMBOLS REPLACE "^_(.*)$" "\\1")
 elseif(NOT "vmMain" IN_LIST SYMBOLS)
     message(FATAL_ERROR "${MODULE}: no vmMain among the symbols ${NM} lists")
 endif()
