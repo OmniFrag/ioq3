@@ -158,7 +158,9 @@ MODEL CHECKS
 =============================================================
 */
 
+qboolean R_ModelBlockInside( int64_t offset, int64_t count, int64_t size, int64_t end );
 qboolean R_ValidateMD3( const void *buffer, int fileSize, const char *name );
+qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name );
 
 /*
 ====================================================================
