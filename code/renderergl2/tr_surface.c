@@ -1303,18 +1303,36 @@ static void RB_SurfaceSkip( void *surf ) {
 }
 
 
+// wrappers of the table's type: calling a function through a pointer
+// to another function type is undefined behaviour
+#define SURFACE_FUNCTION( name, type ) \
+	static void name##_Table( void *surface ) { name( (type *)surface ); }
+SURFACE_FUNCTION( RB_SurfaceBad, surfaceType_t )
+SURFACE_FUNCTION( RB_SurfaceFace, srfBspSurface_t )
+SURFACE_FUNCTION( RB_SurfaceGrid, srfBspSurface_t )
+SURFACE_FUNCTION( RB_SurfaceTriangles, srfBspSurface_t )
+SURFACE_FUNCTION( RB_SurfacePolychain, srfPoly_t )
+SURFACE_FUNCTION( RB_SurfaceMesh, mdvSurface_t )
+SURFACE_FUNCTION( RB_MDRSurfaceAnim, mdrSurface_t )
+SURFACE_FUNCTION( RB_IQMSurfaceAnim, surfaceType_t )
+SURFACE_FUNCTION( RB_SurfaceFlare, srfFlare_t )
+SURFACE_FUNCTION( RB_SurfaceEntity, surfaceType_t )
+SURFACE_FUNCTION( RB_SurfaceVaoMdvMesh, srfVaoMdvMesh_t )
+SURFACE_FUNCTION( RB_IQMSurfaceAnimVao, srfVaoIQModel_t )
+#undef SURFACE_FUNCTION
+
 void (*rb_surfaceTable[SF_NUM_SURFACE_TYPES])( void *) = {
-	(void(*)(void*))RB_SurfaceBad,			// SF_BAD, 
-	(void(*)(void*))RB_SurfaceSkip,			// SF_SKIP, 
-	(void(*)(void*))RB_SurfaceFace,			// SF_FACE,
-	(void(*)(void*))RB_SurfaceGrid,			// SF_GRID,
-	(void(*)(void*))RB_SurfaceTriangles,		// SF_TRIANGLES,
-	(void(*)(void*))RB_SurfacePolychain,		// SF_POLY,
-	(void(*)(void*))RB_SurfaceMesh,			// SF_MDV,
-	(void(*)(void*))RB_MDRSurfaceAnim,		// SF_MDR,
-	(void(*)(void*))RB_IQMSurfaceAnim,		// SF_IQM,
-	(void(*)(void*))RB_SurfaceFlare,		// SF_FLARE,
-	(void(*)(void*))RB_SurfaceEntity,		// SF_ENTITY
-	(void(*)(void*))RB_SurfaceVaoMdvMesh,   // SF_VAO_MDVMESH
-	(void(*)(void*))RB_IQMSurfaceAnimVao,   // SF_VAO_IQM
+	RB_SurfaceBad_Table,		// SF_BAD,
+	RB_SurfaceSkip,				// SF_SKIP,
+	RB_SurfaceFace_Table,		// SF_FACE,
+	RB_SurfaceGrid_Table,		// SF_GRID,
+	RB_SurfaceTriangles_Table,	// SF_TRIANGLES,
+	RB_SurfacePolychain_Table,	// SF_POLY,
+	RB_SurfaceMesh_Table,		// SF_MDV,
+	RB_MDRSurfaceAnim_Table,	// SF_MDR,
+	RB_IQMSurfaceAnim_Table,	// SF_IQM,
+	RB_SurfaceFlare_Table,		// SF_FLARE,
+	RB_SurfaceEntity_Table,		// SF_ENTITY
+	RB_SurfaceVaoMdvMesh_Table,	// SF_VAO_MDVMESH
+	RB_IQMSurfaceAnimVao_Table	// SF_VAO_IQM
 };
