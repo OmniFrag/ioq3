@@ -36,6 +36,21 @@ vmLinkedModule_t vm_linkedModules[] = {
 };
 ]] @ONLY)
     target_sources(${EXECUTABLE} PRIVATE ${TABLE})
+
+    # Check the layout VM_ResetLinked relies on in the link map, where GNU ld
+    # writes one: nothing but the module's own objects between its markers
+    # (check_linked_layout.awk)
+    find_program(AWK awk)
+    if(ARGN AND AWK AND NOT EMSCRIPTEN AND NOT APPLE AND NOT MSVC)
+        set(MAP ${CMAKE_BINARY_DIR}/linked/${EXECUTABLE}.map)
+        list(JOIN ARGN " " MODULE_LIST)
+        target_link_options(${EXECUTABLE} PRIVATE "LINKER:-Map=${MAP}")
+        add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
+            COMMAND ${AWK} -v "modules=${MODULE_LIST}"
+                -f ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/utils/check_linked_layout.awk ${MAP}
+            COMMENT "Checking the linked modules' layout in ${EXECUTABLE}"
+            VERBATIM)
+    endif()
 endfunction()
 
 if(TARGET ${CLIENT_BINARY})
