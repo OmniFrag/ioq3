@@ -253,6 +253,7 @@ static	cvar_t		*fs_homestatepath;
 static	cvar_t		*fs_apppath;
 static	cvar_t		*fs_steampath;
 static	cvar_t		*fs_gogpath;
+static	cvar_t		*fs_predecessorpath;
 static	cvar_t		*fs_microsoftstorepath;
 
 static	cvar_t		*fs_basepath;
@@ -265,6 +266,12 @@ static	int			fs_loadStack;			// total files in memory
 static	int			fs_packFiles = 0;		// total number of files in packs
 
 static cvar_t *fs_pathVars[16];
+
+// Only the paks are read from the predecessor's home (a server offers them
+// for download), never its configs or other files
+static qboolean FS_PathVarPaksOnly( const cvar_t *pathVar ) {
+	return pathVar == fs_predecessorpath;
+}
 
 static int fs_checksumFeed;
 
@@ -803,7 +810,8 @@ long FS_BaseDir_FOpenFileRead(const char *filename, fileHandle_t *fp)
 	for(int i = 0; i < ARRAY_LEN( fs_pathVars ) && !fsh[f].handleFiles.file.o; i++) {
 		const cvar_t *pathVar = fs_pathVars[i];
 
-		if (!pathVar || !pathVar->string[0]) {
+		if (!pathVar || !pathVar->string[0] ||
+			( FS_PathVarPaksOnly( pathVar ) && !COM_CompareExtension( filename, ".pk3" ) )) {
 			continue;
 		}
 
@@ -2985,7 +2993,7 @@ Sets fs_gamedir, adds the directory to the head of the path,
 then loads the zip headers
 ================
 */
-static void FS_AddGameDirectory( const char *path, const char *dir ) {
+static void FS_AddGameDirectory( const char *path, const char *dir, qboolean paksOnly ) {
 	searchpath_t	*sp;
 	searchpath_t	*search;
 	pack_t			*pak;
@@ -3002,17 +3010,23 @@ static void FS_AddGameDirectory( const char *path, const char *dir ) {
 	int				pakwhich;
 	int				len;
 
-	// Unique
+	// find all pak files in this directory
+	Q_strncpyz(curpath, FS_BaseDir_BuildOSPath(path, dir), sizeof(curpath));
+
+	// Unique; a directory read only for its paks has no entry of its own,
+	// so it's known by them
 	for ( sp = fs_searchpaths ; sp ; sp = sp->next ) {
 		if ( sp->dir && !Q_stricmp(sp->dir->path, path) && !Q_stricmp(sp->dir->gamedir, dir)) {
 			return;			// we've already got this one
 		}
+		if ( paksOnly && sp->pack && !Q_stricmp( sp->pack->pakPathname, curpath ) ) {
+			return;
+		}
 	}
 
-	Q_strncpyz( fs_gamedir, dir, sizeof( fs_gamedir ) );
-
-	// find all pak files in this directory
-	Q_strncpyz(curpath, FS_BaseDir_BuildOSPath(path, dir), sizeof(curpath));
+	if ( !paksOnly ) {
+		Q_strncpyz( fs_gamedir, dir, sizeof( fs_gamedir ) );
+	}
 
 	// Get .pk3 files
 	pakfiles = Sys_ListFiles(curpath, ".pk3", NULL, &numfiles, qfalse);
@@ -3021,7 +3035,7 @@ static void FS_AddGameDirectory( const char *path, const char *dir ) {
 		qsort( pakfiles, numfiles, sizeof(char*), paksort );
 	}
 
-	if ( fs_numServerPaks ) {
+	if ( fs_numServerPaks || paksOnly ) {
 		numdirs = 0;
 		pakdirs = NULL;
 	} else {
@@ -3108,6 +3122,10 @@ static void FS_AddGameDirectory( const char *path, const char *dir ) {
 	Sys_FreeFileList( pakfiles );
 	Sys_FreeFileList( pakdirs );
 
+	if ( paksOnly ) {
+		return;
+	}
+
 	//
 	// add the directory to the search path
 	//
@@ -3137,7 +3155,7 @@ static void FS_AddGameDirectories(const char *dir)
 			continue;
 		}
 
-		FS_AddGameDirectory(pathVar->string, dir);
+		FS_AddGameDirectory(pathVar->string, dir, FS_PathVarPaksOnly( pathVar ));
 	}
 }
 
@@ -3455,9 +3473,59 @@ static void FS_InitPathVars( void ) {
 	FS_AddPathVar( fs_homestatepath );
 	FS_AddPathVar( fs_basepath );
 	FS_AddPathVar( fs_apppath );
+	// after the install, so that when it's the same directory, the install's
+	// files are all read
+	FS_AddPathVar( fs_predecessorpath );
 	FS_AddPathVar( fs_steampath );
 	FS_AddPathVar( fs_gogpath );
 	FS_AddPathVar( fs_microsoftstorepath );
+}
+
+/*
+================
+FS_ImportPredecessorConfig
+
+On the first run, while our home has no config, copies the one in
+predHome, the config home of the product this build succeeds, so its
+players keep their settings. That home is only ever read.
+================
+*/
+static void FS_ImportPredecessorConfig( const char *predHome, const char *gameName ) {
+	char	from[MAX_OSPATH], to[MAX_OSPATH], tmp[MAX_OSPATH + 4];
+	byte	buffer[4096];
+	size_t	len;
+	FILE	*in, *out;
+	qboolean	failed;
+
+	if ( !predHome[0] ) {
+		return;
+	}
+
+	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, gameName, Q3CONFIG_CFG ), sizeof( to ) );
+	if ( FS_FileInPathExists( to ) ) {
+		return;
+	}
+	Q_strncpyz( from, FS_BuildOSPath( predHome, gameName, Q3CONFIG_CFG ), sizeof( from ) );
+	if ( !( in = Sys_FOpen( from, "rb" ) ) ) {
+		return;
+	}
+	// copied beside it, then renamed: a partial copy, even one cut short by
+	// a crash, would stop the next run from trying again
+	Com_sprintf( tmp, sizeof( tmp ), "%s.tmp", to );
+	if ( FS_CreatePath( tmp ) || !( out = Sys_FOpen( tmp, "wb" ) ) ) {
+		fclose( in );
+		return;
+	}
+	while ( ( len = fread( buffer, 1, sizeof( buffer ), in ) ) > 0 && fwrite( buffer, 1, len, out ) == len ) {
+	}
+	failed = ferror( in ) || len > 0;
+	fclose( in );
+	if ( fclose( out ) || failed || rename( tmp, to ) ) {
+		FS_Remove( tmp );
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't copy your settings from %s\n", from );
+		return;
+	}
+	Com_Printf( "Copied your settings from %s\n", from );
 }
 
 /*
@@ -3471,6 +3539,7 @@ static void FS_Startup( const char *gameName )
 	const char *configPath = Sys_DefaultHomeConfigPath();
 	const char *dataPath = Sys_DefaultHomeDataPath();
 	const char *statePath = Sys_DefaultHomeStatePath();
+	const char *predConfigPath = "", *predDataPath = "";
 
 	if(*(fs_homepath)->string) {
 		// Setting fs_homepath manually overrides everything else
@@ -3494,6 +3563,12 @@ static void FS_Startup( const char *gameName )
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
 	fs_microsoftstorepath = Cvar_Get ("fs_microsoftstorepath", Sys_MicrosoftStorePath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
+	// the home of the product this build succeeds, whose paks are read and
+	// whose config is copied; not when the home is set by hand, as the tests do
+	if (!fs_homepath->string[0]) {
+		Sys_PredecessorHomePaths( &predConfigPath, &predDataPath );
+	}
+	fs_predecessorpath = Cvar_Get ("fs_predecessorpath", predDataPath, CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
 
 #ifdef __APPLE__
 	fs_apppath = Cvar_Get ("fs_apppath", Sys_DefaultAppPath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
@@ -3525,6 +3600,8 @@ static void FS_Startup( const char *gameName )
 	FS_CreatePath(fs_homeconfigpath->string);
 	FS_CreatePath(fs_homedatapath->string);
 	FS_CreatePath(fs_homestatepath->string);
+
+	FS_ImportPredecessorConfig(predConfigPath, gameName);
 
 	FS_AddGameDirectories(gameName);
 
@@ -3796,6 +3873,11 @@ static void FS_CheckPak0( void )
 	if( strstr( fs_apppath->string, "Contents/MacOS" ) )
 		installHome = qtrue;
 #endif
+#ifdef HOMEPATH_NAME_PREDECESSOR
+	// a product that succeeds another keeps the data in the home, as its
+	// predecessor's players do
+	installHome = qtrue;
+#endif
 
 	if(installHome)
 		installPath = fs_homedatapath->string;
@@ -3818,6 +3900,19 @@ static void FS_CheckPak0( void )
 		Q_strcat(errorText, sizeof(errorText),
 				va(" from the \"%s\" directory in your Quake 3 install or CD-ROM to:\n\n"
 				"%s\n\n", BASEGAME, gamePath));
+
+#ifdef HOMEPATH_NAME_PREDECESSOR
+		// the predecessor's home where it was found; with none found, where
+		// it would be; none with the home set by hand, which leaves it out
+		if (fs_predecessorpath->string[0]) {
+			Q_strcat(errorText, sizeof(errorText),
+					va("Paks in \"%s%c%s\" are read too.\n\n",
+					fs_predecessorpath->string, PATH_SEP, BASEGAME));
+		} else if (!Cvar_VariableString("fs_homepath")[0]) {
+			Q_strcat(errorText, sizeof(errorText),
+					"Paks in the \"" HOMEPATH_NAME_PREDECESSOR "\" folder next to it are read too.\n\n");
+		}
+#endif
 
 		Q_strcat(errorText, sizeof(errorText),
 				"Quake 3 must be purchased to legitimately obtain pak0. "
