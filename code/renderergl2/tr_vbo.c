@@ -23,28 +23,47 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 
 
+// a value from -1 to 1 in 16 bits, and one from 0 to 1; a value past the
+// range packs as its end, and NaN, which fails every comparison, as 0,
+// since converting either to an integer is undefined
+static int16_t R_VaoPackSigned(float f)
+{
+	if (!(f > -1.0f && f < 1.0f))
+		return f >= 1.0f ? 32767 : (f <= -1.0f ? -32767 : 0);
+
+	return f * 32767.0f + (f > 0.0f ? 0.5f : -0.5f);
+}
+
+static uint16_t R_VaoPackUnsigned(float f)
+{
+	if (!(f > 0.0f && f < 1.0f))
+		return f >= 1.0f ? 65535 : 0;
+
+	return f * 65535.0f + 0.5f;
+}
+
 void R_VaoPackTangent(int16_t *out, vec4_t v)
 {
-	out[0] = v[0] * 32767.0f + (v[0] > 0.0f ? 0.5f : -0.5f);
-	out[1] = v[1] * 32767.0f + (v[1] > 0.0f ? 0.5f : -0.5f);
-	out[2] = v[2] * 32767.0f + (v[2] > 0.0f ? 0.5f : -0.5f);
-	out[3] = v[3] * 32767.0f + (v[3] > 0.0f ? 0.5f : -0.5f);
+	out[0] = R_VaoPackSigned(v[0]);
+	out[1] = R_VaoPackSigned(v[1]);
+	out[2] = R_VaoPackSigned(v[2]);
+	out[3] = R_VaoPackSigned(v[3]);
 }
 
 void R_VaoPackNormal(int16_t *out, vec3_t v)
 {
-	out[0] = v[0] * 32767.0f + (v[0] > 0.0f ? 0.5f : -0.5f);
-	out[1] = v[1] * 32767.0f + (v[1] > 0.0f ? 0.5f : -0.5f);
-	out[2] = v[2] * 32767.0f + (v[2] > 0.0f ? 0.5f : -0.5f);
+	out[0] = R_VaoPackSigned(v[0]);
+	out[1] = R_VaoPackSigned(v[1]);
+	out[2] = R_VaoPackSigned(v[2]);
 	out[3] = 0;
 }
 
 void R_VaoPackColor(uint16_t *out, vec4_t c)
 {
-	out[0] = c[0] * 65535.0f + 0.5f;
-	out[1] = c[1] * 65535.0f + 0.5f;
-	out[2] = c[2] * 65535.0f + 0.5f;
-	out[3] = c[3] * 65535.0f + 0.5f;
+	out[0] = R_VaoPackUnsigned(c[0]);
+	out[1] = R_VaoPackUnsigned(c[1]);
+	out[2] = R_VaoPackUnsigned(c[2]);
+	out[3] = R_VaoPackUnsigned(c[3]);
 }
 
 void R_VaoUnpackTangent(vec4_t v, int16_t *pack)
