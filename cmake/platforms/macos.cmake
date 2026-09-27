@@ -110,7 +110,7 @@ endif()
 
 set(CPACK_GENERATOR "DragNDrop")
 
-set(CPACK_DMG_VOLUME_NAME "${PROJECT_NAME} Installer")
+set(CPACK_DMG_VOLUME_NAME "${PACKAGE_NAME} Installer")
 set(CPACK_DMG_BACKGROUND_IMAGE "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-background.png")
 set(CPACK_DMG_SUBDIRECTORY "${MACOS_APP_NAME}")
 

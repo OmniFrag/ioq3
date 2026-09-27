@@ -12,6 +12,9 @@ endmacro()
 
 set_identity(SERVER_NAME ioq3ded)
 set_identity(CLIENT_NAME ioquake3)
+# The installers' name (installer.cmake): the package's file name, and on
+# macOS the disk image's
+set_identity(PACKAGE_NAME ${PROJECT_NAME})
 # CLIENT_WINDOW_TITLE, the name on the window and in the taskbar; PRODUCT_NAME,
 # the name in the version string; and HOMEPATH_NAME, the directory in the
 # user's home that holds configs and downloads, default to the ones in
