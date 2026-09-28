@@ -29,11 +29,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 R_ModelBlockInside
 
 Whether count elements of size bytes from offset lie inside end bytes,
-at an offset the loaders can read ints and floats from in place
+at an offset the loaders can read ints and floats from in place. An
+empty block's offset needn't be aligned, as nothing is read from it.
 =================
 */
 qboolean R_ModelBlockInside( int64_t offset, int64_t count, int64_t size, int64_t end ) {
-	return offset >= 0 && !( offset & 3 ) && count >= 0 && offset <= end && count * size <= end - offset;
+	return offset >= 0 && count >= 0 && ( !count || !( offset & 3 ) ) && offset <= end
+		&& count * size <= end - offset;
 }
 
 /*
