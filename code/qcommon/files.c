@@ -3483,15 +3483,34 @@ static void FS_InitPathVars( void ) {
 
 /*
 ================
+FS_MarkPredecessorConfig
+
+Leaves the mark beside our config that stops the predecessor's being
+copied, naming where it came from ("" when it wasn't)
+================
+*/
+static void FS_MarkPredecessorConfig( const char *mark, const char *from ) {
+	FILE	*out;
+
+	if ( ( out = Sys_FOpen( mark, "wb" ) ) ) {
+		fprintf( out, "%s\n", from );
+		fclose( out );
+	}
+}
+
+/*
+================
 FS_ImportPredecessorConfig
 
-On the first run, while our home has no config, copies the one in
-predHome, the config home of the product this build succeeds, so its
-players keep their settings. That home is only ever read.
+While our home has no config, copies the one in predHome, the config
+home of the product this build succeeds, so its players keep their
+settings. That home is only ever read. A copy, or finding ours already
+there, leaves a mark beside ours, so a player who deletes our config to
+reset it doesn't get the old one back.
 ================
 */
 static void FS_ImportPredecessorConfig( const char *predHome, const char *gameName ) {
-	char	from[MAX_OSPATH], to[MAX_OSPATH], tmp[MAX_OSPATH + 4];
+	char	from[MAX_OSPATH], to[MAX_OSPATH], tmp[MAX_OSPATH + 4], mark[MAX_OSPATH + 9];
 	byte	buffer[4096];
 	size_t	len;
 	FILE	*in, *out;
@@ -3502,7 +3521,13 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	}
 
 	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, gameName, Q3CONFIG_CFG ), sizeof( to ) );
+	Com_sprintf( mark, sizeof( mark ), "%s.imported", to );
+	if ( FS_FileInPathExists( mark ) ) {
+		return;
+	}
 	if ( FS_FileInPathExists( to ) ) {
+		// ours was made without a copy, or by a build before the mark
+		FS_MarkPredecessorConfig( mark, "" );
 		return;
 	}
 	Q_strncpyz( from, FS_BuildOSPath( predHome, gameName, Q3CONFIG_CFG ), sizeof( from ) );
@@ -3526,6 +3551,7 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 		return;
 	}
 	Com_Printf( "Copied your settings from %s\n", from );
+	FS_MarkPredecessorConfig( mark, from );
 }
 
 /*
