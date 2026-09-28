@@ -848,6 +848,148 @@ void Sys_GLimpInit( void )
 {
 }
 
+#ifdef USE_PROTOCOL_REGISTRATION
+#include <shellapi.h>
+
+/*
+==============
+Sys_FormatW
+
+_snwprintf, always terminated
+==============
+*/
+static void Sys_FormatW( wchar_t *buffer, size_t size, const wchar_t *format, ... )
+{
+	va_list args;
+
+	va_start( args, format );
+	_vsnwprintf( buffer, size, format, args );
+	va_end( args );
+	buffer[ size - 1 ] = L'\0';
+}
+
+/*
+==============
+Sys_CommandProgramExists
+
+Whether the program a registered command runs is still installed. Only a
+path on a local drive is checked: a program named without one (found on
+the PATH, such as rundll32.exe), or one only over the network, which can
+take as long as a timeout, counts as installed.
+==============
+*/
+static qboolean Sys_CommandProgramExists( const wchar_t *command )
+{
+	int argc;
+	wchar_t **argv;
+	qboolean exists = qtrue;
+
+	// CommandLineToArgvW gives an empty command this executable
+	if( !*command )
+		return qfalse;
+
+	argv = CommandLineToArgvW( command, &argc );
+	if( !argv )
+		return qtrue;
+
+	if( argc > 0 && argv[ 0 ][ 0 ] && argv[ 0 ][ 1 ] == L':' )
+	{
+		wchar_t root[] = { argv[ 0 ][ 0 ], L':', L'\\', L'\0' };
+
+		if( GetDriveTypeW( root ) != DRIVE_REMOTE )
+			exists = GetFileAttributesW( argv[ 0 ] ) != INVALID_FILE_ATTRIBUTES;
+	}
+
+	LocalFree( argv );
+	return exists;
+}
+
+/*
+==============
+Sys_SetRegistryString
+==============
+*/
+static qboolean Sys_SetRegistryString( HKEY parent, const wchar_t *key, const wchar_t *name, const wchar_t *value )
+{
+	return RegSetKeyValueW( parent, key, name, REG_SZ, value,
+		( wcslen( value ) + 1 ) * sizeof( wchar_t ) ) == ERROR_SUCCESS;
+}
+
+/*
+==============
+Sys_RegisterProtocolHandler
+
+Registers the link schemes for the user, in HKEY_CURRENT_USER, which needs
+no administrator, to open with this executable: a copy of the game has
+them after it runs, but a scheme stays with another program that is still
+installed.
+==============
+*/
+void Sys_RegisterProtocolHandler( void )
+{
+	wchar_t exe[ MAX_PATH ], command[ MAX_PATH + 32 ], icon[ MAX_PATH + 8 ], name[ 64 ];
+	const char *scheme;
+	int schemeLength;
+	HKEY classes;
+	DWORD length = GetModuleFileNameW( NULL, exe, ARRAY_LEN( exe ) );
+
+	if( length == 0 || length >= ARRAY_LEN( exe ) )
+		return;
+
+	// the user's classes: HKEY_CLASSES_ROOT reads them over the machine's
+	if( RegCreateKeyExW( HKEY_CURRENT_USER, L"Software\\Classes", 0, NULL, 0,
+			KEY_WRITE, NULL, &classes, NULL ) != ERROR_SUCCESS )
+		return;
+
+	Sys_FormatW( command, ARRAY_LEN( command ), L"\"%ls\" --uri \"%%1\"", exe );
+	Sys_FormatW( icon, ARRAY_LEN( icon ), L"\"%ls\",0", exe );
+	Sys_FormatW( name, ARRAY_LEN( name ), L"URL:%hs", PRODUCT_NAME );
+
+	for( scheme = Sys_NextProtocolScheme( PROTOCOL_HANDLER, &schemeLength ); scheme;
+		scheme = Sys_NextProtocolScheme( scheme + schemeLength, &schemeLength ) )
+	{
+		wchar_t key[ 64 ], openKey[ 96 ], iconKey[ 96 ], current[ MAX_PATH + 32 ], owner[ 64 ];
+		DWORD size = sizeof( current );
+		LONG status;
+
+		Sys_FormatW( key, ARRAY_LEN( key ), L"%.*hs", schemeLength, scheme );
+		Sys_FormatW( openKey, ARRAY_LEN( openKey ), L"%ls\\shell\\open\\command", key );
+		Sys_FormatW( iconKey, ARRAY_LEN( iconKey ), L"%ls\\DefaultIcon", key );
+
+		// the scheme's program now, the user's or the machine's; a
+		// REG_EXPAND_SZ comes back expanded, as a REG_SZ (asking for
+		// RRF_RT_REG_EXPAND_SZ without RRF_NOEXPAND is refused)
+		status = RegGetValueW( HKEY_CLASSES_ROOT, openKey, NULL,
+			RRF_RT_REG_SZ, NULL, current, &size );
+		if( status == ERROR_SUCCESS )
+		{
+			if( !wcscmp( current, command ) )
+				continue;
+
+			// a copy of the game's, by its name, or one that's gone
+			size = sizeof( owner );
+			if( ( RegGetValueW( HKEY_CLASSES_ROOT, key, NULL, RRF_RT_REG_SZ,
+					NULL, owner, &size ) != ERROR_SUCCESS || wcscmp( owner, name ) )
+				&& Sys_CommandProgramExists( current ) )
+			{
+				Com_DPrintf( "Not registering %ls: another program has it\n", key );
+				continue;
+			}
+		}
+		else if( status != ERROR_FILE_NOT_FOUND )
+			continue;
+
+		if( Sys_SetRegistryString( classes, key, NULL, name )
+			&& Sys_SetRegistryString( classes, key, L"URL Protocol", L"" )
+			&& Sys_SetRegistryString( classes, iconKey, NULL, icon )
+			&& Sys_SetRegistryString( classes, openKey, NULL, command ) )
+			Com_Printf( "Registered the links this client opens: %ls\n", key );
+	}
+
+	RegCloseKey( classes );
+}
+#endif
+
 /*
 ==============
 Sys_PlatformInit

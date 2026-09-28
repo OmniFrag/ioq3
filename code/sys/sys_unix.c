@@ -41,6 +41,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <sys/wait.h>
 #include <time.h>
 #include <sys/resource.h>
+#include <spawn.h>
 
 qboolean stdinIsATTY;
 
@@ -1225,6 +1226,118 @@ dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *t
 	Com_DPrintf( S_COLOR_YELLOW "WARNING: failed to show a dialog\n" );
 	return DR_OK;
 }
+
+#ifdef USE_PROTOCOL_REGISTRATION
+#include "desktop_entry.h"
+
+/*
+==============
+Sys_ReadSmallFile
+
+The file's text, in a buffer of size, which must hold all of it; qfalse
+if it can't be read or is too big
+==============
+*/
+static qboolean Sys_ReadSmallFile( const char *path, char *buffer, int size )
+{
+	FILE *f = fopen( path, "rb" );
+	size_t length;
+
+	if( !f )
+		return qfalse;
+
+	length = fread( buffer, 1, size, f );
+	fclose( f );
+	if( length >= (size_t)size )
+		return qfalse;
+
+	buffer[ length ] = '\0';
+	return qtrue;
+}
+
+/*
+==============
+Sys_RegisterProtocolHandler
+
+Puts the client's desktop entry, which names the link schemes it opens
+(misc/linux/client.desktop.in, DESKTOP_ENTRY_FORMAT), in the user's
+applications, with this executable's path, and the icon beside it if it's
+there, so desktops open the links with it. The entry is the game's by its
+name, so the copy that ran last has the links; a desktop offers them to
+the other programs that have them too.
+==============
+*/
+void Sys_RegisterProtocolHandler( void )
+{
+	char exe[ MAX_OSPATH ], icon[ MAX_OSPATH ], apps[ MAX_OSPATH ], path[ MAX_OSPATH ], temp[ MAX_OSPATH ];
+	char entry[ 4096 ], current[ 4096 ];
+	char *slash;
+	ssize_t length = readlink( "/proc/self/exe", exe, sizeof( exe ) );
+	FILE *f;
+	qboolean ok;
+	pid_t pid;
+	char *argv[] = { "sh", "-c", "update-desktop-database \"$1\" > /dev/null 2>&1 &", "sh", apps, NULL };
+	extern char **environ;
+
+	if( length <= 0 || (size_t)length >= sizeof( exe ) )
+		return;
+	exe[ length ] = '\0';
+
+	// Exec quotes the path, in which these would need escapes
+	if( strpbrk( exe, "\"`$\\%\n" ) )
+	{
+		Com_DPrintf( "Not registering links: the path has characters a desktop entry would escape\n" );
+		return;
+	}
+
+	// dirname() changes what it's given
+	Q_strncpyz( temp, exe, sizeof( temp ) );
+	Com_sprintf( icon, sizeof( icon ), "%s/" APP_ID ".png", Sys_Dirname( temp ) );
+	if( access( icon, R_OK ) )
+		Q_strncpyz( icon, APP_ID, sizeof( icon ) );
+	Com_sprintf( entry, sizeof( entry ), DESKTOP_ENTRY_FORMAT, exe, icon );
+
+	Sys_XDGPath( apps, sizeof( apps ), "XDG_DATA_HOME", ".local/share", "applications" );
+	if( !*apps )
+		return;
+	Com_sprintf( path, sizeof( path ), "%s/" APP_ID ".desktop", apps );
+	if( Sys_ReadSmallFile( path, current, sizeof( current ) ) && !strcmp( current, entry ) )
+		return;
+
+	// as FS_CreatePath does, but its failure is fatal, and this one mustn't be
+	for( slash = strchr( apps + 1, '/' ); slash; slash = strchr( slash + 1, '/' ) )
+	{
+		*slash = '\0';
+		ok = Sys_Mkdir( apps );
+		*slash = '/';
+		if( !ok )
+			return;
+	}
+	if( !Sys_Mkdir( apps ) )
+		return;
+
+	// a whole entry or none, for the desktop reading it, and for another
+	// copy starting at the same time, which writes its own
+	Com_sprintf( temp, sizeof( temp ), "%s.%d.tmp", path, (int)getpid( ) );
+	f = fopen( temp, "wb" );
+	if( !f )
+		return;
+	ok = fputs( entry, f ) >= 0;
+	if( fclose( f ) || !ok || rename( temp, path ) )
+	{
+		unlink( temp );
+		Com_DPrintf( "Not registering links: can't write %s\n", path );
+		return;
+	}
+	Com_Printf( "Registered the links this client opens (" PROTOCOL_HANDLER ") in %s\n", path );
+
+	// the desktops that read the entries' MIME types from its cache, where
+	// it's installed, in the background: it reads every entry there. Through
+	// posix_spawnp, since a fork would run our atexit handlers
+	if( !posix_spawnp( &pid, argv[ 0 ], NULL, NULL, argv, environ ) )
+		waitpid( pid, NULL, 0 );
+}
+#endif
 #endif
 
 /*

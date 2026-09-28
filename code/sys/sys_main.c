@@ -679,6 +679,45 @@ void Sys_ParseArgs( int argc, char **argv )
 #ifdef PROTOCOL_HANDLER
 /*
 =================
+Sys_NextProtocolScheme
+
+The first scheme in a list of them separated by spaces, such as
+PROTOCOL_HANDLER, and its length; NULL at the list's end. The next one
+comes after scheme + length.
+=================
+*/
+const char *Sys_NextProtocolScheme( const char *list, int *length )
+{
+	list += strspn( list, " " );
+	*length = strcspn( list, " " );
+	return *length ? list : NULL;
+}
+
+/*
+=================
+Sys_ProtocolUriScheme
+
+The length of the URI's scheme and the colon after it, if the scheme is
+one of PROTOCOL_HANDLER's; 0 otherwise. Schemes don't depend on case.
+=================
+*/
+int Sys_ProtocolUriScheme( const char *uri )
+{
+	const char *scheme;
+	int len;
+
+	for ( scheme = Sys_NextProtocolScheme( PROTOCOL_HANDLER, &len ); scheme;
+		scheme = Sys_NextProtocolScheme( scheme + len, &len ) )
+	{
+		if ( !Q_stricmpn( uri, scheme, len ) && uri[len] == ':' )
+			return len + 1;
+	}
+
+	return 0;
+}
+
+/*
+=================
 Sys_ParseProtocolUri
 
 This parses a protocol URI, e.g. "quake3://connect/example.com:27950"
@@ -689,13 +728,15 @@ At the moment only the "connect" command is supported.
 */
 char *Sys_ParseProtocolUri( const char *uri )
 {
+	int schemeLength = Sys_ProtocolUriScheme( uri );
+
 	// Both "quake3://" and "quake3:" can be used
-	if ( Q_strncmp( uri, PROTOCOL_HANDLER ":", strlen( PROTOCOL_HANDLER ":" ) ) )
+	if ( !schemeLength )
 	{
 		Com_Printf( "Sys_ParseProtocolUri: unsupported protocol.\n" );
 		return NULL;
 	}
-	uri += strlen( PROTOCOL_HANDLER ":" );
+	uri += schemeLength;
 	if ( !Q_strncmp( uri, "//", strlen( "//" ) ) )
 	{
 		uri += strlen( "//" );
@@ -709,7 +750,7 @@ char *Sys_ParseProtocolUri( const char *uri )
 		char *out;
 
 		uri += strlen( "connect/" );
-		if ( *uri == '\0' || *uri == '?' )
+		if ( *uri == '\0' || *uri == '?' || *uri == '/' )
 		{
 			Com_Printf( "Sys_ParseProtocolUri: missing argument.\n" );
 			return NULL;
@@ -720,10 +761,11 @@ char *Sys_ParseProtocolUri( const char *uri )
 		// contain characters from: a-zA-Z0-9.:-[]
 		for ( i=0; uri[i] != '\0'; i++ )
 		{
-			if ( uri[i] == '?' )
+			if ( uri[i] == '?' || uri[i] == '/' )
 			{
 				// For forwards compatibility, any query string parameters are ignored (e.g. "?password=abcd")
 				// However, these are not passed on macOS, so it may be a bad idea to add them.
+				// So is a path after the address, such as the slash a browser may add
 				break;
 			}
 
@@ -897,6 +939,19 @@ static void Sys_Start( int argc, char **argv )
 	CON_Init( );
 	Com_Init( commandLine );
 	NET_Init( );
+
+#ifdef USE_PROTOCOL_REGISTRATION
+	{
+		// after Com_Init, so the player's config and command line can
+		// turn it off
+		cvar_t *protocolHandler = Cvar_Get( "cl_protocolHandler", "1", CVAR_ARCHIVE );
+
+		Cvar_SetDescription( protocolHandler, "Register the links that open this game, <scheme>://connect/<server> for the schemes " PROTOCOL_HANDLER ", "
+			"for this user at startup: the copy of the game that ran last has them. On Windows, a scheme stays with another program that is still installed." );
+		if ( protocolHandler->integer )
+			Sys_RegisterProtocolHandler( );
+	}
+#endif
 
 	signal( SIGILL, Sys_SigHandler );
 	signal( SIGFPE, Sys_SigHandler );
