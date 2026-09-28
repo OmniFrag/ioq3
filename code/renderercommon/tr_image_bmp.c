@@ -42,6 +42,18 @@ typedef struct
 	unsigned char palette[256][4];
 } BMPHeader_t;
 
+// the header's fields, little-endian, at offsets that aren't multiples of
+// their size
+static int R_BMPLong( const byte *p )
+{
+	return (int)( p[0] | ( p[1] << 8 ) | ( p[2] << 16 ) | ( (unsigned)p[3] << 24 ) );
+}
+
+static short R_BMPShort( const byte *p )
+{
+	return (short)( p[0] | ( p[1] << 8 ) );
+}
+
 void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 {
 	int		columns, rows;
@@ -84,33 +96,33 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 
 	bmpHeader.id[0] = *buf_p++;
 	bmpHeader.id[1] = *buf_p++;
-	bmpHeader.fileSize = LittleLong( * ( int * ) buf_p );
+	bmpHeader.fileSize = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.reserved0 = LittleLong( * ( int * ) buf_p );
+	bmpHeader.reserved0 = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.bitmapDataOffset = LittleLong( * ( int * ) buf_p );
+	bmpHeader.bitmapDataOffset = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.bitmapHeaderSize = LittleLong( * ( int * ) buf_p );
+	bmpHeader.bitmapHeaderSize = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.width = LittleLong( * ( int * ) buf_p );
+	bmpHeader.width = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.height = LittleLong( * ( int * ) buf_p );
+	bmpHeader.height = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.planes = LittleShort( * ( short * ) buf_p );
+	bmpHeader.planes = R_BMPShort( buf_p );
 	buf_p += 2;
-	bmpHeader.bitsPerPixel = LittleShort( * ( short * ) buf_p );
+	bmpHeader.bitsPerPixel = R_BMPShort( buf_p );
 	buf_p += 2;
-	bmpHeader.compression = LittleLong( * ( int * ) buf_p );
+	bmpHeader.compression = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.bitmapDataSize = LittleLong( * ( int * ) buf_p );
+	bmpHeader.bitmapDataSize = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.hRes = LittleLong( * ( int * ) buf_p );
+	bmpHeader.hRes = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.vRes = LittleLong( * ( int * ) buf_p );
+	bmpHeader.vRes = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.colors = LittleLong( * ( int * ) buf_p );
+	bmpHeader.colors = R_BMPLong( buf_p );
 	buf_p += 4;
-	bmpHeader.importantColors = LittleLong( * ( int * ) buf_p );
+	bmpHeader.importantColors = R_BMPLong( buf_p );
 	buf_p += 4;
 
 	if ( bmpHeader.bitsPerPixel == 8 )
@@ -121,14 +133,14 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 		Com_Memcpy( bmpHeader.palette, buf_p, sizeof( bmpHeader.palette ) );
 	}
 
-	if (buffer.b + bmpHeader.bitmapDataOffset > end)
+	if (bmpHeader.bitmapDataOffset > length)
 	{
 		ri.Error( ERR_DROP, "LoadBMP: invalid offset value in header (%s)", name );
 	}
 
 	buf_p = buffer.b + bmpHeader.bitmapDataOffset;
 
-	if ( bmpHeader.id[0] != 'B' && bmpHeader.id[1] != 'M' ) 
+	if ( bmpHeader.id[0] != 'B' || bmpHeader.id[1] != 'M' ) 
 	{
 		ri.Error( ERR_DROP, "LoadBMP: only Windows-style BMP files supported (%s)", name );
 	}
@@ -159,16 +171,16 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 
 	columns = bmpHeader.width;
 	rows = bmpHeader.height;
-	if ( rows < 0 )
+	if ( rows < 0 && rows != INT_MIN )
 		rows = -rows;
-	numPixels = columns * rows;
 
-	if(columns <= 0 || !rows || numPixels > 0x1FFFFFFF // 4*1FFFFFFF == 0x7FFFFFFC < 0x7FFFFFFF
-	    || (((int)numPixels * 4) / columns) / 4 != rows)
+	// 4*1FFFFFFF == 0x7FFFFFFC < 0x7FFFFFFF
+	if(columns <= 0 || rows <= 0 || columns > 0x1FFFFFFF / rows)
 	{
 	  ri.Error (ERR_DROP, "LoadBMP: %s has an invalid image size", name);
 	}
-	if(buf_p + numPixels*bmpHeader.bitsPerPixel/8 > end)
+	numPixels = columns * rows;
+	if((uint64_t)numPixels * bmpHeader.bitsPerPixel / 8 > (uint64_t)(end - buf_p))
 	{
 	  ri.Error (ERR_DROP, "LoadBMP: file truncated (%s)", name);
 	}
@@ -202,8 +214,8 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 				*pixbuf++ = 0xff;
 				break;
 			case 16:
-				shortPixel = * ( unsigned short * ) pixbuf;
-				pixbuf += 2;
+				shortPixel = buf_p[0] | ( buf_p[1] << 8 );
+				buf_p += 2;
 				*pixbuf++ = ( shortPixel & ( 31 << 10 ) ) >> 7;
 				*pixbuf++ = ( shortPixel & ( 31 << 5 ) ) >> 2;
 				*pixbuf++ = ( shortPixel & ( 31 ) ) << 3;
