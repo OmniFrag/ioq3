@@ -1680,6 +1680,16 @@ void CL_PlayCinematic_f(void) {
 	int bits = CIN_system;
 
 	Com_DPrintf("CL_PlayCinematic_f\n");
+
+	// a cinematic takes the client's state, and would drop a connection
+	// silently: the startup logo, queued when the command line has no
+	// commands, would drop the one a link makes when it opens the client on
+	// macOS, where the link comes after startup. Callers disconnect first
+	if (clc.state >= CA_AUTHORIZING && clc.state < CA_CINEMATIC && !clc.demoplaying) {
+		Com_Printf("Not playing a cinematic while connected to a server\n");
+		return;
+	}
+
 	if (clc.state == CA_CINEMATIC) {
 		SCR_StopCinematic();
 	}
