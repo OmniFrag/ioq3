@@ -53,7 +53,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define MAX_VIDEO_HANDLES	16
 
 
-static void RoQ_init( void );
+static qboolean RoQ_init( void );
 
 /******************************************************************************
 *
@@ -620,7 +620,7 @@ static unsigned int yuv_to_rgb24( long y, long u, long v )
 *
 ******************************************************************************/
 
-static void decodeCodeBook( byte *input, unsigned short roq_flags )
+static void decodeCodeBook( byte *input, unsigned short roq_flags, long size )
 {
 	long	i, j, two, four;
 	unsigned short	*aptr, *bptr, *cptr, *dptr;
@@ -640,6 +640,11 @@ static void decodeCodeBook( byte *input, unsigned short roq_flags )
 	}
 
 	four *= 2;
+
+	// each 2x2 entry takes 6 bytes, and each 4x4 one 4
+	if ( two * 6 + four * 2 > size ) {
+		return;
+	}
 
 	bptr = (unsigned short *)vq2;
 
@@ -971,14 +976,24 @@ static void setupQuad( long xOff, long yOff )
 *
 ******************************************************************************/
 
-static void readQuadInfo( byte *qData )
+static qboolean readQuadInfo( byte *qData )
 {
-	if (currentHandle < 0) return;
+	if (currentHandle < 0) return qfalse;
 
 	cinTable[currentHandle].xsize    = qData[0]+qData[1]*256;
 	cinTable[currentHandle].ysize    = qData[2]+qData[3]*256;
 	cinTable[currentHandle].maxsize  = qData[4]+qData[5]*256;
 	cinTable[currentHandle].minsize  = qData[6]+qData[7]*256;
+
+	// the frames are drawn into linbuf, and their quads listed in qStatus
+	// in whole 8 by 8 blocks, which the quads are made of
+	if (!cinTable[currentHandle].xsize || cinTable[currentHandle].xsize > DEFAULT_CIN_WIDTH
+		|| !cinTable[currentHandle].ysize || cinTable[currentHandle].ysize > DEFAULT_CIN_HEIGHT
+		|| (cinTable[currentHandle].xsize & 7) || (cinTable[currentHandle].ysize & 7)) {
+		Com_DPrintf("readQuadInfo: frames of %ux%u aren't supported\n",
+			cinTable[currentHandle].xsize, cinTable[currentHandle].ysize);
+		return qfalse;
+	}
 	
 	cinTable[currentHandle].CIN_HEIGHT = cinTable[currentHandle].ysize;
 	cinTable[currentHandle].CIN_WIDTH  = cinTable[currentHandle].xsize;
@@ -1010,6 +1025,8 @@ static void readQuadInfo( byte *qData )
 			Com_Printf("HACK: approxmimating cinematic for Rage Pro or Voodoo\n");
 		}
 	}
+
+	return qtrue;
 }
 
 /******************************************************************************
@@ -1086,8 +1103,11 @@ static void RoQReset( void ) {
 	FS_FOpenFileRead (cinTable[currentHandle].fileName, &cinTable[currentHandle].iFile, qtrue);
 	// let the background thread start reading ahead
 	FS_Read (cin.file, 16, cinTable[currentHandle].iFile);
-	RoQ_init();
-	cinTable[currentHandle].status = FMV_LOOPED;
+	if ( RoQ_init() ) {
+		cinTable[currentHandle].status = FMV_LOOPED;
+	} else {
+		cinTable[currentHandle].status = FMV_EOF;
+	}
 }
 
 /******************************************************************************
@@ -1105,6 +1125,12 @@ static void RoQInterrupt(void)
         int		ssize;
         
 	if (currentHandle < 0) return;
+
+	// the frame, and the next one's header, are read into cin.file
+	if ( cinTable[currentHandle].RoQFrameSize > sizeof( cin.file ) - 8 ) {
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
 
 	FS_Read( cin.file, cinTable[currentHandle].RoQFrameSize+8, cinTable[currentHandle].iFile );
 	if ( cinTable[currentHandle].RoQPlayed >= cinTable[currentHandle].ROQSize ) { 
@@ -1128,6 +1154,11 @@ redump:
 	switch(cinTable[currentHandle].roq_id) 
 	{
 		case	ROQ_QUAD_VQ:
+			// a frame before the frame size has nothing to be drawn into
+			if (cinTable[currentHandle].numQuads == -1) {
+				cinTable[currentHandle].status = FMV_EOF;
+				break;
+			}
 			if ((cinTable[currentHandle].numQuads&1)) {
 				cinTable[currentHandle].normalBuffer0 = cinTable[currentHandle].t[1];
 				RoQPrepMcomp( cinTable[currentHandle].roqF0, cinTable[currentHandle].roqF1 );
@@ -1146,16 +1177,18 @@ redump:
 			cinTable[currentHandle].dirty = qtrue;
 			break;
 		case	ROQ_CODEBOOK:
-			decodeCodeBook( framedata, (unsigned short)cinTable[currentHandle].roq_flags );
+			decodeCodeBook( framedata, (unsigned short)cinTable[currentHandle].roq_flags, cinTable[currentHandle].RoQFrameSize );
 			break;
+		// sound too long for sbuf is skipped: each mono byte gives a stereo
+		// pair, and each stereo byte a sample
 		case	ZA_SOUND_MONO:
-			if (!cinTable[currentHandle].silent) {
+			if (!cinTable[currentHandle].silent && cinTable[currentHandle].RoQFrameSize <= ARRAY_LEN( sbuf ) / 2) {
 				ssize = RllDecodeMonoToStereo( framedata, sbuf, cinTable[currentHandle].RoQFrameSize, 0, (unsigned short)cinTable[currentHandle].roq_flags);
                                 S_RawSamples(0, ssize, 22050, 2, 1, (byte *)sbuf, 1.0f, -1);
 			}
 			break;
 		case	ZA_SOUND_STEREO:
-			if (!cinTable[currentHandle].silent) {
+			if (!cinTable[currentHandle].silent && cinTable[currentHandle].RoQFrameSize <= ARRAY_LEN( sbuf )) {
 				if (cinTable[currentHandle].numQuads == -1) {
 					S_Update();
 					s_rawend[0] = s_soundtime;
@@ -1166,7 +1199,10 @@ redump:
 			break;
 		case	ROQ_QUAD_INFO:
 			if (cinTable[currentHandle].numQuads == -1) {
-				readQuadInfo( framedata );
+				if ( !readQuadInfo( framedata ) ) {
+					cinTable[currentHandle].status = FMV_EOF;
+					break;
+				}
 				setupQuad( 0, 0 );
 				cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 			}
@@ -1201,6 +1237,11 @@ redump:
 		return; 
 	}
 	
+	// a packet's chunks, read at once, and each header, lie inside cin.file
+	if ( ( framedata - cin.file ) + cinTable[currentHandle].RoQFrameSize + 8 > sizeof( cin.file ) ) {
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
 	framedata		 += cinTable[currentHandle].RoQFrameSize;
 	cinTable[currentHandle].roq_id		 = framedata[0] + framedata[1]*256;
 	cinTable[currentHandle].RoQFrameSize = framedata[2] + framedata[3]*256 + framedata[4]*65536;
@@ -1208,7 +1249,7 @@ redump:
 	cinTable[currentHandle].roqF0		 = (signed char)framedata[7];
 	cinTable[currentHandle].roqF1		 = (signed char)framedata[6];
 
-	if (cinTable[currentHandle].RoQFrameSize>65536||cinTable[currentHandle].roq_id==0x1084) {
+	if (cinTable[currentHandle].RoQFrameSize>sizeof( cin.file ) - 8||cinTable[currentHandle].roq_id==0x1084) {
 		Com_DPrintf("roq_size>65536||roq_id==0x1084\n");
 		cinTable[currentHandle].status = FMV_EOF;
 		if (cinTable[currentHandle].looping) {
@@ -1216,7 +1257,13 @@ redump:
 		}
 		return;
 	}
-	if (cinTable[currentHandle].inMemory && (cinTable[currentHandle].status != FMV_EOF)) { cinTable[currentHandle].inMemory--; framedata += 8; goto redump; }
+	if (cinTable[currentHandle].inMemory && (cinTable[currentHandle].status != FMV_EOF)) {
+		if ( ( framedata - cin.file ) + 8 + cinTable[currentHandle].RoQFrameSize > sizeof( cin.file ) ) {
+			cinTable[currentHandle].status = FMV_EOF;
+			return;
+		}
+		cinTable[currentHandle].inMemory--; framedata += 8; goto redump;
+	}
 //
 // one more frame hits the dust
 //
@@ -1233,7 +1280,7 @@ redump:
 *
 ******************************************************************************/
 
-static void RoQ_init( void )
+static qboolean RoQ_init( void )
 {
 	cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 
@@ -1250,10 +1297,12 @@ static void RoQ_init( void )
 	cinTable[currentHandle].RoQFrameSize	= cin.file[10] + cin.file[11]*256 + cin.file[12]*65536;
 	cinTable[currentHandle].roq_flags	= cin.file[14] + cin.file[15]*256;
 
-	if (cinTable[currentHandle].RoQFrameSize > 65536 || !cinTable[currentHandle].RoQFrameSize) { 
-		return;
+	// the first chunk, and the next one's header, are read into cin.file
+	if (cinTable[currentHandle].RoQFrameSize > sizeof( cin.file ) - 8 || !cinTable[currentHandle].RoQFrameSize) {
+		return qfalse;
 	}
 
+	return qtrue;
 }
 
 /******************************************************************************
@@ -1469,9 +1518,8 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 	FS_Read (cin.file, 16, cinTable[currentHandle].iFile);
 
 	RoQID = (unsigned short)(cin.file[0]) + (unsigned short)(cin.file[1])*256;
-	if (RoQID == 0x1084)
+	if (RoQID == 0x1084 && RoQ_init())
 	{
-		RoQ_init();
 //		FS_Read (cin.file, cinTable[currentHandle].RoQFrameSize+8, cinTable[currentHandle].iFile);
 
 		cinTable[currentHandle].status = FMV_PLAY;
