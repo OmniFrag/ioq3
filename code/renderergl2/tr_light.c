@@ -151,6 +151,13 @@ static void R_SetupEntityLightingGrid( trRefEntity_t *ent, world_t *world ) {
 		float	v;
 
 		v = lightOrigin[i]*world->lightGridInverseSize[i];
+		// an origin that's NaN or far outside the grid would make the
+		// conversion undefined; either way it's clamped to the grid below
+		if ( !( v > -1073741824.0f ) ) {
+			v = -1073741824.0f;
+		} else if ( v > 1073741824.0f ) {
+			v = 1073741824.0f;
+		}
 		pos[i] = floor( v );
 		frac[i] = v - pos[i];
 		if ( pos[i] < 0 ) {
