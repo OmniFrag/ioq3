@@ -3283,7 +3283,7 @@ qhandle_t RE_RegisterSkin( const char *name ) {
 	R_IssuePendingRenderCommands();
 
 	// If not a .skin file, load as a single shader
-	if ( strcmp( name + strlen( name ) - 5, ".skin" ) ) {
+	if ( strlen( name ) < 5 || strcmp( name + strlen( name ) - 5, ".skin" ) ) {
 		skin->numSurfaces = 1;
 		skin->surfaces = ri.Hunk_Alloc( sizeof( skinSurface_t ), h_low );
 		skin->surfaces[0].shader = R_FindShader( name, LIGHTMAP_NONE, qtrue );
