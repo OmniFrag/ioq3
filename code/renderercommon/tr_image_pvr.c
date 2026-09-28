@@ -36,7 +36,6 @@ typedef struct pvr {
 } pvr_t;
 
 typedef unsigned int (*pvr_pixel_func_t)(unsigned short color);
-typedef byte *(*pvr_image_func_t)(pvr_t *pvr, int offset, qboolean detwiddle, pvr_pixel_func_t pixel_func);
 
 enum {
 	PVR_PIXEL_TYPE_ARGB1555 = 0,
@@ -172,12 +171,6 @@ static int mm_offset_vq(int w)
 	}
 }
 
-static byte *decode_mm(pvr_t *pvr, pvr_image_func_t image_func, pvr_pixel_func_t pixel_func, qboolean vq, qboolean detwiddle)
-{
-	int offset = vq ? mm_offset_vq(pvr->width) : mm_offset(pvr->width);
-	return image_func(pvr, offset, detwiddle, pixel_func);
-}
-
 static byte *decode(pvr_t *pvr, int offset, qboolean detwiddle, pvr_pixel_func_t pixel_func)
 {
 	int x, y;
@@ -264,13 +257,16 @@ static byte *decode_vq(pvr_t *pvr, int offset, qboolean detwiddle, pvr_pixel_fun
 
 void R_LoadPVR(const char *name, byte **pic, int *width, int *height)
 {
-	unsigned int length;
+	int length;
 	void *buffer;
-	byte *ptr;
+	byte *ptr, *end;
 	pvr_t *pvr;
 	int pixel_type, image_type;
 	pvr_pixel_func_t pixel_func;
 	byte *ret = NULL;
+	qboolean vq, mm, detwiddle;
+	int w, h, offset;
+	uint64_t size;
 
 	*pic = NULL;
 	if (width)
@@ -284,16 +280,26 @@ void R_LoadPVR(const char *name, byte **pic, int *width, int *height)
 		return;
 
 	ptr = (byte *)buffer;
+	end = ptr + length;
 
-	// skip global index
-	if (memcmp(ptr, "GBIX", 4) == 0)
+	// skip global index, whose length keeps the header aligned
+	if ((size_t)(end - ptr) >= sizeof(gbix_t) && memcmp(ptr, "GBIX", 4) == 0)
 	{
 		gbix_t *gbix = (gbix_t *)ptr;
-		ptr += sizeof(gbix_t) + LittleLong(gbix->len);
+		unsigned int len = LittleLong(gbix->len);
+
+		if (len > (size_t)(end - ptr) - sizeof(gbix_t) || (len & 3))
+		{
+			ri.Printf(PRINT_WARNING, "LoadPVR: bad global index (%s)\n", name);
+			ri.FS_FreeFile(buffer);
+			return;
+		}
+
+		ptr += sizeof(gbix_t) + len;
 	}
 
 	// check magic identifier
-	if (memcmp(ptr, "PVRT", 4) != 0)
+	if ((size_t)(end - ptr) < sizeof(pvr_t) || memcmp(ptr, "PVRT", 4) != 0)
 		ri.Error(ERR_DROP, "LoadPVR: magic identifier does not match expected (%s)", name);
 
 	// fix up header
@@ -302,6 +308,16 @@ void R_LoadPVR(const char *name, byte **pic, int *width, int *height)
 	pvr->type = LittleLong(pvr->type);
 	pvr->width = LittleShort(pvr->width);
 	pvr->height = LittleShort(pvr->height);
+
+	// the Dreamcast's largest texture
+	w = pvr->width;
+	h = pvr->height;
+	if (w < 1 || h < 1 || w > 1024 || h > 1024)
+	{
+		ri.Printf(PRINT_WARNING, "LoadPVR: unsupported size %dx%d (%s)\n", w, h, name);
+		ri.FS_FreeFile(buffer);
+		return;
+	}
 
 	// break out type values
 	pixel_type = pvr->type & 0xFF;
@@ -332,45 +348,47 @@ void R_LoadPVR(const char *name, byte **pic, int *width, int *height)
 		}
 	}
 
-	// decompress image
+	// get image layout
 	switch (image_type)
 	{
 		case PVR_IMAGE_TYPE_TWIDDLED:
-		{
-			ret = decode(pvr, 0, qtrue, pixel_func);
-			break;
-		}
 		case PVR_IMAGE_TYPE_TWIDDLED_MM:
-		{
-			ret = decode_mm(pvr, decode, pixel_func, qfalse, qtrue);
-			break;
-		}
 		case PVR_IMAGE_TYPE_VQ:
-		{
-			ret = decode_vq(pvr, 0, qtrue, pixel_func);
-			break;
-		}
 		case PVR_IMAGE_TYPE_VQ_MM:
-		{
-			ret = decode_mm(pvr, decode_vq, pixel_func, qtrue, qtrue);
-			break;
-		}
 		case PVR_IMAGE_TYPE_RECTANGULAR:
-		{
-			ret = decode(pvr, 0, qfalse, pixel_func);
-			break;
-		}
 		case PVR_IMAGE_TYPE_RECTANGULAR_MM:
-		{
-			ret = decode_mm(pvr, decode, pixel_func, qfalse, qfalse);
 			break;
-		}
 		default:
 		{
 			ri.Error(ERR_DROP, "LoadPVR: unsupported image type 0x%02x (%s)", image_type, name);
 			break;
 		}
 	}
+	vq = image_type == PVR_IMAGE_TYPE_VQ || image_type == PVR_IMAGE_TYPE_VQ_MM;
+	mm = image_type == PVR_IMAGE_TYPE_TWIDDLED_MM || image_type == PVR_IMAGE_TYPE_VQ_MM ||
+		image_type == PVR_IMAGE_TYPE_RECTANGULAR_MM;
+	detwiddle = image_type != PVR_IMAGE_TYPE_RECTANGULAR && image_type != PVR_IMAGE_TYPE_RECTANGULAR_MM;
+	offset = !mm ? 0 : vq ? mm_offset_vq(w) : mm_offset(w);
+
+	// the data the image reads must be in the file: a VQ image is square,
+	// with a codebook of 256 colors of 4 pixels, and an index for each 4
+	if (vq)
+		size = 1024 * sizeof(unsigned short) + offset + (uint64_t)(w / 2) * (h / 2);
+	else
+		size = offset + (uint64_t)w * h * sizeof(unsigned short);
+
+	if (offset < 0 || (vq && w != h) || size > (size_t)(end - (byte *)(pvr + 1)))
+	{
+		ri.Printf(PRINT_WARNING, "LoadPVR: unsupported or truncated %dx%d image (%s)\n", w, h, name);
+		ri.FS_FreeFile(buffer);
+		return;
+	}
+
+	// decompress image
+	if (vq)
+		ret = decode_vq(pvr, offset, detwiddle, pixel_func);
+	else
+		ret = decode(pvr, offset, detwiddle, pixel_func);
 
 	// clean up
 	ri.FS_FreeFile(buffer);
@@ -382,7 +400,7 @@ void R_LoadPVR(const char *name, byte **pic, int *width, int *height)
 	// return stuff
 	*pic = ret;
 	if (width)
-		*width = pvr->width;
+		*width = w;
 	if (height)
-		*height = pvr->height;
+		*height = h;
 }
