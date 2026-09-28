@@ -268,7 +268,7 @@ snd_stream_t *S_OggOpus_CodecOpenStream(const char *filename)
 		return NULL;
 	}
 
-	if(opusInfo->stream_count != 1)
+	if(opusInfo->stream_count != 1 || op_link_count(of) != 1)
 	{
 		op_free(of);
 
@@ -288,8 +288,17 @@ snd_stream_t *S_OggOpus_CodecOpenStream(const char *filename)
 		return NULL;
 	}
 
-	// get the number of sample-frames in the file
+	// get the number of sample-frames in the file, which must fit the size
+	// in bytes in an int
 	numSamples = op_pcm_total(of, -1);
+	if(numSamples < 0 || numSamples > INT_MAX / (opusInfo->channel_count * OPUS_SAMPLEWIDTH))
+	{
+		op_free(of);
+
+		S_CodecUtilClose(&stream);
+
+		return NULL;
+	}
 
 	// fill in the info-structure in the stream
 	stream->info.rate = 48000;
@@ -440,6 +449,10 @@ void *S_OggOpus_CodecLoad(const char *filename, snd_info_t *info)
 
 		return NULL;	
 	}
+
+	// the sound is what decoded, if that's less than the stream said
+	info->size = bytesRead;
+	info->samples = bytesRead / (info->channels * info->width);
 
 	S_OggOpus_CodecCloseStream(stream);
 	
