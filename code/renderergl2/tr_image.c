@@ -2261,7 +2261,15 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 	if (!cubemap)
 	{
 		if (rgba8)
+		{
+			byte *original = pic;
+
 			scaled = RawImage_ScaleToPower2(&pic, &width, &height, type, flags, &resampledBuffer);
+
+			// a resampled picture has only its first level
+			if (pic != original)
+				numMips = 1;
+		}
 		else if (pic && picmip)
 		{
 			for (miplevel = r_picmip->integer; miplevel > 0 && numMips > 1; miplevel--, numMips--)
