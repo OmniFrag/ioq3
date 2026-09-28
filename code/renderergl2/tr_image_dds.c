@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../renderercommon/tr_common.h"
 
+int CalculateMipSize(int width, int height, GLenum picFormat);
+
 typedef unsigned int   ui32_t;
 
 typedef struct ddsHeader_s
@@ -441,6 +443,37 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		else
 		{
 			ri.Printf(PRINT_ALL, "DDS File %s has unsupported RGBA format.", filename);
+			ri.FS_FreeFile(buffer.v);
+			return;
+		}
+	}
+
+	// every level must be in the file, as each is uploaded; no OpenGL takes
+	// a texture larger than 16384, which keeps each level's size in an int
+	{
+		unsigned int levels = (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT) ? ddsHeader->numMips : 1;
+		unsigned int level;
+		int mipWidth = ddsHeader->width, mipHeight = ddsHeader->height;
+		int64_t size = 0;
+
+		if (ddsHeader->width < 1 || ddsHeader->height < 1 || ddsHeader->width > 16384 || ddsHeader->height > 16384
+			|| levels > INT_MAX)
+		{
+			ri.Printf(PRINT_WARNING, "DDS File %s has an unsupported size or number of mipmaps.\n", filename);
+			ri.FS_FreeFile(buffer.v);
+			return;
+		}
+
+		for (level = 0; level < levels && size <= len; level++)
+		{
+			size += CalculateMipSize(mipWidth, mipHeight, *picFormat);
+			mipWidth = MAX(1, mipWidth >> 1);
+			mipHeight = MAX(1, mipHeight >> 1);
+		}
+
+		if (size > len)
+		{
+			ri.Printf(PRINT_WARNING, "DDS File %s is too short for its size and mipmaps.\n", filename);
 			ri.FS_FreeFile(buffer.v);
 			return;
 		}
