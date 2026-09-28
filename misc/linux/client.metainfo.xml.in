@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>org.ioquake3.ioquake3</id>
-  <launchable type="desktop-id">ioquake3.desktop</launchable>
+  <id>@APP_ID@</id>
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-or-later</project_license>
-  <name>ioquake3</name>
+  <name>@APP_NAME@</name>
   <summary>Free and open-source Quake 3 based engine</summary>
   <description>
     <p>
