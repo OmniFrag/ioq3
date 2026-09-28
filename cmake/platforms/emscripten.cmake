@@ -40,9 +40,21 @@ endif()
 
 list(APPEND POST_CONFIGURE_FUNCTIONS deploy_shell_files)
 
+include(utils/png_size)
+
 function(deploy_shell_files)
     configure_file(${SOURCE_DIR}/web/client.html.in
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
+
+    # The page's icon, and a web app manifest, with which a browser can
+    # install the page as an app
+    png_size(${PNG_ICON_PATH} ICON_WIDTH ICON_HEIGHT)
+    string(REPLACE "\\" "\\\\" WEB_APP_NAME "${APP_NAME}") # as JSON
+    string(REPLACE "\"" "\\\"" WEB_APP_NAME "${WEB_APP_NAME}")
+    configure_file(${PNG_ICON_PATH}
+        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.png COPYONLY)
+    configure_file(${SOURCE_DIR}/web/client.webmanifest.in
+        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.webmanifest @ONLY)
 
     if(NOT EMSCRIPTEN_PRELOAD_FILE)
         configure_file(${SOURCE_DIR}/web/client-config.json

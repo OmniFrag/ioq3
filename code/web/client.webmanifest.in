@@ -1,0 +1,10 @@
+{
+  "name": "@WEB_APP_NAME@",
+  "start_url": "@CLIENT_NAME@.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "icons": [
+    { "src": "@CLIENT_NAME@.png", "sizes": "@ICON_WIDTH@x@ICON_HEIGHT@", "type": "image/png" }
+  ]
+}

@@ -28,6 +28,8 @@ if(DEFINED CLIENT_WINDOW_TITLE)
 else()
     set_identity(WEB_PAGE_TITLE "${CLIENT_NAME} Emscripten demo")
 endif()
+# The client's icon as a PNG, for the web page and its web app manifest
+set_identity(PNG_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/quake3-tango.png)
 
 set(BASEGAME baseq3)
 
@@ -37,16 +39,20 @@ set(UI_MODULE ui)
 
 set_identity(WINDOWS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/windows/quake3.ico)
 
+# The client's name as the desktop shows it, apart from the window: the web
+# app's, and the macOS app's by default
+if(DEFINED CLIENT_WINDOW_TITLE)
+    set_identity(APP_NAME ${CLIENT_WINDOW_TITLE})
+else()
+    set_identity(APP_NAME ${CLIENT_NAME})
+endif()
+
 set_identity(MACOS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/macos/quake3_flat.icns)
 set_identity(MACOS_BUNDLE_ID org.ioquake.${CLIENT_NAME})
 # The app's name in the menu bar and About box, where SDL also uses
 # CLIENT_WINDOW_TITLE. MACOS_BUNDLE_SHORT_VERSION and MACOS_BUNDLE_VERSION
 # may be set too (macos.cmake), and default to PRODUCT_VERSION.
-if(DEFINED CLIENT_WINDOW_TITLE)
-    set_identity(MACOS_BUNDLE_NAME ${CLIENT_WINDOW_TITLE})
-else()
-    set_identity(MACOS_BUNDLE_NAME ${CLIENT_NAME})
-endif()
+set_identity(MACOS_BUNDLE_NAME ${APP_NAME})
 # The .app's name in Finder and the Dock, and its executable's
 set_identity(MACOS_APP_NAME ${CLIENT_NAME})
 # The client's reverse-DNS ID, which desktops match to its .desktop file and
