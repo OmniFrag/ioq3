@@ -1316,7 +1316,13 @@ static qboolean RoQ_init( void )
 static void RoQShutdown( void ) {
 	const char *s;
 
+	// refused before its first frame: its file and its slot are free again
 	if (!cinTable[currentHandle].buf) {
+		if (cinTable[currentHandle].iFile) {
+			FS_FCloseFile( cinTable[currentHandle].iFile );
+			cinTable[currentHandle].iFile = 0;
+		}
+		cinTable[currentHandle].fileName[0] = 0;
 		return;
 	}
 
