@@ -30,7 +30,7 @@ FGetLittleLong
 =================
 */
 static int FGetLittleLong( fileHandle_t f ) {
-	int		v;
+	int		v = 0;	// past the file's end
 
 	FS_Read( &v, sizeof(v), f );
 
@@ -43,7 +43,7 @@ FGetLittleShort
 =================
 */
 static short FGetLittleShort( fileHandle_t f ) {
-	short	v;
+	short	v = 0;	// past the file's end
 
 	FS_Read( &v, sizeof(v), f );
 
@@ -91,10 +91,10 @@ static int S_FindRIFFChunk( fileHandle_t f, char *chunk ) {
 		if( !Q_strncmp( name, chunk, 4 ) )
 			return len;
 
-		len = PAD( len, 2 );
-
-		// Not the right chunk - skip it
+		// Not the right chunk - skip it, and the byte padding an odd one
 		FS_Seek( f, len, FS_SEEK_CUR );
+		if( len & 1 )
+			FS_Seek( f, 1, FS_SEEK_CUR );
 	}
 
 	return -1;
@@ -135,10 +135,14 @@ static qboolean S_ReadRIFFHeader(fileHandle_t file, snd_info_t *info)
 	int fmtlen = 0;
 
 	// skip the riff wav header
-	FS_Read(dump, 12, file);
+	if( FS_Read(dump, 12, file) != 12 || memcmp(dump, "RIFF", 4) || memcmp(dump + 8, "WAVE", 4) )
+	{
+		Com_Printf( S_COLOR_RED "ERROR: Not a RIFF WAVE file\n");
+		return qfalse;
+	}
 
 	// Scan for the format chunk
-	if((fmtlen = S_FindRIFFChunk(file, "fmt ")) < 0)
+	if((fmtlen = S_FindRIFFChunk(file, "fmt ")) < 16)
 	{
 		Com_Printf( S_COLOR_RED "ERROR: Couldn't find \"fmt\" chunk\n");
 		return qfalse;
@@ -158,14 +162,20 @@ static qboolean S_ReadRIFFHeader(fileHandle_t file, snd_info_t *info)
 	  return qfalse;
 	}
 
+	if( info->channels < 1 || info->channels > 2 || info->rate < 1 )
+	{
+	  Com_Printf( S_COLOR_RED "ERROR: Only mono and stereo sound with a rate is supported\n");
+	  return qfalse;
+	}
+
 	info->width = bits / 8;
 	info->dataofs = 0;
 
-	// Skip the rest of the format chunk if required
+	// Skip the rest of the format chunk if required, and the byte padding
+	// an odd one
 	if(fmtlen > 16)
 	{
-		fmtlen -= 16;
-		FS_Seek( file, fmtlen, FS_SEEK_CUR );
+		FS_Seek( file, fmtlen - 16 + ( fmtlen & 1 ), FS_SEEK_CUR );
 	}
 
 	// Scan for the data chunk
@@ -199,9 +209,10 @@ void *S_WAV_CodecLoad(const char *filename, snd_info_t *info)
 {
 	fileHandle_t file;
 	void *buffer;
+	long fileLength;
 
 	// Try to open the file
-	FS_FOpenFileRead(filename, &file, qtrue);
+	fileLength = FS_FOpenFileRead(filename, &file, qtrue);
 	if(!file)
 	{
 		return NULL;
@@ -216,6 +227,14 @@ void *S_WAV_CodecLoad(const char *filename, snd_info_t *info)
 		return NULL;
 	}
 
+	// The data must be in the file
+	if(info->size > fileLength - FS_FTell(file))
+	{
+		FS_FCloseFile(file);
+		Com_Printf( S_COLOR_RED "ERROR: \"%s\" is truncated\n", filename);
+		return NULL;
+	}
+
 	// Allocate some memory
 	buffer = Hunk_AllocateTempMemory(info->size);
 	if(!buffer)
@@ -227,7 +246,13 @@ void *S_WAV_CodecLoad(const char *filename, snd_info_t *info)
 	}
 
 	// Read, byteswap
-	FS_Read(buffer, info->size, file);
+	if(FS_Read(buffer, info->size, file) != info->size)
+	{
+		Hunk_FreeTempMemory(buffer);
+		FS_FCloseFile(file);
+		Com_Printf( S_COLOR_RED "ERROR: \"%s\" is truncated\n", filename);
+		return NULL;
+	}
 	S_ByteSwapRawSamples(info->samples, info->width, info->channels, (byte *)buffer);
 
 	// Close and return
@@ -283,9 +308,9 @@ int S_WAV_CodecReadStream(snd_stream_t *stream, int bytes, void *buffer)
 		return 0;
 	if(bytes > remaining)
 		bytes = remaining;
+	bytes = FS_Read(buffer, bytes, stream->file);
 	stream->pos += bytes;
 	samples = (bytes / stream->info.width) / stream->info.channels;
-	FS_Read(buffer, bytes, stream->file);
 	S_ByteSwapRawSamples(samples, stream->info.width, stream->info.channels, buffer);
 	return bytes;
 }
