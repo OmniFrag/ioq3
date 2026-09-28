@@ -487,12 +487,9 @@ static qboolean FindChunk(struct BufferedFile *BF, uint32_t ChunkType)
 			 *  Skip the rest of the chunk.
 			 */
 
-			if(Length)
+			if(Length > 0x7FFFFFFF || !BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
 			{
-				if(Length > 0x7FFFFFFF || !BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
-				{
-					return(qfalse);
-				}  
+				return(qfalse);
 			}
 		}
 	}
@@ -619,18 +616,15 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 		 *  Skip to next chunk
 		 */
 
-		if(Length)
+		if(!BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
 		{
-			if(!BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
-			{
-				BufferedFileRewind(BF, BytesToRewind);
+			BufferedFileRewind(BF, BytesToRewind);
 
-				return((uint32_t)-1);
-			}
+			return((uint32_t)-1);
+		}
 
-			BytesToRewind += Length + PNG_ChunkCRC_Size;
-			CompressedDataLength += Length;
-		} 
+		BytesToRewind += Length + PNG_ChunkCRC_Size;
+		CompressedDataLength += Length;
 	}
 
 	BufferedFileRewind(BF, BytesToRewind);
@@ -695,16 +689,16 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 				return((uint32_t)-1);
 			}
 
-			if(!BufferedFileSkip(BF, PNG_ChunkCRC_Size))
-			{
-				ri.Free(CompressedData); 
-
-				return((uint32_t)-1);
-			}
-
 			memcpy(CompressedDataPtr, OrigCompressedData, Length);
 			CompressedDataPtr += Length;
-		} 
+		}
+
+		if(!BufferedFileSkip(BF, PNG_ChunkCRC_Size))
+		{
+			ri.Free(CompressedData); 
+
+			return((uint32_t)-1);
+		}
 	}
 
 	/*
