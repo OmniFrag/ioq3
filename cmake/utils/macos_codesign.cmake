@@ -1,7 +1,7 @@
-# Signs what's packaged for macOS, as APPLE_CERTIFICATE_ID, the name of a
-# Developer ID Application certificate in the keychain. CPack runs it twice
-# (macos.cmake): before it makes a package, on what it staged, and after,
-# on the disk images it made.
+# Signs what's packaged for macOS, as APPLE_CERTIFICATE_ID, the hash or (part
+# of the) name of a Developer ID Application certificate in the keychain. CPack
+# runs it twice (macos.cmake): before it makes a package, on what it
+# staged, and after, on the disk images it made.
 #
 # The staged files are signed inside out, as Apple asks (codesign's --deep
 # is deprecated): each app's libraries, then the app, then the other
@@ -24,12 +24,23 @@ function(codesign)
 endfunction()
 
 if(IDENTITY)
+    # codesign takes an identity's hash, its name, or part of the name
     execute_process(COMMAND security find-identity -v -p codesigning
-        OUTPUT_VARIABLE IDENTITIES)
-    string(FIND "${IDENTITIES}" "\"${IDENTITY}\"" FOUND)
+        OUTPUT_VARIABLE OUTPUT)
+    string(REGEX MATCHALL "[0-9A-F]+ \"[^\"\n]*\"" IDENTITIES "${OUTPUT}")
+    string(TOUPPER "${IDENTITY}" HASH)
+    set(FOUND -1)
+    foreach(ENTRY IN LISTS IDENTITIES)
+        string(REGEX MATCH "^([0-9A-F]+) \"(.*)\"$" ENTRY "${ENTRY}")
+        string(FIND "${CMAKE_MATCH_2}" "${IDENTITY}" FOUND)
+        if(HASH STREQUAL CMAKE_MATCH_1 OR NOT FOUND EQUAL -1)
+            set(FOUND 0)
+            break()
+        endif()
+    endforeach()
     if(FOUND EQUAL -1)
-        message(FATAL_ERROR "No valid signing identity in the keychain is "
-            "named as APPLE_CERTIFICATE_ID: ${IDENTITY}")
+        message(FATAL_ERROR "No valid signing identity in the keychain "
+            "matches APPLE_CERTIFICATE_ID: ${IDENTITY}")
     endif()
     set(SIGN --force --sign "${IDENTITY}" --timestamp)
     set(EXECUTABLE ${SIGN} --options runtime
