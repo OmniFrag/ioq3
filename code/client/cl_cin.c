@@ -419,6 +419,15 @@ static void blit2_32( byte *src, byte *dst, int spl  )
 *
 ******************************************************************************/
 
+// whether a block size pixels square, moved from a frame's block by an
+// offset from the file, lies inside the frames
+static qboolean RoQBlockInside( const byte *block, long offset, int size, int spl )
+{
+	long	start = ( block - cin.linbuf ) + offset;
+
+	return start >= 0 && start + ( size - 1 ) * (long)spl + size * 4 <= (long)sizeof( cin.linbuf );
+}
+
 static void blitVQQuad32fs( byte *qStatus, void *qdata )
 {
 byte			**status = (byte **)qStatus;
@@ -480,7 +489,8 @@ int		spl;
 							data++;
 							break;
 						case	0x4000:										// motion compensation
-							move4_32( status[index] + cin.mcomp[(*data)], status[index], spl );
+							if ( RoQBlockInside( status[index], cin.mcomp[(*data)], 4, spl ) )
+								move4_32( status[index] + cin.mcomp[(*data)], status[index], spl );
 							data++;
 							break;
 					}
@@ -488,7 +498,8 @@ int		spl;
 				}
 				break;
 			case	0x4000:													// motion compensation
-				move8_32( status[index] + cin.mcomp[(*data)], status[index], spl );
+				if ( RoQBlockInside( status[index], cin.mcomp[(*data)], 8, spl ) )
+					move8_32( status[index] + cin.mcomp[(*data)], status[index], spl );
 				data++;
 				index += 5;
 				break;
