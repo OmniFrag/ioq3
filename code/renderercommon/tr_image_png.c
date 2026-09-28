@@ -58,11 +58,15 @@ PNG LOADING
  *  is bigger than 0 a body and a CRC of the body follow.
  */
 
-struct PNG_ChunkHeader
+/*
+ *  A chunk header's fields, read from its bytes, since a chunk after one
+ *  of odd length starts at an odd offset
+ */
+
+static uint32_t PNG_ReadBigLong(const uint8_t *p)
 {
-	uint32_t Length;
-	uint32_t Type;
-};
+	return(((uint32_t) p[0] << 24) | ((uint32_t) p[1] << 16) | ((uint32_t) p[2] << 8) | p[3]);
+}
 
 #define PNG_ChunkHeader_Size (8)
 
@@ -429,7 +433,7 @@ static qboolean BufferedFileSkip(struct BufferedFile *BF, unsigned Offset)
 
 static qboolean FindChunk(struct BufferedFile *BF, uint32_t ChunkType)
 {
-	struct PNG_ChunkHeader *CH;
+	uint8_t *CH;
 
 	uint32_t Length;
 	uint32_t Type;
@@ -464,8 +468,8 @@ static qboolean FindChunk(struct BufferedFile *BF, uint32_t ChunkType)
 		 *  they might be needed later.
 		 */
 
-		Length = BigLong(CH->Length);
-		Type   = BigLong(CH->Type);
+		Length = PNG_ReadBigLong(CH);
+		Type   = PNG_ReadBigLong(CH + 4);
 
 		/*
 		 *  We found it!
@@ -510,7 +514,7 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 	uint8_t  *CompressedDataPtr;
 	uint32_t  CompressedDataLength;
 
-	struct PNG_ChunkHeader *CH;
+	uint8_t *CH;
 
 	uint32_t Length;
 	uint32_t Type;
@@ -580,8 +584,8 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 		 *  Length and Type of chunk
 		 */
 
-		Length = BigLong(CH->Length);
-		Type   = BigLong(CH->Type);
+		Length = PNG_ReadBigLong(CH);
+		Type   = PNG_ReadBigLong(CH + 4);
 
 		/*
 		 *  We have reached the end of the IDAT chunks
@@ -659,8 +663,8 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 		 *  Length and Type of chunk
 		 */
 
-		Length = BigLong(CH->Length);
-		Type   = BigLong(CH->Type);
+		Length = PNG_ReadBigLong(CH);
+		Type   = PNG_ReadBigLong(CH + 4);
 
 		/*
 		 *  We have reached the end of the IDAT chunks
@@ -1922,7 +1926,7 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 	struct BufferedFile *ThePNG;
 	byte *OutBuffer;
 	uint8_t *Signature;
-	struct PNG_ChunkHeader *CH;
+	uint8_t *CH;
 	uint32_t ChunkHeaderLength;
 	uint32_t ChunkHeaderType;
 	struct PNG_Chunk_IHDR *IHDR;
@@ -2021,8 +2025,8 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 	 *  PNG multi-byte types are in Big Endian
 	 */
 
-	ChunkHeaderLength = BigLong(CH->Length);
-	ChunkHeaderType   = BigLong(CH->Type);
+	ChunkHeaderLength = PNG_ReadBigLong(CH);
+	ChunkHeaderType   = PNG_ReadBigLong(CH + 4);
 
 	/*
 	 *  Check if the first chunk is an IHDR.
@@ -2143,8 +2147,8 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 		 *  PNG multi-byte types are in Big Endian
 		 */
 
-		ChunkHeaderLength = BigLong(CH->Length);
-		ChunkHeaderType   = BigLong(CH->Type);
+		ChunkHeaderLength = PNG_ReadBigLong(CH);
+		ChunkHeaderType   = PNG_ReadBigLong(CH + 4);
 
 		/*
 		 *  Check if the chunk is a PLTE.
@@ -2245,8 +2249,8 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 		 *  PNG multi-byte types are in Big Endian
 		 */
 
-		ChunkHeaderLength = BigLong(CH->Length);
-		ChunkHeaderType   = BigLong(CH->Type);
+		ChunkHeaderLength = PNG_ReadBigLong(CH);
+		ChunkHeaderType   = PNG_ReadBigLong(CH + 4);
 
 		/*
 		 *  Check if the chunk is a tRNS.
