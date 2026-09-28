@@ -37,7 +37,7 @@ qfalse if anything doesn't.
 qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name ) {
 	const byte		*file = buffer;
 	mdrHeader_t		header;
-	int64_t			frameSize, framesOffset, lodOffset, surfOffset, offset;
+	int64_t			frameSize, framesOffset, lodOffset, surfOffset, offset, loaded;
 	int				end, i, j, k, l;
 
 	if ( fileSize < (int)sizeof( header ) ) {
@@ -96,11 +96,19 @@ qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name ) {
 
 	// each level of detail's surfaces are from its start, each surface's
 	// vertexes and triangles are from the surface's, and each ends where
-	// the next starts
+	// the next starts. Levels of detail and surfaces can share data, but
+	// the loader copies each into a model no bigger than the file, so
+	// loaded counts what it would copy, which bounds the time spent here too
 	lodOffset = header.ofsLODs;
+	loaded = 0;
 	for ( l = 0 ; l < header.numLODs ; l++ ) {
 		mdrLOD_t	lod;
 
+		loaded += sizeof( lod );
+		if ( loaded > end ) {
+			ri.Printf( PRINT_WARNING, "R_ValidateMDR: %s is bigger loaded than its end\n", name );
+			return qfalse;
+		}
 		if ( !R_ModelBlockInside( lodOffset, 1, sizeof( lod ), end ) ) {
 			ri.Printf( PRINT_WARNING, "R_ValidateMDR: %s has level of detail %i past its end\n", name, l );
 			return qfalse;
@@ -163,6 +171,7 @@ qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name ) {
 					ri.Printf( PRINT_WARNING, "R_ValidateMDR: %s has a bad vertex on surface %i\n", name, i );
 					return qfalse;
 				}
+
 				for ( k = 0 ; k < numWeights ; k++ ) {
 					mdrWeight_t	w;
 
@@ -174,6 +183,12 @@ qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name ) {
 					}
 				}
 				offset += numWeights * sizeof( mdrWeight_t );
+			}
+
+			loaded += sizeof( surf ) + ( offset - surf.ofsVerts ) + surf.numTriangles * sizeof( mdrTriangle_t );
+			if ( loaded > end ) {
+				ri.Printf( PRINT_WARNING, "R_ValidateMDR: %s is bigger loaded than its end\n", name );
+				return qfalse;
 			}
 
 			for ( j = 0 ; j < surf.numTriangles ; j++ ) {
