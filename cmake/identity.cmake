@@ -41,8 +41,8 @@ set(UI_MODULE ui)
 set_identity(WINDOWS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/windows/quake3.ico)
 
 # The client's name as the desktop shows it, apart from the window: the web
-# app's, the Linux desktop entry's and metainfo's, and the macOS app's by
-# default
+# app's, the Linux desktop entry's and metainfo's, the Windows executables'
+# version resource's, and the macOS app's by default
 if(DEFINED CLIENT_WINDOW_TITLE)
     set_identity(APP_NAME ${CLIENT_WINDOW_TITLE})
 else()
