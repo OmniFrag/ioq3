@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=@APP_NAME@
-Exec=@CLIENT_NAME@
+Exec=@CLIENT_NAME@@DESKTOP_EXEC_URI@
 Icon=@APP_ID@
 Terminal=false
 Categories=Game;ActionGame;
+@DESKTOP_MIME_TYPE@

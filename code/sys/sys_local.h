@@ -74,7 +74,17 @@ qboolean Sys_SetMaxFileLimit( void );
 qboolean Sys_InModalLoop( void );
 
 #ifdef PROTOCOL_HANDLER
+const char *Sys_NextProtocolScheme( const char *list, int *length );
+int Sys_ProtocolUriScheme( const char *uri );
 char *Sys_ParseProtocolUri( const char *uri );
+
+// the client registers the links for the user at startup: on Windows, and
+// on Linux from the desktop entry the build made (linux.cmake); the Mac
+// app declares them itself
+#if !defined(DEDICATED) && ( defined(_WIN32) || defined(USE_DESKTOP_ENTRY) )
+#define USE_PROTOCOL_REGISTRATION
+void Sys_RegisterProtocolHandler( void );
+#endif
 #endif
 
 #ifdef USE_AUTOUPDATER

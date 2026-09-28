@@ -46,7 +46,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   #define CINEMATICS_LOGO		"foologo.roq"
   #define CINEMATICS_INTRO		"intro.roq"
 //  #define LEGACY_PROTOCOL	// You probably don't need this for your standalone game
-//  #define PROTOCOL_HANDLER		"foobar"
+//  #define PROTOCOL_HANDLER		"foobar"	// or several: "foobar quake3"
   #define CONFIG_PREFIX			"fooconfig"
 #else
   #ifndef PRODUCT_NAME
@@ -65,7 +65,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   #define CINEMATICS_LOGO		"idlogo.RoQ"
   #define CINEMATICS_INTRO		"intro.RoQ"
   #define LEGACY_PROTOCOL
+  // the link schemes that open the client, separated by spaces; the build
+  // can set its own (PROTOCOL_HANDLER_SCHEMES in cmake/identity.cmake)
+  #ifndef PROTOCOL_HANDLER
   #define PROTOCOL_HANDLER		"quake3"
+  #endif
   #define CONFIG_PREFIX			"q3config"
 #endif
 

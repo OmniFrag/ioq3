@@ -1258,7 +1258,7 @@ void IN_ProcessEvent( const SDL_Event *e )
 				const char *filename = e->drop.data;
 
 				// Handle macOS open URL event. URL protocol scheme must be set in Info.plist.
-				if( !Q_strncmp( filename, PROTOCOL_HANDLER ":", strlen( PROTOCOL_HANDLER ":" ) ) )
+				if( Sys_ProtocolUriScheme( filename ) )
 				{
 					char *protocolCommand = Sys_ParseProtocolUri( filename );
 

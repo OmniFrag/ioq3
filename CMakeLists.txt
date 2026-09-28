@@ -108,7 +108,13 @@ foreach(NAME PRODUCT_NAME HOMEPATH_NAME HOMEPATH_NAME_PREDECESSOR HOMEPATH_NAME_
         add_compile_definitions(${NAME}="${${NAME}}")
     endif()
 endforeach()
-set_property(SOURCE code/sys/sys_main.c
+# The link schemes, separated by spaces, which windres can't take in a
+# definition; none, for a list set empty, instead of q_shared.h's default
+if(DEFINED PROTOCOL_HANDLER_SCHEMES)
+    list(JOIN PROTOCOL_HANDLER_SCHEMES " " PROTOCOL_HANDLER)
+    add_compile_definitions($<$<NOT:$<COMPILE_LANGUAGE:RC>>:PROTOCOL_HANDLER="${PROTOCOL_HANDLER}">)
+endif()
+set_property(SOURCE code/sys/sys_main.c code/sys/sys_unix.c
     APPEND PROPERTY COMPILE_DEFINITIONS APP_ID="${APP_ID}")
 
 # For CI to read from
