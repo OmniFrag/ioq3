@@ -419,8 +419,10 @@ static void blit2_32( byte *src, byte *dst, int spl  )
 *
 ******************************************************************************/
 
-static void blitVQQuad32fs( byte **status, unsigned char *data )
+static void blitVQQuad32fs( byte *qStatus, void *qdata )
 {
+byte			**status = (byte **)qStatus;
+unsigned char	*data = qdata;
 unsigned short	newd, celdata, code;
 unsigned int	index, i;
 int		spl;
@@ -1065,8 +1067,8 @@ static void initRoQ( void )
 {
 	if (currentHandle < 0) return;
 
-	cinTable[currentHandle].VQNormal = (void (*)(byte *, void *))blitVQQuad32fs;
-	cinTable[currentHandle].VQBuffer = (void (*)(byte *, void *))blitVQQuad32fs;
+	cinTable[currentHandle].VQNormal = blitVQQuad32fs;
+	cinTable[currentHandle].VQBuffer = blitVQQuad32fs;
 	cinTable[currentHandle].samplesPerPixel = 4;
 	ROQ_GenYUVTables();
 	RllSetupTable();
