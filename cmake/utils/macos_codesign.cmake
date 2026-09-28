@@ -1,9 +1,7 @@
 # Signs what's packaged for macOS, as APPLE_CERTIFICATE_ID, the name of a
 # Developer ID Application certificate in the keychain. CPack runs it twice
 # (macos.cmake): before it makes a package, on what it staged, and after,
-# on the disk images it made. It also runs on its own for an install tree:
-#
-#   cmake -DDIR=<installed files> -P macos_codesign.cmake
+# on the disk images it made.
 #
 # The staged files are signed inside out, as Apple asks (codesign's --deep
 # is deprecated): each app's libraries, then the app, then the other
@@ -19,11 +17,27 @@ cmake_minimum_required(VERSION 3.25)
 set(IDENTITY "$ENV{APPLE_CERTIFICATE_ID}")
 
 function(codesign)
-    execute_process(COMMAND codesign --force ${ARGN} RESULT_VARIABLE RESULT)
+    execute_process(COMMAND codesign ${ARGN} RESULT_VARIABLE RESULT)
     if(NOT RESULT EQUAL 0)
         message(FATAL_ERROR "codesign failed: ${ARGN}")
     endif()
 endfunction()
+
+if(IDENTITY)
+    execute_process(COMMAND security find-identity -v -p codesigning
+        OUTPUT_VARIABLE IDENTITIES)
+    string(FIND "${IDENTITIES}" "\"${IDENTITY}\"" FOUND)
+    if(FOUND EQUAL -1)
+        message(FATAL_ERROR "No valid signing identity in the keychain is "
+            "named as APPLE_CERTIFICATE_ID: ${IDENTITY}")
+    endif()
+    set(SIGN --force --sign "${IDENTITY}" --timestamp)
+    set(EXECUTABLE ${SIGN} --options runtime
+        --entitlements "${CMAKE_CURRENT_LIST_DIR}/../entitlements.plist")
+else()
+    set(SIGN --force --sign -)
+    set(EXECUTABLE ${SIGN})
+endif()
 
 # after CPack made the packages: the disk images, so that Gatekeeper checks
 # them when they're opened
@@ -31,28 +45,20 @@ if(CPACK_PACKAGE_FILES)
     if(IDENTITY)
         foreach(FILE IN LISTS CPACK_PACKAGE_FILES)
             if(FILE MATCHES "\\.dmg$")
-                codesign(--sign "${IDENTITY}" --timestamp "${FILE}")
+                codesign(${SIGN} "${FILE}")
             endif()
         endforeach()
     endif()
     return()
 endif()
 
-if(CPACK_TEMPORARY_INSTALL_DIRECTORY)
-    set(DIR "${CPACK_TEMPORARY_INSTALL_DIRECTORY}")
-endif()
+set(DIR "${CPACK_TEMPORARY_INSTALL_DIRECTORY}")
 if(NOT IS_DIRECTORY "${DIR}")
-    message(FATAL_ERROR "macos_codesign.cmake: no directory to sign (DIR)")
+    message(FATAL_ERROR "macos_codesign.cmake runs from CPack, which stages the files to sign")
 endif()
-
 if(IDENTITY)
-    set(SIGN --sign "${IDENTITY}" --timestamp)
-    set(EXECUTABLE ${SIGN} --options runtime
-        --entitlements "${CMAKE_CURRENT_LIST_DIR}/../entitlements.plist")
     message(STATUS "Signing ${DIR} as ${IDENTITY}")
 else()
-    set(SIGN --sign -)
-    set(EXECUTABLE ${SIGN})
     message(STATUS "Signing ${DIR} ad hoc: APPLE_CERTIFICATE_ID isn't set")
 endif()
 
@@ -65,11 +71,7 @@ foreach(APP IN LISTS APPS)
         codesign(${SIGN} "${LIBRARY}")
     endforeach()
     codesign(${EXECUTABLE} "${APP}")
-    execute_process(COMMAND codesign --verify --strict --deep "${APP}"
-        RESULT_VARIABLE RESULT)
-    if(NOT RESULT EQUAL 0)
-        message(FATAL_ERROR "${APP}'s signature doesn't verify")
-    endif()
+    codesign(--verify --strict --deep "${APP}")
 endforeach()
 
 # the Mach-O executables outside the apps, such as the dedicated server
