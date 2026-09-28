@@ -305,8 +305,31 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 		return NULL;  
 	}
 
-	// get the number of sample-frames in the OGG
+	if((OGGInfo->channels != 1 && OGGInfo->channels != 2) || OGGInfo->rate < 1 || OGGInfo->rate > INT_MAX)
+	{
+		ov_clear(vf);
+
+		Z_Free(vf);
+
+		S_CodecUtilClose(&stream);
+
+		Com_Printf("Only mono and stereo OGG files with a rate are supported\n");
+		return NULL;
+	}
+
+	// get the number of sample-frames in the OGG, which must fit the
+	// size in bytes in an int
 	numSamples = ov_pcm_total(vf, 0);
+	if(numSamples < 0 || numSamples > INT_MAX / (OGGInfo->channels * OGG_SAMPLEWIDTH))
+	{
+		ov_clear(vf);
+
+		Z_Free(vf);
+
+		S_CodecUtilClose(&stream);
+
+		return NULL;
+	}
 
 	// fill in the info-structure in the stream
 	stream->info.rate = OGGInfo->rate;
@@ -466,6 +489,10 @@ void *S_OGG_CodecLoad(const char *filename, snd_info_t *info)
 
 		return NULL;	
 	}
+
+	// the sound is what decoded, if that's less than the stream said
+	info->size = bytesRead;
+	info->samples = bytesRead / (info->channels * info->width);
 
 	S_OGG_CodecCloseStream(stream);
 	
