@@ -1,5 +1,7 @@
 <!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>@WEB_PAGE_TITLE@</title>
+<link rel=icon href="@CLIENT_NAME@.png">
+<link rel=manifest href="@CLIENT_NAME@.webmanifest">
 <style>
 html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: rgb(0, 0, 0); }
 /* Fill the page. SDL3 resizes the canvas to its CSS size as the page
