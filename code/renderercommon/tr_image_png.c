@@ -489,7 +489,7 @@ static qboolean FindChunk(struct BufferedFile *BF, uint32_t ChunkType)
 
 			if(Length)
 			{
-				if(!BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
+				if(Length > 0x7FFFFFFF || !BufferedFileSkip(BF, Length + PNG_ChunkCRC_Size))
 				{
 					return(qfalse);
 				}  
@@ -604,6 +604,18 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 		BytesToRewind += PNG_ChunkHeader_Size;
 
 		/*
+		 *  A chunk is at most 2^31 - 1 bytes long, and the chunks together
+		 *  must fit the count
+		 */
+
+		if(Length > 0x7FFFFFFF || CompressedDataLength + Length < CompressedDataLength)
+		{
+			BufferedFileRewind(BF, BytesToRewind);
+
+			return((uint32_t)-1);
+		}
+
+		/*
 		 *  Skip to next chunk
 		 */
 
@@ -693,6 +705,17 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 			memcpy(CompressedDataPtr, OrigCompressedData, Length);
 			CompressedDataPtr += Length;
 		} 
+	}
+
+	/*
+	 *  There must be room for the zlib header and checkvalue.
+	 */
+
+	if(CompressedDataLength < PNG_ZlibHeader_Size + PNG_ZlibCheckValue_Size)
+	{
+		ri.Free(CompressedData);
+
+		return((uint32_t)-1);
 	}
 
 	/*
@@ -2141,10 +2164,10 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 		}
 
 		/*
-		 *  Check if Length is divisible by 3
+		 *  Check if Length is divisible by 3, and holds at most 256 colors
 		 */
 
-		if(ChunkHeaderLength % 3)
+		if((ChunkHeaderLength % 3) || (ChunkHeaderLength > 256 * 3))
 		{
 			CloseBufferedFile(ThePNG);
 
