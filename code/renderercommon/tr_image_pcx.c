@@ -101,10 +101,13 @@ void R_LoadPCX ( const char *filename, byte **pic, int *width, int *height)
 		|| pcx->encoding != 1
 		|| pcx->color_planes != 1
 		|| pcx->bits_per_pixel != 8
+		|| w == 0
+		|| h == 0
 		|| w >= 1024
 		|| h >= 1024)
 	{
 		ri.Printf (PRINT_ALL, "Bad or unsupported pcx file %s (%dx%d@%d)\n", filename, w, h, pcx->bits_per_pixel);
+		ri.FS_FreeFile (pcx);
 		return;
 	}
 
@@ -140,9 +143,11 @@ void R_LoadPCX ( const char *filename, byte **pic, int *width, int *height)
 		ri.Printf (PRINT_ALL, "PCX file truncated: %s\n", filename);
 		ri.FS_FreeFile (pcx);
 		ri.Free (pic8);
+		return;
 	}
 
-	if (raw.b-(byte*)pcx >= end - (byte*)769 || end[-769] != 0x0c)
+	// the palette follows the pixels: 0x0c, then 256 colors
+	if (end - raw.b < 769 || end[-769] != 0x0c)
 	{
 		ri.Printf (PRINT_ALL, "PCX missing palette: %s\n", filename);
 		ri.FS_FreeFile (pcx);
