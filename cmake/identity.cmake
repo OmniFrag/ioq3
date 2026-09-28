@@ -28,7 +28,8 @@ if(DEFINED CLIENT_WINDOW_TITLE)
 else()
     set_identity(WEB_PAGE_TITLE "${CLIENT_NAME} Emscripten demo")
 endif()
-# The client's icon as a PNG, for the web page and its web app manifest
+# The client's icon as a PNG, for the web page and its web app manifest,
+# and for Linux desktops
 set_identity(PNG_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/quake3-tango.png)
 
 set(BASEGAME baseq3)
@@ -40,7 +41,8 @@ set(UI_MODULE ui)
 set_identity(WINDOWS_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/windows/quake3.ico)
 
 # The client's name as the desktop shows it, apart from the window: the web
-# app's, and the macOS app's by default
+# app's, the Linux desktop entry's and metainfo's, and the macOS app's by
+# default
 if(DEFINED CLIENT_WINDOW_TITLE)
     set_identity(APP_NAME ${CLIENT_WINDOW_TITLE})
 else()
@@ -56,8 +58,11 @@ set_identity(MACOS_BUNDLE_NAME ${APP_NAME})
 # The .app's name in Finder and the Dock, and its executable's
 set_identity(MACOS_APP_NAME ${CLIENT_NAME})
 # The client's reverse-DNS ID, which desktops match to its .desktop file and
-# metainfo (misc/linux) to find its icon and name
+# metainfo to find its icon and name
 set_identity(APP_ID org.ioquake3.${CLIENT_NAME})
+# The Linux client's metainfo's template, in which linux.cmake fills in
+# @APP_ID@, @APP_NAME@ and the other settings here
+set_identity(LINUX_METAINFO_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/client.metainfo.xml.in)
 
 set_identity(COPYRIGHT "QUAKE III ARENA Copyright © 1999-2000 id Software, Inc. All rights reserved.")
 

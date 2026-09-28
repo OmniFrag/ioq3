@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=@APP_NAME@
+Exec=@CLIENT_NAME@
+Icon=@APP_ID@
+Terminal=false
+Categories=Game;ActionGame;
