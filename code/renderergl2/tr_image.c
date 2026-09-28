@@ -1963,7 +1963,7 @@ static void RawImage_UploadToRgtc2Texture(GLuint texture, int miplevel, int x, i
 	ri.Hunk_FreeTempMemory(compressedData);
 }
 
-static int CalculateMipSize(int width, int height, GLenum picFormat)
+int CalculateMipSize(int width, int height, GLenum picFormat)
 {
 	int numBlocks = ((width + 3) / 4) * ((height + 3) / 4);
 	int numPixels = width * height;
