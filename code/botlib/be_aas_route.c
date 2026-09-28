@@ -484,6 +484,9 @@ unsigned short int AAS_AreaTravelTime(int areanum, vec3_t start, vec3_t end)
 	else if (AAS_AreaSwim(areanum)) dist *= DISTANCEFACTOR_SWIM;
 	//normal walk area
 	else dist *= DISTANCEFACTOR_WALK;
+	//the travel time is 16 bits; a NaN, which bad points give, or a
+	//distance past int's range would make the conversion undefined
+	if (!(dist < 65535)) dist = 65535;
 	//
 	intdist = (int) dist;
 	//make sure the distance isn't zero
