@@ -110,7 +110,7 @@ static unsigned int argb1555_to_rgba8888(unsigned short color)
 	g = ((color >> 5) & 31) << 4;
 	b = ((color >> 0) & 31) << 4;
 	a = ((color >> 15) & 1) * 255;
-	return (a << 24) | (b << 16) | (g << 8) | r;
+	return ((unsigned int)a << 24) | (b << 16) | (g << 8) | r;
 }
 
 static unsigned int rgb565_to_rgba8888(unsigned short color)
@@ -120,7 +120,7 @@ static unsigned int rgb565_to_rgba8888(unsigned short color)
 	g = ((color >> 5) & 63) << 2;
 	b = ((color >> 0) & 31) << 3;
 	a = 255;
-	return (a << 24) | (b << 16) | (g << 8) | r;
+	return ((unsigned int)a << 24) | (b << 16) | (g << 8) | r;
 }
 
 static unsigned int argb4444_to_rgba8888(unsigned short color)
@@ -130,7 +130,7 @@ static unsigned int argb4444_to_rgba8888(unsigned short color)
 	g = ((color >> 4) & 15) << 4;
 	b = ((color >> 0) & 15) << 4;
 	a = ((color >> 12) & 15) | 0xF;
-	return (a << 24) | (b << 16) | (g << 8) | r;
+	return ((unsigned int)a << 24) | (b << 16) | (g << 8) | r;
 }
 
 static int mm_offset(int w)
