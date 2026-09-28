@@ -67,4 +67,9 @@ set_identity(LINUX_METAINFO_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/client.m
 set_identity(COPYRIGHT "QUAKE III ARENA Copyright © 1999-2000 id Software, Inc. All rights reserved.")
 
 set_identity(CONTACT_EMAIL "info@ioquake.org")
-set(PROTOCOL_HANDLER_SCHEME quake3)
+# The link schemes that open the client (quake3://connect/<server>), a
+# list: the macOS app declares them, the Linux desktop entry too, and the
+# client registers them for the user at startup on Windows and Linux
+if(NOT BUILD_STANDALONE)
+    set_identity(PROTOCOL_HANDLER_SCHEMES quake3)
+endif()
