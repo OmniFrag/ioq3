@@ -56,6 +56,10 @@ cvar_t *r_allowSoftwareGL; // Don't abort out if a hardware visual can't be obta
 cvar_t *r_centerWindow;
 cvar_t *r_sdlDriver;
 cvar_t *r_preferOpenGLES;
+cvar_t *r_gpuSync;
+
+// the last frame's fence, which GLimp_EndFrame waits on after the next swap
+static GLsync frameFence;
 
 int qglMajorVersion, qglMinorVersion;
 int qglesMajorVersion, qglesMinorVersion;
@@ -85,6 +89,7 @@ QGL_1_3_PROCS;
 QGL_1_5_PROCS;
 QGL_2_0_PROCS;
 QGL_3_0_PROCS;
+QGL_ARB_sync_PROCS;
 QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
@@ -99,6 +104,12 @@ GLimp_Shutdown
 void GLimp_Shutdown( void )
 {
 	ri.IN_Shutdown();
+
+	if( frameFence )
+	{
+		qglDeleteSync( frameFence );
+		frameFence = NULL;
+	}
 
 	SDL_QuitSubSystem( SDL_INIT_VIDEO );
 
@@ -378,6 +389,22 @@ static qboolean GLimp_GetProcAddresses( qboolean fixedFunction ) {
 
 #undef GLE
 
+	// optional: without them, GLimp_EndFrame doesn't limit the frames the
+	// driver queues
+	if ( QGL_VERSION_ATLEAST( 3, 2 ) || QGLES_VERSION_ATLEAST( 3, 0 ) || SDL_GL_ExtensionSupported( "GL_ARB_sync" ) ) {
+#ifdef __SDL_NOGETPROCADDR__
+#define GLE( ret, name, ... ) qgl##name = gl#name;
+#else
+#define GLE( ret, name, ... ) qgl##name = (name##proc *) SDL_GL_GetProcAddress( "gl" #name );
+#endif
+		QGL_ARB_sync_PROCS;
+#undef GLE
+
+		if ( !qglFenceSync || !qglDeleteSync || !qglClientWaitSync ) {
+			qglFenceSync = NULL;
+		}
+	}
+
 	return success;
 }
 
@@ -406,6 +433,7 @@ static void GLimp_ClearProcAddresses( void ) {
 	QGL_1_5_PROCS;
 	QGL_2_0_PROCS;
 	QGL_3_0_PROCS;
+	QGL_ARB_sync_PROCS;
 	QGL_ARB_occlusion_query_PROCS;
 	QGL_ARB_framebuffer_object_PROCS;
 	QGL_ARB_vertex_array_object_PROCS;
@@ -1287,6 +1315,9 @@ void GLimp_Init( qboolean fixedFunction )
 	r_sdlDriver = ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
 	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_preferOpenGLES = ri.Cvar_Get( "r_preferOpenGLES", "-1", CVAR_ARCHIVE | CVAR_LATCH );
+	r_gpuSync = ri.Cvar_Get( "r_gpuSync", "1", CVAR_ARCHIVE );
+	ri.Cvar_SetDescription( r_gpuSync, "Wait after each swap for the GPU to finish the frame before, so that no more than one frame is queued and frames "
+		"show as soon after they're drawn as they can. Needs OpenGL 3.2, or GL_ARB_sync." );
 	ri.Cvar_SetDescription( ri.Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM ),
 		"The swap interval the driver gave for r_swapInterval: with one, a com_maxfps at or above the display's refresh rate leaves the pacing to the display." );
 
@@ -1427,6 +1458,27 @@ void GLimp_EndFrame( void )
 	{
 		SDL_GL_SwapWindow( SDL_window );
 	}
+
+#ifndef __EMSCRIPTEN__
+	// At most one frame in flight: wait for the GPU to finish the frame
+	// before this one, so that the driver can't queue frames and show
+	// each later than it was drawn. The CPU still works on the next frame
+	// while the GPU draws this one. (WebGL can't wait.)
+	if( frameFence )
+	{
+		if( r_gpuSync->integer )
+		{
+			qglClientWaitSync( frameFence, GL_SYNC_FLUSH_COMMANDS_BIT, 100 * 1000000 );
+		}
+		qglDeleteSync( frameFence );
+		frameFence = NULL;
+	}
+
+	if( r_gpuSync->integer && qglFenceSync )
+	{
+		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
+	}
+#endif
 
 #ifdef __EMSCRIPTEN__
 	// the page owns browser fullscreen; changing r_fullscreen, e.g. with
