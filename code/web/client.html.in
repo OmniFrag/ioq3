@@ -89,6 +89,18 @@ Element.prototype.requestPointerLock = function (options) {
     return request;
 };
 
+// The WebGL context SDL creates, which has no attributes of its own for
+// these: the fast GPU where there are two, and with ?desynchronized, frames
+// drawn straight to the screen rather than through the page's compositor,
+// a frame sooner, where the browser can (it may tear, or ignore it).
+const getContext = HTMLCanvasElement.prototype.getContext;
+const desynchronized = urlParams.has('desynchronized');
+HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+    if (type === 'webgl' || type === 'webgl2')
+        attributes = { ...attributes, powerPreference: 'high-performance', ...(desynchronized && { desynchronized }) };
+    return getContext.call(this, type, attributes);
+};
+
 // The page owns browser fullscreen; the engine follows the canvas's size.
 // Entering it also locks the pointer, which fails if asked for during the
 // fullscreen change. The first click into the game enters it, unless
