@@ -101,6 +101,9 @@ void GLimp_Shutdown( void )
 	ri.IN_Shutdown();
 
 	SDL_QuitSubSystem( SDL_INIT_VIDEO );
+
+	// no swap waits for the display now
+	ri.Cvar_Set( "r_swapIntervalActive", "0" );
 }
 
 /*
@@ -568,6 +571,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	int windowWidth, windowHeight;
 	float density = 1.0f;
+	int swapInterval;
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL display\n");
 
@@ -989,6 +993,15 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 			ri.Printf( PRINT_DEVELOPER, "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
 		}
 
+		// the interval that took, which isn't the one asked for when the
+		// driver refused it (a driver's settings can also override it
+		// unseen, which the frame cap allows for)
+		if( !SDL_GL_GetSwapInterval( &swapInterval ) )
+		{
+			swapInterval = 0;
+		}
+		ri.Cvar_Set( "r_swapIntervalActive", va( "%d", swapInterval ) );
+
 		SDL_GL_GetAttribute( SDL_GL_RED_SIZE, &realColorBits[0] );
 		SDL_GL_GetAttribute( SDL_GL_GREEN_SIZE, &realColorBits[1] );
 		SDL_GL_GetAttribute( SDL_GL_BLUE_SIZE, &realColorBits[2] );
@@ -1274,6 +1287,8 @@ void GLimp_Init( qboolean fixedFunction )
 	r_sdlDriver = ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
 	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_preferOpenGLES = ri.Cvar_Get( "r_preferOpenGLES", "-1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_SetDescription( ri.Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM ),
+		"The swap interval the driver gave for r_swapInterval: with one, a com_maxfps at or above the display's refresh rate leaves the pacing to the display." );
 
 	if( ri.Cvar_VariableIntegerValue( "com_abnormalExit" ) )
 	{

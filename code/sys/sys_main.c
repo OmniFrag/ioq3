@@ -986,6 +986,40 @@ static qboolean inFrame = qfalse;
 
 /*
 =================
+Sys_RefreshInterval
+
+From the display mode of the display the game's window is on: the one
+with the keyboard or the mouse, or failing both, the first
+=================
+*/
+int64_t Sys_RefreshInterval( void )
+{
+	SDL_Window *window = SDL_GetKeyboardFocus( );
+	const SDL_DisplayMode *mode;
+
+	if( !window )
+	{
+		window = SDL_GetMouseFocus( );
+	}
+	if( !window )
+	{
+		SDL_Window **windows = SDL_GetWindows( NULL );
+
+		window = windows ? windows[ 0 ] : NULL;
+		SDL_free( windows );
+	}
+
+	mode = window ? SDL_GetCurrentDisplayMode( SDL_GetDisplayForWindow( window ) ) : NULL;
+	if( !mode || mode->refresh_rate_numerator <= 0 || mode->refresh_rate_denominator <= 0 )
+	{
+		return 0;
+	}
+
+	return (int64_t)1000000000 * mode->refresh_rate_denominator / mode->refresh_rate_numerator;
+}
+
+/*
+=================
 Sys_SleepPrecise
 =================
 */
