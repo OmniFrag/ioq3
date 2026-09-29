@@ -44,6 +44,11 @@ let generatedArguments = `
     +set fs_basegame "${fs_basegame}"
     +set fs_game "${fs_game}"
 `;
+// Phones and tablets keep half-size textures, without filtering at an angle,
+// until a phone profile is measured: full-size textures take four times the
+// memory. A player's own ?args come after, and win
+if (matchMedia('(pointer: coarse)').matches)
+    generatedArguments += ' +set r_picmip 1 +set r_ext_texture_filter_anisotropic 0 ';
 // Note that unfortunately "+" needs to be encoded as "%2b" in URL query strings or it will be stripped by the browser.
 const queryArgs = urlParams.get('args');
 if (queryArgs) generatedArguments += ` ${queryArgs} `;
