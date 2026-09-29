@@ -164,6 +164,7 @@ typedef struct {
 
 	int			clientNum;
 	int			lastPacketSentTime;			// for retransmits during connection
+	int			packetDue;					// when the next usercmd packet is due, by cls.realtime (cl_maxpackets)
 	int			lastPacketTime;				// for timeouts
 
 	char		servername[MAX_OSPATH];		// name of server from original connect (used by reconnect)

@@ -670,8 +670,7 @@ getting more delta compression will reduce total bandwidth.
 =================
 */
 qboolean CL_ReadyToSendPacket( void ) {
-	int		oldPacketNum;
-	int		delta;
+	int		interval;
 
 	// don't send anything if playing back a demo
 	if ( clc.demoplaying || clc.state == CA_CINEMATIC ) {
@@ -709,13 +708,23 @@ qboolean CL_ReadyToSendPacket( void ) {
 	} else if ( cl_maxpackets->integer > 125 ) {
 		Cvar_Set( "cl_maxpackets", "125" );
 	}
-	oldPacketNum = (clc.netchan.outgoingSequence - 1) & PACKET_MASK;
-	delta = cls.realtime -  cl.outPackets[ oldPacketNum ].p_realtime;
-	if ( delta < 1000 / cl_maxpackets->integer ) {
+
+	// Each packet is due an interval after the last one was due, and goes
+	// on the frame nearest that time, so that the rate is cl_maxpackets
+	// whatever the frame rate: waiting for the interval to pass since the
+	// last one sent, at 144 frames a second (7 ms) and 125 packets (8 ms),
+	// sent every other frame. After falling more than three packets behind,
+	// the count starts again, rather than sending a burst.
+	interval = 1000 / cl_maxpackets->integer;
+	if ( cls.realtime - clc.packetDue > 3 * interval ) {
+		clc.packetDue = cls.realtime;
+	}
+	if ( 2 * ( clc.packetDue - cls.realtime ) > cls.frametime ) {
 		// the accumulated commands will go out in the next packet
 		return qfalse;
 	}
 
+	clc.packetDue += interval;
 	return qtrue;
 }
 
