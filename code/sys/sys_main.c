@@ -984,6 +984,67 @@ int main( int argc, char **argv )
 #else
 static qboolean inFrame = qfalse;
 
+#ifdef __EMSCRIPTEN__
+#define REFRESH_SAMPLES 15
+static int64_t refreshSamples[ REFRESH_SAMPLES ];
+static int numRefreshSamples = 0, nextRefreshSample = 0;
+static int64_t refreshInterval = 0;
+
+/*
+=================
+Sys_CompareRefreshSamples
+=================
+*/
+static int Sys_CompareRefreshSamples( const void *a, const void *b )
+{
+	int64_t d = *(const int64_t *)a - *(const int64_t *)b;
+
+	return ( d > 0 ) - ( d < 0 );
+}
+
+/*
+=================
+Sys_SampleRefresh
+
+The browser calls SDL_AppIterate on each refresh of the display: the
+median of the last few intervals between calls is the refresh interval,
+whatever frames took longer
+=================
+*/
+static void Sys_SampleRefresh( void )
+{
+	static int64_t last = 0;
+	int64_t now = Sys_Nanoseconds( );
+	int64_t sorted[ REFRESH_SAMPLES ];
+
+	if( last && now - last < 100000000 )
+	{
+		refreshSamples[ nextRefreshSample ] = now - last;
+		nextRefreshSample = ( nextRefreshSample + 1 ) % REFRESH_SAMPLES;
+		numRefreshSamples = MIN( numRefreshSamples + 1, REFRESH_SAMPLES );
+	}
+	last = now;
+
+	if( numRefreshSamples == REFRESH_SAMPLES )
+	{
+		Com_Memcpy( sorted, refreshSamples, sizeof( sorted ) );
+		qsort( sorted, REFRESH_SAMPLES, sizeof( sorted[ 0 ] ), Sys_CompareRefreshSamples );
+		refreshInterval = sorted[ REFRESH_SAMPLES / 2 ];
+	}
+}
+
+/*
+=================
+Sys_RefreshInterval
+
+As measured, since a page isn't told the display's refresh rate
+=================
+*/
+int64_t Sys_RefreshInterval( void )
+{
+	return refreshInterval;
+}
+#else
 /*
 =================
 Sys_RefreshInterval
@@ -1017,6 +1078,7 @@ int64_t Sys_RefreshInterval( void )
 
 	return (int64_t)1000000000 * mode->refresh_rate_denominator / mode->refresh_rate_numerator;
 }
+#endif
 
 /*
 =================
@@ -1148,6 +1210,10 @@ SDL_AppResult SDL_AppIterate( void *appstate )
 	{
 		return SDL_APP_CONTINUE;
 	}
+
+#ifdef __EMSCRIPTEN__
+	Sys_SampleRefresh( );
+#endif
 
 	due = Com_WaitFrame( );
 
