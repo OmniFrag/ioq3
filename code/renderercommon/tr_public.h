@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		9
+#define	REF_API_VERSION		10
 
 //
 // these are the functions exported by the refresh module
@@ -104,6 +104,11 @@ typedef struct {
 	// the new configuration. Returns qfalse if the renderer can't, and a
 	// vid_restart is needed.
 	qboolean (*ResizeWindow)( glconfig_t *config );
+
+	// Whether the GPU is ready for a new frame, without waiting: where the
+	// renderer can't wait for it after the swap (WebGL), the client skips
+	// a frame instead while the last is still being drawn. May be NULL.
+	qboolean (*FrameReady)( void );
 } refexport_t;
 
 //
