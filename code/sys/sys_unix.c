@@ -583,34 +583,37 @@ char* Sys_MicrosoftStorePath(void)
 
 /*
 ================
-Sys_Milliseconds
+Sys_Nanoseconds
+
+The time since the first call, by a monotonic clock: the time of day can
+jump when it's set, and game time mustn't
 ================
 */
-/* base time in seconds, that's our origin
-   timeval:tv_sec is an int:
-   assuming this wraps every 0x7fffffff - ~68 years since the Epoch (1970) - we're safe till 2038 */
-unsigned long sys_timeBase = 0;
-/* current time in ms, using sys_timeBase as origin
-   NOTE: sys_timeBase*1000 + curtime -> ms since the Epoch
-     0x7fffffff ms - ~24 days
-   although timeval:tv_usec is an int, I'm not sure wether it is actually used as an unsigned int
-     (which would affect the wrap period) */
-int curtime;
+int64_t Sys_Nanoseconds( void )
+{
+	static int64_t	base = -1;
+	struct timespec	tp;
+	int64_t			now;
+
+	clock_gettime( CLOCK_MONOTONIC, &tp );
+	now = (int64_t)tp.tv_sec * 1000000000 + tp.tv_nsec;
+
+	if( base < 0 )
+		base = now;
+
+	return now - base;
+}
+
+/*
+================
+Sys_Milliseconds
+
+Sys_Nanoseconds, in milliseconds; 0x7fffffff ms is ~24 days
+================
+*/
 int Sys_Milliseconds (void)
 {
-	struct timeval tp;
-
-	gettimeofday(&tp, NULL);
-
-	if (!sys_timeBase)
-	{
-		sys_timeBase = tp.tv_sec;
-		return tp.tv_usec/1000;
-	}
-
-	curtime = (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
-
-	return curtime;
+	return (int)( Sys_Nanoseconds() / 1000000 );
 }
 
 /*
