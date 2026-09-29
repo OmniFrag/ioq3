@@ -986,6 +986,19 @@ static qboolean inFrame = qfalse;
 
 /*
 =================
+Sys_SleepPrecise
+=================
+*/
+void Sys_SleepPrecise( int64_t ns )
+{
+	if( ns > 0 )
+	{
+		SDL_DelayPrecise( (Uint64)ns );
+	}
+}
+
+/*
+=================
 Sys_Frame
 =================
 */
