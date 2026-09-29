@@ -1095,6 +1095,29 @@ static void IN_WindowResized( void )
 
 /*
 ===============
+IN_EventTime
+
+When an event happened, by Sys_Milliseconds. SDL stamps each event, by its
+own clock, as the system reports it, which is sooner than it reaches
+the game between frames: how long ago that was, by SDL's clock, is taken
+from Sys_Nanoseconds. None is earlier than the last frame's input.
+===============
+*/
+static int IN_EventTime( const SDL_Event *e )
+{
+	Uint64 sdlNow = SDL_GetTicksNS( );
+	int64_t now = Sys_Nanoseconds( );
+
+	if( e->common.timestamp <= sdlNow )
+	{
+		now -= (int64_t)( sdlNow - e->common.timestamp );
+	}
+
+	return MAX( (int)( now / 1000000 ), in_eventTime );
+}
+
+/*
+===============
 IN_ProcessEvent
 
 SDL hands each event to the client between frames (sys_main.c)
@@ -1102,6 +1125,7 @@ SDL hands each event to the client between frames (sys_main.c)
 */
 void IN_ProcessEvent( const SDL_Event *e )
 {
+	int time = IN_EventTime( e );
 	keyNum_t key = 0;
 	static keyNum_t lastKeyDown = 0;
 
@@ -1115,19 +1139,19 @@ void IN_ProcessEvent( const SDL_Event *e )
 				break;
 
 			if( ( key = IN_TranslateSDLToQ3Key( &e->key, qtrue ) ) )
-				Com_QueueEvent( in_eventTime, SE_KEY, key, qtrue, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, key, qtrue, 0, NULL );
 
 			if( key == K_BACKSPACE )
-				Com_QueueEvent( in_eventTime, SE_CHAR, CTRL('h'), 0, 0, NULL );
+				Com_QueueEvent( time, SE_CHAR, CTRL('h'), 0, 0, NULL );
 			else if( keys[K_CTRL].down && key >= 'a' && key <= 'z' )
-				Com_QueueEvent( in_eventTime, SE_CHAR, CTRL(key), 0, 0, NULL );
+				Com_QueueEvent( time, SE_CHAR, CTRL(key), 0, 0, NULL );
 
 			lastKeyDown = key;
 			break;
 
 		case SDL_EVENT_KEY_UP:
 			if( ( key = IN_TranslateSDLToQ3Key( &e->key, qfalse ) ) )
-				Com_QueueEvent( in_eventTime, SE_KEY, key, qfalse, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, key, qfalse, 0, NULL );
 
 			lastKeyDown = 0;
 			break;
@@ -1147,11 +1171,11 @@ void IN_ProcessEvent( const SDL_Event *e )
 						continue;
 					if( IN_IsConsoleKey( 0, utf32 ) )
 					{
-						Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
-						Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
+						Com_QueueEvent( time, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
+						Com_QueueEvent( time, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
 					}
 					else
-						Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
+						Com_QueueEvent( time, SE_CHAR, utf32, 0, 0, NULL );
 				}
 			}
 			break;
@@ -1169,7 +1193,7 @@ void IN_ProcessEvent( const SDL_Event *e )
 				mouseMotionRemainder[1] = dy - y;
 				if( !x && !y )
 					break;
-				Com_QueueEvent( in_eventTime, SE_MOUSE, x, y, 0, NULL );
+				Com_QueueEvent( time, SE_MOUSE, x, y, 0, NULL );
 			}
 			break;
 
@@ -1197,7 +1221,7 @@ void IN_ProcessEvent( const SDL_Event *e )
 					case SDL_BUTTON_X2:     b = K_MOUSE5;     break;
 					default:                b = K_AUX1 + ( e->button.button - SDL_BUTTON_X2 + 1 ) % 16; break;
 				}
-				Com_QueueEvent( in_eventTime, SE_KEY, b,
+				Com_QueueEvent( time, SE_KEY, b,
 					( e->type == SDL_EVENT_MOUSE_BUTTON_DOWN ? qtrue : qfalse ), 0, NULL );
 			}
 			break;
@@ -1210,24 +1234,24 @@ void IN_ProcessEvent( const SDL_Event *e )
 			// and a pause or a change of direction starts a new scroll.
 			if( !e->wheel.y )
 				break;
-			if( in_eventTime - mouseWheelTime > 250
+			if( time - mouseWheelTime > 250
 				|| ( e->wheel.y > 0 && mouseWheelRemainder < 0 ) || ( e->wheel.y < 0 && mouseWheelRemainder > 0 ) )
 			{
 				mouseWheelRemainder = 0;
 				if( fabs( e->wheel.y ) < 1.0f )
 					mouseWheelRemainder = ( e->wheel.y > 0 ? 1.0f : -1.0f ) - e->wheel.y;
 			}
-			mouseWheelTime = in_eventTime;
+			mouseWheelTime = time;
 			mouseWheelRemainder += e->wheel.y;
 			for( ; mouseWheelRemainder >= 1.0f; mouseWheelRemainder -= 1.0f )
 			{
-				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
-				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
 			}
 			for( ; mouseWheelRemainder <= -1.0f; mouseWheelRemainder += 1.0f )
 			{
-				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
-				Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
+				Com_QueueEvent( time, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
 			}
 			break;
 
