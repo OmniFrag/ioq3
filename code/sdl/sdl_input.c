@@ -1247,6 +1247,11 @@ void IN_ProcessEvent( const SDL_Event *e )
 			windowResized = qtrue;
 			break;
 
+		// moved to a display of another density or scale
+		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+			Cvar_SetValue( "r_displayScale", SDL_GetWindowDisplayScale( SDL_window ) );
+			break;
+
 		case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
@@ -1407,6 +1412,7 @@ void IN_Init( void *windowData )
 	appState = SDL_GetWindowFlags( SDL_window );
 	Cvar_SetValue( "com_unfocused",	!( appState & SDL_WINDOW_INPUT_FOCUS ) );
 	Cvar_SetValue( "com_minimized", appState & SDL_WINDOW_MINIMIZED );
+	Cvar_SetValue( "r_displayScale", SDL_GetWindowDisplayScale( SDL_window ) );
 
 	IN_InitJoystick( );
 	Com_DPrintf( "------------------------------------\n" );

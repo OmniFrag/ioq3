@@ -2856,6 +2856,7 @@ void Com_Init( char *commandLine ) {
 		Cvar_ForgetOldDefault( "r_autoExposure", "1" );
 		Cvar_ForgetOldDefault( "r_specularMapping", "1" );
 		Cvar_ForgetOldDefault( "r_dlightMode", "0" );
+		Cvar_ForgetOldDefault( "con_scale", "1" );
 	}
 	// always written, so the next start knows the config is this new
 	Cvar_SetDescription( Cvar_Get( "com_configVersion", "1", CVAR_ARCHIVE | CVAR_PROTECTED ),

@@ -62,6 +62,7 @@ cvar_t		*con_autoclear;
 cvar_t		*con_notifytime;
 cvar_t		*con_notifylines;
 cvar_t		*con_scale;
+cvar_t		*r_displayScale;
 
 
 
@@ -278,7 +279,8 @@ void Con_ClearNotify( void ) {
 ================
 Con_CheckResize
 
-If the line width has changed, reformat the buffer.
+If the line width has changed, with the screen or the characters' size,
+reformat the buffer and fit the input line to it.
 ================
 */
 void Con_CheckResize (void)
@@ -288,11 +290,25 @@ void Con_CheckResize (void)
 
 	if (con_scale != NULL)
 	{
-		g_smallchar_width = (int)((float)SMALLCHAR_WIDTH * con_scale->value);
-		g_smallchar_height = (int)((float)SMALLCHAR_HEIGHT * con_scale->value);
+		float scale = con_scale->value;
+
+		// 0 follows the window's display scale, in half steps, so the text
+		// keeps its size on a high density display, and between displays
+		if (scale <= 0.0f)
+			scale = floorf(r_displayScale->value * 2.0f + 0.5f) / 2.0f;
+		scale = Com_Clamp(1.0f, 4.0f, scale);
+
+		g_smallchar_width = (int)((float)SMALLCHAR_WIDTH * scale);
+		g_smallchar_height = (int)((float)SMALLCHAR_HEIGHT * scale);
 	}
 
 	width = (cls.glconfig.vidWidth / g_smallchar_width) - 2;
+
+	// at least one character, however narrow the window. Every time: a
+	// line recalled from the history keeps the width it was typed at, and
+	// a window too narrow for the buffer leaves con.linewidth at the default
+	g_console_field_width = cls.glconfig.vidWidth ? MAX(1, width) : DEFAULT_CONSOLE_WIDTH;
+	g_consoleField.widthInChars = g_console_field_width;
 
 	if (width == con.linewidth)
 		return;
@@ -370,8 +386,13 @@ void Con_Init (void) {
 	Cvar_CheckRange(con_notifylines, 1, NUM_CON_TIMES - 1, qtrue);
 	con_conspeed = Cvar_Get ("scr_conspeed", "3", CVAR_ARCHIVE);
 	con_autoclear = Cvar_Get("con_autoclear", "1", CVAR_ARCHIVE);
-	con_scale = Cvar_Get("con_scale", "1", CVAR_ARCHIVE);
-	Cvar_CheckRange(con_scale, 1.0f, 4.0f, qfalse);
+	// set by the window (IN_Init). Before con_scale, which reads it
+	r_displayScale = Cvar_Get("r_displayScale", "1", CVAR_ROM);
+	Cvar_SetDescription(r_displayScale, "The window's display scale: its pixel density times the "
+		"display's content scale");
+	con_scale = Cvar_Get("con_scale", "0", CVAR_ARCHIVE_ND);
+	Cvar_CheckRange(con_scale, 0.0f, 4.0f, qfalse);
+	Cvar_SetDescription(con_scale, "Size of the console's text, 1 to 4; 0 follows the display's scale");
 
 	Field_Clear( &g_consoleField );
 	g_consoleField.widthInChars = g_console_field_width;

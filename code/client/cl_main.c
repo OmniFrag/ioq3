@@ -3183,19 +3183,6 @@ void CL_ShutdownRef( void ) {
 
 /*
 ============
-CL_SetConsoleFieldWidth
-
-Fits the console's input line to the screen
-============
-*/
-static void CL_SetConsoleFieldWidth( void ) {
-	// at least one character, however narrow the window
-	g_console_field_width = MAX( 1, cls.glconfig.vidWidth / g_smallchar_width - 2 );
-	g_consoleField.widthInChars = g_console_field_width;
-}
-
-/*
-============
 CL_ResizeWindow
 
 Follows a change in the window's size without a vid_restart, if the
@@ -3218,7 +3205,6 @@ qboolean CL_ResizeWindow( void ) {
 		CL_CloseAVI( );
 	}
 
-	CL_SetConsoleFieldWidth( );
 	return qtrue;
 }
 
@@ -3235,7 +3221,6 @@ void CL_InitRenderer( void ) {
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.whiteShader = re.RegisterShader( "white" );
 	cls.consoleShader = re.RegisterShader( "console" );
-	CL_SetConsoleFieldWidth( );
 }
 
 /*
