@@ -241,6 +241,12 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 #define QGL_3_0_PROCS \
 	GLE(const GLubyte *, GetStringi, GLenum name, GLuint index) \
 
+// GL_ARB_sync, built-in to OpenGL 3.2 and OpenGL ES 3.0; optional
+#define QGL_ARB_sync_PROCS \
+	GLE(GLsync, FenceSync, GLenum condition, GLbitfield flags) \
+	GLE(void, DeleteSync, GLsync sync) \
+	GLE(GLenum, ClientWaitSync, GLsync sync, GLbitfield flags, GLuint64 timeout) \
+
 // GL_ARB_framebuffer_object, built-in to OpenGL 3.0
 #define QGL_ARB_framebuffer_object_PROCS \
 	GLE(void, BindRenderbuffer, GLenum target, GLuint renderbuffer) \
@@ -324,6 +330,7 @@ QGL_1_3_PROCS;
 QGL_1_5_PROCS;
 QGL_2_0_PROCS;
 QGL_3_0_PROCS;
+QGL_ARB_sync_PROCS;
 QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
