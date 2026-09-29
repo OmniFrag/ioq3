@@ -1260,6 +1260,11 @@ void	Sys_Print( const char *msg );
 int		Sys_Milliseconds (void);
 int64_t	Sys_Nanoseconds( void );
 
+#ifndef DEDICATED
+// sleeps for ns nanoseconds, to within a microsecond or so (SDL_DelayPrecise)
+void	Sys_SleepPrecise( int64_t ns );
+#endif
+
 qboolean Sys_RandomBytes( byte *string, int len );
 
 // the system console is shown when a dedicated server is running

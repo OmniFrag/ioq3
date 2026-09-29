@@ -3239,46 +3239,143 @@ int Com_TimeVal(int minMsec)
 
 static int	com_lastFrameTime = 0;
 static int64_t	com_frameStart;			// when the last frame started, in Sys_Nanoseconds
-static int	com_frameMinMsec = -1;	// how long the frame Com_WaitFrame waits for takes
-
 /*
 =================
 Com_FrameMinMsec
 
-How long the next frame takes at least
+How long the next frame of a server, or of a timedemo, takes at least
 =================
 */
 static int Com_FrameMinMsec( void ) {
-	static int	bias = 0;
-	int		minMsec, timeVal;
-
 	if(com_timedemo->integer)
 		return 1;
 
-	if(com_dedicated->integer)
-		return SV_FrameMsec();
+	return SV_FrameMsec();
+}
+
+#ifndef DEDICATED
+static int64_t	com_frameDue;	// when the next client frame is due, in Sys_Nanoseconds
+
+/*
+=================
+Com_PacedFrames
+
+Whether the client paces its frames to com_maxfps, to the nanosecond; a
+server's and a timedemo's go by the millisecond
+=================
+*/
+static qboolean Com_PacedFrames( void ) {
+	return !com_dedicated->integer && !com_timedemo->integer;
+}
+
+/*
+=================
+Com_CapInterval
+
+The interval of a cap of fps frames a second, in nanoseconds. A classic
+cap, 1000/k rounded down (125, 250, 333, 90...), is exactly k milliseconds
+a frame, as every Quake III engine has given it: players choose those
+for how the game moves in frames of that many milliseconds. Any other
+rate is paced exactly.
+=================
+*/
+static int64_t Com_CapInterval( int fps ) {
+	int		k = 1000 / fps;
+
+	if(k > 0 && 1000 / k == fps)
+		return k * (int64_t)1000000;
+
+	return 1000000000 / fps;
+}
+
+/*
+=================
+Com_FrameInterval
+
+How long a client frame takes at least, in nanoseconds: at most 1000
+frames a second, since game time is in whole milliseconds
+=================
+*/
+static int64_t Com_FrameInterval( void ) {
+	int64_t	interval = 1000000;
 
 	if(com_maxfps->integer > 0)
-		minMsec = 1000 / com_maxfps->integer;
-	else
-		minMsec = 1;
+		interval = MAX(interval, Com_CapInterval(com_maxfps->integer));
 
 	// in the background, slower, but never faster than com_maxfps
 	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
-		minMsec = MAX(minMsec, 1000 / com_maxfpsMinimized->integer);
+		interval = MAX(interval, Com_CapInterval(com_maxfpsMinimized->integer));
 	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
-		minMsec = MAX(minMsec, 1000 / com_maxfpsUnfocused->integer);
+		interval = MAX(interval, Com_CapInterval(com_maxfpsUnfocused->integer));
 
-	timeVal = com_frameTime - com_lastFrameTime;
-	bias += timeVal - minMsec;
-
-	if(bias > minMsec)
-		bias = minMsec;
-
-	// Adjust minMsec if previous frame took too long to render so
-	// that framerate is stable at the requested value.
-	return minMsec - bias;
+	return interval;
 }
+
+/*
+=================
+Com_NextFrameDue
+
+As a client frame ends, when the next one is due: an interval after this
+one was due, so that a rate that isn't a whole number of milliseconds a
+frame keeps its average, and a frame that started late is made up by the
+next. One that started more than an interval late starts the count
+again, rather than run frames back to back: on a whole millisecond of
+the clock game time counts, so frames of whole milliseconds each move
+game time by exactly that much.
+=================
+*/
+static void Com_NextFrameDue( int64_t frameStart ) {
+	int64_t	interval = Com_FrameInterval();
+
+	if(frameStart - com_frameDue > interval)
+		com_frameDue = frameStart - frameStart % 1000000;
+
+	com_frameDue += interval;
+}
+
+/*
+=================
+Com_WaitClientFrame
+
+Com_WaitFrame for the client. The network is read here, and a listen
+server's queued packets go out, on every call, due or not. While the
+frame is more than 3 milliseconds away, it sleeps once and returns, for
+the main loop to take input in between; then it waits precisely until
+the frame is due. A queued packet's time is kept to the millisecond.
+=================
+*/
+static qboolean Com_WaitClientFrame( void ) {
+	int64_t	left, wait;
+
+	for(;;)
+	{
+		left = com_frameDue - Sys_Nanoseconds();
+		wait = left;
+		if(com_sv_running->integer)
+			wait = MIN(wait, SV_SendQueuedPackets() * (int64_t)1000000);
+
+		if(left <= 0)
+		{
+			NET_Sleep(0);
+			return qtrue;
+		}
+
+		// a millisecond sleep can overshoot, so one ends 2 ms before the
+		// frame at the latest, whenever a queued packet is due
+		if(com_busyWait->integer || wait < 1000000)
+			NET_Sleep(0);
+		else if(left > 3000000)
+			NET_Sleep(MIN(wait, left - 2000000) / 1000000);
+		else if(wait < left)
+			NET_Sleep(wait / 1000000);
+		else
+			Sys_SleepPrecise(left);
+
+		if(left > 3000000)
+			return Sys_Nanoseconds() >= com_frameDue;
+	}
+}
+#endif
 
 /*
 =================
@@ -3288,10 +3385,12 @@ Whether the next frame is due, without waiting for it
 =================
 */
 qboolean Com_FrameDue( void ) {
-	if(com_frameMinMsec < 0)
-		com_frameMinMsec = Com_FrameMinMsec();
+#ifndef DEDICATED
+	if(Com_PacedFrames())
+		return Sys_Nanoseconds() >= com_frameDue;
+#endif
 
-	return !Com_TimeVal(com_frameMinMsec);
+	return !Com_TimeVal(Com_FrameMinMsec());
 }
 
 /*
@@ -3300,36 +3399,40 @@ Com_WaitFrame
 
 Sleeps toward the next frame, and returns whether it's due. The main loop
 calls it until it is, then Com_Frame, and can handle input in between. The
-last millisecond passes here.
+last millisecond or so passes here.
 =================
 */
 qboolean Com_WaitFrame( void ) {
-	int		timeVal, timeValSV;
+	int		minMsec, timeVal, timeValSV;
 
-	if(com_frameMinMsec < 0)
-		com_frameMinMsec = Com_FrameMinMsec();
+#ifndef DEDICATED
+	if(Com_PacedFrames())
+		return Com_WaitClientFrame();
+#endif
+
+	minMsec = Com_FrameMinMsec();
 
 	do
 	{
 		if(com_sv_running->integer)
 		{
 			timeValSV = SV_SendQueuedPackets();
-			
-			timeVal = Com_TimeVal(com_frameMinMsec);
+
+			timeVal = Com_TimeVal(minMsec);
 
 			if(timeValSV < timeVal)
 				timeVal = timeValSV;
 		}
 		else
-			timeVal = Com_TimeVal(com_frameMinMsec);
-		
+			timeVal = Com_TimeVal(minMsec);
+
 		if(com_busyWait->integer || timeVal < 1)
 			NET_Sleep(0);
 		else
 			NET_Sleep(timeVal - 1);
-	} while(timeVal < 2 && Com_TimeVal(com_frameMinMsec));
+	} while(timeVal < 2 && Com_TimeVal(minMsec));
 
-	return !Com_TimeVal(com_frameMinMsec);
+	return !Com_TimeVal(minMsec);
 }
 
 /*
@@ -3373,8 +3476,6 @@ void Com_Frame( void ) {
 		timeBeforeFirstEvents = Sys_Milliseconds ();
 	}
 
-	// the next Com_WaitFrame waits for the next frame
-	com_frameMinMsec = -1;
 	
 	IN_Frame();
 
@@ -3492,6 +3593,11 @@ void Com_Frame( void ) {
 	}
 
 	Com_ReadFromPipe( );
+
+#ifndef DEDICATED
+	// after the frame's input and commands, which can change the cap
+	Com_NextFrameDue( frameStart );
+#endif
 
 	com_frameNumber++;
 }
