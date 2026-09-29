@@ -3310,10 +3310,14 @@ static int64_t Com_FrameInterval( void ) {
 	if(com_maxfps->integer > 0)
 	{
 		cap = Com_CapInterval(com_maxfps->integer);
+#ifdef __EMSCRIPTEN__
+		refresh = 0;	// the cap is rounded to whole refreshes below
+#else
 		// a swap interval of n shows a frame every n refreshes (-1 is
 		// adaptive vsync, every refresh)
 		refresh = com_swapIntervalActive->integer ?
 			Sys_RefreshInterval() * abs(com_swapIntervalActive->integer) : 0;
+#endif
 
 		// With vsync, the swap waits for the display: a cap at or above its
 		// refresh rate would only drop frames it could show, so the display
@@ -3335,6 +3339,16 @@ static int64_t Com_FrameInterval( void ) {
 	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
 		interval = MAX(interval, Com_CapInterval(com_maxfpsUnfocused->integer));
 
+#ifdef __EMSCRIPTEN__
+	// A browser runs frames on the display's refreshes, and always waits
+	// for them: a cap is the nearest whole number of refreshes, since one
+	// between two would take one frame on the first and the next on the
+	// second, unevenly
+	refresh = Sys_RefreshInterval();
+	if(refresh > 0)
+		interval = MAX(1, (interval + refresh / 2) / refresh) * refresh;
+#endif
+
 	return interval;
 }
 
@@ -3354,10 +3368,17 @@ game time by exactly that much.
 static void Com_NextFrameDue( int64_t frameStart ) {
 	int64_t	interval = Com_FrameInterval();
 
+#ifdef __EMSCRIPTEN__
+	// A browser runs frames on the display's refreshes: counted from this
+	// frame's start, on one, the next is due on the refresh nearest its
+	// time, and an interval measured a little short can't creep earlier.
+	com_frameDue = frameStart + interval - Sys_RefreshInterval() / 2;
+#else
 	if(frameStart - com_frameDue > interval)
 		com_frameDue = frameStart - frameStart % 1000000;
 
 	com_frameDue += interval;
+#endif
 }
 
 /*
@@ -3372,6 +3393,14 @@ the frame is due. A queued packet's time is kept to the millisecond.
 =================
 */
 static qboolean Com_WaitClientFrame( void ) {
+#ifdef __EMSCRIPTEN__
+	// the page can't sleep: the main loop skips a refresh that comes early
+	NET_Sleep(0);
+	if(com_sv_running->integer)
+		SV_SendQueuedPackets();
+
+	return Sys_Nanoseconds() >= com_frameDue;
+#else
 	int64_t	left, wait;
 
 	for(;;)
@@ -3401,6 +3430,7 @@ static qboolean Com_WaitClientFrame( void ) {
 		if(left > 3000000)
 			return Sys_Nanoseconds() >= com_frameDue;
 	}
+#endif
 }
 #endif
 
