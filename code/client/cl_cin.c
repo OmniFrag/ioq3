@@ -1686,7 +1686,7 @@ void CL_PlayCinematic_f(void) {
 	// commands, would drop the one a link makes when it opens the client on
 	// macOS, where the link comes after startup. Callers disconnect first
 	if (clc.state >= CA_AUTHORIZING && clc.state < CA_CINEMATIC && !clc.demoplaying) {
-		Com_Printf("Not playing a cinematic while connected to a server\n");
+		Com_Printf("Not playing a cinematic while connecting or connected to a server\n");
 		return;
 	}
 
