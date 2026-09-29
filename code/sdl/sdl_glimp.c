@@ -154,6 +154,19 @@ static int GLimp_CompareModes( const void *a, const void *b )
 
 /*
 ===============
+GLimp_ModePixels
+
+A display mode's size in pixels, as r_mode's sizes are (GLimp_SetMode)
+===============
+*/
+static void GLimp_ModePixels( const SDL_DisplayMode *mode, int *width, int *height )
+{
+	*width = SDL_lroundf( mode->w * mode->pixel_density );
+	*height = SDL_lroundf( mode->h * mode->pixel_density );
+}
+
+/*
+===============
 GLimp_DetectAvailableModes
 ===============
 */
@@ -194,6 +207,7 @@ static void GLimp_DetectAvailableModes(void)
 	for( i = 0; i < numSDLModes; i++ )
 	{
 		SDL_DisplayMode *mode = displayModes[i];
+		int w, h;
 
 		if( !mode || !mode->w || !mode->h )
 		{
@@ -206,22 +220,21 @@ static void GLimp_DetectAvailableModes(void)
 		if( windowMode.format != mode->format )
 			continue;
 
-		// SDL can give the same resolution with different refresh rates.
-		// Only list resolution once.
+		GLimp_ModePixels( mode, &w, &h );
+
+		// SDL can give the same resolution with different refresh rates,
+		// or densities. Only list resolution once.
 		for( j = 0; j < numModes; j++ )
 		{
-			if( mode->w == modes[ j ].w && mode->h == modes[ j ].h )
+			if( w == modes[ j ].w && h == modes[ j ].h )
 				break;
 		}
 
 		if( j != numModes )
 			continue;
 
-		//FIXME: do we need to handle pixel density somehow?
-		// Not sure if/how SDL abstracts this...
-
-		modes[ numModes ].w = mode->w;
-		modes[ numModes ].h = mode->h;
+		modes[ numModes ].w = w;
+		modes[ numModes ].h = h;
 		numModes++;
 	}
 
@@ -464,7 +477,75 @@ static void GLimp_FitWindow( void )
 
 /*
 ===============
+GLimp_ClosestFullscreenMode
+
+The display's fullscreen mode nearest width by height pixels. Prefers, in
+order: at least that many pixels each way; the fewest pixels then (else
+the most); pixel density 1; the refresh rate nearest refreshRate (the
+highest for 0).
+===============
+*/
+static qboolean GLimp_ClosestFullscreenMode( SDL_DisplayID display, int width, int height,
+	float refreshRate, SDL_DisplayMode *closest )
+{
+	SDL_DisplayMode **modes;
+	const SDL_DisplayMode *best = NULL;
+	int i, count, bestPixels = 0;
+	qboolean bestFits = qfalse;
+
+	modes = SDL_GetFullscreenDisplayModes( display, &count );
+	if( !modes )
+	{
+		return qfalse;
+	}
+
+	for( i = 0; i < count; i++ )
+	{
+		const SDL_DisplayMode *mode = modes[i];
+		int w, h, pixels;
+		qboolean fits, better;
+
+		if( !mode->w || !mode->h )
+			continue;
+
+		GLimp_ModePixels( mode, &w, &h );
+		pixels = w * h;
+		fits = w >= width && h >= height;
+
+		if( !best || fits != bestFits )
+			better = !best || fits;
+		else if( pixels != bestPixels )
+			better = fits ? pixels < bestPixels : pixels > bestPixels;
+		else if( mode->pixel_density != best->pixel_density )
+			better = mode->pixel_density < best->pixel_density;
+		else if( refreshRate > 0.0f )
+			better = SDL_fabsf( mode->refresh_rate - refreshRate ) < SDL_fabsf( best->refresh_rate - refreshRate );
+		else
+			better = mode->refresh_rate > best->refresh_rate;
+
+		if( better )
+		{
+			best = mode;
+			bestPixels = pixels;
+			bestFits = fits;
+		}
+	}
+
+	if( best )
+	{
+		*closest = *best;
+	}
+	SDL_free( modes );
+	return best != NULL;
+}
+
+/*
+===============
 GLimp_SetMode
+
+r_mode's sizes are the pixels to render, on every platform. The window
+is created at that size in its own coordinates, which on macOS and
+Wayland are points: fewer on a high density display.
 ===============
 */
 static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qboolean fixedFunction)
@@ -485,6 +566,8 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	const SDL_DisplayMode *desktopMode = NULL;
 	int display = 0;
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
+	int windowWidth, windowHeight;
+	float density = 1.0f;
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL display\n");
 
@@ -492,6 +575,10 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	// sizes the canvas, and SDL3 follows its size changes only for a
 	// resizable window.
 	flags |= SDL_WINDOW_RESIZABLE;
+
+	// full resolution where windows are sized in points (macOS, Wayland,
+	// the web)
+	flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
 #ifdef USE_ICON
 	icon = SDL_CreateSurfaceFrom(
@@ -518,6 +605,10 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	}
 
 	desktopMode = SDL_GetDesktopDisplayMode( display );
+	if( desktopMode && desktopMode->pixel_density > 0.0f )
+	{
+		density = desktopMode->pixel_density;
+	}
 	if( desktopMode && desktopMode->h > 0 )
 	{
 		displayAspect = (float)desktopMode->w / (float)desktopMode->h;
@@ -533,28 +624,36 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	if( mode == -2 && desktopMode )
 	{
-		// use desktop video resolution
+		// use desktop video resolution, which is in the window's
+		// coordinates
 		if( desktopMode->h > 0 )
 		{
-			glConfig.vidWidth = desktopMode->w;
-			glConfig.vidHeight = desktopMode->h;
+			windowWidth = desktopMode->w;
+			windowHeight = desktopMode->h;
 #ifndef __EMSCRIPTEN__
 			if( !fullscreen )
 			{
-				GLimp_WindowedSize( display, &glConfig.vidWidth, &glConfig.vidHeight );
+				GLimp_WindowedSize( display, &windowWidth, &windowHeight );
 			}
 #endif
 		}
 		else
 		{
-			glConfig.vidWidth = 640;
-			glConfig.vidHeight = 480;
+			windowWidth = 640;
+			windowHeight = 480;
 			ri.Printf( PRINT_ALL, "Cannot determine display resolution, assuming 640x480\n" );
 		}
 
+		glConfig.vidWidth = SDL_lroundf( windowWidth * density );
+		glConfig.vidHeight = SDL_lroundf( windowHeight * density );
 		glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
 	}
-	else if ( !R_GetModeInfo( &glConfig.vidWidth, &glConfig.vidHeight, &glConfig.windowAspect, mode ) )
+	else if ( R_GetModeInfo( &glConfig.vidWidth, &glConfig.vidHeight, &glConfig.windowAspect, mode ) )
+	{
+		windowWidth = SDL_lroundf( glConfig.vidWidth / density );
+		windowHeight = SDL_lroundf( glConfig.vidHeight / density );
+	}
+	else
 	{
 		ri.Printf( PRINT_ALL, " invalid mode\n" );
 		return RSERR_INVALID_MODE;
@@ -562,10 +661,10 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	ri.Printf( PRINT_ALL, " %d %d\n", glConfig.vidWidth, glConfig.vidHeight);
 
 	// Center window
-	if( r_centerWindow->integer && !fullscreen )
+	if( r_centerWindow->integer && !fullscreen && desktopMode )
 	{
-		x = ( desktopMode->w / 2 ) - ( glConfig.vidWidth / 2 );
-		y = ( desktopMode->h / 2 ) - ( glConfig.vidHeight / 2 );
+		x = ( desktopMode->w / 2 ) - ( windowWidth / 2 );
+		y = ( desktopMode->h / 2 ) - ( windowHeight / 2 );
 	}
 
 	// Destroy existing state if it exists
@@ -784,7 +883,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 			SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, contexts[type].minorVersion );
 
 			if( ( SDL_window = SDL_CreateWindow( CLIENT_WINDOW_TITLE,
-					glConfig.vidWidth, glConfig.vidHeight, flags ) ) == NULL )
+					windowWidth, windowHeight, flags ) ) == NULL )
 			{
 				ri.Printf( PRINT_DEVELOPER, "SDL_CreateWindow failed: %s\n", SDL_GetError( ) );
 				break;
@@ -857,14 +956,14 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 			glConfig.displayFrequency = ri.Cvar_VariableIntegerValue( "r_displayRefresh" );
 			if( mode != -2 )
 			{
-				if( SDL_GetClosestFullscreenDisplayMode( display, glConfig.vidWidth, glConfig.vidHeight,
-						(float)glConfig.displayFrequency, true, &closestMode ) )
+				if( GLimp_ClosestFullscreenMode( display, glConfig.vidWidth, glConfig.vidHeight,
+						(float)glConfig.displayFrequency, &closestMode ) )
 				{
 					fullscreenMode = &closestMode;
 				}
 				else
 				{
-					ri.Printf( PRINT_DEVELOPER, "No fullscreen mode near %dx%d, using the desktop's: %s\n",
+					ri.Printf( PRINT_DEVELOPER, "No fullscreen modes for %dx%d, using the desktop's: %s\n",
 						glConfig.vidWidth, glConfig.vidHeight, SDL_GetError( ) );
 				}
 			}
