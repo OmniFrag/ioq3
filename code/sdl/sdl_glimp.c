@@ -1446,6 +1446,32 @@ qboolean GLimp_UpdateWindowSize( void )
 
 /*
 ===============
+GLimp_FrameReady
+
+Whether the GPU has finished the last frame, where GLimp_EndFrame doesn't
+wait for it (WebGL)
+===============
+*/
+qboolean GLimp_FrameReady( void )
+{
+#ifdef __EMSCRIPTEN__
+	if( frameFence )
+	{
+		if( qglClientWaitSync( frameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED )
+		{
+			return qfalse;
+		}
+
+		qglDeleteSync( frameFence );
+		frameFence = NULL;
+	}
+#endif
+
+	return qtrue;
+}
+
+/*
+===============
 GLimp_EndFrame
 
 Responsible for doing a swapbuffers
@@ -1459,11 +1485,15 @@ void GLimp_EndFrame( void )
 		SDL_GL_SwapWindow( SDL_window );
 	}
 
+	// At most one frame in flight, so that the driver can't queue frames
+	// and show each later than it was drawn: a fence goes in after each
+	// swap, and the next swap waits for it, so the CPU still works on the
+	// next frame while the GPU draws this one. WebGL can't wait on a
+	// fence, and a fence's state only changes between the browser's
+	// tasks: GLimp_FrameReady looks at it at the next refresh instead, and
+	// the client skips that one while the frame isn't done. Without
+	// fences, there, reading a pixel waits for the frame.
 #ifndef __EMSCRIPTEN__
-	// At most one frame in flight: wait for the GPU to finish the frame
-	// before this one, so that the driver can't queue frames and show
-	// each later than it was drawn. The CPU still works on the next frame
-	// while the GPU draws this one. (WebGL can't wait.)
 	if( frameFence )
 	{
 		if( r_gpuSync->integer )
@@ -1473,10 +1503,25 @@ void GLimp_EndFrame( void )
 		qglDeleteSync( frameFence );
 		frameFence = NULL;
 	}
+#else
+	if( frameFence && !r_gpuSync->integer )
+	{
+		qglDeleteSync( frameFence );
+		frameFence = NULL;
+	}
+#endif
 
-	if( r_gpuSync->integer && qglFenceSync )
+	// on the web, a fence not yet looked at stays
+	if( r_gpuSync->integer && qglFenceSync && !frameFence )
 	{
 		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
+	}
+#ifdef __EMSCRIPTEN__
+	else if( r_gpuSync->integer && !qglFenceSync )
+	{
+		byte pixel[4];
+
+		qglReadPixels( 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel );
 	}
 #endif
 
