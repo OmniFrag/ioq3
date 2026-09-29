@@ -3210,6 +3210,22 @@ qboolean CL_ResizeWindow( void ) {
 
 /*
 ============
+CL_FrameReady
+
+Whether the renderer is ready for a new frame, or is still drawing the
+last, where it can't wait for that itself (the web)
+============
+*/
+qboolean CL_FrameReady( void ) {
+	if ( !cls.rendererStarted || !re.FrameReady ) {
+		return qtrue;
+	}
+
+	return re.FrameReady( );
+}
+
+/*
+============
 CL_InitRenderer
 ============
 */

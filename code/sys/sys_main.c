@@ -1151,25 +1151,18 @@ SDL_AppResult SDL_AppIterate( void *appstate )
 
 	due = Com_WaitFrame( );
 
-#ifdef __EMSCRIPTEN__
-	// A browser calls this once per display refresh, and the page can't
-	// sleep: skip a refresh that comes early for a capped frame rather
-	// than spin until the frame is due. Com_WaitFrame waits out the last
-	// couple of milliseconds itself.
-	if( !due )
-	{
-		return SDL_APP_CONTINUE;
-	}
-#else
 	// Return between sleeps, so SDL handles the events that come in
-	// meanwhile and the frame starts with them. A Windows modal loop calls
-	// this from a timer instead, and handles no events in between; wait
-	// there, or frames come only on the timer's ticks.
-	if( !due && !Sys_InModalLoop( ) )
+	// meanwhile and the frame starts with them; a browser, which calls this
+	// once per display refresh, skips a refresh that comes early for a
+	// capped frame. A Windows modal loop calls this from a timer instead,
+	// and handles no events in between; wait there, or frames come only on
+	// the timer's ticks. Skip one, too, while the GPU is still drawing the
+	// last frame where the renderer can't wait for it (the web), rather
+	// than queue another behind it.
+	if( ( !due && !Sys_InModalLoop( ) ) || !CL_FrameReady( ) )
 	{
 		return SDL_APP_CONTINUE;
 	}
-#endif
 
 	while( !due )
 	{
