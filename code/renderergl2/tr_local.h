@@ -709,6 +709,7 @@ typedef enum
 	UNIFORM_BONEMATRIX,
 
 	UNIFORM_GREYSCALE,
+	UNIFORM_GAMMA,
 
 	UNIFORM_FBUFSCALE, // 1 / the screen's width and height
 
@@ -1628,7 +1629,7 @@ typedef struct {
 
 	float					identityLight;		// 1.0 / ( 1 << overbrightBits )
 	int						identityLightByte;	// identityLight * 255
-	int						overbrightBits;		// r_overbrightBits->integer, but set to 0 if no hw gamma
+	int						overbrightBits;		// r_overbrightBits->integer, which the shaders apply
 	int						multisample;		// the render FBO's samples: r_ext_framebuffer_multisample, as far as the GPU allows
 
 	orientationr_t			or;					// for current entity
@@ -1995,7 +1996,6 @@ void    	R_Init( void );
 void		R_UpdateSubImage( image_t *image, byte *pic, int x, int y, int width, int height, GLenum picFormat );
 
 void		R_SetColorMappings( void );
-void		R_GammaCorrect( byte *buffer, int bufSize );
 
 void	R_ImageList_f( void );
 void	R_SkinList_f( void );
@@ -2015,6 +2015,7 @@ skin_t	*R_GetSkinByHandle( qhandle_t hSkin );
 int R_ComputeLOD( trRefEntity_t *ent );
 
 const void *RB_TakeVideoFrameCmd( const void *data );
+void RB_TakeCaptures( void );
 
 //
 // tr_shader.c
@@ -2427,6 +2428,7 @@ typedef struct {
 	int height;
 	char *fileName;
 	qboolean jpeg;
+	qboolean silent;
 } screenshotCommand_t;
 
 typedef struct {

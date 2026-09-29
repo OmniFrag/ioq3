@@ -331,8 +331,9 @@ void FBO_Init(void)
 	// config keeps for the next GPU
 	tr.multisample = multisample;
 	
-	// only create a render FBO if we need to resolve MSAA or do HDR
-	// otherwise just render straight to the screen (tr.renderFbo = NULL)
+	// render into an FBO, which the present pass draws to the screen with
+	// greyscale and brightness (RB_PresentToScreen); with multisampling,
+	// into renderbuffers resolved into the render image
 	if (multisample && glRefConfig.framebufferMultisample)
 	{
 		tr.renderFbo = FBO_Create("_render", tr.renderDepthImage->width, tr.renderDepthImage->height);
@@ -345,7 +346,7 @@ void FBO_Init(void)
 		FBO_AttachImage(tr.msaaResolveFbo, tr.renderDepthImage, GL_DEPTH_ATTACHMENT, 0);
 		R_CheckFBO(tr.msaaResolveFbo);
 	}
-	else if (r_hdr->integer)
+	else
 	{
 		tr.renderFbo = FBO_Create("_render", tr.renderDepthImage->width, tr.renderDepthImage->height);
 		FBO_AttachImage(tr.renderFbo, tr.renderImage, GL_COLOR_ATTACHMENT0, 0);

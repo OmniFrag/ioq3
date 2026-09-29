@@ -930,7 +930,7 @@ typedef struct {
 
 	float					identityLight;		// 1.0 / ( 1 << overbrightBits )
 	int						identityLightByte;	// identityLight * 255
-	int						overbrightBits;		// r_overbrightBits->integer, but set to 0 if no hw gamma
+	int						overbrightBits;		// r_overbrightBits->integer, applied by hw gamma or RB_OverbrightPass
 
 	orientationr_t			or;					// for current entity
 
@@ -1196,6 +1196,7 @@ skin_t	*R_GetSkinByHandle( qhandle_t hSkin );
 int R_ComputeLOD( trRefEntity_t *ent );
 
 const void *RB_TakeVideoFrameCmd( const void *data );
+void RB_TakeCaptures( void );
 
 //
 // tr_shader.c
@@ -1525,6 +1526,7 @@ typedef struct {
 	int height;
 	char *fileName;
 	qboolean jpeg;
+	qboolean silent;
 } screenshotCommand_t;
 
 typedef struct {
