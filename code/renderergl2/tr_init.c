@@ -1334,6 +1334,10 @@ void R_Register( void )
 	r_noborder = ri.Cvar_Get("r_noborder", "0", CVAR_ARCHIVE | CVAR_LATCH);
 	r_customwidth = ri.Cvar_Get( "r_customwidth", "1600", CVAR_ARCHIVE | CVAR_LATCH );
 	r_customheight = ri.Cvar_Get( "r_customheight", "1024", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_mode, "Video mode: -2 is the desktop's, -1 is r_customwidth by r_customheight, "
+		"the rest are listed by modelist; sizes are in pixels" );
+	ri.Cvar_SetDescription( r_customwidth, "Width to render in pixels, for r_mode -1" );
+	ri.Cvar_SetDescription( r_customheight, "Height to render in pixels, for r_mode -1" );
 	r_customPixelAspect = ri.Cvar_Get( "r_customPixelAspect", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_simpleMipMaps = ri.Cvar_Get( "r_simpleMipMaps", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_vertexLight = ri.Cvar_Get( "r_vertexLight", "0", CVAR_ARCHIVE | CVAR_LATCH );
