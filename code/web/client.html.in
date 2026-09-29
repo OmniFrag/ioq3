@@ -61,6 +61,18 @@ const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {fi
 // The game takes keys while its canvas has focus; start with it there
 canvas.focus();
 
+// Cap the device pixel ratio SDL3 sizes the canvas by at 2 (?maxPixelRatio=):
+// a phone at 3 would draw 2.25 times the pixels. It still follows zoom and displays.
+const requestedPixelRatio = Number(urlParams.get('maxPixelRatio'));
+const maxPixelRatio = requestedPixelRatio > 0 ? requestedPixelRatio : 2;
+const pixelRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+    ?? Object.getOwnPropertyDescriptor(Window.prototype, 'devicePixelRatio');
+if (pixelRatio?.get)
+    Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => Math.min(pixelRatio.get.call(window), maxPixelRatio),
+    });
+
 // Ask for raw mouse input when locking the pointer. Without it, Chromium on
 // Windows sometimes reports a huge movementY that snaps the view straight up
 // or down. Browsers without raw input either ignore the option or reject

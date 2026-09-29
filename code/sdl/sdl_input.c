@@ -396,9 +396,15 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 		IN_GobbleMotionEvents( );
 		SDL_SetWindowRelativeMouseMode( SDL_window, false );
 
-		// Don't warp the mouse unless the cursor is within the window
+		// Don't warp the mouse unless the cursor is within the window.
+		// SDL takes the window's coordinates, not the renderer's pixels.
 		if( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_MOUSE_FOCUS )
-			SDL_WarpMouseInWindow( SDL_window, cls.glconfig.vidWidth / 2, cls.glconfig.vidHeight / 2 );
+		{
+			int width, height;
+
+			if( SDL_GetWindowSize( SDL_window, &width, &height ) )
+				SDL_WarpMouseInWindow( SDL_window, width / 2.0f, height / 2.0f );
+		}
 
 		mouseActive = qfalse;
 	}
@@ -1044,8 +1050,8 @@ static void IN_SaveWindowSize( qboolean restarting )
 		return;
 	}
 
-	// the window is created in screen coordinates
-	if( SDL_GetWindowSize( SDL_window, &width, &height ) && width > 0 && height > 0 )
+	// r_mode's sizes are pixels (GLimp_SetMode)
+	if( SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) && width > 0 && height > 0 )
 	{
 		Cvar_SetValue( "r_customwidth", width );
 		Cvar_SetValue( "r_customheight", height );
