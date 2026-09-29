@@ -3238,6 +3238,7 @@ int Com_TimeVal(int minMsec)
 }
 
 static int	com_lastFrameTime = 0;
+static int64_t	com_frameStart;			// when the last frame started, in Sys_Nanoseconds
 static int	com_frameMinMsec = -1;	// how long the frame Com_WaitFrame waits for takes
 
 /*
@@ -3345,6 +3346,10 @@ void Com_Frame( void ) {
 	int		timeBeforeEvents;
 	int		timeBeforeClient;
 	int		timeAfter;
+	int64_t	frameStart = Sys_Nanoseconds( );
+	int64_t	sinceLastFrame = frameStart - com_frameStart;
+
+	com_frameStart = frameStart;
   
 
 	if ( setjmp (abortframe) ) {
@@ -3463,8 +3468,11 @@ void Com_Frame( void ) {
 		sv -= time_game;
 		cl -= time_frontend + time_backend;
 
-		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i\n", 
-					 com_frameNumber, all, sv, ev, cl, time_game, time_frontend, time_backend );
+		// and the frame's game time, and the time since the last frame
+		// started, in microseconds
+		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i ms:%i dt:%i\n",
+					 com_frameNumber, all, sv, ev, cl, time_game, time_frontend, time_backend,
+					 msec, (int)( sinceLastFrame / 1000 ) );
 	}	
 
 	//
