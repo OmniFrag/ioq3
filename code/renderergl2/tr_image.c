@@ -33,17 +33,6 @@ int		gl_filter_max = GL_LINEAR;
 #define FILE_HASH_SIZE		1024
 static	image_t*		hashTable[FILE_HASH_SIZE];
 
-/*
-** R_GammaCorrect
-*/
-void R_GammaCorrect( byte *buffer, int bufSize ) {
-	int i;
-
-	for ( i = 0; i < bufSize; i++ ) {
-		buffer[i] = s_gammatable[buffer[i]];
-	}
-}
-
 typedef struct {
 	char *name;
 	int	minimize, maximize;
@@ -3079,10 +3068,8 @@ void R_SetColorMappings( void ) {
 		s_intensitytable[i] = j;
 	}
 
-	if ( glConfig.deviceSupportsGamma )
-	{
-		GLimp_SetGamma( s_gammatable, s_gammatable, s_gammatable );
-	}
+	// no gamma ramps under SDL3: the present pass applies r_gamma
+	// (RB_PresentToScreen), or with no framebuffers, R_LightScaleTexture
 }
 
 /*

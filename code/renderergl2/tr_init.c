@@ -303,6 +303,12 @@ static void InitOpenGL( void )
 		GLimp_UpdateWindowSize();
 	}
 
+	// SDL3 has no gamma ramps, so the present pass applies brightness in a
+	// shader wherever the frame goes through a framebuffer. Game modules then
+	// see gamma support, so their Brightness works, and textures no longer
+	// have r_gamma baked in, so it takes effect at once
+	glConfig.deviceSupportsGamma = glRefConfig.framebufferObject;
+
 	// check for GLSL function textureCubeLod()
 	if ( r_cubeMapping->integer && !QGL_VERSION_ATLEAST( 3, 0 ) ) {
 		ri.Printf( PRINT_WARNING, "WARNING: Disabled r_cubeMapping because it requires OpenGL 3.0\n" );
@@ -563,10 +569,7 @@ void RB_TakeScreenshot(int x, int y, int width, int height, char *fileName)
 
 	memcount = linelen * height;
 
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(allbuf + offset, memcount);
-
+	// the window's frame, which has the present pass's gamma
 	ri.FS_WriteFile(fileName, buffer, memcount + 18);
 
 	ri.Hunk_FreeTempMemory(allbuf);
@@ -587,13 +590,17 @@ void RB_TakeScreenshotJPEG(int x, int y, int width, int height, char *fileName)
 	buffer = RB_ReadPixels(x, y, width, height, &offset, &padlen);
 	memcount = (width * 3 + padlen) * height;
 
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(buffer + offset, memcount);
-
+	// the window's frame, which has the present pass's gamma
 	RE_SaveJPG(fileName, r_screenshotJpegQuality->integer, width, height, buffer + offset, padlen);
 	ri.Hunk_FreeTempMemory(buffer);
 }
+
+// screenshots and video frames are taken when the frame is finished,
+// after the present pass (RB_TakeCaptures): the window then holds the
+// frame the player sees, and after the swap it may not
+static screenshotCommand_t pendingScreenshot;
+static videoFrameCommand_t pendingVideoFrame;
+static qboolean screenshotPending, videoFramePending, levelShotPending;
 
 /*
 ==================
@@ -605,15 +612,9 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 	
 	cmd = (const screenshotCommand_t *)data;
 
-	// finish any 2D drawing if needed
-	if(tess.numIndexes)
-		RB_EndSurface();
+	pendingScreenshot = *cmd;
+	screenshotPending = qtrue;
 
-	if (cmd->jpeg)
-		RB_TakeScreenshotJPEG( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName);
-	else
-		RB_TakeScreenshot( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName);
-	
 	return (const void *)(cmd + 1);	
 }
 
@@ -622,7 +623,7 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 R_TakeScreenshot
 ==================
 */
-void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg ) {
+void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg, qboolean silent ) {
 	static char	fileName[MAX_OSPATH]; // bad things if two screenshots per frame?
 	screenshotCommand_t	*cmd;
 
@@ -639,6 +640,7 @@ void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean
 	Q_strncpyz( fileName, name, sizeof(fileName) );
 	cmd->fileName = fileName;
 	cmd->jpeg = jpeg;
+	cmd->silent = silent;
 }
 
 /* 
@@ -696,10 +698,20 @@ void R_ScreenshotFilenameJPEG( int lastNumber, char *fileName ) {
 R_LevelShot
 
 levelshots are specialized 128*128 thumbnails for
-the menu system, sampled down from full screen distorted images
+the menu system, sampled down from full screen distorted images;
+taken with the next frame (RB_TakeCaptures)
 ====================
 */
 void R_LevelShot( void ) {
+	levelShotPending = qtrue;
+}
+
+/*
+====================
+RB_TakeLevelShot
+====================
+*/
+static void RB_TakeLevelShot( void ) {
 	char		checkname[MAX_OSPATH];
 	byte		*buffer;
 	byte		*source, *allsource;
@@ -710,6 +722,11 @@ void R_LevelShot( void ) {
 	int			r, g, b;
 	float		xScale, yScale;
 	int			xx, yy;
+
+	if ( !tr.world ) {
+		ri.Printf( PRINT_WARNING, "levelshot: no map loaded\n" );
+		return;
+	}
 
 	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
 
@@ -745,10 +762,7 @@ void R_LevelShot( void ) {
 		}
 	}
 
-	// gamma correct
-	if ( glConfig.deviceSupportsGamma ) {
-		R_GammaCorrect( buffer + 18, 128 * 128 * 3 );
-	}
+	// the window's frame, which has the present pass's gamma
 
 	ri.FS_WriteFile( checkname, buffer, 128 * 128*3 + 18 );
 
@@ -816,11 +830,7 @@ void R_ScreenShot_f (void) {
 		lastNumber++;
 	}
 
-	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse );
-
-	if ( !silent ) {
-		ri.Printf (PRINT_ALL, "Wrote %s\n", checkname);
-	}
+	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse, silent );
 } 
 
 void R_ScreenShotJPEG_f (void) {
@@ -869,11 +879,7 @@ void R_ScreenShotJPEG_f (void) {
 		lastNumber++;
 	}
 
-	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qtrue );
-
-	if ( !silent ) {
-		ri.Printf (PRINT_ALL, "Wrote %s\n", checkname);
-	}
+	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qtrue, silent );
 } 
 
 //============================================================================
@@ -914,19 +920,27 @@ RB_TakeVideoFrameCmd
 */
 const void *RB_TakeVideoFrameCmd( const void *data )
 {
-	const videoFrameCommand_t	*cmd;
+	const videoFrameCommand_t *cmd = (const videoFrameCommand_t *)data;
+
+	pendingVideoFrame = *cmd;
+	videoFramePending = qtrue;
+
+	return (const void *)(cmd + 1);
+}
+
+/*
+==================
+RB_TakeVideoFrame
+==================
+*/
+static void RB_TakeVideoFrame( const videoFrameCommand_t *cmd )
+{
 	byte				*cBuf;
 	size_t				memcount, bytesPerPixel, linelen, avilinelen;
 	int				padwidth, avipadwidth, padlen, avipadlen;
 	int				yin, xin, xout;
 	GLint packAlign, format;
 
-	// finish any 2D drawing if needed
-	if(tess.numIndexes)
-		RB_EndSurface();
-
-	cmd = (const videoFrameCommand_t *)data;
-	
 	// OpenGL ES is only required to support reading GL_RGBA
 	if (qglesMajorVersion >= 1) {
 		format = GL_RGBA;
@@ -951,16 +965,13 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 	avipadlen = avipadwidth - avilinelen;
 
 	cBuf = PADP(cmd->captureBuffer, packAlign);
-		
+
 	qglReadPixels(0, 0, cmd->width, cmd->height, format,
 		GL_UNSIGNED_BYTE, cBuf);
 
 	memcount = padwidth * cmd->height;
 
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(cBuf, memcount);
-
+	// the window's frame, which has the present pass's gamma
 	if(cmd->motionJpeg)
 	{
 		// Convert RGBA to RGB, in place, line by line
@@ -1011,8 +1022,49 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 		
 		ri.CL_WriteAVIVideoFrame(cmd->encodeBuffer, avipadwidth * cmd->height);
 	}
+}
 
-	return (const void *)(cmd + 1);	
+/*
+==================
+RB_TakeCaptures
+
+Takes the screenshot, levelshot and video frame asked for, from the
+window's finished frame, before the swap
+==================
+*/
+void RB_TakeCaptures( void )
+{
+	if ( !screenshotPending && !videoFramePending && !levelShotPending )
+		return;
+
+	if ( glRefConfig.framebufferObject )
+		GL_BindFramebuffer( GL_READ_FRAMEBUFFER, 0 );
+
+	if ( screenshotPending )
+	{
+		const screenshotCommand_t *cmd = &pendingScreenshot;
+
+		if ( cmd->jpeg )
+			RB_TakeScreenshotJPEG( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName );
+		else
+			RB_TakeScreenshot( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName );
+		// said once it's written, so the frame doesn't show it
+		if ( !cmd->silent )
+			ri.Printf( PRINT_ALL, "Wrote %s\n", cmd->fileName );
+		screenshotPending = qfalse;
+	}
+
+	if ( levelShotPending )
+	{
+		RB_TakeLevelShot();
+		levelShotPending = qfalse;
+	}
+
+	if ( videoFramePending )
+	{
+		RB_TakeVideoFrame( &pendingVideoFrame );
+		videoFramePending = qfalse;
+	}
 }
 
 //============================================================================
@@ -1145,7 +1197,7 @@ void GfxInfo_f( void )
 	}
 	if ( glConfig.deviceSupportsGamma )
 	{
-		ri.Printf( PRINT_ALL, "GAMMA: hardware w/ %d overbright bits\n", tr.overbrightBits );
+		ri.Printf( PRINT_ALL, "GAMMA: shader w/ %d overbright bits\n", tr.overbrightBits );
 	}
 	else
 	{
@@ -1652,6 +1704,10 @@ void RE_Shutdown( qboolean destroyWindow ) {
 		R_ShutdownVaos();
 		GLSL_ShutdownGPUShaders();
 	}
+
+	// captures asked for in a frame that never finished: a video frame's
+	// buffers may be freed before the next renderer's first frame
+	screenshotPending = videoFramePending = levelShotPending = qfalse;
 
 	R_DoneFreeType();
 
