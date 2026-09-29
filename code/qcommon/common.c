@@ -86,6 +86,9 @@ cvar_t	*com_unfocused;
 cvar_t	*com_maxfpsUnfocused;
 cvar_t	*com_minimized;
 cvar_t	*com_maxfpsMinimized;
+#ifndef DEDICATED
+cvar_t	*com_swapIntervalActive;
+#endif
 cvar_t	*com_abnormalExit;
 cvar_t	*com_standalone;
 cvar_t	*com_gamename;
@@ -2936,6 +2939,10 @@ void Com_Init( char *commandLine ) {
 #endif
 	com_abnormalExit = Cvar_Get( "com_abnormalExit", "0", CVAR_ROM );
 	com_busyWait = Cvar_Get("com_busyWait", "0", CVAR_ARCHIVE);
+#ifndef DEDICATED
+	// the renderer's, set when it makes the window
+	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
+#endif
 	Cvar_Get("com_errorMessage", "", CVAR_ROM | CVAR_NORESTART);
 
 #ifdef CINEMATICS_INTRO
@@ -3298,9 +3305,29 @@ frames a second, since game time is in whole milliseconds
 */
 static int64_t Com_FrameInterval( void ) {
 	int64_t	interval = 1000000;
+	int64_t	cap, refresh;
 
 	if(com_maxfps->integer > 0)
-		interval = MAX(interval, Com_CapInterval(com_maxfps->integer));
+	{
+		cap = Com_CapInterval(com_maxfps->integer);
+		// a swap interval of n shows a frame every n refreshes (-1 is
+		// adaptive vsync, every refresh)
+		refresh = com_swapIntervalActive->integer ?
+			Sys_RefreshInterval() * abs(com_swapIntervalActive->integer) : 0;
+
+		// With vsync, the swap waits for the display: a cap at or above its
+		// refresh rate would only drop frames it could show, so the display
+		// paces them. One below it paces them as without vsync, for a
+		// display of variable refresh rate, say, or to save power. Where
+		// the refresh rate isn't known, the cap is kept.
+		if(!refresh || cap > refresh + refresh / 1000)
+			interval = MAX(interval, cap);
+		// A driver's settings can turn vsync off unseen: then frames are
+		// kept to a tenth faster than the display, which a swap that waits
+		// never is.
+		else
+			interval = MAX(interval, refresh - refresh / 10);
+	}
 
 	// in the background, slower, but never faster than com_maxfps
 	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)

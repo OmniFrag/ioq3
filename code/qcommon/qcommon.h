@@ -1263,6 +1263,9 @@ int64_t	Sys_Nanoseconds( void );
 #ifndef DEDICATED
 // sleeps for ns nanoseconds, to within a microsecond or so (SDL_DelayPrecise)
 void	Sys_SleepPrecise( int64_t ns );
+// the refresh interval of the display the game is on, in nanoseconds; 0
+// when it isn't known
+int64_t	Sys_RefreshInterval( void );
 #endif
 
 qboolean Sys_RandomBytes( byte *string, int len );
