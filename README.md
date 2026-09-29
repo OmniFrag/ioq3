@@ -261,8 +261,9 @@ the above locations, if desired.
   con_autoclear                     - Set to 0 to disable clearing console
                                       input text when console is closed
   con_scale                         - Scales console text to make it legible at
-                                      high resolutions. Defaults to 1. Maximum
-                                      is 4. Accepts fractional values (1.5).
+                                      high resolutions. 1 to 4; accepts
+                                      fractional values (1.5). Defaults to 0,
+                                      which follows the display's scale.
   con_notifylines                   - The number of lines to display in the
                                       notify area
 
