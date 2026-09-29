@@ -1629,6 +1629,7 @@ typedef struct {
 	float					identityLight;		// 1.0 / ( 1 << overbrightBits )
 	int						identityLightByte;	// identityLight * 255
 	int						overbrightBits;		// r_overbrightBits->integer, but set to 0 if no hw gamma
+	int						multisample;		// the render FBO's samples: r_ext_framebuffer_multisample, as far as the GPU allows
 
 	orientationr_t			or;					// for current entity
 

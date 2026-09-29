@@ -276,12 +276,10 @@ void FBO_Resize(void)
 	// need new storage at the new size
 	if (tr.msaaResolveFbo)
 	{
-		int multisample = r_ext_framebuffer_multisample->integer;
-
 		tr.renderFbo->width = tr.renderDepthImage->width;
 		tr.renderFbo->height = tr.renderDepthImage->height;
-		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->colorFormat, 0, multisample);
-		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->depthFormat, 0, multisample);
+		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->colorFormat, 0, tr.multisample);
+		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->depthFormat, 0, tr.multisample);
 		FBO_Fit(tr.msaaResolveFbo, tr.renderDepthImage);
 	}
 
@@ -329,8 +327,9 @@ void FBO_Init(void)
 	if (multisample < 2 || !glRefConfig.framebufferBlit)
 		multisample = 0;
 
-	if (multisample != r_ext_framebuffer_multisample->integer)
-		ri.Cvar_SetValue("r_ext_framebuffer_multisample", (float)multisample);
+	// what the GPU allows, apart from what the player asked for, which a
+	// config keeps for the next GPU
+	tr.multisample = multisample;
 	
 	// only create a render FBO if we need to resolve MSAA or do HDR
 	// otherwise just render straight to the screen (tr.renderFbo = NULL)
