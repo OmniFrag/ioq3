@@ -1254,8 +1254,11 @@ char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 void	Sys_Print( const char *msg );
 
 // Sys_Milliseconds should only be used for profiling purposes,
-// any game related timing information should come from event timestamps
+// any game related timing information should come from event timestamps.
+// It's Sys_Nanoseconds, a monotonic clock from the first call, in whole
+// milliseconds.
 int		Sys_Milliseconds (void);
+int64_t	Sys_Nanoseconds( void );
 
 qboolean Sys_RandomBytes( byte *string, int len );
 
