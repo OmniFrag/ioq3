@@ -290,22 +290,41 @@ char* Sys_MicrosoftStorePath(void)
 
 /*
 ================
-Sys_Milliseconds
+Sys_Nanoseconds
+
+The time since the first call, by the performance counter
 ================
 */
-int sys_timeBase;
+int64_t Sys_Nanoseconds( void )
+{
+	static LARGE_INTEGER	frequency, base;
+	LARGE_INTEGER			now;
+	int64_t					ticks;
+
+	QueryPerformanceCounter( &now );
+
+	if( !frequency.QuadPart )
+	{
+		QueryPerformanceFrequency( &frequency );
+		base = now;
+	}
+
+	// in two parts, so the multiplication can't overflow
+	ticks = now.QuadPart - base.QuadPart;
+	return ticks / frequency.QuadPart * 1000000000 +
+		ticks % frequency.QuadPart * 1000000000 / frequency.QuadPart;
+}
+
+/*
+================
+Sys_Milliseconds
+
+Sys_Nanoseconds, in milliseconds; 0x7fffffff ms is ~24 days
+================
+*/
 int Sys_Milliseconds (void)
 {
-	int             sys_curtime;
-	static qboolean initialized = qfalse;
-
-	if (!initialized) {
-		sys_timeBase = timeGetTime();
-		initialized = qtrue;
-	}
-	sys_curtime = timeGetTime() - sys_timeBase;
-
-	return sys_curtime;
+	return (int)( Sys_Nanoseconds() / 1000000 );
 }
 
 /*
