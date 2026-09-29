@@ -1600,17 +1600,9 @@ const void *RB_PostProcess(const void *data)
 			RB_ToneMap(srcFbo, srcBox, tr.screenScratchFbo, srcBox, autoExposure);
 			FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		}
-		else if (r_cameraExposure->value != 0.0f)
-		{
-			vec4_t color;
-
-			color[0] =
-			color[1] =
-			color[2] = pow(2, r_cameraExposure->value); //exp2(r_cameraExposure->value);
-			color[3] = 1.0f;
-
-			FBO_BlitFromTexture(tr.whiteImage, NULL, NULL, srcFbo, srcBox, NULL, color, GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO);
-		}
+		// Without the tone map, the view keeps the colours it was drawn with,
+		// as without framebuffers: r_cameraExposure is the tone map's, and its
+		// default alone would double the view on a float target
 	}
 
 	if (r_drawSunRays->integer)
