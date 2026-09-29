@@ -1364,9 +1364,11 @@ const void *RB_ClearDepth(const void *data)
 =============
 RB_DrawGreyscale
 
+Draws the frame to the window with greyscale and gamma: the present
+pass's shader
 =============
 */
-static void RB_DrawGreyscale(const FBO_t *src)
+static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 {
 	if (!src || !src->colorImage[0])
 		return;
@@ -1379,6 +1381,7 @@ static void RB_DrawGreyscale(const FBO_t *src)
 	GLSL_BindProgram(&tr.greyscaleShader);
 	GLSL_SetUniformInt(&tr.greyscaleShader, UNIFORM_TEXTUREMAP, 0);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GREYSCALE, backEnd.greyscale);
+	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GAMMA, gamma);
 	GL_BindToTMU(src->colorImage[0], 0);
 
 	vec4_t quadVerts[4] = {
@@ -1390,51 +1393,44 @@ static void RB_DrawGreyscale(const FBO_t *src)
 
 	vec2_t texCoords[4] = { {0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f} };
 
+	// every channel, as a blit copies them, where anaglyph leaves the
+	// right eye's selected
+	qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	RB_InstantQuad2(quadVerts, texCoords);
+	qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
 }
 
 /*
 =============
 RB_PresentToScreen
 
+Copies the frame from the render FBO to the window, through a shader for
+greyscale and for brightness, which SDL3's missing gamma ramps leave to it
 =============
 */
 static void RB_PresentToScreen(void)
 {
-	if (!glRefConfig.framebufferObject)
+	const FBO_t *src;
+	float gamma = r_gamma->value;
+	qboolean shade = backEnd.greyscale > 0.0f || gamma != 1.0f;
+
+	if (!tr.renderFbo)
 		return;
 
-	const FBO_t *src = NULL;
-
-	if (tr.renderFbo && tr.renderFbo->colorImage[0])
+	// resolve multisampling into a texture first where the shader reads
+	// one, or with HDR: resolving an RGB16F MSAA FBO straight to the
+	// screen messes with the brightness
+	src = tr.renderFbo;
+	if (tr.msaaResolveFbo && (shade || r_hdr->integer))
 	{
-		// texture-backed render FBO
-		src = tr.renderFbo;
-	}
-	else if (tr.msaaResolveFbo && r_hdr->integer)
-	{
-		// Resolving an RGB16F MSAA FBO to the screen messes with the brightness, so resolve to an RGB16F FBO first
 		FBO_FastBlit(tr.renderFbo, NULL, tr.msaaResolveFbo, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		src = tr.msaaResolveFbo;
 	}
 
-	if (src)
-	{
-		if (backEnd.greyscale > 0.0f)
-		{
-			RB_DrawGreyscale(src);
-		}
-		else
-		{
-			FBO_FastBlit(src, NULL, NULL, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-		}
-		return;
-	}
-
-	if (tr.renderFbo)
-	{
-		FBO_FastBlit(tr.renderFbo, NULL, NULL, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-	}
+	if (shade)
+		RB_DrawGreyscale(src, gamma);
+	else
+		FBO_FastBlit(src, NULL, NULL, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 }
 
 
@@ -1479,6 +1475,7 @@ const void	*RB_SwapBuffers( const void *data ) {
 	}
 
 	RB_PresentToScreen();
+	RB_TakeCaptures();
 
 	if ( !glState.finishCalled ) {
 		qglFinish();

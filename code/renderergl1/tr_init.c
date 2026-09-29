@@ -476,6 +476,13 @@ void RB_TakeScreenshotJPEG(int x, int y, int width, int height, char *fileName)
 	ri.Hunk_FreeTempMemory(buffer);
 }
 
+// screenshots and video frames are taken when the frame is finished,
+// after the overbright pass (RB_TakeCaptures): the window then holds the
+// frame the player sees, and after the swap it may not
+static screenshotCommand_t pendingScreenshot;
+static videoFrameCommand_t pendingVideoFrame;
+static qboolean screenshotPending, videoFramePending, levelShotPending;
+
 /*
 ==================
 RB_TakeScreenshotCmd
@@ -485,12 +492,10 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 	const screenshotCommand_t	*cmd;
 	
 	cmd = (const screenshotCommand_t *)data;
-	
-	if (cmd->jpeg)
-		RB_TakeScreenshotJPEG( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName);
-	else
-		RB_TakeScreenshot( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName);
-	
+
+	pendingScreenshot = *cmd;
+	screenshotPending = qtrue;
+
 	return (const void *)(cmd + 1);	
 }
 
@@ -499,7 +504,7 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 R_TakeScreenshot
 ==================
 */
-void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg ) {
+void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg, qboolean silent ) {
 	static char	fileName[MAX_OSPATH]; // bad things if two screenshots per frame?
 	screenshotCommand_t	*cmd;
 
@@ -516,6 +521,7 @@ void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean
 	Q_strncpyz( fileName, name, sizeof(fileName) );
 	cmd->fileName = fileName;
 	cmd->jpeg = jpeg;
+	cmd->silent = silent;
 }
 
 /* 
@@ -573,10 +579,20 @@ void R_ScreenshotFilenameJPEG( int lastNumber, char *fileName ) {
 R_LevelShot
 
 levelshots are specialized 128*128 thumbnails for
-the menu system, sampled down from full screen distorted images
+the menu system, sampled down from full screen distorted images;
+taken with the next frame (RB_TakeCaptures)
 ====================
 */
 void R_LevelShot( void ) {
+	levelShotPending = qtrue;
+}
+
+/*
+====================
+RB_TakeLevelShot
+====================
+*/
+static void RB_TakeLevelShot( void ) {
 	char		checkname[MAX_OSPATH];
 	byte		*buffer;
 	byte		*source, *allsource;
@@ -587,6 +603,11 @@ void R_LevelShot( void ) {
 	int			r, g, b;
 	float		xScale, yScale;
 	int			xx, yy;
+
+	if ( !tr.world ) {
+		ri.Printf( PRINT_WARNING, "levelshot: no map loaded\n" );
+		return;
+	}
 
 	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
 
@@ -693,11 +714,7 @@ void R_ScreenShot_f (void) {
 		lastNumber++;
 	}
 
-	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse );
-
-	if ( !silent ) {
-		ri.Printf (PRINT_ALL, "Wrote %s\n", checkname);
-	}
+	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse, silent );
 } 
 
 void R_ScreenShotJPEG_f (void) {
@@ -746,11 +763,7 @@ void R_ScreenShotJPEG_f (void) {
 		lastNumber++;
 	}
 
-	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qtrue );
-
-	if ( !silent ) {
-		ri.Printf (PRINT_ALL, "Wrote %s\n", checkname);
-	}
+	R_TakeScreenshot( 0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qtrue, silent );
 } 
 
 //============================================================================
@@ -762,13 +775,25 @@ RB_TakeVideoFrameCmd
 */
 const void *RB_TakeVideoFrameCmd( const void *data )
 {
-	const videoFrameCommand_t	*cmd;
+	const videoFrameCommand_t *cmd = (const videoFrameCommand_t *)data;
+
+	pendingVideoFrame = *cmd;
+	videoFramePending = qtrue;
+
+	return (const void *)(cmd + 1);
+}
+
+/*
+==================
+RB_TakeVideoFrame
+==================
+*/
+static void RB_TakeVideoFrame( const videoFrameCommand_t *cmd )
+{
 	byte				*cBuf;
 	size_t				memcount, linelen;
 	int				padwidth, avipadwidth, padlen, avipadlen;
 	GLint packAlign;
-	
-	cmd = (const videoFrameCommand_t *)data;
 	
 	qglGetIntegerv(GL_PACK_ALIGNMENT, &packAlign);
 
@@ -828,8 +853,43 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 		
 		ri.CL_WriteAVIVideoFrame(cmd->encodeBuffer, avipadwidth * cmd->height);
 	}
+}
 
-	return (const void *)(cmd + 1);	
+/*
+==================
+RB_TakeCaptures
+
+Takes the screenshot, levelshot and video frame asked for, from the
+window's finished frame, before the swap
+==================
+*/
+void RB_TakeCaptures( void )
+{
+	if ( screenshotPending )
+	{
+		const screenshotCommand_t *cmd = &pendingScreenshot;
+
+		if ( cmd->jpeg )
+			RB_TakeScreenshotJPEG( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName );
+		else
+			RB_TakeScreenshot( cmd->x, cmd->y, cmd->width, cmd->height, cmd->fileName );
+		// said once it's written, so the frame doesn't show it
+		if ( !cmd->silent )
+			ri.Printf( PRINT_ALL, "Wrote %s\n", cmd->fileName );
+		screenshotPending = qfalse;
+	}
+
+	if ( levelShotPending )
+	{
+		RB_TakeLevelShot();
+		levelShotPending = qfalse;
+	}
+
+	if ( videoFramePending )
+	{
+		RB_TakeVideoFrame( &pendingVideoFrame );
+		videoFramePending = qfalse;
+	}
 }
 
 //============================================================================
@@ -1315,6 +1375,10 @@ void RE_Shutdown( qboolean destroyWindow ) {
 		R_IssuePendingRenderCommands();
 		R_DeleteTextures();
 	}
+
+	// captures asked for in a frame that never finished: a video frame's
+	// buffers may be freed before the next renderer's first frame
+	screenshotPending = videoFramePending = levelShotPending = qfalse;
 
 	R_DoneFreeType();
 

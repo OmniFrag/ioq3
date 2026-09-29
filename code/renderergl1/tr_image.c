@@ -1270,12 +1270,11 @@ void R_SetColorMappings( void ) {
 
 	// setup the overbright lighting
 	tr.overbrightBits = r_overBrightBits->integer;
-	if ( !glConfig.deviceSupportsGamma ) {
-		tr.overbrightBits = 0;		// need hardware gamma for overbright
-	}
 
-	// never overbright in windowed mode
-	if ( !glConfig.isFullscreen ) 
+	// never overbright in windowed mode with hardware gamma, which would
+	// brighten the whole desktop; without it (SDL3 has none), a pass over
+	// the finished frame does it (RB_OverbrightPass), in a window too
+	if ( glConfig.deviceSupportsGamma && !glConfig.isFullscreen )
 	{
 		tr.overbrightBits = 0;
 	}
@@ -1289,6 +1288,11 @@ void R_SetColorMappings( void ) {
 		if ( tr.overbrightBits > 1 ) {
 			tr.overbrightBits = 1;
 		}
+	}
+	// no more than the map's, which R_ColorShiftLightingBytes shifts by
+	// the difference (hardware gamma kept this unreachable in a window)
+	if ( tr.overbrightBits > r_mapOverBrightBits->integer ) {
+		tr.overbrightBits = r_mapOverBrightBits->integer;
 	}
 	if ( tr.overbrightBits < 0 ) {
 		tr.overbrightBits = 0;
@@ -1310,7 +1314,9 @@ void R_SetColorMappings( void ) {
 
 	g = r_gamma->value;
 
-	shift = tr.overbrightBits;
+	// the table goes to the hardware, or into textures without it, where
+	// the overbright pass brightens the frame instead
+	shift = glConfig.deviceSupportsGamma ? tr.overbrightBits : 0;
 
 	for ( i = 0; i < 256; i++ ) {
 		if ( g == 1 ) {

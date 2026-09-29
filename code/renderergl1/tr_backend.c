@@ -1047,6 +1047,40 @@ const void *RB_ClearDepth(const void *data)
 
 /*
 =============
+RB_OverbrightPass
+
+Brightens the finished frame by 2 to the power of the overbright bits, as
+the hardware gamma ramp did (R_SetColorMappings' table): each draw doubles
+what's there
+=============
+*/
+static void RB_OverbrightPass( void ) {
+	int		i;
+
+	RB_SetGL2D();
+	GL_Bind( tr.whiteImage );
+	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ONE );
+	qglColor4f( 1, 1, 1, 1 );
+
+	// the whole frame, where stereo and anaglyph leave the right eye's
+	// buffer and channels selected; the next frame selects them again
+	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	if ( glConfig.stereoEnabled ) {
+		qglDrawBuffer( GL_BACK );
+	}
+
+	for ( i = 0; i < tr.overbrightBits; i++ ) {
+		qglBegin( GL_QUADS );
+		qglVertex2f( 0, 0 );
+		qglVertex2f( glConfig.vidWidth, 0 );
+		qglVertex2f( glConfig.vidWidth, glConfig.vidHeight );
+		qglVertex2f( 0, glConfig.vidHeight );
+		qglEnd();
+	}
+}
+
+/*
+=============
 RB_SwapBuffers
 
 =============
@@ -1063,6 +1097,12 @@ const void	*RB_SwapBuffers( const void *data ) {
 	if ( r_showImages->integer ) {
 		RB_ShowImages();
 	}
+
+	// without hardware gamma (SDL3 has none)
+	if ( !glConfig.deviceSupportsGamma && tr.overbrightBits ) {
+		RB_OverbrightPass();
+	}
+	RB_TakeCaptures();
 
 	cmd = (const swapBuffersCommand_t *)data;
 
