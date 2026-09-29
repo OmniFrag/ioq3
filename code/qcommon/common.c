@@ -2829,11 +2829,13 @@ void Com_Init( char *commandLine ) {
 
 	Com_ExecuteCfg();
 
-	// defaults that changed after the configs holding them were written.
-	// Only a config without com_configVersion predates them: in one written
-	// since, an old default is a value the player chose (the menu's Normal
-	// textures are r_picmip 1), and stays. A later change bumps the version
-	// and forgets its old defaults in configs older than that
+	// Defaults that changed from ioquake3's, forgotten in a config this
+	// engine didn't write (no com_configVersion): in practice the
+	// predecessor's, copied on the first run, which holds its defaults
+	// written out. In a config written here, an old default is a value the
+	// player chose (the menu's Normal textures are r_picmip 1), and stays;
+	// this engine's own earlier defaults aren't kept, so a later change
+	// adds its old default here without bumping the version
 	if ( Cvar_VariableIntegerValue( "com_configVersion" ) < 1 ) {
 		Cvar_ForgetOldDefault( "snaps", "20" );
 		Cvar_ForgetOldDefault( "cl_maxpackets", "30" );
