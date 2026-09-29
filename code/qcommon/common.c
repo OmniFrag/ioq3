@@ -2829,10 +2829,36 @@ void Com_Init( char *commandLine ) {
 
 	Com_ExecuteCfg();
 
-	// defaults that changed after the configs holding them were written
-	Cvar_ForgetOldDefault( "snaps", "20" );
-	Cvar_ForgetOldDefault( "cl_maxpackets", "30" );
-	Cvar_ForgetOldDefault( "s_mixPreStep", "0.05" );
+	// defaults that changed after the configs holding them were written.
+	// Only a config without com_configVersion predates them: in one written
+	// since, an old default is a value the player chose (the menu's Normal
+	// textures are r_picmip 1), and stays. A later change bumps the version
+	// and forgets its old defaults in configs older than that
+	if ( Cvar_VariableIntegerValue( "com_configVersion" ) < 1 ) {
+		Cvar_ForgetOldDefault( "snaps", "20" );
+		Cvar_ForgetOldDefault( "cl_maxpackets", "30" );
+		Cvar_ForgetOldDefault( "s_mixPreStep", "0.05" );
+#ifndef __EMSCRIPTEN__
+		Cvar_ForgetOldDefault( "com_maxfps", "85" );
+		Cvar_ForgetOldDefault( "com_maxfpsUnfocused", "0" );
+		Cvar_ForgetOldDefault( "com_maxfpsMinimized", "0" );
+#endif
+		Cvar_ForgetOldDefault( "s_muteWhenMinimized", "0" );
+		Cvar_ForgetOldDefault( "r_picmip", "1" );
+		Cvar_ForgetOldDefault( "r_ext_texture_filter_anisotropic", "0" );
+		Cvar_ForgetOldDefault( "r_ext_max_anisotropy", "2" );
+		Cvar_ForgetOldDefault( "r_subdivisions", "4" );
+		Cvar_ForgetOldDefault( "r_lodbias", "0" );
+		Cvar_ForgetOldDefault( "r_ext_framebuffer_multisample", "0" );
+		Cvar_ForgetOldDefault( "r_toneMap", "1" );
+		Cvar_ForgetOldDefault( "r_autoExposure", "1" );
+		Cvar_ForgetOldDefault( "r_specularMapping", "1" );
+		Cvar_ForgetOldDefault( "r_dlightMode", "0" );
+	}
+	// always written, so the next start knows the config is this new
+	Cvar_SetDescription( Cvar_Get( "com_configVersion", "1", CVAR_ARCHIVE | CVAR_PROTECTED ),
+		"Which of the engine's changed defaults the config was written after; set by the engine" );
+	Cvar_Set( "com_configVersion", "1" );
 
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
@@ -2870,7 +2896,9 @@ void Com_Init( char *commandLine ) {
 	// browser-driven event loop. So default throttling to off.
 	com_maxfps = Cvar_Get ("com_maxfps", "0", CVAR_ARCHIVE);
 #else
-	com_maxfps = Cvar_Get ("com_maxfps", "85", CVAR_ARCHIVE);
+	// 125 fps: 8 ms frames, which vanilla movement physics are tuned for, as
+	// Quake3e and CNQ3 default to
+	com_maxfps = Cvar_Get ("com_maxfps", "125", CVAR_ARCHIVE_ND);
 #endif
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
@@ -2893,9 +2921,16 @@ void Com_Init( char *commandLine ) {
 	com_ansiColor = Cvar_Get( "com_ansiColor", "0", CVAR_ARCHIVE );
 
 	com_unfocused = Cvar_Get( "com_unfocused", "0", CVAR_ROM );
-	com_maxfpsUnfocused = Cvar_Get( "com_maxfpsUnfocused", "0", CVAR_ARCHIVE );
 	com_minimized = Cvar_Get( "com_minimized", "0", CVAR_ROM );
+#ifdef __EMSCRIPTEN__
+	// the browser throttles a page in the background itself
+	com_maxfpsUnfocused = Cvar_Get( "com_maxfpsUnfocused", "0", CVAR_ARCHIVE );
 	com_maxfpsMinimized = Cvar_Get( "com_maxfpsMinimized", "0", CVAR_ARCHIVE );
+#else
+	// a game in the background needn't heat the machine or drain a battery
+	com_maxfpsUnfocused = Cvar_Get( "com_maxfpsUnfocused", "60", CVAR_ARCHIVE_ND );
+	com_maxfpsMinimized = Cvar_Get( "com_maxfpsMinimized", "20", CVAR_ARCHIVE_ND );
+#endif
 	com_abnormalExit = Cvar_Get( "com_abnormalExit", "0", CVAR_ROM );
 	com_busyWait = Cvar_Get("com_busyWait", "0", CVAR_ARCHIVE);
 	Cvar_Get("com_errorMessage", "", CVAR_ROM | CVAR_NORESTART);
@@ -3219,14 +3254,16 @@ static int Com_FrameMinMsec( void ) {
 	if(com_dedicated->integer)
 		return SV_FrameMsec();
 
-	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
-		minMsec = 1000 / com_maxfpsMinimized->integer;
-	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
-		minMsec = 1000 / com_maxfpsUnfocused->integer;
-	else if(com_maxfps->integer > 0)
+	if(com_maxfps->integer > 0)
 		minMsec = 1000 / com_maxfps->integer;
 	else
 		minMsec = 1;
+
+	// in the background, slower, but never faster than com_maxfps
+	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
+		minMsec = MAX(minMsec, 1000 / com_maxfpsMinimized->integer);
+	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
+		minMsec = MAX(minMsec, 1000 / com_maxfpsUnfocused->integer);
 
 	timeVal = com_frameTime - com_lastFrameTime;
 	bias += timeVal - minMsec;
