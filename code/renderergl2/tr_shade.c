@@ -574,9 +574,11 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 		|| ((blend & GLS_DSTBLEND_BITS) == GLS_DSTBLEND_SRC_COLOR)
 		|| ((blend & GLS_DSTBLEND_BITS) == GLS_DSTBLEND_ONE_MINUS_SRC_COLOR);
 
-	qboolean is2DDraw = backEnd.currentEntity == &backEnd.entity2D;
-
-	float overbright = (isBlend || is2DDraw) ? 1.0f : (float)(1 << tr.overbrightBits);
+	// opengl1 draws at tr.identityLight and brightens the finished frame,
+	// 2D included, by 1 << overbrightBits, so a colour it doesn't dim comes
+	// out that much brighter there, and is scaled up here to match. A
+	// blend that multiplies the frame matches without it.
+	float overbright = isBlend ? 1.0f : (float)(1 << tr.overbrightBits);
 
 	fog_t *fog;
 
@@ -612,6 +614,7 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 			baseColor[1] = pStage->constantColor[1] / 255.0f;
 			baseColor[2] = pStage->constantColor[2] / 255.0f;
 			baseColor[3] = pStage->constantColor[3] / 255.0f;
+			VectorScale( baseColor, overbright, baseColor );
 			break;
 		case CGEN_VERTEX:
 		case CGEN_VERTEX_LIT:
@@ -645,7 +648,7 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 		case CGEN_WAVEFORM:
 			baseColor[0] = 
 			baseColor[1] = 
-			baseColor[2] = RB_CalcWaveColorSingle( &pStage->rgbWave );
+			baseColor[2] = RB_CalcWaveColorSingle( &pStage->rgbWave ) * overbright;	// dimmed by tr.identityLight, as in opengl1, unless noise
 			break;
 		case CGEN_ENTITY:
 			if (backEnd.currentEntity)
@@ -654,6 +657,7 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 				baseColor[1] = ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[1] / 255.0f;
 				baseColor[2] = ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[2] / 255.0f;
 				baseColor[3] = ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[3] / 255.0f;
+				VectorScale( baseColor, overbright, baseColor );
 			}
 			break;
 		case CGEN_ONE_MINUS_ENTITY:
@@ -663,6 +667,7 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 				baseColor[1] = 1.0f - ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[1] / 255.0f;
 				baseColor[2] = 1.0f - ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[2] / 255.0f;
 				baseColor[3] = 1.0f - ((unsigned char *)backEnd.currentEntity->e.shaderRGBA)[3] / 255.0f;
+				VectorScale( baseColor, overbright, baseColor );
 			}
 			break;
 		case CGEN_IDENTITY:
