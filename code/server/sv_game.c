@@ -1266,6 +1266,10 @@ void SV_RestartGameProgs( void ) {
 		Com_Error( ERR_FATAL, "VM_Restart on game failed" );
 	}
 
+	// the restarted game links its entities afresh, and may have fewer:
+	// one left linked from before would be found above its count
+	SV_ClearWorld();
+
 	SV_InitGameVM( qtrue );
 }
 

@@ -142,14 +142,22 @@ static worldSector_t *SV_CreateworldSector( int depth, vec3_t mins, vec3_t maxs 
 ===============
 SV_ClearWorld
 
+Empties the world, entities' links included, so that none linked before
+can be found in it: a restarted game may have fewer entities
 ===============
 */
 void SV_ClearWorld( void ) {
 	clipHandle_t	h;
 	vec3_t			mins, maxs;
+	int				i;
 
 	Com_Memset( sv_worldSectors, 0, sizeof(sv_worldSectors) );
 	sv_numworldSectors = 0;
+
+	for ( i = 0 ; i < MAX_GENTITIES ; i++ ) {
+		sv.svEntities[i].worldSector = NULL;
+		sv.svEntities[i].nextEntityInWorldSector = NULL;
+	}
 
 	// get world map bounds
 	h = CM_InlineModel( 0 );
