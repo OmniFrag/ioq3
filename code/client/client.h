@@ -584,8 +584,20 @@ void	SCR_DebugGraph (float value);
 
 int		SCR_GetBigStringWidth( const char *str );	// returns in virtual 640x480 coordinates
 
+// where SCR_AdjustFrom640 puts the 640x480 screen on an axis: stretched over
+// the window, or at one scale on both axes against an edge or centred
+typedef enum {
+	PLACE_STRETCH,
+	PLACE_LEFT,
+	PLACE_CENTER,
+	PLACE_RIGHT,
+	PLACE_TOP = PLACE_LEFT,
+	PLACE_BOTTOM = PLACE_RIGHT
+} screenPlacement_t;
+
+void	SCR_SetPlacement( screenPlacement_t horizontal, screenPlacement_t vertical );
 void	SCR_AdjustFrom640( float *x, float *y, float *w, float *h );
-void	SCR_FillRect( float x, float y, float width, float height, 
+void	SCR_FillRect( float x, float y, float width, float height,
 					 const float *color );
 void	SCR_DrawPic( float x, float y, float width, float height, qhandle_t hShader );
 void	SCR_DrawNamedPic( float x, float y, float width, float height, const char *picname );
