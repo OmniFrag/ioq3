@@ -291,6 +291,11 @@ void FBO_Resize(void)
 		FBO_Fit(tr.quarterFbo[i], tr.quarterImage[i]);
 	FBO_Fit(tr.hdrDepthFbo, tr.hdrDepthImage);
 	FBO_Fit(tr.screenSsaoFbo, tr.screenSsaoImage);
+
+	// without EXT_direct_state_access the calls above bind framebuffers
+	// behind glState's back (tr_dsa.c)
+	GL_BindFramebuffer(GL_FRAMEBUFFER, 0);
+	glState.currentFBO = NULL;
 }
 
 /*
