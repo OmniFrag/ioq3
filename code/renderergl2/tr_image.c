@@ -2899,6 +2899,10 @@ void R_CreateBuiltinImages( void ) {
 			tr.sunRaysImage = R_CreateImage("*sunRays", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, rgbFormat);
 
 		tr.renderDepthImage  = R_CreateImage("*renderdepth",  NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
+
+		// sized by R_UpdateViewScale
+		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, hdrFormat);
+		tr.viewDepthImage = R_CreateImage("*viewdepth", NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 		tr.textureDepthImage = R_CreateImage("*texturedepth", NULL, PSHADOW_MAP_SIZE, PSHADOW_MAP_SIZE, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 
 		{
@@ -2984,19 +2988,25 @@ static void R_ResizeImage( image_t *image, int width, int height )
 R_ResizeScreenImages
 
 Resizes the images R_CreateBuiltinImages sizes from the screen, after the
-window changed size
+window or r_viewScale changed: the render images to the window, the view
+images to the scaled world views, and the screen-space images world views
+use to their size (tr.sceneWidth and tr.sceneHeight)
 ===============
 */
 void R_ResizeScreenImages( void )
 {
-	int width = glConfig.vidWidth, height = glConfig.vidHeight;
+	int width = tr.sceneWidth, height = tr.sceneHeight;
+	// the view images are unused at the window's size
+	int viewWidth = tr.viewScaled ? width : 1, viewHeight = tr.viewScaled ? height : 1;
 	int i;
 
-	R_ResizeImage( tr.renderImage, width, height );
+	R_ResizeImage( tr.renderImage, glConfig.vidWidth, glConfig.vidHeight );
+	R_ResizeImage( tr.renderDepthImage, glConfig.vidWidth, glConfig.vidHeight );
+	R_ResizeImage( tr.viewImage, viewWidth, viewHeight );
+	R_ResizeImage( tr.viewDepthImage, viewWidth, viewHeight );
 	R_ResizeImage( tr.screenScratchImage, width, height );
 	R_ResizeImage( tr.hdrDepthImage, width, height );
 	R_ResizeImage( tr.sunRaysImage, width, height );
-	R_ResizeImage( tr.renderDepthImage, width, height );
 	R_ResizeImage( tr.screenShadowImage, width, height );
 	for ( i = 0; i < 2; i++ )
 		R_ResizeImage( tr.quarterImage[i], width / 2, height / 2 );
