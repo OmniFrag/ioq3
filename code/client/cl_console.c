@@ -643,19 +643,22 @@ void Con_DrawNotify (void)
 		}
 	}
 
-	// v is in native coordinates, convert to 640x480 for SCR_DrawBigString
-	v *= 480.0f / cls.glconfig.vidHeight;
-	v += 8;
-
 	re.SetColor( NULL );
 
 	if (Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME) ) {
 		return;
 	}
 
-	// draw the chat line
+	// draw the chat line unstretched, at the left, below the notify lines,
+	// which end at row v in pixels: where that is in 640x480 units
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{
+		float	top = 0.0f, scale = 1.0f;
+
+		SCR_SetPlacement( PLACE_LEFT, PLACE_TOP );
+		SCR_AdjustFrom640( NULL, &top, NULL, &scale );
+		v = MAX( 0, ( v - top ) / scale ) + 8;
+
 		if (chat_team)
 		{
 			SCR_DrawBigString (8, v, "say_team:", 1.0f, qfalse );
@@ -669,6 +672,7 @@ void Con_DrawNotify (void)
 
 		Field_BigDraw( &chatField, skip * BIGCHAR_WIDTH, v,
 			SCREEN_WIDTH - ( skip + 1 ) * BIGCHAR_WIDTH, qtrue, qtrue );
+		SCR_SetPlacement( PLACE_STRETCH, PLACE_STRETCH );
 	}
 
 }

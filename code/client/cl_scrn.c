@@ -49,32 +49,76 @@ void SCR_DrawNamedPic( float x, float y, float width, float height, const char *
 }
 
 
+// where SCR_AdjustFrom640 puts what's drawn next; when not stretching, the
+// window's safe area it places against and the scale 640x480 fits it at
+static screenPlacement_t	scr_placeX = PLACE_STRETCH, scr_placeY = PLACE_STRETCH;
+static int					scr_area[4];
+static float				scr_fitScale;
+
+/*
+================
+SCR_SetPlacement
+
+Sets how SCR_AdjustFrom640 maps 640x480 to the window on each axis:
+stretched over it, the default, as the console and cinematics want; or at
+one scale on both axes, so text and pictures keep their shape, against an
+edge of the window's safe area or centred in it
+================
+*/
+void SCR_SetPlacement( screenPlacement_t horizontal, screenPlacement_t vertical ) {
+	scr_placeX = horizontal;
+	scr_placeY = vertical;
+	if ( horizontal != PLACE_STRETCH || vertical != PLACE_STRETCH ) {
+		CL_GetSafeArea( scr_area );
+		scr_fitScale = MIN( scr_area[2] / (float)SCREEN_WIDTH, scr_area[3] / (float)SCREEN_HEIGHT );
+	}
+}
+
+/*
+================
+SCR_PlaceAxis
+
+One axis of SCR_AdjustFrom640: the scale and offset from 640x480 units to a
+window side of windowSize pixels, whose safe part starts at start and is
+size long
+================
+*/
+static void SCR_PlaceAxis( screenPlacement_t place, int windowSize, int start, int size, int virtualSize,
+	float *scale, float *bias ) {
+	if ( place == PLACE_STRETCH ) {
+		*scale = windowSize / (float)virtualSize;
+		*bias = 0.0f;
+		return;
+	}
+
+	*scale = scr_fitScale;
+	*bias = start;
+	if ( place == PLACE_CENTER ) {
+		*bias += 0.5f * ( size - virtualSize * scr_fitScale );
+	} else if ( place == PLACE_RIGHT ) {
+		*bias += size - virtualSize * scr_fitScale;
+	}
+}
+
 /*
 ================
 SCR_AdjustFrom640
 
-Adjusted for resolution and screen aspect ratio
+From the 640x480 virtual screen to the window's pixels, as SCR_SetPlacement
+says
 ================
 */
 void SCR_AdjustFrom640( float *x, float *y, float *w, float *h ) {
-	float	xscale;
-	float	yscale;
+	float	xscale, yscale, xbias, ybias;
 
-#if 0
-		// adjust for wide screens
-		if ( cls.glconfig.vidWidth * 480 > cls.glconfig.vidHeight * 640 ) {
-			*x += 0.5 * ( cls.glconfig.vidWidth - ( cls.glconfig.vidHeight * 640 / 480 ) );
-		}
-#endif
+	SCR_PlaceAxis( scr_placeX, cls.glconfig.vidWidth, scr_area[0], scr_area[2], SCREEN_WIDTH, &xscale, &xbias );
+	SCR_PlaceAxis( scr_placeY, cls.glconfig.vidHeight, scr_area[1], scr_area[3], SCREEN_HEIGHT, &yscale, &ybias );
 
-	// scale for screen sizes
-	xscale = cls.glconfig.vidWidth / 640.0;
-	yscale = cls.glconfig.vidHeight / 480.0;
 	if ( x ) {
-		*x *= xscale;
+		*x = *x * xscale + xbias;
 	}
 	if ( y ) {
-		*y *= yscale;
+		*y = *y * yscale + ybias;
 	}
 	if ( w ) {
 		*w *= xscale;
@@ -343,7 +387,9 @@ void SCR_DrawDemoRecording( void ) {
 	pos = FS_FTell( clc.demofile );
 	sprintf( string, "RECORDING %s: %ik", clc.demoName, pos / 1024 );
 
+	SCR_SetPlacement( PLACE_CENTER, PLACE_TOP );
 	SCR_DrawStringExt( 320 - strlen( string ) * 4, 20, 8, string, g_color_table[7], qtrue, qfalse );
+	SCR_SetPlacement( PLACE_STRETCH, PLACE_STRETCH );
 }
 
 
@@ -382,7 +428,9 @@ void SCR_DrawVoipMeter( void ) {
 	buffer[i] = '\0';
 
 	sprintf( string, "VoIP: [%s]", buffer );
+	SCR_SetPlacement( PLACE_CENTER, PLACE_TOP );
 	SCR_DrawStringExt( 320 - strlen( string ) * 4, 10, 8, string, g_color_table[7], qtrue, qfalse );
+	SCR_SetPlacement( PLACE_STRETCH, PLACE_STRETCH );
 }
 #endif
 
