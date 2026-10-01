@@ -397,6 +397,11 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 		r_textureMode->modified = qfalse;
 	}
 
+	// the 3D view's resolution, from this frame on
+	if ( r_viewScale->modified ) {
+		R_UpdateViewScale();
+	}
+
 	//
 	// gamma stuff
 	//

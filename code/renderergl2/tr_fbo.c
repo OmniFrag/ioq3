@@ -262,30 +262,81 @@ static void FBO_Fit(FBO_t *fbo, image_t *image)
 
 /*
 ============
+FBO_CreateRenderTarget
+
+A framebuffer to draw in, of its images' size; with multisampling, into
+renderbuffers that *resolveFbo resolves into the images
+============
+*/
+static FBO_t *FBO_CreateRenderTarget(const char *name, const char *resolveName, image_t *image, image_t *depthImage, int format, FBO_t **resolveFbo)
+{
+	FBO_t *fbo = FBO_Create(name, depthImage->width, depthImage->height);
+	FBO_t *imageFbo = fbo;
+
+	*resolveFbo = NULL;
+	if (tr.multisample && glRefConfig.framebufferMultisample)
+	{
+		FBO_CreateBuffer(fbo, format, 0, tr.multisample);
+		FBO_CreateBuffer(fbo, GL_DEPTH_COMPONENT24, 0, tr.multisample);
+		R_CheckFBO(fbo);
+
+		imageFbo = *resolveFbo = FBO_Create(resolveName, depthImage->width, depthImage->height);
+	}
+
+	FBO_AttachImage(imageFbo, image, GL_COLOR_ATTACHMENT0, 0);
+	FBO_AttachImage(imageFbo, depthImage, GL_DEPTH_ATTACHMENT, 0);
+	R_CheckFBO(imageFbo);
+
+	return fbo;
+}
+
+/*
+============
+FBO_ResizeRenderTarget
+
+Fits a framebuffer from FBO_CreateRenderTarget to its resized images; with
+multisampling its renderbuffers get new storage
+============
+*/
+static void FBO_ResizeRenderTarget(FBO_t *fbo, FBO_t *resolveFbo, image_t *depthImage)
+{
+	if (resolveFbo)
+	{
+		fbo->width = depthImage->width;
+		fbo->height = depthImage->height;
+		FBO_CreateBuffer(fbo, fbo->colorFormat, 0, tr.multisample);
+		FBO_CreateBuffer(fbo, fbo->depthFormat, 0, tr.multisample);
+		FBO_Fit(resolveFbo, depthImage);
+	}
+
+	FBO_Fit(fbo, depthImage);
+}
+
+/*
+============
 FBO_Resize
 
 Fits the framebuffers that cover the screen to their resized images,
-keeping the framebuffers and their attachments
+keeping the framebuffers and their attachments (R_ResizeScreenImages)
 ============
 */
 void FBO_Resize(void)
 {
+	// what world views draw their depth into
+	image_t *sceneDepthImage = tr.viewScaled ? tr.viewDepthImage : tr.renderDepthImage;
 	int i;
 
-	// with MSAA the render framebuffer renders into renderbuffers, which
-	// need new storage at the new size
-	if (tr.msaaResolveFbo)
-	{
-		tr.renderFbo->width = tr.renderDepthImage->width;
-		tr.renderFbo->height = tr.renderDepthImage->height;
-		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->colorFormat, 0, tr.multisample);
-		FBO_CreateBuffer(tr.renderFbo, tr.renderFbo->depthFormat, 0, tr.multisample);
-		FBO_Fit(tr.msaaResolveFbo, tr.renderDepthImage);
-	}
+	FBO_ResizeRenderTarget(tr.renderFbo, tr.msaaResolveFbo, tr.renderDepthImage);
+	FBO_ResizeRenderTarget(tr.viewFbo, tr.viewResolveFbo, tr.viewDepthImage);
 
-	FBO_Fit(tr.renderFbo, tr.renderDepthImage);
+	// these test against a world view's depth
+	if (tr.screenScratchFbo)
+		FBO_AttachImage(tr.screenScratchFbo, sceneDepthImage, GL_DEPTH_ATTACHMENT, 0);
+	if (tr.sunRaysFbo)
+		FBO_AttachImage(tr.sunRaysFbo, sceneDepthImage, GL_DEPTH_ATTACHMENT, 0);
+
 	FBO_Fit(tr.screenScratchFbo, tr.screenScratchImage);
-	FBO_Fit(tr.sunRaysFbo, tr.renderDepthImage);
+	FBO_Fit(tr.sunRaysFbo, sceneDepthImage);
 	FBO_Fit(tr.screenShadowFbo, tr.screenShadowImage);
 	for (i = 0; i < 2; i++)
 		FBO_Fit(tr.quarterFbo[i], tr.quarterImage[i]);
@@ -339,25 +390,13 @@ void FBO_Init(void)
 	// render into an FBO, which the present pass draws to the screen with
 	// greyscale and brightness (RB_PresentToScreen); with multisampling,
 	// into renderbuffers resolved into the render image
-	if (multisample && glRefConfig.framebufferMultisample)
-	{
-		tr.renderFbo = FBO_Create("_render", tr.renderDepthImage->width, tr.renderDepthImage->height);
-		FBO_CreateBuffer(tr.renderFbo, hdrFormat, 0, multisample);
-		FBO_CreateBuffer(tr.renderFbo, GL_DEPTH_COMPONENT24, 0, multisample);
-		R_CheckFBO(tr.renderFbo);
+	tr.renderFbo = FBO_CreateRenderTarget("_render", "_msaaResolve", tr.renderImage, tr.renderDepthImage,
+		hdrFormat, &tr.msaaResolveFbo);
 
-		tr.msaaResolveFbo = FBO_Create("_msaaResolve", tr.renderDepthImage->width, tr.renderDepthImage->height);
-		FBO_AttachImage(tr.msaaResolveFbo, tr.renderImage, GL_COLOR_ATTACHMENT0, 0);
-		FBO_AttachImage(tr.msaaResolveFbo, tr.renderDepthImage, GL_DEPTH_ATTACHMENT, 0);
-		R_CheckFBO(tr.msaaResolveFbo);
-	}
-	else
-	{
-		tr.renderFbo = FBO_Create("_render", tr.renderDepthImage->width, tr.renderDepthImage->height);
-		FBO_AttachImage(tr.renderFbo, tr.renderImage, GL_COLOR_ATTACHMENT0, 0);
-		FBO_AttachImage(tr.renderFbo, tr.renderDepthImage, GL_DEPTH_ATTACHMENT, 0);
-		R_CheckFBO(tr.renderFbo);
-	}
+	// world views at r_viewScale's size, scaled into the render FBO after
+	// their post-processing (RB_PostProcess)
+	tr.viewFbo = FBO_CreateRenderTarget("_view", "_viewResolve", tr.viewImage, tr.viewDepthImage,
+		hdrFormat, &tr.viewResolveFbo);
 
 	// clear render buffer
 	// this fixes the corrupt screen bug with r_hdr 1 on older hardware

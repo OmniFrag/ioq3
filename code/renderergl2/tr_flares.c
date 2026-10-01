@@ -278,7 +278,7 @@ void RB_TestFlare( flare_t *f ) {
 	float			fade;
 	float			flareDepth;
 
-	FBO_t           *oldFbo;
+	FBO_t           *oldFbo, *resolveFbo;
 
 	backEnd.pc.c_flareTests++;
 
@@ -288,16 +288,17 @@ void RB_TestFlare( flare_t *f ) {
 
 	// if we're doing multisample rendering, read from the correct FBO
 	oldFbo = glState.currentFBO;
-	if (tr.msaaResolveFbo)
+	resolveFbo = RB_ViewScaled() ? tr.viewResolveFbo : tr.msaaResolveFbo;
+	if (resolveFbo)
 	{
-		FBO_Bind(tr.msaaResolveFbo);
+		FBO_Bind(resolveFbo);
 	}
 
 	// read back the z buffer contents
 	qglReadPixels( f->windowX, f->windowY, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth );
 
 	// if we're doing multisample rendering, switch to the old FBO
-	if (tr.msaaResolveFbo)
+	if (resolveFbo)
 	{
 		FBO_Bind(oldFbo);
 	}

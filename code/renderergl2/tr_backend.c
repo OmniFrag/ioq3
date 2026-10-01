@@ -889,6 +889,19 @@ const void *RB_StretchPic ( const void *data ) {
 
 /*
 =============
+RB_ViewScaled
+
+Whether the current world view draws into the view FBO, at r_viewScale's
+size, rather than into the render FBO (R_UpdateViewScale)
+=============
+*/
+qboolean RB_ViewScaled(void)
+{
+	return tr.viewFbo && backEnd.viewParms.targetFbo == tr.viewFbo;
+}
+
+/*
+=============
 RB_DrawSurfs
 
 =============
@@ -932,10 +945,14 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 		if (!isShadowView)
 		{
-			if (tr.msaaResolveFbo)
+			qboolean scaled = RB_ViewScaled();
+			FBO_t *resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
+			image_t *depthImage = scaled ? tr.viewDepthImage : tr.renderDepthImage;
+
+			if (resolveFbo)
 			{
 				// If we're using multisampling, resolve the depth first
-				FBO_FastBlit(tr.renderFbo, NULL, tr.msaaResolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+				FBO_FastBlit(scaled ? tr.viewFbo : tr.renderFbo, NULL, resolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 			}
 			else if (tr.renderFbo == NULL && tr.renderDepthImage)
 			{
@@ -952,7 +969,7 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 				VectorSet4(srcTexCoords, 0.0f, 0.0f, 1.0f, 1.0f);
 
-				FBO_BlitFromTexture(tr.renderDepthImage, srcTexCoords, NULL, tr.hdrDepthFbo, NULL, NULL, NULL, 0);
+				FBO_BlitFromTexture(depthImage, srcTexCoords, NULL, tr.hdrDepthFbo, NULL, NULL, NULL, 0);
 			}
 
 			if (r_sunlightMode->integer && backEnd.viewParms.flags & VPF_USESUNLIGHT)
@@ -963,18 +980,18 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 				FBO_Bind(tr.screenShadowFbo);
 
-				box[0] = backEnd.viewParms.viewportX      * tr.screenShadowFbo->width / (float)glConfig.vidWidth;
-				box[1] = backEnd.viewParms.viewportY      * tr.screenShadowFbo->height / (float)glConfig.vidHeight;
-				box[2] = backEnd.viewParms.viewportWidth  * tr.screenShadowFbo->width / (float)glConfig.vidWidth;
-				box[3] = backEnd.viewParms.viewportHeight * tr.screenShadowFbo->height / (float)glConfig.vidHeight;
+				box[0] = backEnd.viewParms.viewportX      * tr.screenShadowFbo->width / (float)tr.sceneWidth;
+				box[1] = backEnd.viewParms.viewportY      * tr.screenShadowFbo->height / (float)tr.sceneHeight;
+				box[2] = backEnd.viewParms.viewportWidth  * tr.screenShadowFbo->width / (float)tr.sceneWidth;
+				box[3] = backEnd.viewParms.viewportHeight * tr.screenShadowFbo->height / (float)tr.sceneHeight;
 
 				qglViewport(box[0], box[1], box[2], box[3]);
 				qglScissor(box[0], box[1], box[2], box[3]);
 
-				box[0] = backEnd.viewParms.viewportX / (float)glConfig.vidWidth;
-				box[1] = backEnd.viewParms.viewportY / (float)glConfig.vidHeight;
-				box[2] = box[0] + backEnd.viewParms.viewportWidth / (float)glConfig.vidWidth;
-				box[3] = box[1] + backEnd.viewParms.viewportHeight / (float)glConfig.vidHeight;
+				box[0] = backEnd.viewParms.viewportX / (float)tr.sceneWidth;
+				box[1] = backEnd.viewParms.viewportY / (float)tr.sceneHeight;
+				box[2] = box[0] + backEnd.viewParms.viewportWidth / (float)tr.sceneWidth;
+				box[3] = box[1] + backEnd.viewParms.viewportHeight / (float)tr.sceneHeight;
 
 				texCoords[0][0] = box[0]; texCoords[0][1] = box[3];
 				texCoords[1][0] = box[2]; texCoords[1][1] = box[3];
@@ -995,7 +1012,7 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 				GLSL_BindProgram(&tr.shadowmaskShader);
 
-				GL_BindToTMU(tr.renderDepthImage, TB_COLORMAP);
+				GL_BindToTMU(depthImage, TB_COLORMAP);
 
 				if (r_shadowCascadeZFar->integer != 0)
 				{
@@ -1370,6 +1387,9 @@ pass's shader
 */
 static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 {
+	// the window's size, which the shader's vertices are in
+	vec2_t fbufScale = { 1.0f / glConfig.vidWidth, 1.0f / glConfig.vidHeight };
+
 	if (!src || !src->colorImage[0])
 		return;
 
@@ -1379,6 +1399,7 @@ static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 	GL_State(GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO);
 
 	GLSL_BindProgram(&tr.greyscaleShader);
+	GLSL_SetUniformVec2(&tr.greyscaleShader, UNIFORM_FBUFSCALE, fbufScale);
 	GLSL_SetUniformInt(&tr.greyscaleShader, UNIFORM_TEXTUREMAP, 0);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GREYSCALE, backEnd.greyscale);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GAMMA, gamma);
@@ -1528,6 +1549,61 @@ const void *RB_CapShadowMap(const void *data)
 
 /*
 =============
+RB_CopyFboRect
+
+Copies a rectangle of a framebuffer's colour to another place in it, which
+mustn't overlap it
+=============
+*/
+static void RB_CopyFboRect(FBO_t *fbo, int x, int y, int w, int h, int dstX, int dstY)
+{
+	ivec4_t srcBox, dstBox;
+
+	VectorSet4(srcBox, x, y, w, h);
+	VectorSet4(dstBox, dstX, dstY, w, h);
+	FBO_FastBlit(fbo, srcBox, fbo, dstBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+}
+
+/*
+=============
+RB_DrawScaledView
+
+Draws a world view that r_viewScale scaled, from the view FBO it was drawn
+and post-processed in, into its own rectangle of the render FBO, filtered
+linearly: scaling up smooths, and scaling down by 2 averages each 2x2
+=============
+*/
+static void RB_DrawScaledView(FBO_t *src)
+{
+	int x = backEnd.viewParms.viewportX, y = backEnd.viewParms.viewportY;
+	int w = backEnd.viewParms.viewportWidth, h = backEnd.viewParms.viewportHeight;
+	ivec4_t srcBox, dstBox;
+
+	// the view's edge columns and rows again just outside it, so that
+	// filtering at its edges reads them as clamping to the edge would,
+	// not what lies around a view smaller than the view FBO (as opengl1's)
+	if (glRefConfig.framebufferBlit)
+	{
+		int x0 = MAX(x - 1, 0), x1 = MIN(x + w + 1, src->width);
+
+		if (x > 0)
+			RB_CopyFboRect(src, x, y, 1, h, x - 1, y);
+		if (x + w < src->width)
+			RB_CopyFboRect(src, x + w - 1, y, 1, h, x + w, y);
+		if (y > 0)
+			RB_CopyFboRect(src, x0, y, x1 - x0, 1, x0, y - 1);
+		if (y + h < src->height)
+			RB_CopyFboRect(src, x0, y + h - 1, x1 - x0, 1, x0, y + h);
+	}
+
+	VectorSet4(srcBox, x, y, w, h);
+	VectorSet4(dstBox, backEnd.refdef.x, glConfig.vidHeight - (backEnd.refdef.y + backEnd.refdef.height),
+		backEnd.refdef.width, backEnd.refdef.height);
+	FBO_Blit(src, srcBox, NULL, tr.renderFbo, dstBox, NULL, NULL, 0);
+}
+
+/*
+=============
 RB_PostProcess
 
 =============
@@ -1535,15 +1611,15 @@ RB_PostProcess
 const void *RB_PostProcess(const void *data)
 {
 	const postProcessCommand_t *cmd = data;
-	FBO_t *srcFbo, *dstFbo;
+	FBO_t *srcFbo, *dstFbo, *resolveFbo;
 	ivec4_t srcBox, dstBox;
-	qboolean autoExposure;
+	qboolean autoExposure, scaled;
 
 	// finish any 2D drawing if needed
 	if(tess.numIndexes)
 		RB_EndSurface();
 
-	if (!glRefConfig.framebufferObject || !r_postProcess->integer)
+	if (!glRefConfig.framebufferObject)
 	{
 		// do nothing
 		return (const void *)(cmd + 1);
@@ -1555,15 +1631,21 @@ const void *RB_PostProcess(const void *data)
 		backEnd.viewParms = cmd->viewParms;
 	}
 
-	srcFbo = tr.renderFbo;
-	dstFbo = tr.renderFbo;
+	// a view r_viewScale scaled is scaled into place here, with or
+	// without its effects
+	scaled = RB_ViewScaled();
+	if (!r_postProcess->integer && !scaled)
+		return (const void *)(cmd + 1);
 
-	if (tr.msaaResolveFbo)
+	srcFbo = dstFbo = scaled ? tr.viewFbo : tr.renderFbo;
+	resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
+
+	if (resolveFbo)
 	{
 		// Resolve the MSAA before anything else
 		// Can't resolve just part of the MSAA FBO, so multiple views will suffer a performance hit here
-		FBO_FastBlit(tr.renderFbo, NULL, tr.msaaResolveFbo, NULL, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-		srcFbo = tr.msaaResolveFbo;
+		FBO_FastBlit(dstFbo, NULL, resolveFbo, NULL, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+		srcFbo = resolveFbo;
 	}
 
 	dstBox[0] = backEnd.viewParms.viewportX;
@@ -1571,46 +1653,53 @@ const void *RB_PostProcess(const void *data)
 	dstBox[2] = backEnd.viewParms.viewportWidth;
 	dstBox[3] = backEnd.viewParms.viewportHeight;
 
-	if (r_ssao->integer)
-	{
-		srcBox[0] = backEnd.viewParms.viewportX      * tr.screenSsaoImage->width  / (float)glConfig.vidWidth;
-		srcBox[1] = backEnd.viewParms.viewportY      * tr.screenSsaoImage->height / (float)glConfig.vidHeight;
-		srcBox[2] = backEnd.viewParms.viewportWidth  * tr.screenSsaoImage->width  / (float)glConfig.vidWidth;
-		srcBox[3] = backEnd.viewParms.viewportHeight * tr.screenSsaoImage->height / (float)glConfig.vidHeight;
-
-		FBO_Blit(tr.screenSsaoFbo, srcBox, NULL, srcFbo, dstBox, NULL, NULL, GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO);
-	}
-
 	srcBox[0] = backEnd.viewParms.viewportX;
 	srcBox[1] = backEnd.viewParms.viewportY;
 	srcBox[2] = backEnd.viewParms.viewportWidth;
 	srcBox[3] = backEnd.viewParms.viewportHeight;
 
-	if (srcFbo)
+	if (r_postProcess->integer)
 	{
-		if (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
+		if (r_ssao->integer)
 		{
-			autoExposure = r_autoExposure->integer || r_forceAutoExposure->integer;
+			ivec4_t ssaoBox;
 
-			// Use an intermediate FBO because it can't blit to the same FBO directly
-			// and can't read from an MSAA dstFbo later.
-			RB_ToneMap(srcFbo, srcBox, tr.screenScratchFbo, srcBox, autoExposure);
-			FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			ssaoBox[0] = backEnd.viewParms.viewportX      * tr.screenSsaoImage->width  / (float)tr.sceneWidth;
+			ssaoBox[1] = backEnd.viewParms.viewportY      * tr.screenSsaoImage->height / (float)tr.sceneHeight;
+			ssaoBox[2] = backEnd.viewParms.viewportWidth  * tr.screenSsaoImage->width  / (float)tr.sceneWidth;
+			ssaoBox[3] = backEnd.viewParms.viewportHeight * tr.screenSsaoImage->height / (float)tr.sceneHeight;
+
+			FBO_Blit(tr.screenSsaoFbo, ssaoBox, NULL, srcFbo, dstBox, NULL, NULL, GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO);
 		}
-		// Without the tone map, the view keeps the colours it was drawn with,
-		// as without framebuffers: r_cameraExposure is the tone map's, and its
-		// default alone would double the view on a float target
+
+		if (srcFbo)
+		{
+			if (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
+			{
+				autoExposure = r_autoExposure->integer || r_forceAutoExposure->integer;
+
+				// Use an intermediate FBO because it can't blit to the same FBO directly
+				// and can't read from an MSAA dstFbo later.
+				RB_ToneMap(srcFbo, srcBox, tr.screenScratchFbo, srcBox, autoExposure);
+				FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			}
+			// Without the tone map, the view keeps the colours it was drawn with,
+			// as without framebuffers: r_cameraExposure is the tone map's, and its
+			// default alone would double the view on a float target
+		}
+
+		if (r_drawSunRays->integer)
+			RB_SunRays(srcFbo, srcBox, srcFbo, srcBox);
+
+		if (1)
+			RB_BokehBlur(srcFbo, srcBox, srcFbo, srcBox, backEnd.refdef.blurFactor);
+		else
+			RB_GaussianBlur(srcFbo, srcFbo, backEnd.refdef.blurFactor);
 	}
 
-	if (r_drawSunRays->integer)
-		RB_SunRays(srcFbo, srcBox, srcFbo, srcBox);
-
-	if (1)
-		RB_BokehBlur(srcFbo, srcBox, srcFbo, srcBox, backEnd.refdef.blurFactor);
-	else
-		RB_GaussianBlur(srcFbo, srcFbo, backEnd.refdef.blurFactor);
-
-	if (srcFbo != dstFbo)
+	if (scaled)
+		RB_DrawScaledView(srcFbo);
+	else if (srcFbo != dstFbo)
 		FBO_FastBlit(srcFbo, srcBox, dstFbo, dstBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
 #if 0
