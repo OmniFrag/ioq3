@@ -683,6 +683,21 @@ FILE *Sys_Mkfifo( const char *ospath )
 
 /*
 ==============
+Sys_ExecutablePath
+
+The running executable's full path, which argv[0] isn't when the program
+was started from the PATH
+==============
+*/
+qboolean Sys_ExecutablePath( char *path, int size )
+{
+	DWORD length = GetModuleFileNameA( NULL, path, size );
+
+	return length > 0 && length < (DWORD)size;
+}
+
+/*
+==============
 Sys_Cwd
 ==============
 */

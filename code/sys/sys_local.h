@@ -58,6 +58,7 @@ unsigned int CON_LogRead( char *out, unsigned int outSize );
 
 char *Sys_BinaryPath( void );
 char *Sys_BinaryPathRelative( const char *relative );
+qboolean Sys_ExecutablePath( char *path, int size );
 
 #ifdef __APPLE__
 char *Sys_StripAppBundle( char *pwd );
