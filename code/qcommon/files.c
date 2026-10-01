@@ -3161,26 +3161,6 @@ static void FS_AddGameDirectories(const char *dir)
 
 /*
 ================
-FS_idPak
-================
-*/
-qboolean FS_idPak(char *pak, char *base, int numPaks)
-{
-	int i;
-
-	for (i = 0; i < NUM_ID_PAKS; i++) {
-		if ( !FS_FilenameCompare(pak, va("%s/pak%d", base, i)) ) {
-			break;
-		}
-	}
-	if (i < numPaks) {
-		return qtrue;
-	}
-	return qfalse;
-}
-
-/*
-================
 FS_CheckDirTraversal
 
 Check whether the string contains stuff like "../" to prevent directory traversal bugs
@@ -3254,16 +3234,6 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 	{
 		// Ok, see if we have this pak file
 		havepak = qfalse;
-
-		// never autodownload any of the id paks
-		if(FS_idPak(fs_serverReferencedPakNames[i], BASEGAME, NUM_ID_PAKS)
-#ifndef STANDALONE
-				|| FS_idPak(fs_serverReferencedPakNames[i], BASETA, NUM_TA_PAKS)
-#endif
-			)
-		{
-			continue;
-		}
 
 		// Make sure the server cannot make us write to non-quake3 directories.
 		if(FS_CheckDirTraversal(fs_serverReferencedPakNames[i]))
