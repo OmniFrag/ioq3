@@ -1400,6 +1400,33 @@ void IN_Frame( void )
 
 /*
 ===============
+IN_GetSafeArea
+
+The window's safe area (SDL_GetWindowSafeArea) in pixels, as x, y, width
+and height. SDL gives it in the window's coordinates, which can differ from
+its pixels at a high pixel density.
+===============
+*/
+qboolean IN_GetSafeArea( int rect[4] )
+{
+	SDL_Rect safe;
+	int width, height, pixelWidth, pixelHeight;
+
+	if( !SDL_window || !SDL_GetWindowSafeArea( SDL_window, &safe ) ||
+		!SDL_GetWindowSize( SDL_window, &width, &height ) ||
+		!SDL_GetWindowSizeInPixels( SDL_window, &pixelWidth, &pixelHeight ) ||
+		width <= 0 || height <= 0 )
+		return qfalse;
+
+	rect[0] = safe.x * pixelWidth / width;
+	rect[1] = safe.y * pixelHeight / height;
+	rect[2] = ( safe.x + safe.w ) * pixelWidth / width - rect[0];
+	rect[3] = ( safe.y + safe.h ) * pixelHeight / height - rect[1];
+	return qtrue;
+}
+
+/*
+===============
 IN_Init
 ===============
 */

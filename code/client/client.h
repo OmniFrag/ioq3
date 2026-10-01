@@ -491,6 +491,7 @@ int CL_GetPingQueueCount( void );
 
 void CL_ShutdownRef( void );
 qboolean CL_ResizeWindow( void );
+void CL_GetSafeArea( int rect[4] );
 qboolean CL_WantsTextInput( void );
 void CL_InitRef( void );
 qboolean CL_CDKeyValidate( const char *key, const char *checksum );

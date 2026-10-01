@@ -407,6 +407,7 @@ static const vmExtension_t cl_cgameExtensions[] = {
 	{ "trap_FollowWindowSize_OF", COM_TRAP_FOLLOWWINDOWSIZE },
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_IsRecordingDemo", COM_TRAP_ISRECORDINGDEMO },
+	{ "trap_GetSafeArea_OF", COM_TRAP_GETSAFEAREA },
 	{ NULL, 0 }
 };
 
@@ -519,6 +520,7 @@ static const char * const cl_cgameSyscallNames[] = {
 	SYSCALL( COM_TRAP_FOLLOWWINDOWSIZE ),
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
 	SYSCALL( COM_TRAP_ISRECORDINGDEMO ),
+	SYSCALL( COM_TRAP_GETSAFEAREA ),
 };
 
 /*
@@ -863,6 +865,10 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_ISRECORDINGDEMO:
 		return clc.demorecording;
+
+	case COM_TRAP_GETSAFEAREA:
+		CL_GetSafeArea( VMA_ARRAY( 1, int, 4 ) );
+		return 0;
 
 	default:
 	        assert(0);
