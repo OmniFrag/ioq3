@@ -57,6 +57,10 @@ cvar_t *r_centerWindow;
 cvar_t *r_sdlDriver;
 cvar_t *r_preferOpenGLES;
 cvar_t *r_gpuSync;
+cvar_t *r_modeFullscreen;
+
+// a new r_mode for the window, which waits while it's fullscreen
+static qboolean windowSizePending;
 
 // the last frame's fence, which GLimp_EndFrame waits on after the next swap
 static GLsync frameFence;
@@ -513,16 +517,21 @@ GLimp_ClosestFullscreenMode
 The display's fullscreen mode nearest width by height pixels. Prefers, in
 order: at least that many pixels each way; the fewest pixels then (else
 the most); pixel density 1; the refresh rate nearest refreshRate (the
-highest for 0).
+desktop's for 0).
 ===============
 */
 static qboolean GLimp_ClosestFullscreenMode( SDL_DisplayID display, int width, int height,
 	float refreshRate, SDL_DisplayMode *closest )
 {
 	SDL_DisplayMode **modes;
-	const SDL_DisplayMode *best = NULL;
+	const SDL_DisplayMode *best = NULL, *desktopMode;
 	int i, count, bestPixels = 0;
 	qboolean bestFits = qfalse;
+
+	if( refreshRate <= 0.0f && ( desktopMode = SDL_GetDesktopDisplayMode( display ) ) != NULL )
+	{
+		refreshRate = desktopMode->refresh_rate;
+	}
 
 	modes = SDL_GetFullscreenDisplayModes( display, &count );
 	if( !modes )
@@ -572,6 +581,176 @@ static qboolean GLimp_ClosestFullscreenMode( SDL_DisplayID display, int width, i
 
 /*
 ===============
+GLimp_FullscreenMode
+
+The display mode fullscreen asks for, or NULL for none: the window fills
+the display in the mode it has, at its resolution and refresh rate, and
+no screen goes blank for a mode change (r_modeFullscreen -2). A mode, or
+-1 for r_customwidth by r_customheight, changes the display to the
+closest it has; an empty r_modeFullscreen uses r_mode's.
+===============
+*/
+static const SDL_DisplayMode *GLimp_FullscreenMode( SDL_DisplayID display, SDL_DisplayMode *closest )
+{
+	// what isn't a number keeps the display's mode, rather than reading as
+	// mode 0
+	int mode = !*r_modeFullscreen->string ? r_mode->integer :
+		Q_isanumber( r_modeFullscreen->string ) ? r_modeFullscreen->integer : -2;
+	int width, height;
+	float aspect;
+
+	if( mode == -2 )
+	{
+		return NULL;
+	}
+
+	if( !R_GetModeInfo( &width, &height, &aspect, mode ) )
+	{
+		ri.Printf( PRINT_ALL, "Invalid fullscreen mode %d, using the display's own\n", mode );
+		return NULL;
+	}
+
+	if( !GLimp_ClosestFullscreenMode( display, width, height,
+			(float)ri.Cvar_VariableIntegerValue( "r_displayRefresh" ), closest ) )
+	{
+		ri.Printf( PRINT_DEVELOPER, "No fullscreen modes for %dx%d, using the display's own: %s\n",
+			width, height, SDL_GetError( ) );
+		return NULL;
+	}
+
+	return closest;
+}
+
+/*
+===============
+GLimp_ApplyFullscreenMode
+
+Gives the window GLimp_FullscreenMode's mode, for whenever it's fullscreen
+===============
+*/
+static qboolean GLimp_ApplyFullscreenMode( SDL_DisplayID display )
+{
+	SDL_DisplayMode closestMode;
+	const SDL_DisplayMode *mode = GLimp_FullscreenMode( display, &closestMode );
+
+	if( !SDL_SetWindowFullscreenMode( SDL_window, mode ) )
+	{
+		ri.Printf( PRINT_DEVELOPER, "SDL_SetWindowFullscreenMode failed: %s\n", SDL_GetError( ) );
+		return qfalse;
+	}
+
+	if( !mode )
+	{
+		mode = SDL_GetDesktopDisplayMode( display );
+	}
+	glConfig.displayFrequency = mode ? SDL_lroundf( mode->refresh_rate ) : 0;
+	return qtrue;
+}
+
+/*
+===============
+GLimp_ModeSize
+
+A window's size for an r_mode, in the window's coordinates, which on macOS
+and Wayland are points, and in pixels. -2 is the desktop's size, of which
+a native window gets three quarters
+===============
+*/
+static qboolean GLimp_ModeSize( SDL_DisplayID display, int mode, float density,
+	int *windowWidth, int *windowHeight, int *pixelWidth, int *pixelHeight )
+{
+	const SDL_DisplayMode *desktopMode = SDL_GetDesktopDisplayMode( display );
+	float aspect;
+
+	if( mode == -2 && desktopMode )
+	{
+		if( desktopMode->h > 0 )
+		{
+			*windowWidth = desktopMode->w;
+			*windowHeight = desktopMode->h;
+#ifndef __EMSCRIPTEN__
+			GLimp_WindowedSize( display, windowWidth, windowHeight );
+#endif
+		}
+		else
+		{
+			*windowWidth = 640;
+			*windowHeight = 480;
+			ri.Printf( PRINT_ALL, "Cannot determine display resolution, assuming 640x480\n" );
+		}
+
+		*pixelWidth = SDL_lroundf( *windowWidth * density );
+		*pixelHeight = SDL_lroundf( *windowHeight * density );
+		return qtrue;
+	}
+
+	if( !R_GetModeInfo( pixelWidth, pixelHeight, &aspect, mode ) )
+	{
+		return qfalse;
+	}
+
+	*windowWidth = SDL_lroundf( *pixelWidth / density );
+	*windowHeight = SDL_lroundf( *pixelHeight / density );
+	return qtrue;
+}
+
+/*
+===============
+GLimp_WindowSizeChanged
+
+Whether r_mode, r_customwidth or r_customheight changed since last asked
+===============
+*/
+static qboolean GLimp_WindowSizeChanged( void )
+{
+	qboolean changed = r_mode->modified || r_customwidth->modified || r_customheight->modified;
+
+	r_mode->modified = r_customwidth->modified = r_customheight->modified = qfalse;
+	return changed;
+}
+
+#ifndef __EMSCRIPTEN__
+/*
+===============
+GLimp_ResizeWindow
+
+Gives a window r_mode's size, in place
+===============
+*/
+static void GLimp_ResizeWindow( void )
+{
+	float density = SDL_GetWindowPixelDensity( SDL_window );
+	int width, height, pixelWidth, pixelHeight, currentWidth, currentHeight;
+
+	if( !GLimp_ModeSize( SDL_GetDisplayForWindow( SDL_window ), r_mode->integer,
+			density > 0.0f ? density : 1.0f, &width, &height, &pixelWidth, &pixelHeight ) )
+	{
+		ri.Printf( PRINT_ALL, "Invalid mode %d\n", r_mode->integer );
+		return;
+	}
+
+	// already that size, as when IN_SaveWindowSize keeps a resize. Ask the
+	// window: glConfig follows it only once its resize event arrives, so
+	// just after leaving fullscreen it still has the fullscreen size.
+	if( SDL_GetWindowSizeInPixels( SDL_window, &currentWidth, &currentHeight ) &&
+		pixelWidth == currentWidth && pixelHeight == currentHeight )
+	{
+		return;
+	}
+
+	// restoring is asynchronous on X11 and Wayland, and a size asked for
+	// while still maximized is lost to it
+	if( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_MAXIMIZED )
+	{
+		SDL_RestoreWindow( SDL_window );
+		SDL_SyncWindow( SDL_window );
+	}
+	SDL_SetWindowSize( SDL_window, width, height );
+}
+#endif
+
+/*
+===============
 GLimp_SetMode
 
 r_mode's sizes are the pixels to render, on every platform. The window
@@ -597,7 +776,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	const SDL_DisplayMode *desktopMode = NULL;
 	int display = 0;
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
-	int windowWidth, windowHeight;
+	int windowWidth, windowHeight, pixelWidth, pixelHeight;
 	float density = 1.0f;
 	int swapInterval;
 
@@ -654,43 +833,19 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	ri.Printf (PRINT_ALL, "...setting mode %d:", mode );
 
-	if( mode == -2 && desktopMode )
-	{
-		// use desktop video resolution, which is in the window's
-		// coordinates
-		if( desktopMode->h > 0 )
-		{
-			windowWidth = desktopMode->w;
-			windowHeight = desktopMode->h;
-#ifndef __EMSCRIPTEN__
-			if( !fullscreen )
-			{
-				GLimp_WindowedSize( display, &windowWidth, &windowHeight );
-			}
-#endif
-		}
-		else
-		{
-			windowWidth = 640;
-			windowHeight = 480;
-			ri.Printf( PRINT_ALL, "Cannot determine display resolution, assuming 640x480\n" );
-		}
-
-		glConfig.vidWidth = SDL_lroundf( windowWidth * density );
-		glConfig.vidHeight = SDL_lroundf( windowHeight * density );
-		glConfig.windowAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
-	}
-	else if ( R_GetModeInfo( &glConfig.vidWidth, &glConfig.vidHeight, &glConfig.windowAspect, mode ) )
-	{
-		windowWidth = SDL_lroundf( glConfig.vidWidth / density );
-		windowHeight = SDL_lroundf( glConfig.vidHeight / density );
-	}
-	else
+	// the window's size, which it also keeps for when it leaves fullscreen;
+	// GLimp_UpdateWindowSize takes the size it gets
+	if( !GLimp_ModeSize( display, mode, density, &windowWidth, &windowHeight, &pixelWidth, &pixelHeight ) )
 	{
 		ri.Printf( PRINT_ALL, " invalid mode\n" );
 		return RSERR_INVALID_MODE;
 	}
-	ri.Printf( PRINT_ALL, " %d %d\n", glConfig.vidWidth, glConfig.vidHeight);
+	ri.Printf( PRINT_ALL, " %d %d\n", pixelWidth, pixelHeight );
+
+	// until the window says otherwise, should it report no size
+	glConfig.vidWidth = pixelWidth;
+	glConfig.vidHeight = pixelHeight;
+	glConfig.windowAspect = (float)pixelWidth / (float)pixelHeight;
 
 	// Center window
 	if( r_centerWindow->integer && !fullscreen && desktopMode )
@@ -980,29 +1135,8 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 		if( fullscreen )
 		{
-			// SDL3 only accepts modes the display has; NULL keeps the
-			// desktop's, which is what mode -2 asks for
-			SDL_DisplayMode closestMode;
-			const SDL_DisplayMode *fullscreenMode = NULL;
-
-			glConfig.displayFrequency = ri.Cvar_VariableIntegerValue( "r_displayRefresh" );
-			if( mode != -2 )
+			if( !GLimp_ApplyFullscreenMode( display ) )
 			{
-				if( GLimp_ClosestFullscreenMode( display, glConfig.vidWidth, glConfig.vidHeight,
-						(float)glConfig.displayFrequency, &closestMode ) )
-				{
-					fullscreenMode = &closestMode;
-				}
-				else
-				{
-					ri.Printf( PRINT_DEVELOPER, "No fullscreen modes for %dx%d, using the desktop's: %s\n",
-						glConfig.vidWidth, glConfig.vidHeight, SDL_GetError( ) );
-				}
-			}
-
-			if( !SDL_SetWindowFullscreenMode( SDL_window, fullscreenMode ) )
-			{
-				ri.Printf( PRINT_DEVELOPER, "SDL_SetWindowFullscreenMode failed: %s\n", SDL_GetError( ) );
 				continue;
 			}
 		}
@@ -1327,6 +1461,10 @@ void GLimp_Init( qboolean fixedFunction )
 		"show as soon after they're drawn as they can. Needs OpenGL 3.2, or GL_ARB_sync." );
 	ri.Cvar_SetDescription( ri.Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM ),
 		"The swap interval the driver gave for r_swapInterval: with one, a com_maxfps at or above the display's refresh rate leaves the pacing to the display." );
+	r_modeFullscreen = ri.Cvar_Get( "r_modeFullscreen", "-2", CVAR_ARCHIVE );
+	ri.Cvar_SetDescription( r_modeFullscreen, "Display mode for fullscreen: -2 keeps the display's own resolution and refresh rate; "
+		"-1 (r_customwidth by r_customheight) or a mode number changes the display to the closest mode it has, at r_displayRefresh; "
+		"empty uses r_mode" );
 
 	if( ri.Cvar_VariableIntegerValue( "com_abnormalExit" ) )
 	{
@@ -1371,6 +1509,11 @@ void GLimp_Init( qboolean fixedFunction )
 	ri.Error( ERR_FATAL, "GLimp_Init() - could not load OpenGL subsystem" );
 
 success:
+	// the new window has r_mode's size, and fullscreen r_modeFullscreen's
+	GLimp_WindowSizeChanged( );
+	r_modeFullscreen->modified = qfalse;
+	windowSizePending = qfalse;
+
 	// These values force the UI to disable driver selection
 	glConfig.driverType = GLDRV_ICD;
 	glConfig.hardwareType = GLHW_GENERIC;
@@ -1562,6 +1705,12 @@ void GLimp_EndFrame( void )
 
 		if( needToToggle )
 		{
+			// the same display mode as a window created fullscreen
+			if( r_fullscreen->integer )
+			{
+				GLimp_ApplyFullscreenMode( SDL_GetDisplayForWindow( SDL_window ) );
+			}
+
 			sdlToggled = SDL_SetWindowFullscreen( SDL_window, r_fullscreen->integer );
 
 			// SDL_WM_ToggleFullScreen didn't work, so do it the slow way;
@@ -1585,6 +1734,44 @@ void GLimp_EndFrame( void )
 		}
 
 		r_fullscreen->modified = qfalse;
+	}
+
+	// r_mode sizes the window, at once, or when it leaves fullscreen; a
+	// fullscreen window takes a new display mode at once
+	{
+		qboolean sizeChanged = GLimp_WindowSizeChanged( );
+		qboolean fullscreenModeChanged = r_modeFullscreen->modified;
+
+		r_modeFullscreen->modified = qfalse;
+		if( sizeChanged )
+		{
+			windowSizePending = qtrue;
+
+			// an empty r_modeFullscreen follows r_mode, and -1 r_customwidth
+			// by r_customheight
+			if( !*r_modeFullscreen->string || r_modeFullscreen->integer == -1 )
+			{
+				fullscreenModeChanged = qtrue;
+			}
+		}
+
+		if( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN )
+		{
+			if( fullscreenModeChanged )
+			{
+				GLimp_ApplyFullscreenMode( SDL_GetDisplayForWindow( SDL_window ) );
+			}
+			else if( sizeChanged )
+			{
+				ri.Printf( PRINT_ALL, "r_mode sizes the window; fullscreen keeps its display mode "
+					"(r_modeFullscreen changes that)\n" );
+			}
+		}
+		else if( windowSizePending )
+		{
+			windowSizePending = qfalse;
+			GLimp_ResizeWindow( );
+		}
 	}
 #endif
 }
