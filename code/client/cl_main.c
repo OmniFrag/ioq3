@@ -3210,6 +3210,22 @@ qboolean CL_ResizeWindow( void ) {
 
 /*
 ============
+CL_GetSafeArea
+
+The window's safe area in pixels, as x, y, width and height, for the game
+modules' trap_GetSafeArea: the whole window where the system reports none
+============
+*/
+void CL_GetSafeArea( int rect[4] ) {
+	if ( !IN_GetSafeArea( rect ) ) {
+		rect[0] = rect[1] = 0;
+		rect[2] = cls.glconfig.vidWidth;
+		rect[3] = cls.glconfig.vidHeight;
+	}
+}
+
+/*
+============
 CL_FrameReady
 
 Whether the renderer is ready for a new frame, or is still drawing the
