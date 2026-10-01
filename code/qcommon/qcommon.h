@@ -409,6 +409,11 @@ typedef struct {
 #define	COM_TRAP_CVAR_SETDESCRIPTION	802
 #define	COM_TRAP_ISRECORDINGDEMO	803
 
+// trap_GetSafeArea( int rect[4] ) in cgame: the window's safe area in pixels,
+// as x, y, width and height, clear of notches, rounded corners, home bars and
+// overscan; the whole window where the system reports none
+#define	COM_TRAP_GETSAFEAREA	804
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );
@@ -1227,6 +1232,7 @@ void IN_Init( void *windowData );
 void IN_Frame( void );
 void IN_Shutdown( void );
 void IN_Restart( void );
+qboolean IN_GetSafeArea( int rect[4] );
 
 /*
 ==============================================================
