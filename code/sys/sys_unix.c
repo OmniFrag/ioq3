@@ -55,6 +55,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <pthread.h>
 #define USE_THREADS
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 qboolean stdinIsATTY;
 
@@ -1032,6 +1035,35 @@ char *Sys_Cwd( void )
 	cwd[MAX_OSPATH-1] = 0;
 
 	return cwd;
+}
+
+/*
+==================
+Sys_ExecutablePath
+
+The running executable's full path, with its links resolved, which
+argv[0] isn't when the program was started from the PATH; qfalse where
+the system can't say
+==================
+*/
+qboolean Sys_ExecutablePath( char *path, int size )
+{
+	char exe[ PATH_MAX ], resolved[ PATH_MAX ];
+#if defined( __APPLE__ )
+	uint32_t length = sizeof( exe );
+
+	if( _NSGetExecutablePath( exe, &length ) != 0 )
+		return qfalse;
+#elif defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
+	Q_strncpyz( exe, "/proc/self/exe", sizeof( exe ) );
+#else
+	return qfalse;
+#endif
+
+	if( !realpath( exe, resolved ) || strlen( resolved ) >= (size_t)size )
+		return qfalse;
+	Q_strncpyz( path, resolved, size );
+	return qtrue;
 }
 
 /*

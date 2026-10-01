@@ -1062,6 +1062,7 @@ Sys_Start
 static void Sys_Start( int argc, char **argv )
 {
 	int   i;
+	char  executable[ MAX_OSPATH ];
 	// Com_StartupVariable reads it after Com_Init
 	static char  commandLine[ MAX_STRING_CHARS ] = { 0 };
 #ifdef PROTOCOL_HANDLER
@@ -1125,7 +1126,7 @@ static void Sys_Start( int argc, char **argv )
 #endif
 
 	Sys_ParseArgs( argc, argv );
-	Sys_SetBinaryPath( Sys_Dirname( argv[ 0 ] ) );
+	Sys_SetBinaryPath( Sys_Dirname( Sys_ExecutablePath( executable, sizeof( executable ) ) ? executable : argv[ 0 ] ) );
 	Sys_SetDefaultInstallPath( DEFAULT_BASEDIR );
 
 	// Concatenate the command line for passing to Com_Init
