@@ -467,6 +467,7 @@ typedef struct {
 	vec3_t		visBounds[2];
 	float		zFar;
 	stereoFrame_t	stereoFrame;
+	qboolean	scaled;				// r_viewScale drew it smaller, in its corner (RB_DrawScaledView)
 } viewParms_t;
 
 
@@ -909,6 +910,7 @@ typedef struct {
 	image_t					*flareImage;
 	image_t					*whiteImage;			// full of 0xff
 	image_t					*identityLightImage;	// full of tr.identityLightByte
+	image_t					*viewImage;				// a world view r_viewScale drew smaller
 
 	shader_t				*defaultShader;
 	shader_t				*shadowShader;

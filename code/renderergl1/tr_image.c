@@ -1246,6 +1246,9 @@ void R_CreateBuiltinImages( void ) {
 
 	tr.identityLightImage = R_CreateImage("*identityLight", (byte *)data, 8, 8, IMGTYPE_COLORALPHA, IMGFLAG_NONE, 0);
 
+	// sized by RB_DrawScaledView
+	tr.viewImage = R_CreateImage("*view", (byte *)data, 8, 8, IMGTYPE_COLORALPHA, IMGFLAG_CLAMPTOEDGE, 0);
+
 
 	for(x=0;x<32;x++) {
 		// scratchimage is usually used for cinematic drawing

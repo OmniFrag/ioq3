@@ -1546,6 +1546,8 @@ typedef struct {
 	image_t					*renderImage;
 	image_t					*sunRaysImage;
 	image_t					*renderDepthImage;
+	image_t					*viewImage;			// world views at r_viewScale's size
+	image_t					*viewDepthImage;
 	image_t					*pshadowMaps[MAX_DRAWN_PSHADOWS];
 	image_t					*screenScratchImage;
 	image_t					*textureScratchImage[2];
@@ -1563,6 +1565,8 @@ typedef struct {
 
 	FBO_t					*renderFbo;
 	FBO_t					*msaaResolveFbo;
+	FBO_t					*viewFbo;			// world views draw here when r_viewScale scales them
+	FBO_t					*viewResolveFbo;
 	FBO_t					*sunRaysFbo;
 	FBO_t					*depthFbo;
 	FBO_t					*pshadowFbos[MAX_DRAWN_PSHADOWS];
@@ -1576,6 +1580,11 @@ typedef struct {
 	FBO_t					*screenSsaoFbo;
 	FBO_t					*hdrDepthFbo;
 	FBO_t                   *renderCubeFbo;
+
+	// the size world views draw at, and the screen-space images they use
+	// have: the window's, or with viewScaled, r_viewScale's (R_UpdateViewScale)
+	int						sceneWidth, sceneHeight;
+	qboolean				viewScaled;
 
 	shader_t				*defaultShader;
 	shader_t				*shadowShader;
@@ -2007,6 +2016,7 @@ void	R_InitFogTable( void );
 float	R_FogFactor( float s, float t );
 void	R_InitImages( void );
 void	R_ResizeScreenImages( void );
+void	R_UpdateViewScale( void );
 void	R_DeleteTextures( void );
 int		R_SumOfUsedImages( void );
 void	R_InitSkins( void );
@@ -2016,6 +2026,7 @@ int R_ComputeLOD( trRefEntity_t *ent );
 
 const void *RB_TakeVideoFrameCmd( const void *data );
 void RB_TakeCaptures( void );
+qboolean RB_ViewScaled( void );
 
 //
 // tr_shader.c

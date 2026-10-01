@@ -118,7 +118,24 @@ extern cvar_t *r_stereoEnabled;
 
 extern	cvar_t	*r_saveFontData;
 
+extern cvar_t *r_viewScale;		// the 3D view's resolution, a fraction of its size in pixels
+
 qboolean	R_GetModeInfo( int *width, int *height, float *windowAspect, int mode );
+
+/*
+================
+R_ScaleViewSide
+
+A side of the 3D view, in pixels, at r_viewScale's scale: rounded, at
+least 64 pixels unless the side is smaller, and at most maxSide
+================
+*/
+static ID_INLINE int R_ScaleViewSide( int side, float scale, int maxSide ) {
+	int scaled = (int)( side * scale + 0.5f );
+
+	scaled = MAX( scaled, MIN( side, 64 ) );
+	return MIN( scaled, maxSide );
+}
 
 float R_NoiseGet4f( float x, float y, float z, double t );
 void  R_NoiseInit( void );

@@ -903,6 +903,70 @@ const void *RB_StretchPic ( const void *data ) {
 
 /*
 =============
+RB_DrawScaledView
+
+Scales a world view r_viewScale drew smaller, in the corner of its
+rectangle, up into the whole rectangle: copied into a texture and drawn
+with linear filtering
+=============
+*/
+static void RB_DrawScaledView( void ) {
+	const viewParms_t *view = &backEnd.viewParms;
+	image_t *image = tr.viewImage;
+	int x = view->viewportX, y = view->viewportY, w = view->viewportWidth, h = view->viewportHeight;
+	float x0 = backEnd.refdef.x, y0 = backEnd.refdef.y;
+	float x1 = x0 + backEnd.refdef.width, y1 = y0 + backEnd.refdef.height;
+	float s, t;
+
+	GL_Bind( image );
+
+	// sides that are powers of 2, which every GL takes, grown as needed
+	if ( image->uploadWidth < w || image->uploadHeight < h ) {
+		while ( image->uploadWidth < w )
+			image->uploadWidth <<= 1;
+		while ( image->uploadHeight < h )
+			image->uploadHeight <<= 1;
+		image->width = image->uploadWidth;
+		image->height = image->uploadHeight;
+
+		qglTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, image->uploadWidth, image->uploadHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+	}
+
+	qglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, x, y, w, h );
+
+	// the last column and row again past them, so that filtering at the
+	// view's edges reads them as clamping to the edge would
+	if ( w < image->uploadWidth )
+		qglCopyTexSubImage2D( GL_TEXTURE_2D, 0, w, 0, x + w - 1, y, 1, h );
+	if ( h < image->uploadHeight )
+		qglCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, h, x, y + h - 1, w, 1 );
+	if ( w < image->uploadWidth && h < image->uploadHeight )
+		qglCopyTexSubImage2D( GL_TEXTURE_2D, 0, w, h, x + w - 1, y + h - 1, 1, 1 );
+
+	s = w / (float)image->uploadWidth;
+	t = h / (float)image->uploadHeight;
+
+	RB_SetGL2D();
+	GL_State( GLS_DEPTHTEST_DISABLE );
+	qglColor4f( 1, 1, 1, 1 );
+
+	// GL's rows go up, the 2D view's down
+	qglBegin( GL_QUADS );
+	qglTexCoord2f( 0, t );
+	qglVertex2f( x0, y0 );
+	qglTexCoord2f( s, t );
+	qglVertex2f( x1, y0 );
+	qglTexCoord2f( s, 0 );
+	qglVertex2f( x1, y1 );
+	qglTexCoord2f( 0, 0 );
+	qglVertex2f( x0, y1 );
+	qglEnd();
+}
+
+/*
+=============
 RB_DrawSurfs
 
 =============
@@ -921,6 +985,11 @@ const void	*RB_DrawSurfs( const void *data ) {
 	backEnd.viewParms = cmd->viewParms;
 
 	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+
+	// the view's own drawing, after what its portals drew
+	if ( backEnd.viewParms.scaled && !backEnd.viewParms.isPortal ) {
+		RB_DrawScaledView();
+	}
 
 	return (const void *)(cmd + 1);
 }

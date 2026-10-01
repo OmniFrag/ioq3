@@ -1610,13 +1610,15 @@ void GLSL_BindProgram(shaderProgram_t * program)
 	if (GL_UseProgram(programObject))
 		backEnd.pc.c_glslShaderBinds++;
 
-	// the screen's size can change without recompiling the shaders
+	// the screen's size can change without recompiling the shaders: the
+	// size world views draw at and their screen-space images have, which
+	// r_viewScale can change (the present pass sets the window's)
 	if (program && program->uniforms[UNIFORM_FBUFSCALE] != -1)
 	{
 		vec2_t fbufScale;
 
-		fbufScale[0] = 1.0f / glConfig.vidWidth;
-		fbufScale[1] = 1.0f / glConfig.vidHeight;
+		fbufScale[0] = 1.0f / tr.sceneWidth;
+		fbufScale[1] = 1.0f / tr.sceneHeight;
 		GLSL_SetUniformVec2(program, UNIFORM_FBUFSCALE, fbufScale);
 	}
 }

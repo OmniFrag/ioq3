@@ -392,6 +392,22 @@ void RE_RenderScene( const refdef_t *fd ) {
 	parms.viewportY = glConfig.vidHeight - ( tr.refdef.y + tr.refdef.height );
 	parms.viewportWidth = tr.refdef.width;
 	parms.viewportHeight = tr.refdef.height;
+
+	// r_viewScale below 1: a world view draws smaller, in the corner of its
+	// rectangle, and RB_DrawScaledView scales it up into the rectangle
+	if ( r_viewScale->value != 1.0f && !( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		static qboolean noted;
+
+		if ( r_viewScale->value < 1.0f && !glConfig.stereoEnabled ) {
+			parms.viewportWidth = R_ScaleViewSide( tr.refdef.width, r_viewScale->value, glConfig.maxTextureSize );
+			parms.viewportHeight = R_ScaleViewSide( tr.refdef.height, r_viewScale->value, glConfig.maxTextureSize );
+			parms.scaled = parms.viewportWidth != tr.refdef.width || parms.viewportHeight != tr.refdef.height;
+		} else if ( !noted ) {
+			ri.Printf( PRINT_ALL, "opengl1 can't scale the 3D view %s: r_viewScale counts as 1\n",
+				glConfig.stereoEnabled ? "in stereo" : "above 1, which needs framebuffers" );
+			noted = qtrue;
+		}
+	}
 	parms.isPortal = qfalse;
 
 	parms.fovX = tr.refdef.fov_x;
