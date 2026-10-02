@@ -119,6 +119,7 @@ extern cvar_t *r_stereoEnabled;
 extern	cvar_t	*r_saveFontData;
 
 extern cvar_t *r_viewScale;		// the 3D view's resolution, a fraction of its size in pixels
+extern cvar_t *r_upscale2D;		// sharpen 2D art at high resolutions
 
 qboolean	R_GetModeInfo( int *width, int *height, float *windowAspect, int mode );
 
@@ -142,6 +143,9 @@ void  R_NoiseInit( void );
 
 image_t     *R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags );
 image_t *R_CreateImage( const char *name, byte *pic, int width, int height, imgType_t type, imgFlags_t flags, int internalFormat );
+
+void R_InitUpscale2D( void );
+void R_Upscale2D( const char *name, byte **pic, int *width, int *height, qboolean powerOfTwo );
 
 void R_IssuePendingRenderCommands( void );
 qhandle_t		 RE_RegisterShaderLightMap( const char *name, int lightmapIndex );
