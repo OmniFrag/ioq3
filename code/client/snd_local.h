@@ -200,7 +200,10 @@ extern	vec3_t	listener_right;
 extern	vec3_t	listener_up;
 extern	dma_t	dma;
 
-#define	MAX_RAW_SAMPLES	16384
+// a power of two; about 0.74 seconds at SDL's default 44100 Hz, as 16384
+// was at 22050, which a RoQ cinematic's sound needs ahead of the mixer:
+// past it, new samples overwrite ones not yet played
+#define	MAX_RAW_SAMPLES	32768
 #define MAX_RAW_STREAMS (MAX_CLIENTS * 2 + 1)
 extern	portable_samplepair_t s_rawsamples[MAX_RAW_STREAMS][MAX_RAW_SAMPLES];
 extern	int		s_rawend[MAX_RAW_STREAMS];
