@@ -943,7 +943,13 @@ const void	*RB_DrawSurfs( const void *data ) {
 		qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
 		backEnd.depthFill = qfalse;
 
-		if (!isShadowView)
+		// the view's depth, resolved or copied to a texture, for what reads
+		// it: the sun's shadow mask, SSAO and the shadow blur (through
+		// hdrDepth), flares, and the sun rays' sun, which tests against it
+		// (sunRaysFbo); otherwise the view stays in its framebuffer, which on
+		// a tile-based GPU spares storing and reloading it
+		if (!isShadowView && (tr.hdrDepthFbo || r_flares->integer || r_drawSunRays->integer
+			|| (r_sunlightMode->integer && (backEnd.viewParms.flags & VPF_USESUNLIGHT))))
 		{
 			qboolean scaled = RB_ViewScaled();
 			FBO_t *resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
@@ -1613,7 +1619,7 @@ const void *RB_PostProcess(const void *data)
 	const postProcessCommand_t *cmd = data;
 	FBO_t *srcFbo, *dstFbo, *resolveFbo;
 	ivec4_t srcBox, dstBox;
-	qboolean autoExposure, scaled;
+	qboolean autoExposure, scaled, effects;
 
 	// finish any 2D drawing if needed
 	if(tess.numIndexes)
@@ -1634,17 +1640,34 @@ const void *RB_PostProcess(const void *data)
 	// a view r_viewScale scaled is scaled into place here, with or
 	// without its effects
 	scaled = RB_ViewScaled();
-	if (!r_postProcess->integer && !scaled)
-		return (const void *)(cmd + 1);
+	effects = r_postProcess->integer && (r_ssao->integer || r_drawSunRays->integer
+		|| (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
+		|| backEnd.refdef.blurFactor * 10.0f >= 0.004f);
 
 	srcFbo = dstFbo = scaled ? tr.viewFbo : tr.renderFbo;
 	resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
 
+	// nothing to do: the view stays in the render FBO, where the 2D is
+	// drawn after it, and is resolved once, at RB_PresentToScreen. On a
+	// tile-based GPU, resolving it here and copying it back stores and
+	// reloads every sample for nothing
+	if (!effects && !scaled)
+	{
+		// but without a depth prepass, flares read the depth resolved
+		// here, a frame late (RB_TestFlare)
+		if (resolveFbo && r_flares->integer && !r_depthPrepass->integer)
+			FBO_FastBlit(dstFbo, NULL, resolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+		return (const void *)(cmd + 1);
+	}
+
 	if (resolveFbo)
 	{
-		// Resolve the MSAA before anything else
+		// Resolve the MSAA before anything else, and its depth for flares,
+		// which read it (RB_TestFlare)
 		// Can't resolve just part of the MSAA FBO, so multiple views will suffer a performance hit here
-		FBO_FastBlit(dstFbo, NULL, resolveFbo, NULL, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+		FBO_FastBlit(dstFbo, NULL, resolveFbo, NULL,
+			GL_COLOR_BUFFER_BIT | (r_flares->integer ? GL_DEPTH_BUFFER_BIT : 0), GL_NEAREST);
 		srcFbo = resolveFbo;
 	}
 
@@ -1658,7 +1681,7 @@ const void *RB_PostProcess(const void *data)
 	srcBox[2] = backEnd.viewParms.viewportWidth;
 	srcBox[3] = backEnd.viewParms.viewportHeight;
 
-	if (r_postProcess->integer)
+	if (effects)
 	{
 		if (r_ssao->integer)
 		{
