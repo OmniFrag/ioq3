@@ -1037,15 +1037,26 @@ fullscreen the size follows the display mode, so r_mode stays. A
 maximized window fills whatever desktop it's on, so its size is kept only
 for a restart, which recreates the window from it. Ask the window:
 IN_Frame sets cls.glconfig.isFullscreen from r_fullscreen, which on the web
-doesn't make the window fullscreen (GLimp_SetMode).
+doesn't make the window fullscreen (GLimp_SetMode). A window covering its
+whole display is fullscreen too, or about to be: macOS animates into
+fullscreen at the full size before it reports it, which can take longer
+than the wait for resizing to settle.
 ===============
 */
 static void IN_SaveWindowSize( qboolean restarting )
 {
 	SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+	SDL_Rect bounds;
 	int width, height;
 
 	if( ( flags & SDL_WINDOW_FULLSCREEN ) || ( !restarting && ( flags & SDL_WINDOW_MAXIMIZED ) ) )
+	{
+		return;
+	}
+
+	if( SDL_GetDisplayBounds( SDL_GetDisplayForWindow( SDL_window ), &bounds ) &&
+		SDL_GetWindowSize( SDL_window, &width, &height ) &&
+		width >= bounds.w && height >= bounds.h )
 	{
 		return;
 	}

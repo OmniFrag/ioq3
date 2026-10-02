@@ -459,19 +459,24 @@ static void GLimp_ClearProcAddresses( void ) {
 ===============
 GLimp_WindowedSize
 
-A window as big as the desktop looks fullscreen, so a window at the desktop
-resolution gets three quarters of the display's usable area
+A window as big as the desktop looks fullscreen, so one that nearly covers
+it is shrunk, keeping its shape, to fit three quarters of the display's
+usable area
 ===============
 */
 static void GLimp_WindowedSize( SDL_DisplayID display, int *width, int *height )
 {
 	SDL_Rect usable;
+	float scale;
 
-	if( display && SDL_GetDisplayUsableBounds( display, &usable ) )
+	if( !display || !SDL_GetDisplayUsableBounds( display, &usable ) || *width <= 0 || *height <= 0 )
 	{
-		*width = usable.w * 3 / 4;
-		*height = usable.h * 3 / 4;
+		return;
 	}
+
+	scale = SDL_min( usable.w * 0.75f / *width, usable.h * 0.75f / *height );
+	*width = SDL_lroundf( *width * scale );
+	*height = SDL_lroundf( *height * scale );
 }
 
 /*
