@@ -1059,6 +1059,9 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 		return NULL;
 	}
 
+	// every upload rounds to powers of two
+	R_Upscale2D( name, &pic, &width, &height, qtrue );
+
 	image = R_CreateImage( ( char * ) name, pic, width, height, type, flags, 0 );
 	ri.Free( pic );
 	return image;
@@ -1358,6 +1361,7 @@ R_InitImages
 */
 void	R_InitImages( void ) {
 	Com_Memset(hashTable, 0, sizeof(hashTable));
+	R_InitUpscale2D();
 	// build brightness translation tables
 	R_SetColorMappings();
 
