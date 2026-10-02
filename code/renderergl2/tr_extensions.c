@@ -64,6 +64,27 @@ void GLimp_InitExtraExtensions(void)
 	// GL function loader, based on https://gist.github.com/rygorous/16796a0c876cf8a5f542caddb55bce8a
 #define GLE(ret, name, ...) qgl##name = (name##proc *) SDL_GL_GetProcAddress("gl" #name);
 
+	// OpenGL 3.0 and OpenGL ES 3.0 - GL_ARB_map_buffer_range, with GL_ARB_sync's
+	// fences: dynamic geometry streams through mapped ring buffers (tr_vbo.c).
+	// Checked before the OpenGL ES extensions, which end early
+	extension = "GL_ARB_map_buffer_range";
+	glRefConfig.mapBufferRange = qfalse;
+#ifndef __EMSCRIPTEN__
+	// WebGL has no buffer mapping; Emscripten only emulates it
+	if (q_gl_version_at_least_3_0 || QGLES_VERSION_ATLEAST(3, 0) || SDL_GL_ExtensionSupported(extension))
+	{
+		QGL_ARB_map_buffer_range_PROCS;
+
+		glRefConfig.mapBufferRange = r_arb_map_buffer_range->integer && qglMapBufferRange && qglUnmapBuffer && qglFenceSync;
+
+		ri.Printf(PRINT_ALL, result[glRefConfig.mapBufferRange], extension);
+	}
+	else
+#endif
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
 	//
 	// OpenGL ES extensions
 	//

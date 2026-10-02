@@ -431,6 +431,193 @@ void R_BindNullVao(void)
 
 /*
 ============
+Streaming
+
+With GL_ARB_map_buffer_range, the tess VAO's buffers are rings: each batch
+is written after the last through an unsynchronized mapping, so writing
+never waits for the GPU. A fence marks each segment of a ring as it's
+left, and is waited for (rarely: a ring holds several frames) before the
+segment is written again. Orphaning a buffer and refilling it with
+glBufferSubData, as uploading does, makes some drivers flush and wait for
+the GPU on every batch: macOS's, which runs OpenGL on Metal.
+============
+*/
+
+#define STREAM_RING_SEGMENTS 4
+#define STREAM_VERTEX_RING_SIZE (8 * 1024 * 1024)
+#define STREAM_INDEX_RING_SIZE (2 * 1024 * 1024)
+
+typedef struct
+{
+	GLenum target;
+	int size;
+	int pos;
+	int segment;
+	GLsync fences[STREAM_RING_SEGMENTS];
+} streamRing_t;
+
+static streamRing_t vertexRing = { GL_ARRAY_BUFFER, STREAM_VERTEX_RING_SIZE };
+static streamRing_t indexRing = { GL_ELEMENT_ARRAY_BUFFER, STREAM_INDEX_RING_SIZE };
+
+// the tess VAO's buffer sizes for uploading, batch by batch
+static int tessVertexesSize, tessIndexesSize;
+
+static void StreamRing_Reset(streamRing_t *ring)
+{
+	int i;
+
+	for (i = 0; i < STREAM_RING_SEGMENTS; i++)
+	{
+		if (ring->fences[i])
+			qglDeleteSync(ring->fences[i]);
+		ring->fences[i] = NULL;
+	}
+	ring->pos = 0;
+	ring->segment = 0;
+}
+
+static void StreamRing_EnterSegment(streamRing_t *ring, int segment)
+{
+	// the segment left is free once the commands so far are done
+	ring->fences[ring->segment] = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	ring->segment = segment;
+
+	if (ring->fences[segment])
+	{
+		qglClientWaitSync(ring->fences[segment], GL_SYNC_FLUSH_COMMANDS_BIT, 1000 * 1000 * 1000);
+		qglDeleteSync(ring->fences[segment]);
+		ring->fences[segment] = NULL;
+	}
+}
+
+// maps size bytes of the ring for writing; offset is where they start
+static byte *StreamRing_Map(streamRing_t *ring, int size, int *offset)
+{
+	int segmentSize = ring->size / STREAM_RING_SEGMENTS;
+	int segment;
+
+	size = PAD(size, 64);
+	if (size > segmentSize)
+		return NULL;
+
+	// a batch stays inside one segment: the fence set as a segment is left
+	// must come after every draw that reads it, and a batch that crossed
+	// into the next would be drawn after its first segment's fence
+	segment = ring->pos / segmentSize;
+	if ((ring->pos + size - 1) / segmentSize != segment)
+	{
+		segment++;
+		ring->pos = segment * segmentSize;
+	}
+	if (segment >= STREAM_RING_SEGMENTS)
+	{
+		segment = 0;
+		ring->pos = 0;
+	}
+	if (segment != ring->segment)
+		StreamRing_EnterSegment(ring, segment);
+
+	*offset = ring->pos;
+	ring->pos += size;
+
+	return qglMapBufferRange(ring->target, *offset, size,
+		GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+}
+
+/*
+============
+RB_StreamTessVao
+
+Writes the batch into the tess VAO's rings, the attributes one after
+another, and points the attributes at them; qfalse if a mapping failed
+============
+*/
+static qboolean RB_StreamTessVao(unsigned int attribBits)
+{
+	int attribIndex;
+	int size = 0;
+	int offset;
+	int indexesSize = tess.numIndexes * sizeof(tess.indexes[0]);
+	byte *data;
+
+	// if nothing to set, set everything
+	if(!(attribBits & ATTR_BITS))
+		attribBits = ATTR_BITS;
+
+	// note: tess has a VBO where stride == size, each a multiple of 8
+	for (attribIndex = 0; attribIndex < ATTR_INDEX_COUNT; attribIndex++)
+	{
+		if (attribBits & (1 << attribIndex))
+			size += tess.numVertexes * tess.vao->attribs[attribIndex].stride;
+	}
+
+	data = StreamRing_Map(&vertexRing, size, &offset);
+	if (!data)
+		return qfalse;
+
+	for (attribIndex = 0; attribIndex < ATTR_INDEX_COUNT; attribIndex++)
+	{
+		uint32_t attribBit = 1 << attribIndex;
+		vaoAttrib_t *vAtb = &tess.vao->attribs[attribIndex];
+
+		if (attribBits & attribBit)
+		{
+			size = tess.numVertexes * vAtb->stride;
+			Com_Memcpy(data, tess.attribPointers[attribIndex], size);
+			qglVertexAttribPointer(attribIndex, vAtb->count, vAtb->type, vAtb->normalized, vAtb->stride, BUFFER_OFFSET(offset));
+			data += size;
+			offset += size;
+
+			if (!(glState.vertexAttribsEnabled & attribBit))
+			{
+				qglEnableVertexAttribArray(attribIndex);
+				glState.vertexAttribsEnabled |= attribBit;
+			}
+		}
+		else
+		{
+			if ((glState.vertexAttribsEnabled & attribBit))
+			{
+				qglDisableVertexAttribArray(attribIndex);
+				glState.vertexAttribsEnabled &= ~attribBit;
+			}
+		}
+	}
+
+	qglUnmapBuffer(GL_ARRAY_BUFFER);
+
+	data = StreamRing_Map(&indexRing, indexesSize, &offset);
+	if (!data)
+		return qfalse;
+
+	Com_Memcpy(data, tess.indexes, indexesSize);
+	qglUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
+	tess.vaoFirstIndex = offset / sizeof(tess.indexes[0]);
+
+	return qtrue;
+}
+
+/*
+============
+RB_StopStreaming
+
+After a mapping failed: uploads from now on, into buffers of the size for
+it, with the attributes where uploading puts them
+============
+*/
+static void RB_StopStreaming(void)
+{
+	ri.Printf(PRINT_WARNING, "glMapBufferRange failed: uploading dynamic geometry instead of streaming it\n");
+
+	glRefConfig.mapBufferRange = qfalse;
+	tess.vao->vertexesSize = tessVertexesSize;
+	tess.vao->indexesSize = tessIndexesSize;
+	tess.vaoFirstIndex = 0;
+	Vao_SetVertexPointers(tess.vao);
+}
+
+/*
+============
 R_InitVaos
 ============
 */
@@ -454,7 +641,17 @@ void R_InitVaos(void)
 
 	indexesSize = sizeof(tess.indexes[0]) * SHADER_MAX_INDEXES;
 
+	tessVertexesSize = vertexesSize;
+	tessIndexesSize = indexesSize;
+
+	// streamed, the buffers are rings of batches (RB_StreamTessVao)
+	if (glRefConfig.mapBufferRange)
+	{
+		vertexesSize = STREAM_VERTEX_RING_SIZE;
+		indexesSize = STREAM_INDEX_RING_SIZE;
+	}
 	tess.vao = R_CreateVao("tessVertexArray_VAO", NULL, vertexesSize, NULL, indexesSize, VAO_USAGE_DYNAMIC);
+	tess.vaoFirstIndex = 0;
 
 	offset = 0;
 
@@ -556,6 +753,9 @@ void R_ShutdownVaos(void)
 	}
 
 	tr.numVaos = 0;
+
+	StreamRing_Reset(&vertexRing);
+	StreamRing_Reset(&indexRing);
 }
 
 /*
@@ -623,6 +823,14 @@ void RB_UpdateTessVao(unsigned int attribBits)
 		int attribUpload;
 
 		R_BindVao(tess.vao);
+
+		if (glRefConfig.mapBufferRange)
+		{
+			if (RB_StreamTessVao(attribBits))
+				return;
+
+			RB_StopStreaming();
+		}
 
 		// orphan old vertex buffer so we don't stall on it
 		qglBufferData(GL_ARRAY_BUFFER, tess.vao->vertexesSize, NULL, GL_DYNAMIC_DRAW);
