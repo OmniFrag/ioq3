@@ -1060,7 +1060,7 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	}
 
 	// every upload rounds to powers of two
-	R_Upscale2D( name, &pic, &width, &height, qtrue );
+	R_Upscale2D( name, &pic, &width, &height, qtrue, ( flags & IMGFLAG_PICMIP ) && r_picmip->integer );
 
 	image = R_CreateImage( ( char * ) name, pic, width, height, type, flags, 0 );
 	ri.Free( pic );
