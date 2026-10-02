@@ -1558,8 +1558,14 @@ void GLSL_ShutdownGPUShaders(void)
 
 	ri.Printf(PRINT_ALL, "------- GLSL_ShutdownGPUShaders -------\n");
 
-	for (i = 0; i < ATTR_INDEX_COUNT && i < glRefConfig.maxVertexAttribs; i++)
-		qglDisableVertexAttribArray(i);
+	// with vertex array objects, the arrays' state is theirs, and they're
+	// gone (R_ShutdownVaos); a core profile has no default one, and
+	// changing the arrays with none bound is GL_INVALID_OPERATION
+	if (!glRefConfig.vertexArrayObject)
+	{
+		for (i = 0; i < ATTR_INDEX_COUNT && i < glRefConfig.maxVertexAttribs; i++)
+			qglDisableVertexAttribArray(i);
+	}
 
 	GL_BindNullProgram();
 
