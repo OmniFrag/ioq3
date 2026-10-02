@@ -46,6 +46,10 @@ void R_DrawElements( int numIndexes, int firstIndex )
 	}
 	else
 	{
+		// the tess VAO's indexes are wherever they were last streamed to
+		if (glState.currentVao == tess.vao)
+			firstIndex += tess.vaoFirstIndex;
+
 		qglDrawElements(GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(firstIndex * sizeof(glIndex_t)));
 	}
 }

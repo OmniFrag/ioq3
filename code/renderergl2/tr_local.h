@@ -43,9 +43,11 @@ QGL_1_3_PROCS;
 QGL_1_5_PROCS;
 QGL_2_0_PROCS;
 QGL_3_0_PROCS;
+QGL_ARB_sync_PROCS;
 QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
+QGL_ARB_map_buffer_range_PROCS;
 QGL_EXT_direct_state_access_PROCS;
 #undef GLE
 
@@ -1437,6 +1439,7 @@ typedef struct {
 
 	qboolean vertexArrayObject;
 	qboolean directStateAccess;
+	qboolean mapBufferRange;
 
 	int maxVertexAttribs;
 	qboolean gpuVertexAnimation;
@@ -1751,6 +1754,7 @@ extern  cvar_t  *r_ext_texture_float;
 extern  cvar_t  *r_ext_framebuffer_multisample;
 extern  cvar_t  *r_arb_seamless_cube_map;
 extern  cvar_t  *r_arb_vertex_array_object;
+extern  cvar_t  *r_arb_map_buffer_range;
 extern  cvar_t  *r_ext_direct_state_access;
 
 extern	cvar_t	*r_nobind;						// turns off binding to appropriate textures
@@ -2078,6 +2082,7 @@ typedef struct shaderCommands_s
 
 	void *attribPointers[ATTR_INDEX_COUNT];
 	vao_t       *vao;
+	int         vaoFirstIndex;	// where vao's indexes start in its index buffer, streamed
 	qboolean    useInternalVao;
 	qboolean    useCacheVao;
 
