@@ -63,8 +63,12 @@ static int windowSizeSaveTime = 0;	// IN_SaveWindowSize once resizing settles
 // bring several sizes between frames
 static qboolean windowResized = qfalse;
 
-// the window has lost focus since it was shown (IN_FocusGained)
-static qboolean windowFocusLost = qfalse;
+#ifdef __APPLE__
+// IN_CheckFullscreen once focus has settled
+static int fullscreenCheckTime = 0;
+// a window that didn't go fullscreen was restarted, and none has since
+static qboolean fullscreenRestarted = qfalse;
+#endif
 
 static int in_eventTime = 0;
 
@@ -1107,31 +1111,43 @@ static void IN_WindowResized( void )
 	vidRestartTime = Sys_Milliseconds( ) + 1000;
 }
 
+#ifdef __APPLE__
 /*
 ===============
-IN_FocusGained
+IN_CheckFullscreen
 
-macOS takes a window into fullscreen only while it has focus, and one that
-loses it first, to a click in another application or to the terminal that
-started the game, is left a window, with r_fullscreen still 1 and no event
-to say so. Ask again once it's back. Not the first focus: the window may
-still be on its way into fullscreen.
+macOS takes a window into fullscreen only while it has focus. One that
+loses it first, or never gets it, to a click in another application or to
+the terminal that started the game, stays a window at its windowed size,
+with r_fullscreen 1 and no event to say so, and asking SDL again does
+nothing: the window is stuck. A new window goes fullscreen, so restart
+once, a second after the window gets focus, by when one on its way into
+fullscreen is there. Not while a map or demo loads, which it would
+interrupt.
 ===============
 */
-static void IN_FocusGained( void )
+static void IN_CheckFullscreen( void )
 {
-	if( !windowFocusLost || !Cvar_VariableIntegerValue( "r_fullscreen" ) ||
-		( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
+	SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+
+	if( clc.state != CA_DISCONNECTED && clc.state != CA_ACTIVE )
+	{
+		fullscreenCheckTime = Sys_Milliseconds( ) + 1000;
+		return;
+	}
+	fullscreenCheckTime = 0;
+
+	if( fullscreenRestarted || !Cvar_VariableIntegerValue( "r_fullscreen" ) ||
+		!( flags & SDL_WINDOW_INPUT_FOCUS ) || ( flags & SDL_WINDOW_FULLSCREEN ) )
 	{
 		return;
 	}
 
-	// the page owns fullscreen on the web (GLimp_SetMode)
-#ifndef __EMSCRIPTEN__
-	Com_DPrintf( "The window was left out of fullscreen; asking again\n" );
-	SDL_SetWindowFullscreen( SDL_window, true );
-#endif
+	fullscreenRestarted = qtrue;
+	Com_Printf( "The window didn't go fullscreen; restarting it\n" );
+	Cbuf_AddText( "vid_restart\n" );
 }
+#endif
 
 /*
 ===============
@@ -1319,12 +1335,22 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
-		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; windowFocusLost = qtrue; break;
-		case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); IN_FocusGained( ); break;
+		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
+		case SDL_EVENT_WINDOW_FOCUS_GAINED:
+			Cvar_SetValue( "com_unfocused", 0 );
+#ifdef __APPLE__
+			fullscreenCheckTime = Sys_Milliseconds( ) + 1000;
+#endif
+			break;
 
 		// the window manager, the browser or its Esc key can change
 		// fullscreen too; keep r_fullscreen in step with the window
-		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: Cvar_Set( "r_fullscreen", "1" ); break;
+		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+			Cvar_Set( "r_fullscreen", "1" );
+#ifdef __APPLE__
+			fullscreenRestarted = qfalse;
+#endif
+			break;
 		case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: Cvar_Set( "r_fullscreen", "0" ); break;
 
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
@@ -1436,6 +1462,13 @@ void IN_Frame( void )
 		windowSizeSaveTime = 0;
 		IN_SaveWindowSize( qfalse );
 	}
+
+#ifdef __APPLE__
+	if( fullscreenCheckTime && fullscreenCheckTime < Sys_Milliseconds( ) )
+	{
+		IN_CheckFullscreen( );
+	}
+#endif
 }
 
 /*
@@ -1481,7 +1514,6 @@ void IN_Init( void *windowData )
 	}
 
 	SDL_window = (SDL_Window *)windowData;
-	windowFocusLost = qfalse;
 
 	Com_DPrintf( "\n------- Input Initialization -------\n" );
 
