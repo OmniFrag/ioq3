@@ -3190,8 +3190,10 @@ renderer can and the running game modules read glconfig every frame
 ============
 */
 qboolean CL_ResizeWindow( void ) {
+	// a renderer starting takes the window's size then: a vid_restart now,
+	// as a map or demo loads, would only interrupt it
 	if ( !cls.rendererStarted ) {
-		return qfalse;
+		return qtrue;
 	}
 	if ( ( cls.uiStarted && !cls.uiResizesInPlace ) || ( cls.cgameStarted && !cls.cgameResizesInPlace ) ) {
 		return qfalse;
