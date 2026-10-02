@@ -145,7 +145,8 @@ image_t     *R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags
 image_t *R_CreateImage( const char *name, byte *pic, int width, int height, imgType_t type, imgFlags_t flags, int internalFormat );
 
 void R_InitUpscale2D( void );
-void R_Upscale2D( const char *name, byte **pic, int *width, int *height, qboolean powerOfTwo );
+void R_ShutdownUpscale2D( void );
+void R_Upscale2D( const char *name, byte **pic, int *width, int *height, qboolean powerOfTwo, qboolean uploadShrinks );
 
 void R_IssuePendingRenderCommands( void );
 qhandle_t		 RE_RegisterShaderLightMap( const char *name, int lightmapIndex );
