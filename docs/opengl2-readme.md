@@ -71,6 +71,15 @@ Cvars for API:
                                      0 - Prefer desktop OpenGL.
                                      -1 - Automatically pick (default).
 
+* `r_arb_map_buffer_range`          - Stream dynamic geometry (models, sprites,
+                                   effects) through mapped buffers, instead of
+                                   uploading each batch with glBufferSubData,
+                                   which some drivers, such as macOS's OpenGL
+                                   on Metal, stall on. Needs OpenGL 3.2 or
+                                   OpenGL ES 3.0; WebGL can't map buffers.
+                                     0 - Upload each batch.
+                                     1 - Stream if supported. (default)
+
 Cvars for simple rendering features:
 
 * `r_ext_compressed_textures`       - Automatically compress textures.

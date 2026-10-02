@@ -104,6 +104,7 @@ cvar_t  *r_ext_texture_float;
 cvar_t  *r_ext_framebuffer_multisample;
 cvar_t  *r_arb_seamless_cube_map;
 cvar_t  *r_arb_vertex_array_object;
+cvar_t  *r_arb_map_buffer_range;
 cvar_t  *r_ext_direct_state_access;
 
 cvar_t  *r_cameraExposure;
@@ -1306,6 +1307,9 @@ void R_Register( void )
 	r_ext_framebuffer_multisample = ri.Cvar_Get( "r_ext_framebuffer_multisample", "4", CVAR_ARCHIVE_ND | CVAR_LATCH);
 	r_arb_seamless_cube_map = ri.Cvar_Get( "r_arb_seamless_cube_map", "0", CVAR_ARCHIVE | CVAR_LATCH);
 	r_arb_vertex_array_object = ri.Cvar_Get( "r_arb_vertex_array_object", "1", CVAR_ARCHIVE | CVAR_LATCH);
+	r_arb_map_buffer_range = ri.Cvar_Get( "r_arb_map_buffer_range", "1", CVAR_ARCHIVE | CVAR_LATCH);
+	ri.Cvar_SetDescription( r_arb_map_buffer_range, "Stream dynamic geometry through mapped buffers, which never wait on the GPU, "
+		"instead of uploading each batch with glBufferSubData, which some drivers (macOS's) stall on. Needs OpenGL 3.2 or OpenGL ES 3.0." );
 	r_ext_direct_state_access = ri.Cvar_Get("r_ext_direct_state_access", "1", CVAR_ARCHIVE | CVAR_LATCH);
 
 	// Full-size textures, filtered at an angle, finer curves and the most

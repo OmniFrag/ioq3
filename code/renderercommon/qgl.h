@@ -263,6 +263,11 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 	GLE(void, BlitFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) \
 	GLE(void, RenderbufferStorageMultisample, GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) \
 
+// GL_ARB_map_buffer_range, built-in to OpenGL 3.0 and OpenGL ES 3.0
+#define QGL_ARB_map_buffer_range_PROCS \
+	GLE(void *, MapBufferRange, GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) \
+	GLE(GLboolean, UnmapBuffer, GLenum target) \
+
 // GL_ARB_vertex_array_object, built-in to OpenGL 3.0
 #define QGL_ARB_vertex_array_object_PROCS \
 	GLE(void, BindVertexArray, GLuint array) \
@@ -334,6 +339,7 @@ QGL_ARB_sync_PROCS;
 QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
+QGL_ARB_map_buffer_range_PROCS;
 QGL_EXT_direct_state_access_PROCS;
 #undef GLE
 
