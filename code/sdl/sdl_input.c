@@ -63,6 +63,9 @@ static int windowSizeSaveTime = 0;	// IN_SaveWindowSize once resizing settles
 // bring several sizes between frames
 static qboolean windowResized = qfalse;
 
+// the window has lost focus since it was shown (IN_FocusGained)
+static qboolean windowFocusLost = qfalse;
+
 static int in_eventTime = 0;
 
 static SDL_Window *SDL_window = NULL;
@@ -1106,6 +1109,32 @@ static void IN_WindowResized( void )
 
 /*
 ===============
+IN_FocusGained
+
+macOS takes a window into fullscreen only while it has focus, and one that
+loses it first, to a click in another application or to the terminal that
+started the game, is left a window, with r_fullscreen still 1 and no event
+to say so. Ask again once it's back. Not the first focus: the window may
+still be on its way into fullscreen.
+===============
+*/
+static void IN_FocusGained( void )
+{
+	if( !windowFocusLost || !Cvar_VariableIntegerValue( "r_fullscreen" ) ||
+		( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) )
+	{
+		return;
+	}
+
+	// the page owns fullscreen on the web (GLimp_SetMode)
+#ifndef __EMSCRIPTEN__
+	Com_DPrintf( "The window was left out of fullscreen; asking again\n" );
+	SDL_SetWindowFullscreen( SDL_window, true );
+#endif
+}
+
+/*
+===============
 IN_EventTime
 
 When an event happened, by Sys_Milliseconds. SDL stamps each event, by its
@@ -1290,8 +1319,8 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
-		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
-		case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
+		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; windowFocusLost = qtrue; break;
+		case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); IN_FocusGained( ); break;
 
 		// the window manager, the browser or its Esc key can change
 		// fullscreen too; keep r_fullscreen in step with the window
@@ -1452,6 +1481,7 @@ void IN_Init( void *windowData )
 	}
 
 	SDL_window = (SDL_Window *)windowData;
+	windowFocusLost = qfalse;
 
 	Com_DPrintf( "\n------- Input Initialization -------\n" );
 
