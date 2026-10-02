@@ -3457,10 +3457,20 @@ Com_WaitFrame
 Sleeps toward the next frame, and returns whether it's due. The main loop
 calls it until it is, then Com_Frame, and can handle input in between. The
 last millisecond or so passes here.
+
+Packets that arrive meanwhile are handled here (NET_Sleep), outside
+Com_Frame, so an ERR_DROP they raise needs abortframe set here too: the last
+Com_Frame's has returned, and a longjmp to it unwinds into a frame that's
+gone (on Windows, STATUS_BAD_STACK).
 =================
 */
 qboolean Com_WaitFrame( void ) {
 	int		minMsec, timeVal, timeValSV;
+
+	if ( setjmp (abortframe) ) {
+		Cmd_EndRestricted();
+		return qtrue;	// an ERR_DROP was thrown; the next frame shows it
+	}
 
 #ifndef DEDICATED
 	if(Com_PacedFrames())
