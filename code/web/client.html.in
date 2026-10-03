@@ -132,7 +132,12 @@ if (pixelRatio?.get)
 const rawMouse = urlParams.has('rawMouse') ? urlParams.get('rawMouse') !== '0' : /Windows/.test(navigator.userAgent);
 const requestPointerLock = Element.prototype.requestPointerLock;
 Element.prototype.requestPointerLock = function (options) {
-    if (!rawMouse) return requestPointerLock.call(this, options);
+    if (!rawMouse) {
+        // a refusal is the page's to handle (pointerlockerror), not an error
+        const request = requestPointerLock.call(this, options);
+        request?.catch?.(() => {});
+        return request;
+    }
     const request = requestPointerLock.call(this, { ...options, unadjustedMovement: true });
     request?.catch?.((e) => {
         if (e?.name === 'NotSupportedError')
