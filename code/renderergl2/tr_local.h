@@ -1428,6 +1428,7 @@ typedef struct {
 	int maxColorAttachments;
 
 	qboolean textureFloat;
+	qboolean textureFloat32; // OpenGL ES: 32-bit float colour buffers, filtered linearly
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
 	
