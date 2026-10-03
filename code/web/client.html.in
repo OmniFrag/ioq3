@@ -164,7 +164,19 @@ let engine;
 // the menu toggle from where it is
 const tellFullscreen = (on) =>
     engine?.ccall?.('Cbuf_AddText', null, ['string'], [`set r_fullscreen ${on ? 1 : 0}\n`]);
+// Safari hides the page for a moment as it moves into fullscreen, a Space
+// of its own on macOS, and SDL takes that for the window hiding, which
+// leaves fullscreen: about 0.7 s after the click, Safari went back to a
+// window. While fullscreen changes, from a request until a little after
+// the change, the page keeps visibility changes from SDL. Emscripten
+// listens on the document, so this capturing listener on the window comes
+// first.
+let fullscreenChanging = 0;
+addEventListener('visibilitychange', (event) => {
+    if (performance.now() < fullscreenChanging) event.stopImmediatePropagation();
+}, true);
 document.addEventListener('fullscreenchange', () => {
+    fullscreenChanging = performance.now() + 1500;
     if (!document.fullscreenElement) wantFullscreen = false;
     // In fullscreen, Chromium's keyboard lock gives the game the keys the
     // browser would take: Ctrl+W, the Windows key, and Esc, which then
@@ -179,6 +191,7 @@ const setFullscreen = (on) => {
     if (iOS) return tellFullscreen(false);
     // only a refused fullscreen sets r_fullscreen back: a lock refused,
     // as Safari can during the change, leaves fullscreen be
+    fullscreenChanging = performance.now() + 3000;
     if (on)
         document.documentElement.requestFullscreen?.()
             .then(() => canvas.requestPointerLock()?.catch?.(() => {}), () => tellFullscreen(false));
