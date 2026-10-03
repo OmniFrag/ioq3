@@ -134,14 +134,17 @@ Element.prototype.requestPointerLock = function (options) {
 };
 
 // The WebGL context SDL creates, which has no attributes of its own for
-// these: the fast GPU where there are two, and with ?desynchronized, frames
-// drawn straight to the screen rather than through the page's compositor,
-// a frame sooner, where the browser can (it may tear, or ignore it).
+// these: the fast GPU where there are two; an opaque canvas, since the
+// frame's alpha is the renderer's own business, and a blend that zeroes
+// it, as a burn mark's does, showed the black page through as a hard-edged
+// hole; and with ?desynchronized, frames drawn straight to the screen
+// rather than through the page's compositor, a frame sooner, where the
+// browser can (it may tear, or ignore it).
 const getContext = HTMLCanvasElement.prototype.getContext;
 const desynchronized = urlParams.has('desynchronized');
 HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     if (type === 'webgl' || type === 'webgl2')
-        attributes = { ...attributes, powerPreference: 'high-performance', ...(desynchronized && { desynchronized }) };
+        attributes = { ...attributes, alpha: false, powerPreference: 'high-performance', ...(desynchronized && { desynchronized }) };
     return getContext.call(this, type, attributes);
 };
 
