@@ -17,6 +17,7 @@ canvas:focus { outline: none; }
 #status[hidden] { display: none; }
 #status > div { background: rgba(0, 0, 0, 0.7); padding: 16px 24px; border-radius: 8px; max-width: min(32em, 80vw); }
 #status progress { display: block; width: 100%; margin-top: 8px; }
+#status progress[hidden] { display: none; }
 /* an error stays, and its words can be copied */
 #status.error { pointer-events: auto; user-select: text; }
 </style>
@@ -176,10 +177,11 @@ const setFullscreen = (on) => {
     if (!!on === !!document.fullscreenElement) return;
     wantFullscreen = on && !iOS;
     if (iOS) return tellFullscreen(false);
+    // only a refused fullscreen sets r_fullscreen back: a lock refused,
+    // as Safari can during the change, leaves fullscreen be
     if (on)
         document.documentElement.requestFullscreen?.()
-            .then(() => canvas.requestPointerLock())
-            .catch(() => tellFullscreen(false));
+            .then(() => canvas.requestPointerLock()?.catch?.(() => {}), () => tellFullscreen(false));
     else
         document.exitFullscreen().catch(() => {});
 };

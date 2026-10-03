@@ -45,8 +45,11 @@ static SDL_Joystick *stick = NULL;
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
+#ifndef __EMSCRIPTEN__
 // in a window, the player clicked into the game since it last lost focus
+// (a browser has its own click: lockClickButtons)
 static qboolean mouseClickedIn = qfalse;
+#endif
 
 #ifdef __EMSCRIPTEN__
 // mouse buttons whose press locked the pointer, whose release is theirs too
@@ -1407,7 +1410,12 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_WINDOW_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
-		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
+		case SDL_EVENT_WINDOW_FOCUS_LOST:
+			Cvar_SetValue( "com_unfocused", 1 );
+#ifndef __EMSCRIPTEN__
+			mouseClickedIn = qfalse;
+#endif
+			break;
 		case SDL_EVENT_WINDOW_FOCUS_GAINED:
 			Cvar_SetValue( "com_unfocused", 0 );
 #ifdef __APPLE__
@@ -1478,10 +1486,12 @@ void IN_Frame( void )
 	// update isFullscreen since it might of changed since the last vid_restart
 	cls.glconfig.isFullscreen = Cvar_VariableIntegerValue( "r_fullscreen" ) != 0;
 
+#ifndef __EMSCRIPTEN__
 	// a player in fullscreen is in the game, and stays in it if they switch
 	// to a window
 	if( cls.glconfig.isFullscreen )
 		mouseClickedIn = qtrue;
+#endif
 
 #ifdef __EMSCRIPTEN__
 	// a held key whose release went with the pointer lock, as Esc gives the
