@@ -156,21 +156,31 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
 const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let wantFullscreen = urlParams.get('fullscreen') !== '0' && !iOS;
+// the engine, once it runs: console commands go to it
+let engine;
+// r_fullscreen follows the page, however fullscreen changed (a click, Esc,
+// the browser) or didn't (a request refused), so that F11, Alt+Enter and
+// the menu toggle from where it is
+const tellFullscreen = (on) =>
+    engine?.ccall?.('Cbuf_AddText', null, ['string'], [`set r_fullscreen ${on ? 1 : 0}\n`]);
 document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement) wantFullscreen = false;
     // In fullscreen, Chromium's keyboard lock gives the game the keys the
     // browser would take: Ctrl+W, the Windows key, and Esc, which then
     // leaves fullscreen only when held. Leaving fullscreen ends the lock.
     else navigator.keyboard?.lock?.().catch(() => {});
+    tellFullscreen(!!document.fullscreenElement);
 });
 const setFullscreen = (on) => {
+    // where it already is, as when r_fullscreen echoes tellFullscreen
+    if (!!on === !!document.fullscreenElement) return;
     wantFullscreen = on && !iOS;
-    if (iOS) return;
-    if (on && !document.fullscreenElement)
+    if (iOS) return tellFullscreen(false);
+    if (on)
         document.documentElement.requestFullscreen?.()
             .then(() => canvas.requestPointerLock())
-            .catch(() => {});
-    else if (!on && document.fullscreenElement)
+            .catch(() => tellFullscreen(false));
+    else
         document.exitFullscreen().catch(() => {});
 };
 canvas.addEventListener('pointerdown', () => { if (wantFullscreen) setFullscreen(true); });
@@ -446,8 +456,9 @@ ioquake3({
     // a player who quit isn't asked before closing the page
     onExit: () => setPlaying(false),
     // the engine has started, and draws from here on
-    postRun: [() => {
+    postRun: [(module) => {
         started = true;
+        engine = module;
         showPrompt();
     }],
 });
