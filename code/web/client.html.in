@@ -9,18 +9,30 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
    browsers' toolbars. SDL3 needs no border or padding on the canvas. */
 canvas { display: block; width: 100vw; height: 100dvh; border: 0; padding: 0; }
 canvas:focus { outline: none; }
+/* The page's word over the game: the download's progress, or an error.
+   Clicks go through it to the canvas, where SDL asks for the pointer. */
+#status { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
+    font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
+#status[hidden] { display: none; }
+#status > div { background: rgba(0, 0, 0, 0.7); padding: 16px 24px; border-radius: 8px; max-width: min(32em, 80vw); }
+#status progress { display: block; width: 100%; margin-top: 8px; }
+#status progress[hidden] { display: none; }
+/* an error stays, and its words can be copied */
+#status.error { pointer-events: auto; user-select: text; }
 </style>
 
 <!-- The game takes keys only while its canvas has focus (the engine sets
      SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT), so keys typed into the rest of
      the page stay there; tabindex lets the canvas have focus -->
 <canvas id=canvas tabindex=0></canvas>
+<div id=status hidden><div><span></span><progress hidden></progress></div></div>
 
 <script type=module>
 // These strings are set in the generated HTML file in the build directory.
 const CLIENT_NAME = '@CLIENT_NAME@';
 const BASEGAME = '@BASEGAME@';
 const EMSCRIPTEN_PRELOAD_FILE = '@EMSCRIPTEN_PRELOAD_FILE@' === 'ON';
+const MIN_WEBGL_VERSION = Number('@WEB_MIN_WEBGL_VERSION@');
 
 // Path or URL containing the client engine .js, .wasm, and possibly .data.
 let enginePath = './';
@@ -30,6 +42,36 @@ let dataPath = './';
 let configFilename = `./${CLIENT_NAME}-config.json`;
 
 if (window.location.protocol === 'file:') throw new Error(`Unfortunately browser security restrictions prevent loading wasm from a file: URL. This file must be loaded from a web server. The easiest way to do this is probably to use Python\'s built-in web server by running \`python3 -m http.server\` in the top level source directory and then navigate to http://localhost:8000/build/debug-emscripten-wasm32/${CLIENT_NAME}.html`);
+
+// What the page says over the game: the download's progress, with a bar
+// for a fraction, or an error; nothing hides it. An error stays.
+const statusBox = document.getElementById('status');
+const statusText = statusBox.querySelector('span');
+const statusBar = statusBox.querySelector('progress');
+const showStatus = (text, fraction) => {
+    if (statusBox.classList.contains('error')) return;
+    statusBox.hidden = !text;
+    statusText.textContent = text ?? '';
+    statusBar.hidden = fraction === undefined;
+    if (fraction !== undefined) statusBar.value = fraction;
+};
+// An error the game can't start after: the page goes no further
+const fail = (text) => {
+    showStatus(text);
+    statusBox.classList.add('error');
+    throw new Error(text);
+};
+const failDownload = (name, response) =>
+    fail(`Couldn't download ${name}: ${response ? `the server answered ${response.status}` : 'the connection failed'}.`);
+
+// Ask for WebGL on a canvas of the page's own, before downloading anything:
+// a canvas keeps the first kind of context it gives out, and the game's
+// must be SDL's to choose
+const probe = document.createElement('canvas');
+const webgl = probe.getContext('webgl2') ?? (MIN_WEBGL_VERSION < 2 ? probe.getContext('webgl') : null);
+webgl?.getExtension('WEBGL_lose_context')?.loseContext();
+if (!webgl)
+    fail(`This browser can't run the game: it needs WebGL${MIN_WEBGL_VERSION < 2 ? '' : ' 2'}, which is missing or turned off.`);
 
 // First set up the command line arguments and the Emscripten filesystem.
 const urlParams = new URLSearchParams(window.location.search);
@@ -56,7 +98,9 @@ if (queryArgs) generatedArguments += ` ${queryArgs} `;
 const dataURL = new URL(dataPath, location.origin + location.pathname);
 
 const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {files: []}})
-  : fetch(configFilename).then(r => r.ok ? r.json() : { /* empty config */ });
+  : fetch(configFilename).catch(() => null).then((r) => r?.ok
+      ? r.json().catch(() => fail(`Couldn't read ${configFilename}: it isn't valid JSON.`))
+      : failDownload(configFilename, r));
 
 // The game takes keys while its canvas has focus; start with it there
 canvas.focus();
@@ -126,42 +170,171 @@ const setFullscreen = (on) => {
 };
 canvas.addEventListener('pointerdown', () => { if (wantFullscreen) setFullscreen(true); });
 
+// A right click is the game's. SDL leaves the event be, and the browser's
+// menu would open over the game while the pointer is free: on the menus,
+// and with the console down.
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+// A player in a match is asked before the page closes or reloads, and one on
+// the menu isn't; the engine says when a match starts and ends (CL_Frame).
+// The listener is there only meanwhile: a browser may leave a page with one
+// out of its back-forward cache.
+const confirmLeave = (event) => {
+    event.preventDefault();
+    event.returnValue = '';
+};
+const setPlaying = (playing) => {
+    if (playing) addEventListener('beforeunload', confirmLeave);
+    else removeEventListener('beforeunload', confirmLeave);
+};
+
+// The engine's files live in the page's memory: a screenshot it writes
+// is handed to the player as a download (FS_WriteFile), named for when it
+// was taken, since the engine keeps no copy and so names every one shot0000
+const saveFile = (path, bytes) => {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([bytes]));
+    link.download = `@CLIENT_BINARY@-${stamp}.${path.split('.').pop()}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+};
+
+// The home, Emscripten's HOME, where the engine keeps its config, the
+// console's history and recorded demos, is kept in the browser's storage
+// between visits. It's read back before the engine starts, and saved when
+// the engine writes its config and when the page is hidden or closed,
+// which may be the last chance. Only once it was read, or the first save
+// would replace what's stored with a new home. A browser that won't store
+// it, as in some private windows, plays without.
+const HOME = '/home/web_user';
+let homeFS, saving = false, saveAgain = false;
+const saveHome = () => {
+    if (!homeFS) return;
+    if (saving) {
+        saveAgain = true;
+        return;
+    }
+    saving = true;
+    homeFS.syncfs(false, (error) => {
+        if (error) console.warn(`Couldn't save the settings: ${error}`);
+        saving = false;
+        if (saveAgain) {
+            saveAgain = false;
+            saveHome();
+        }
+    });
+};
+// The config is written whenever a setting changes, every frame while a
+// slider is dragged: save a second after the last write
+let configSave = 0;
+const configWritten = () => {
+    clearTimeout(configSave);
+    configSave = setTimeout(saveHome, 1000);
+};
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveHome(); });
+addEventListener('pagehide', saveHome);
+
+// Download the files the config lists for the game, all at once, showing
+// their progress against the sizes the server gives. A pak that's missing
+// is an error; other files may be, such as the QVMs a build that links its
+// game code doesn't need. A failure stops the rest.
+const megabytes = (bytes) => Math.round(bytes / 1e6);
+const downloadGame = async (FS) => {
+    const config = await configPromise;
+    const files = [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir).flatMap((gamedir) => {
+        if (config[gamedir]?.files) return config[gamedir].files;
+        console.warn(`Game directory '${gamedir}' cannot be used. It must have files listed in ${configFilename}.`);
+        return [];
+    });
+    const downloading = new AbortController();
+    const stop = (name, response) => {
+        downloading.abort();
+        failDownload(name, response);
+    };
+    const responses = await Promise.all(files.map((file) =>
+        fetch(new URL(file.src, dataURL), { signal: downloading.signal }).catch(() => null)));
+    const downloads = [];
+    let received = 0, total = 0, sized = true;
+    responses.forEach((response, i) => {
+        const { src } = files[i];
+        if (response?.status === 404 && !/\.pk3$/i.test(src)) {
+            console.warn(`${src} isn't on the server; skipped`);
+            return;
+        }
+        if (!response?.ok) stop(src, response);
+        // a compressed response's length isn't what it reads as
+        const length = Number(response.headers.get('Content-Length'));
+        if (length > 0 && !response.headers.has('Content-Encoding')) total += length;
+        else sized = false;
+        downloads.push({ ...files[i], response, length });
+    });
+    // when a whole megabyte or hundredth more is in, so the bar ends full
+    let shown = '';
+    const progress = () => {
+        const bytes = sized ? Math.min(received, total) : received;
+        const text = `Downloading the game: ${megabytes(bytes)}${sized ? ` of ${megabytes(total)}` : ''} MB`;
+        const fraction = sized ? Math.floor(100 * bytes / total) / 100 : undefined;
+        if (`${text} ${fraction}` === shown) return;
+        shown = `${text} ${fraction}`;
+        showStatus(text, fraction);
+    };
+    if (downloads.length) progress();
+    await Promise.all(downloads.map(async ({ src, dst, response, length }) => {
+        // into one buffer of the size given, grown if that's wrong
+        let data = new Uint8Array(length), size = 0;
+        try {
+            const reader = response.body.getReader();
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (size + value.length > data.length) {
+                    const grown = new Uint8Array(Math.max(2 * data.length, size + value.length));
+                    grown.set(data.subarray(0, size));
+                    data = grown;
+                }
+                data.set(value, size);
+                size += value.length;
+                received += value.length;
+                progress();
+            }
+        } catch {
+            stop(src);
+        }
+        FS.mkdirTree(dst);
+        // the page keeps no copy, so the file system can take this one, cut
+        // to size if it was grown
+        FS.writeFile(`${dst}/${src.match(/[^/]+$/)[0]}`, size < data.length ? data.slice(0, size) : data, { canOwn: true });
+    }));
+};
+
 const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
 ioquake3({
     canvas: canvas,
     setFullscreen,
+    setPlaying,
+    saveFile,
+    configWritten,
     arguments: generatedArguments.trim().split(/\s+/),
     locateFile: (file) => enginePath + file,
-    preRun: [async (module) => {
+    preRun: [(module) => {
+        module.FS.mount(module.FS.filesystems.IDBFS, {}, HOME);
+        module.addRunDependency('load-home');
+        module.FS.syncfs(true, (error) => {
+            if (error) console.warn(`Couldn't read the settings saved before: ${error}`);
+            else homeFS = module.FS;
+            module.removeRunDependency('load-home');
+        });
+    }, async (module) => {
+        // a download that fails leaves the engine waiting, under its error
         module.addRunDependency('setup-ioq3-filesystem');
-        try {
-            const config = await configPromise;
-            const gamedirs = [com_basegame,fs_basegame,fs_game];
-            for (let g = 0; g < gamedirs.length; g++) {
-                const gamedir = gamedirs[g];
-                if (gamedir === '') {
-                    continue;
-                }
-                if (config[gamedir] === null
-                 || config[gamedir].files === null) {
-                    console.warn(`Game directory '${gamedir}' cannot be used. It must have files listed in ${configFilename}.`);
-                    continue;
-                }
-                const files = config[gamedir].files;
-                const fetches = files.map(file => fetch(new URL(file.src, dataURL)));
-                for (let i = 0; i < files.length; i++) {
-                    const response = await fetches[i];
-                    if (!response.ok) continue;
-                    const data = await response.arrayBuffer();
-                    let name = files[i].src.match(/[^/]+$/)[0];
-                    let dir = files[i].dst;
-                    module.FS.mkdirTree(dir);
-                    module.FS.writeFile(`${dir}/${name}`, new Uint8Array(data));
-                }
-            }
-        } finally {
-            module.removeRunDependency('setup-ioq3-filesystem');
-        }
+        await downloadGame(module.FS);
+        showStatus('Starting…');
+        module.removeRunDependency('setup-ioq3-filesystem');
     }],
+    // a player who quit isn't asked before closing the page
+    onExit: () => setPlaying(false),
+    // the engine has started, and draws from here on
+    postRun: [() => showStatus()],
 });
 </script>
