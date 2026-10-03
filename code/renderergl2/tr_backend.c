@@ -1453,9 +1453,10 @@ static void RB_PresentToScreen(void)
 
 	// resolve multisampling into a texture first where the shader reads
 	// one, or with HDR: resolving an RGB16F MSAA FBO straight to the
-	// screen messes with the brightness
+	// screen messes with the brightness. OpenGL ES resolves only into the
+	// same format, which the screen's, an opaque WebGL canvas's say, isn't
 	src = tr.renderFbo;
-	if (tr.msaaResolveFbo && (shade || r_hdr->integer))
+	if (tr.msaaResolveFbo && (shade || r_hdr->integer || qglesMajorVersion))
 	{
 		FBO_FastBlit(tr.renderFbo, NULL, tr.msaaResolveFbo, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		src = tr.msaaResolveFbo;
