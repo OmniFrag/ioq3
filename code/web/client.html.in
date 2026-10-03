@@ -235,26 +235,36 @@ const setPlaying = (playing) => {
 // clicks, touches and keys, until it plays.
 //
 // Meanwhile OpenAL starts a source node for every sound it schedules, and
-// Chrome warns for each one, a hundred in a demo: hold those starts until
-// the player's input resumes the context, and start them in its handler,
-// which Chrome allows, or else once the context runs. Its clock stays at 0
-// while it's suspended, so the sounds start as they would have, and a sound
-// stopped before that just doesn't.
+// Chrome warns for each one, a hundred in a demo: hold those starts. A
+// sound made while the page couldn't play is lost, as in a muted game,
+// rather than all of them playing at once when it can: the input that
+// resumes the context drops them, or else the context running does. Not a
+// loop, which OpenAL schedules only once and would never again, nor a sound
+// of the last moment, such as the click's own, made in the frame after its
+// handler, before the context runs. A stream, music or a cinematic's sound,
+// carries on with what OpenAL queues next.
+const HELD_SOUND_AGE = 250;
 let audioContexts = [];
 if (window.AudioContext)
     window.AudioContext = class extends window.AudioContext {
-        #held = new Set();
+        #held = new Map();
         constructor(...args) {
             super(...args);
             audioContexts.push(this);
-            this.addEventListener('statechange', () => { if (this.state === 'running') this.startHeld(); });
+            this.addEventListener('statechange', () => { if (this.state === 'running') this.releaseHeld(); });
         }
-        startHeld() {
-            const held = [...this.#held];
+        releaseHeld() {
+            const now = performance.now();
+            for (const [source, { start, at }] of this.#held) {
+                if (source.loop || now - at < HELD_SOUND_AGE) {
+                    // one that throws doesn't keep the rest from starting
+                    try { start(); } catch (error) { queueMicrotask(() => { throw error; }); }
+                } else {
+                    source.disconnect();
+                    source.stop = () => {};
+                }
+            }
             this.#held.clear();
-            // one that throws doesn't keep the rest from starting
-            for (const start of held)
-                try { start(); } catch (error) { queueMicrotask(() => { throw error; }); }
         }
         createBufferSource(...args) {
             const source = super.createBufferSource(...args);
@@ -262,16 +272,14 @@ if (window.AudioContext)
             // context runs has nothing to hold
             if (this.state === 'running') return source;
             const { start, stop } = source;
-            let held = null;
             source.start = (...when) => {
                 if (this.state === 'running') return start.apply(source, when);
-                held = () => start.apply(source, when);
-                this.#held.add(held);
+                this.#held.set(source, { start: () => start.apply(source, when), at: performance.now() });
             };
             // a node that never started throws on stop(): drop it, and
             // ignore any stop() after
             source.stop = (...when) => {
-                if (held && this.#held.delete(held)) source.stop = () => {};
+                if (this.#held.delete(source)) source.stop = () => {};
                 else stop.apply(source, when);
             };
             return source;
@@ -284,7 +292,7 @@ const resumeAudio = () => {
         if (context.state === 'running') continue;
         context.resume().catch(() => {});
         // Esc and modifier keys aren't input that lets sound start
-        if (navigator.userActivation?.isActive !== false) context.startHeld();
+        if (navigator.userActivation?.isActive !== false) context.releaseHeld();
     }
 };
 for (const type of ['pointerdown', 'keydown', 'touchend'])
