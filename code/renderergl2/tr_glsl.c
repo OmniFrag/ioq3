@@ -266,7 +266,15 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 			Q_strcat(dest, size, extra);
 		}
 
-		if (qglesMajorVersion >= 2)
+		// GLSL ES 3.00 has full precision everywhere: medium precision, 16
+		// bits on many phones, bands HDR and lighting, and in a vertex
+		// shader, whose default it would override, shakes positions
+		if (qglesMajorVersion >= 3)
+		{
+			Q_strcat(dest, size, "precision highp float;\n");
+			Q_strcat(dest, size, "precision highp sampler2DShadow;\n");
+		}
+		else if (qglesMajorVersion >= 2)
 		{
 			Q_strcat(dest, size, "precision mediump float;\n");
 			Q_strcat(dest, size, "precision mediump sampler2DShadow;\n");
