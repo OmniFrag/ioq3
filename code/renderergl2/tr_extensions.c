@@ -180,6 +180,36 @@ void GLimp_InitExtraExtensions(void)
 			ri.Printf(PRINT_ALL, result[2], extension);
 		}
 
+		// OpenGL ES 3.0 has framebuffers, blits and multisampled
+		// renderbuffers, as WebGL2 does: the render FBO, and with it MSAA,
+		// the depth prepass and post-processing
+		if (qglesMajorVersion >= 3)
+		{
+			glRefConfig.framebufferObject = !!r_ext_framebuffer_object->integer;
+			glRefConfig.framebufferBlit = qtrue;
+			glRefConfig.framebufferMultisample = qtrue;
+
+			qglGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &glRefConfig.maxRenderbufferSize);
+			qglGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &glRefConfig.maxColorAttachments);
+
+			QGL_ARB_framebuffer_object_PROCS;
+
+			ri.Printf(PRINT_ALL, result[glRefConfig.framebufferObject], "OpenGL ES 3.0 framebuffers");
+
+			// float colour buffers, to render HDR into (tr_image.c gives
+			// them the formats OpenGL ES needs)
+			extension = "GL_EXT_color_buffer_float";
+			if (SDL_GL_ExtensionSupported(extension))
+			{
+				glRefConfig.textureFloat = !!r_ext_texture_float->integer;
+				ri.Printf(PRINT_ALL, result[glRefConfig.textureFloat], extension);
+			}
+			else
+			{
+				ri.Printf(PRINT_ALL, result[2], extension);
+			}
+		}
+
 		goto done;
 	}
 

@@ -1538,6 +1538,15 @@ void R_ConvertTextureFormat( const byte *in, int width, int height, GLenum forma
 			out += rowPadding;
 		}
 	}
+	else if ( format == GL_RGBA && type == GL_FLOAT )
+	{
+		// a float image's bytes, which OpenGL ES won't convert itself;
+		// rows of floats need no padding
+		float *f = (float *)out;
+
+		for ( x = 0; x < width * height * 4; x++ )
+			*f++ = *in++ / 255.0f;
+	}
 	else
 	{
 		ri.Error( ERR_DROP, "Unable to convert RGBA image to OpenGL format 0x%X and type 0x%X", format, type );
@@ -2022,7 +2031,7 @@ static void RawImage_UploadTexture(GLuint texture, byte *data, int x, int y, int
 
 	if (qglesMajorVersion && rgba8 && (dataFormat != GL_RGBA || dataType != GL_UNSIGNED_BYTE))
 	{
-		formatBuffer = ri.Hunk_AllocateTempMemory(4 * width * height);
+		formatBuffer = ri.Hunk_AllocateTempMemory((dataType == GL_FLOAT ? 4 * sizeof(float) : 4) * width * height);
 	}
 
 	miplevel = 0;
@@ -2236,6 +2245,30 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 				dataFormat = GL_RGBA;
 				dataType = GL_UNSIGNED_SHORT_4_4_4_4;
 				break;
+
+			// OpenGL ES 3.0's framebuffer images, which keep their sized
+			// formats and take only the data types made for them
+			case GL_RGBA16F:
+				dataFormat = GL_RGBA;
+				dataType = GL_FLOAT;
+				break;
+			case GL_R32F:
+				// filtering 32-bit floats needs an extension WebGL often
+				// lacks, and 16 bits hold the depth it keeps
+				internalFormat = GL_R16F;
+				dataFormat = GL_RED;
+				dataType = GL_FLOAT;
+				break;
+			case GL_DEPTH_COMPONENT16:
+				dataType = GL_UNSIGNED_SHORT;
+				break;
+			case GL_DEPTH_COMPONENT:
+			case GL_DEPTH_COMPONENT24:
+			case GL_DEPTH_COMPONENT32:
+				internalFormat = GL_DEPTH_COMPONENT24;
+				dataType = GL_UNSIGNED_INT;
+				break;
+
 			default:
 				ri.Error( ERR_DROP, "Missing OpenGL ES support for image '%s' with internal format 0x%X\n", name, internalFormat );
 		}
@@ -2325,7 +2358,8 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 		case GL_DEPTH_COMPONENT32_ARB:
 			// Fix for sampling depth buffer on old nVidia cards.
 			// from http://www.idevgames.com/forums/thread-4141-post-34844.html#pid34844
-			if ( !QGL_VERSION_ATLEAST( 3, 0 ) ) {
+			// OpenGL ES has no depth texture mode
+			if ( !qglesMajorVersion && !QGL_VERSION_ATLEAST( 3, 0 ) ) {
 				qglTextureParameterfEXT(image->texnum, textureTarget, GL_DEPTH_TEXTURE_MODE, GL_LUMINANCE);
 			}
 			qglTextureParameterfEXT(image->texnum, textureTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
