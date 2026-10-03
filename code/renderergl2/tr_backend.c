@@ -1287,6 +1287,11 @@ void RB_ShowImages( void ) {
 	for ( i=0 ; i<tr.numImages ; i++ ) {
 		image = tr.images[i];
 
+		// a depth image isn't a picture, and one compared for shadows can't
+		// be drawn as one: WebGL refuses the draw
+		if ( image->dataFormat == GL_DEPTH_COMPONENT )
+			continue;
+
 		w = glConfig.vidWidth / 20;
 		h = glConfig.vidHeight / 15;
 		x = i % 20 * w;
