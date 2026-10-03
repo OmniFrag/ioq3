@@ -1287,9 +1287,11 @@ void RB_ShowImages( void ) {
 	for ( i=0 ; i<tr.numImages ; i++ ) {
 		image = tr.images[i];
 
-		// a depth image isn't a picture, and one compared for shadows can't
-		// be drawn as one: WebGL refuses the draw
-		if ( image->dataFormat == GL_DEPTH_COMPONENT )
+		// OpenGL ES and WebGL refuse to draw a depth image compared for
+		// shadows as a colour texture, or an image the framebuffer drawn
+		// into holds
+		if ( qglesMajorVersion && ( image->dataFormat == GL_DEPTH_COMPONENT
+			|| ( glState.currentFBO && glState.currentFBO->colorImage[0] == image ) ) )
 			continue;
 
 		w = glConfig.vidWidth / 20;
@@ -1592,8 +1594,9 @@ static void RB_DrawScaledView(FBO_t *src)
 
 	// the view's edge columns and rows again just outside it, so that
 	// filtering at its edges reads them as clamping to the edge would,
-	// not what lies around a view smaller than the view FBO (as opengl1's)
-	if (glRefConfig.framebufferBlit)
+	// not what lies around a view smaller than the view FBO (as opengl1's).
+	// OpenGL ES and WebGL2 refuse a blit within one image
+	if (glRefConfig.framebufferBlit && !qglesMajorVersion)
 	{
 		int x0 = MAX(x - 1, 0), x1 = MIN(x + w + 1, src->width);
 
