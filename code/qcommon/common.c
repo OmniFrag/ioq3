@@ -2483,6 +2483,10 @@ void Com_ExecuteCfg(void)
 		Cbuf_ExecuteText(EXEC_NOW, "exec autoexec.cfg\n");
 		Cbuf_Execute();
 	}
+
+#ifdef __EMSCRIPTEN__
+	CL_WebScreenshotKey();
+#endif
 }
 
 /*

@@ -956,6 +956,25 @@ void Key_SetBindingRestricted( int keynum, const char *binding ) {
 	keys[keynum].restricted = qtrue;
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+===================
+CL_WebScreenshotKey
+
+F11 is fullscreen on the web (CL_KeyDownEvent), so a screenshot bound to it
+moves to F10, if that's free, as a JPEG, which the player gets as a
+download (FS_WriteFile) and can open, unlike a TGA
+===================
+*/
+void CL_WebScreenshotKey( void ) {
+	const char *f10 = Key_GetBinding( K_F10 );
+
+	if ( !Q_stricmp( Key_GetBinding( K_F11 ), "screenshot" ) && ( !f10 || !*f10 ) ) {
+		Key_SetBinding( K_F10, "screenshotJPEG" );
+	}
+}
+#endif
+
 /*
 ===================
 Key_GetBinding
@@ -1282,10 +1301,17 @@ void CL_KeyDownEvent( int key, unsigned time )
 	if( keys[key].repeats == 1 )
 		anykeydown++;
 
-	if( keys[K_ALT].down && key == K_ENTER )
+	// Alt+Enter toggles fullscreen, and so does F11 on the web, where
+	// players expect it to; there it would otherwise be Quake III's
+	// screenshot key
+	if( ( keys[K_ALT].down && key == K_ENTER )
+#ifdef __EMSCRIPTEN__
+		|| key == K_F11
+#endif
+		)
 	{
 		// don't repeat fullscreen toggle when keys are held down
-		if ( keys[K_ENTER].repeats > 1 ) {
+		if ( keys[key].repeats > 1 ) {
 			return;
 		}
 

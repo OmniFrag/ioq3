@@ -33,6 +33,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "unzip.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 /*
 =============================================================================
 
@@ -2072,6 +2076,15 @@ void FS_WriteFile( const char *qpath, const void *buffer, int size ) {
 	FS_Write( buffer, size, f );
 
 	FS_FCloseFile( f );
+
+#ifdef __EMSCRIPTEN__
+	// a page's files are out of the player's reach, and gone when it
+	// closes: give them their screenshots as downloads
+	if ( !Q_stricmpn( qpath, "screenshots/", 12 ) ) {
+		MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
+			qpath, buffer, size );
+	}
+#endif
 }
 
 
