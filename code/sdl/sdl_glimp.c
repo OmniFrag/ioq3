@@ -64,6 +64,10 @@ static qboolean windowSizePending;
 
 // the last frame's fence, which GLimp_EndFrame waits on after the next swap
 static GLsync frameFence;
+#ifdef __EMSCRIPTEN__
+// the fence of the frame before, which GLimp_FrameReady looks at
+static GLsync previousFrameFence;
+#endif
 
 int qglMajorVersion, qglMinorVersion;
 int qglesMajorVersion, qglesMinorVersion;
@@ -115,6 +119,13 @@ void GLimp_Shutdown( void )
 		qglDeleteSync( frameFence );
 		frameFence = NULL;
 	}
+#ifdef __EMSCRIPTEN__
+	if( previousFrameFence )
+	{
+		qglDeleteSync( previousFrameFence );
+		previousFrameFence = NULL;
+	}
+#endif
 
 	SDL_QuitSubSystem( SDL_INIT_VIDEO );
 
@@ -1605,22 +1616,22 @@ qboolean GLimp_UpdateWindowSize( void )
 ===============
 GLimp_FrameReady
 
-Whether the GPU has finished the last frame, where GLimp_EndFrame doesn't
-wait for it (WebGL)
+Whether the GPU has finished the frame before last, where GLimp_EndFrame
+doesn't wait for it (WebGL)
 ===============
 */
 qboolean GLimp_FrameReady( void )
 {
 #ifdef __EMSCRIPTEN__
-	if( frameFence )
+	if( previousFrameFence )
 	{
-		if( qglClientWaitSync( frameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED )
+		if( qglClientWaitSync( previousFrameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED )
 		{
 			return qfalse;
 		}
 
-		qglDeleteSync( frameFence );
-		frameFence = NULL;
+		qglDeleteSync( previousFrameFence );
+		previousFrameFence = NULL;
 	}
 #endif
 
@@ -1647,9 +1658,11 @@ void GLimp_EndFrame( void )
 	// swap, and the next swap waits for it, so the CPU still works on the
 	// next frame while the GPU draws this one. WebGL can't wait on a
 	// fence, and a fence's state only changes between the browser's
-	// tasks: GLimp_FrameReady looks at it at the next refresh instead, and
-	// the client skips that one while the frame isn't done. Without
-	// fences, there, reading a pixel waits for the frame.
+	// tasks: GLimp_FrameReady looks at refreshes instead, and the client
+	// skips one while the frame before last isn't done. The last may still
+	// be drawing, as natively: waiting for it would skip a whole refresh
+	// whenever the GPU takes longer than one, and halve the frame rate.
+	// Without fences, there, reading a pixel waits for the frame.
 #ifndef __EMSCRIPTEN__
 	if( frameFence )
 	{
@@ -1661,15 +1674,22 @@ void GLimp_EndFrame( void )
 		frameFence = NULL;
 	}
 #else
-	if( frameFence && !r_gpuSync->integer )
+	// one not looked at belongs to a frame drawn without asking
+	if( previousFrameFence )
 	{
-		qglDeleteSync( frameFence );
-		frameFence = NULL;
+		qglDeleteSync( previousFrameFence );
+	}
+	previousFrameFence = frameFence;
+	frameFence = NULL;
+
+	if( previousFrameFence && !r_gpuSync->integer )
+	{
+		qglDeleteSync( previousFrameFence );
+		previousFrameFence = NULL;
 	}
 #endif
 
-	// on the web, a fence not yet looked at stays
-	if( r_gpuSync->integer && qglFenceSync && !frameFence )
+	if( r_gpuSync->integer && qglFenceSync )
 	{
 		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
 	}
