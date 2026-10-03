@@ -33,6 +33,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "unzip.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 /*
 =============================================================================
 
@@ -2062,6 +2066,17 @@ void FS_WriteFile( const char *qpath, const void *buffer, int size ) {
 	if ( !qpath || !buffer ) {
 		Com_Error( ERR_FATAL, "FS_WriteFile: NULL parameter" );
 	}
+
+#ifdef __EMSCRIPTEN__
+	// a page's files are out of the player's reach: give them their
+	// screenshots as downloads, and write no copy to the page's memory or
+	// the browser's storage, where the home is kept between visits
+	if ( !Q_stricmpn( qpath, "screenshots/", 12 ) ) {
+		MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
+			qpath, buffer, size );
+		return;
+	}
+#endif
 
 	f = FS_FOpenFileWrite_HomeData( qpath );
 	if ( !f ) {

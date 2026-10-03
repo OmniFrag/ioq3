@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "libmumblelink.h"
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #ifdef USE_MUMBLE
 cvar_t	*cl_useMumble;
 cvar_t	*cl_mumbleScale;
@@ -2985,6 +2989,20 @@ void CL_Frame ( int msec ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+#ifdef __EMSCRIPTEN__
+	{
+		// the page asks a player in a match before closing it, and not one
+		// on the menu or watching a demo
+		static qboolean wasPlaying = qfalse;
+		qboolean playing = clc.state == CA_ACTIVE && !clc.demoplaying;
+
+		if ( playing != wasPlaying ) {
+			MAIN_THREAD_EM_ASM( { Module.setPlaying?.( $0 ); }, playing );
+			wasPlaying = playing;
+		}
+	}
+#endif
 
 #ifdef USE_HTTP
 	if(clc.httpUsed) {
