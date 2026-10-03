@@ -47,6 +47,26 @@ static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
 // in a window, the player clicked into the game since it last lost focus
 static qboolean mouseClickedIn = qfalse;
+
+#ifdef __EMSCRIPTEN__
+// mouse buttons whose press locked the pointer, whose release is theirs too
+static Uint32 lockClickButtons;
+// the pointer was locked at the last frame (IN_Frame)
+static qboolean pointerWasLocked;
+
+/*
+===============
+IN_PointerLocked
+
+Whether the browser has locked the pointer to the game: SDL asks for the
+lock, and the browser grants it on a click
+===============
+*/
+static qboolean IN_PointerLocked( void )
+{
+	return MAIN_THREAD_EM_ASM_INT( { return !!document.pointerLockElement; } ) != 0;
+}
+#endif
 // what SDL reported beyond the whole pixels and wheel notches sent so far
 static float mouseMotionRemainder[2];
 static float mouseWheelRemainder;
@@ -1297,6 +1317,25 @@ void IN_ProcessEvent( const SDL_Event *e )
 				mouseClickedIn = qtrue;
 				break;
 			}
+#else
+			// nor, in a browser, is the click that locks the pointer
+			// ("Click to play"), or its release, which Safari can deliver
+			// mid-lock. Not a touch's: a phone has no pointer to lock
+			if( e->button.which != SDL_TOUCH_MOUSEID && e->button.button < 32 )
+			{
+				Uint32 bit = 1u << e->button.button;
+
+				if( e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && !IN_PointerLocked( ) )
+				{
+					lockClickButtons |= bit;
+					break;
+				}
+				if( e->type == SDL_EVENT_MOUSE_BUTTON_UP && ( lockClickButtons & bit ) )
+				{
+					lockClickButtons &= ~bit;
+					break;
+				}
+			}
 #endif
 
 			{
@@ -1418,7 +1457,7 @@ IN_Frame
 */
 void IN_Frame( void )
 {
-	qboolean loading;
+	qboolean loading, keepMouse;
 
 	IN_JoyMove( );
 
@@ -1444,12 +1483,31 @@ void IN_Frame( void )
 	if( cls.glconfig.isFullscreen )
 		mouseClickedIn = qtrue;
 
-	if( !cls.glconfig.isFullscreen && ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) )
+#ifdef __EMSCRIPTEN__
+	// a held key whose release went with the pointer lock, as Esc gives the
+	// pointer back, would stay held
+	{
+		qboolean locked = IN_PointerLocked( );
+
+		if( pointerWasLocked && !locked )
+			Key_ClearStates( );
+		pointerWasLocked = locked;
+	}
+
+	// a browser's Esc frees the pointer whenever the player wants it, so
+	// the console and loading keep it: giving it up resizes the page in
+	// Safari, which shows its own bar in a window while the pointer's free
+	keepMouse = qtrue;
+#else
+	keepMouse = cls.glconfig.isFullscreen;
+#endif
+
+	if( !keepMouse && ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) )
 	{
 		// Console is down in windowed mode
 		IN_DeactivateMouse( cls.glconfig.isFullscreen );
 	}
-	else if( !cls.glconfig.isFullscreen && loading )
+	else if( !keepMouse && loading )
 	{
 		// Loading in windowed mode
 		IN_DeactivateMouse( cls.glconfig.isFullscreen );
