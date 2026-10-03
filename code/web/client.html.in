@@ -228,24 +228,64 @@ const setPlaying = (playing) => {
     else removeEventListener('beforeunload', confirmLeave);
 };
 
-// SDL makes its AudioContext as the engine starts, before the player has
-// done anything, so the browser starts it suspended. SDL resumes it from a
-// timer once the page has had input, which Chrome allows and Safari refuses
-// outside the input's own handler: resume it there, on clicks, touches and
-// keys, until it plays.
+// The engine's sound (Emscripten's OpenAL, or SDL's) makes its AudioContext
+// as the engine starts, before the player has done anything, so the browser
+// starts it suspended. Each resumes it on input, once, or from a timer, which
+// Safari refuses outside the input's own handler: resume it there, on
+// clicks, touches and keys, until it plays.
+//
+// Meanwhile OpenAL starts a source node for every sound it schedules, and
+// Chrome warns for each one, a hundred in a demo: hold those starts until
+// the player's input resumes the context, and start them in its handler,
+// which Chrome allows, or else once the context runs. Its clock stays at 0
+// while it's suspended, so the sounds start as they would have, and a sound
+// stopped before that just doesn't.
 let audioContexts = [];
 if (window.AudioContext)
     window.AudioContext = class extends window.AudioContext {
+        #held = new Set();
         constructor(...args) {
             super(...args);
             audioContexts.push(this);
+            this.addEventListener('statechange', () => { if (this.state === 'running') this.startHeld(); });
+        }
+        startHeld() {
+            const held = [...this.#held];
+            this.#held.clear();
+            // one that throws doesn't keep the rest from starting
+            for (const start of held)
+                try { start(); } catch (error) { queueMicrotask(() => { throw error; }); }
+        }
+        createBufferSource(...args) {
+            const source = super.createBufferSource(...args);
+            // OpenAL starts a node as it makes it: one made while the
+            // context runs has nothing to hold
+            if (this.state === 'running') return source;
+            const { start, stop } = source;
+            let held = null;
+            source.start = (...when) => {
+                if (this.state === 'running') return start.apply(source, when);
+                held = () => start.apply(source, when);
+                this.#held.add(held);
+            };
+            // a node that never started throws on stop(): drop it, and
+            // ignore any stop() after
+            source.stop = (...when) => {
+                if (held && this.#held.delete(held)) source.stop = () => {};
+                else stop.apply(source, when);
+            };
+            return source;
         }
     };
 const resumeAudio = () => {
-    // a sound restart closes SDL's context and makes another
+    // a sound restart closes the context and makes another
     audioContexts = audioContexts.filter((context) => context.state !== 'closed');
-    for (const context of audioContexts)
-        if (context.state !== 'running') context.resume().catch(() => {});
+    for (const context of audioContexts) {
+        if (context.state === 'running') continue;
+        context.resume().catch(() => {});
+        // Esc and modifier keys aren't input that lets sound start
+        if (navigator.userActivation?.isActive !== false) context.startHeld();
+    }
 };
 for (const type of ['pointerdown', 'keydown', 'touchend'])
     addEventListener(type, resumeAudio, { capture: true });
