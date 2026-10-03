@@ -2253,9 +2253,11 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 				dataType = GL_FLOAT;
 				break;
 			case GL_R32F:
-				// filtering 32-bit floats needs an extension WebGL often
-				// lacks, and 16 bits hold the depth it keeps
-				internalFormat = GL_R16F;
+				// raw depth, which needs the 32 bits at a distance; where
+				// they can't be rendered and filtered, 16 bits still beat
+				// no depth (tr_extensions.c)
+				if (!glRefConfig.textureFloat32)
+					internalFormat = GL_R16F;
 				dataFormat = GL_RED;
 				dataType = GL_FLOAT;
 				break;
