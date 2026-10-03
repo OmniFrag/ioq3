@@ -2067,6 +2067,17 @@ void FS_WriteFile( const char *qpath, const void *buffer, int size ) {
 		Com_Error( ERR_FATAL, "FS_WriteFile: NULL parameter" );
 	}
 
+#ifdef __EMSCRIPTEN__
+	// a page's files are out of the player's reach: give them their
+	// screenshots as downloads, and write no copy to the page's memory or
+	// the browser's storage, where the home is kept between visits
+	if ( !Q_stricmpn( qpath, "screenshots/", 12 ) ) {
+		MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
+			qpath, buffer, size );
+		return;
+	}
+#endif
+
 	f = FS_FOpenFileWrite_HomeData( qpath );
 	if ( !f ) {
 		Com_Printf( "Failed to open %s\n", qpath );
@@ -2076,15 +2087,6 @@ void FS_WriteFile( const char *qpath, const void *buffer, int size ) {
 	FS_Write( buffer, size, f );
 
 	FS_FCloseFile( f );
-
-#ifdef __EMSCRIPTEN__
-	// a page's files are out of the player's reach, and gone when it
-	// closes: give them their screenshots as downloads
-	if ( !Q_stricmpn( qpath, "screenshots/", 12 ) ) {
-		MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
-			qpath, buffer, size );
-	}
-#endif
 }
 
 

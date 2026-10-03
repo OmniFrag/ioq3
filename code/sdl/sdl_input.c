@@ -33,6 +33,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../client/client.h"
 #include "../sys/sys_local.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 
 static cvar_t *in_keyboardDebug     = NULL;
 
@@ -356,6 +360,27 @@ static void IN_GobbleMotionEvents( void )
 		Com_Printf( "IN_GobbleMotionEvents failed: %s\n", SDL_GetError( ) );
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+===============
+IN_WebWantPointer
+
+Tells the page whether the game wants the pointer locked, which only a
+click can do, so it can ask the player for one
+===============
+*/
+static void IN_WebWantPointer( qboolean want )
+{
+	static qboolean wanted = qfalse;
+
+	if( want != wanted )
+	{
+		MAIN_THREAD_EM_ASM( { Module.setPointerWanted?.( $0 ); }, want );
+		wanted = want;
+	}
+}
+#endif
+
 /*
 ===============
 IN_ActivateMouse
@@ -368,6 +393,10 @@ static void IN_ActivateMouse( qboolean isFullscreen )
 
 	if (!mouseAvailable || !SDL_WasInit( SDL_INIT_VIDEO ) )
 		return;
+
+#ifdef __EMSCRIPTEN__
+	IN_WebWantPointer( relative ? qtrue : qfalse );
+#endif
 
 	// SDL can refuse relative mode, e.g. on the web until the pointer is
 	// over the canvas; keep asking, while the mouse works meanwhile
@@ -389,6 +418,10 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 {
 	if( !SDL_WasInit( SDL_INIT_VIDEO ) )
 		return;
+
+#ifdef __EMSCRIPTEN__
+	IN_WebWantPointer( qfalse );
+#endif
 
 	// Always show the cursor when the mouse is disabled,
 	// but not when fullscreen

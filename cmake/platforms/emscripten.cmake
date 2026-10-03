@@ -18,15 +18,23 @@ set(USE_HTTP OFF CACHE INTERNAL "")
 # Disable LTO since the libraries Emscripten provides aren't LTO enabled
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 
+# The oldest WebGL the client runs on, which the page also checks for. A
+# parent project that needs WebGL 2 may set it to 2 beforehand.
+if(NOT DEFINED WEB_MIN_WEBGL_VERSION)
+    set(WEB_MIN_WEBGL_VERSION 1)
+endif()
+
 list(APPEND CLIENT_LINK_OPTIONS
     -sTOTAL_MEMORY=256MB
     -sSTACK_SIZE=5MB
-    -sMIN_WEBGL_VERSION=1
+    -sMIN_WEBGL_VERSION=${WEB_MIN_WEBGL_VERSION}
     -sMAX_WEBGL_VERSION=2
     -sEXPORTED_RUNTIME_METHODS=FS,addRunDependency,removeRunDependency
     -sEXIT_RUNTIME=1
     -sEXPORT_ES6
     -sEXPORT_NAME=${CLIENT_NAME}
+    # the page keeps the home in the browser's storage (client.html.in)
+    -lidbfs.js
 )
 
 option(EMSCRIPTEN_PRELOAD_FILE "Preload game files into .data file" OFF)

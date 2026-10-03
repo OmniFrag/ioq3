@@ -30,6 +30,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #else
 #include <winsock.h>
 #endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 int demo_protocols[] =
 { 67, 66, 0 };
@@ -3102,6 +3105,12 @@ void Com_WriteConfigToFile( const char *filename ) {
 	// private cvars, such as passwords, go only in the engine's own config
 	Cvar_WriteVariables( f, Q_stricmp( FS_SkipPathPrefix( filename ), Q3CONFIG_CFG ) ? CVAR_PRIVATE : 0 );
 	FS_FCloseFile( f );
+
+#ifdef __EMSCRIPTEN__
+	// the page keeps the home in the browser's storage for the player's
+	// next visit, and saves it now rather than only as the page closes
+	MAIN_THREAD_EM_ASM( { Module.configWritten?.(); } );
+#endif
 }
 
 
