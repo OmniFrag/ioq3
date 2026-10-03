@@ -119,14 +119,20 @@ if (pixelRatio?.get)
         get: () => Math.min(pixelRatio.get.call(window), maxPixelRatio),
     });
 
-// Ask for raw mouse input when locking the pointer. Without it, Chromium on
-// Windows sometimes reports a huge movementY that snaps the view straight up
-// or down. Browsers without raw input either ignore the option or reject
-// the request with NotSupportedError (Chrome on Linux); only that rejection
-// falls back to a plain lock. Other failures, such as a request made during
-// a fullscreen change, must not quietly downgrade to it.
+// On Windows, ask for raw mouse input when locking the pointer, as the
+// native client gets it there. Without it, Chromium on Windows sometimes
+// reports a huge movementY that snaps the view straight up or down.
+// Elsewhere the native client moves with the system's acceleration, macOS's
+// included, so raw input would make the same hand movement turn the view
+// far less (?rawMouse=1 or 0 overrides). Browsers without raw input either
+// ignore the option or reject the request with NotSupportedError (Chrome
+// on Linux); only that rejection falls back to a plain lock. Other
+// failures, such as a request made during a fullscreen change, must not
+// quietly downgrade to it.
+const rawMouse = urlParams.has('rawMouse') ? urlParams.get('rawMouse') !== '0' : /Windows/.test(navigator.userAgent);
 const requestPointerLock = Element.prototype.requestPointerLock;
 Element.prototype.requestPointerLock = function (options) {
+    if (!rawMouse) return requestPointerLock.call(this, options);
     const request = requestPointerLock.call(this, { ...options, unadjustedMovement: true });
     request?.catch?.((e) => {
         if (e?.name === 'NotSupportedError')
