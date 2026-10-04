@@ -386,6 +386,69 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	cmd_script = script;
 }
 
+// the order the buffers run in: the startup scripts' first, as one buffer
+// ran them before the command line's commands even after a wait, then the
+// player's, then game code's
+static const int cbuf_order[CBUF_COUNT] = {
+	CBUF_SCRIPT, CBUF_RESTRICTED | CBUF_SCRIPT, 0, CBUF_RESTRICTED
+};
+
+/*
+============
+Cbuf_ExecuteFirst
+
+Runs the first count buffers in order, a line from the first that has one
+and doesn't wait, until none has; then counts down their waits
+============
+*/
+static void Cbuf_ExecuteFirst( int count )
+{
+	int	i;
+
+	// a comment runs to the end of what one call executes, as it always has
+	for ( i = 0; i < count; i++ ) {
+		cmd_buffers[ cbuf_order[i] ].inStarComment = cmd_buffers[ cbuf_order[i] ].inSlashComment = qfalse;
+	}
+
+	for ( ;; ) {
+		for ( i = 0; i < count; i++ ) {
+			cmd_t *buf = &cmd_buffers[ cbuf_order[i] ];
+
+			if ( buf->cursize && buf->wait <= 0 ) {
+				Cbuf_ExecuteLine( buf );
+				break;
+			}
+		}
+		if ( i == count ) {
+			break;
+		}
+	}
+
+	// a buffer still holding text after a wait runs it a frame later
+	for ( i = 0; i < count; i++ ) {
+		cmd_t *buf = &cmd_buffers[ cbuf_order[i] ];
+
+		if ( buf->cursize && buf->wait > 0 ) {
+			buf->wait--;
+		}
+	}
+}
+
+/*
+============
+Cbuf_ExecuteScripts
+
+Runs the startup scripts' buffers only, leaving the player's and game
+code's, and their waits, for the frame: a startup script run in the middle
+of a command, such as game_restart's, doesn't run the commands after it
+first
+============
+*/
+void Cbuf_ExecuteScripts( void )
+{
+	Cbuf_ExecuteFirst( 2 );	// cbuf_order's two script buffers
+}
+
 /*
 ============
 Cbuf_Execute
@@ -393,40 +456,7 @@ Cbuf_Execute
 */
 void Cbuf_Execute (void)
 {
-	// the order the buffers run in: the startup scripts' first, as one buffer
-	// ran them before the command line's commands even after a wait, then the
-	// player's, then game code's
-	static const int order[CBUF_COUNT] = {
-		CBUF_SCRIPT, CBUF_RESTRICTED | CBUF_SCRIPT, 0, CBUF_RESTRICTED
-	};
-	int	i;
-
-	// a comment runs to the end of what one call executes, as it always has
-	for ( i = 0; i < CBUF_COUNT; i++ ) {
-		cmd_buffers[i].inStarComment = cmd_buffers[i].inSlashComment = qfalse;
-	}
-
-	// a line from the first buffer that has one and doesn't wait, until none
-	for ( ;; ) {
-		for ( i = 0; i < CBUF_COUNT; i++ ) {
-			cmd_t *buf = &cmd_buffers[ order[i] ];
-
-			if ( buf->cursize && buf->wait <= 0 ) {
-				Cbuf_ExecuteLine( buf );
-				break;
-			}
-		}
-		if ( i == CBUF_COUNT ) {
-			break;
-		}
-	}
-
-	// a buffer still holding text after a wait runs it a frame later
-	for ( i = 0; i < CBUF_COUNT; i++ ) {
-		if ( cmd_buffers[i].cursize && cmd_buffers[i].wait > 0 ) {
-			cmd_buffers[i].wait--;
-		}
-	}
+	Cbuf_ExecuteFirst( CBUF_COUNT );
 }
 
 
