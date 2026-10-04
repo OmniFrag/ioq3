@@ -2494,38 +2494,58 @@ static void Com_ConfigWritten( void ) {
 #endif
 }
 
-// settings/'s files, in the order they're read: the scopes each holds,
-// whether it holds the binds, and whether it's the game directory's own,
-// its name then a folder of one per directory. The base game has its own as
-// a mod does, so switching between them moves nothing
+// The files settings are saved in, in the order they're read: where each is
+// in the home's config directory, with %s for the game directory's own; the
+// scopes it holds; whether it holds the binds; and its text as it was read
+// or last written, NULL where there's no file, so a file is written only
+// when what it would hold changed. A client keeps settings/, where the base
+// game has its own as a mod does, so switching between them moves nothing;
+// a dedicated server keeps one config in its game directory, of every scope
+// that's saved
 typedef struct {
-	const char	*name;
+	const char	*path;
 	int		scopes;
 	qboolean	binds;
-	qboolean	perMod;
+	char		*text;
 } settingsFile_t;
 
-static const settingsFile_t com_settingsFiles[] = {
-	{ "device.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE ), qfalse, qfalse },
-	{ "player.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER ), qtrue, qfalse },
-	{ "server.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse, qfalse },
-	{ "devices", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE_MOD ), qfalse, qtrue },
-	{ "mods", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ), qfalse, qtrue }
+static settingsFile_t com_settingsFiles[] = {
+	{ "settings/device.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE ), qfalse },
+	{ "settings/player.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER ), qtrue },
+	{ "settings/server.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse },
+	{ "settings/devices/%s.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE_MOD ), qfalse },
+	{ "settings/mods/%s.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ), qfalse }
 };
 
+static settingsFile_t com_serverConfig = { "%s/" Q3CONFIG_CFG, CVAR_SCOPES_SAVED, qfalse };
+
 static char	com_settingsMod[MAX_QPATH];	// the game directory whose settings were read
-static int	com_settingsToWrite;	// the scopes settings/ lacked, as read (Com_ReadSettings)
+
+/*
+=================
+Com_SettingsFiles
+
+The files this program saves its settings in
+=================
+*/
+static settingsFile_t *Com_SettingsFiles( int *count ) {
+	if ( Com_IsClient() ) {
+		*count = ARRAY_LEN( com_settingsFiles );
+		return com_settingsFiles;
+	}
+	*count = 1;
+	return &com_serverConfig;
+}
 
 /*
 =================
 Com_SettingsPath
 
-Where one of settings/'s files is, for the game directory whose settings
-were read
+Where one of the files is, for the game directory whose settings were read
 =================
 */
-static const char *Com_SettingsPath( const settingsFile_t *file ) {
-	return file->perMod ? va( "settings/%s/%s.cfg", file->name, com_settingsMod ) : va( "settings/%s", file->name );
+static void Com_SettingsPath( const settingsFile_t *file, char *path, int size ) {
+	Com_sprintf( path, size, file->path, com_settingsMod );
 }
 
 /*
@@ -2629,27 +2649,6 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 
 /*
 =================
-Com_ReadSettingsFile
-
-Applies one of settings/'s files, if there is one, from the home's config
-directory only
-=================
-*/
-static qboolean Com_ReadSettingsFile( const char *settingsPath ) {
-	char	*text;
-	char	path[MAX_QPATH];	// settingsPath can be va()'s, which the commands reuse
-
-	Q_strncpyz( path, settingsPath, sizeof( path ) );
-	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&text ) < 0 ) {
-		return qfalse;
-	}
-	Com_ApplyConfig( text, path, NULL, qfalse );
-	Z_Free( text );
-	return qtrue;
-}
-
-/*
-=================
 Com_SavesIoq3Only
 
 Whether a config saves a cvar only ioquake3 saves, which stock Quake III's
@@ -2710,15 +2709,16 @@ static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **def
 =================
 Com_ImportConfig
 
-Imports a config (Com_ApplyConfig) as its writer saved it (Com_ConfigWriter)
+Applies a config (Com_ApplyConfig) as its writer saved it
+(Com_ConfigWriter); returns who wrote it
 =================
 */
-static void Com_ImportConfig( char *text, const char *path, qboolean modOnly ) {
+static const char *Com_ImportConfig( char *text, const char *path, qboolean modOnly ) {
 	const cvarDefault_t	*defaults;
 	const char		*writer = Com_ConfigWriter( text, &defaults );
 
-	Com_Printf( "Importing %s, written by %s.\n", path, writer );
 	Com_ApplyConfig( text, path, defaults, modOnly );
+	return writer;
 }
 
 /*
@@ -2738,7 +2738,38 @@ static qboolean Com_ImportOldConfig( const char *game, qboolean modOnly ) {
 	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&text ) < 0 ) {
 		return qfalse;
 	}
-	Com_ImportConfig( text, path, modOnly );
+	Com_Printf( "Imported %s, written by %s.\n", path, Com_ImportConfig( text, path, modOnly ) );
+	Z_Free( text );
+	return qtrue;
+}
+
+/*
+=================
+Com_ReadSettingsFile
+
+Applies one of the files, if there is one, from the home's config
+directory only, as its writer saved it (Com_ImportConfig): a dedicated
+server's config from before this engine stated its version holds
+ioquake3's defaults. Keeps the file's text, NULL where there's none, which
+a write compares with
+=================
+*/
+static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
+	char	path[MAX_QPATH];
+	char	*text;
+
+	if ( file->text ) {
+		Z_Free( file->text );
+	}
+	Com_SettingsPath( file, path, sizeof( path ) );
+	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&file->text ) < 0 ) {
+		return qfalse;
+	}
+	// applying it cuts its text into lines; a copy from the main zone, as
+	// a config can outgrow the small one CopyString uses
+	text = Z_Malloc( strlen( file->text ) + 1 );
+	strcpy( text, file->text );
+	Com_ImportConfig( text, path, qfalse );
 	Z_Free( text );
 	return qtrue;
 }
@@ -2747,21 +2778,26 @@ static qboolean Com_ImportOldConfig( const char *game, qboolean modOnly ) {
 =================
 Com_ReadSettings
 
-The player's settings, from settings/: the device's, the player's, a
-listen server's own, then the game directory's own. What settings/ lacks
-the config the game directory kept before has: all of it on the first
-start with settings/, and a mod's own on the mod's first visit (the base
-game's as any mod's, when the first start was in a mod); those are written
-to settings/ (com_settingsToWrite)
+The settings saved, in the files' order: a client's device's, player's,
+listen server's, then the game directory's own; or a dedicated server's
+config. What a client's settings/ lacks, the config the game directory
+kept before has: all of it on the first start with settings/, and the
+directory's own on its first visit. The files that didn't exist are
+written at the next write, as what they'd hold differs from nothing
 =================
 */
 static void Com_ReadSettings( void ) {
 	qboolean	found = qfalse, foundMod = qfalse;
 	int		i;
 
+	if ( !Com_IsClient() ) {
+		Com_ReadSettingsFile( &com_serverConfig );
+		return;
+	}
 	for ( i = 0; i < ARRAY_LEN( com_settingsFiles ); i++ ) {
-		if ( Com_ReadSettingsFile( Com_SettingsPath( &com_settingsFiles[i] ) ) ) {
-			if ( com_settingsFiles[i].perMod ) {
+		if ( Com_ReadSettingsFile( &com_settingsFiles[i] ) ) {
+			if ( com_settingsFiles[i].scopes &
+				( CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ) | CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE_MOD ) ) ) {
 				foundMod = qtrue;
 			} else {
 				found = qtrue;
@@ -2770,25 +2806,8 @@ static void Com_ReadSettings( void ) {
 	}
 	if ( !found ) {
 		Com_ImportOldConfig( com_settingsMod, qfalse );
-		com_settingsToWrite = -1;
-	} else if ( !foundMod && Com_ImportOldConfig( com_settingsMod, qtrue ) ) {
-		com_settingsToWrite = CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ) | CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE_MOD );
-	}
-}
-
-/*
-=================
-Com_SettingsRead
-
-After the configs run: settings/ holds what was read, so only the scopes
-it lacked are to be written
-=================
-*/
-static void Com_SettingsRead( void ) {
-	cvar_modifiedFlags &= ~CVAR_ARCHIVE;
-	cvar_modifiedScopes = com_settingsToWrite;
-	if ( com_settingsToWrite ) {
-		cvar_modifiedFlags |= CVAR_ARCHIVE;
+	} else if ( !foundMod ) {
+		Com_ImportOldConfig( com_settingsMod, qtrue );
 	}
 }
 
@@ -2809,31 +2828,40 @@ static void Com_ExecuteScript( const char *name ) {
 ==================
 Com_ExecuteCfg
 
-default.cfg and autoexec.cfg are scripts, around the player's settings: a
-client's, or on the first start that has them, the config kept before,
-which the first write turns into them; a dedicated server's own config.
-"safe" on the command line skips the player's and autoexec.cfg
+default.cfg and autoexec.cfg are scripts, around the settings saved
+(Com_ReadSettings). The next write compares the files with what they'd
+hold, and writes those that differ: an imported config's, and those that
+didn't exist. "safe" on the command line skips the settings and
+autoexec.cfg, and that first write saves over them, as stock's did
 ==================
 */
 void Com_ExecuteCfg(void)
 {
-	// the game directory whose settings are read and written, even in safe
-	// mode, which writes what the player changes
+	// the game directory whose settings are read and written
 	Q_strncpyz( com_settingsMod, FS_LoadedGameDir(), sizeof( com_settingsMod ) );
-	com_settingsToWrite = 0;
 
 	Com_ExecuteScript( "default.cfg" );
 
 	if(!Com_SafeMode())
 	{
-		if ( Com_IsClient() ) {
-			Com_ReadSettings();
-		} else {
-			Cbuf_ExecuteText(EXEC_NOW, "exec " Q3CONFIG_CFG "\n");
-			Cbuf_Execute();
-		}
+		Com_ReadSettings();
 		Com_ExecuteScript( "autoexec.cfg" );
 	}
+	else
+	{
+		// nothing was read, so nothing is compared with: a game directory
+		// changed to isn't compared with the one left's text
+		int		count, i;
+		settingsFile_t	*files = Com_SettingsFiles( &count );
+
+		for ( i = 0; i < count; i++ ) {
+			if ( files[i].text ) {
+				Z_Free( files[i].text );
+				files[i].text = NULL;
+			}
+		}
+	}
+	cvar_modifiedFlags |= CVAR_ARCHIVE;
 }
 
 /*
@@ -2872,7 +2900,6 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 		// Clean out any user and VM created cvars
 		Cvar_Restart(qtrue);
 		Com_ExecuteCfg();
-		Com_SettingsRead();
 
 		if(disconnect)
 		{
@@ -3208,37 +3235,7 @@ void Com_Init( char *commandLine ) {
 
 	Com_ExecuteCfg();
 
-	// Defaults that changed from ioquake3's, forgotten in a config this
-	// engine didn't write (no com_configVersion): in practice the
-	// predecessor's, copied on the first run, which holds its defaults
-	// written out. In a config written here, an old default is a value the
-	// player chose (the menu's Normal textures are r_picmip 1), and stays;
-	// this engine's own earlier defaults aren't kept, so a later change
-	// adds its old default here without bumping the version
-	// (a client's settings drop them as they're imported: Com_ConfigWriter)
-	if ( !Com_IsClient() && Cvar_VariableIntegerValue( "com_configVersion" ) < 1 ) {
-		Cvar_ForgetOldDefault( "snaps", "20" );
-		Cvar_ForgetOldDefault( "cl_maxpackets", "30" );
-		Cvar_ForgetOldDefault( "s_mixPreStep", "0.05" );
-#ifndef __EMSCRIPTEN__
-		Cvar_ForgetOldDefault( "com_maxfps", "85" );
-		Cvar_ForgetOldDefault( "com_maxfpsUnfocused", "0" );
-		Cvar_ForgetOldDefault( "com_maxfpsMinimized", "0" );
-#endif
-		Cvar_ForgetOldDefault( "s_muteWhenMinimized", "0" );
-		Cvar_ForgetOldDefault( "r_picmip", "1" );
-		Cvar_ForgetOldDefault( "r_ext_texture_filter_anisotropic", "0" );
-		Cvar_ForgetOldDefault( "r_ext_max_anisotropy", "2" );
-		Cvar_ForgetOldDefault( "r_subdivisions", "4" );
-		Cvar_ForgetOldDefault( "r_lodbias", "0" );
-		Cvar_ForgetOldDefault( "r_ext_framebuffer_multisample", "0" );
-		Cvar_ForgetOldDefault( "r_toneMap", "1" );
-		Cvar_ForgetOldDefault( "r_autoExposure", "1" );
-		Cvar_ForgetOldDefault( "r_specularMapping", "1" );
-		Cvar_ForgetOldDefault( "r_dlightMode", "0" );
-		Cvar_ForgetOldDefault( "con_scale", "1" );
-	}
-	// the config states it (Com_WriteConfigToFile), so the next start knows
+	// the config states it (Com_WriteConfigLines), so the next start knows
 	// the config is this new
 	Cvar_SetDescription( Cvar_Get( "com_configVersion", COM_CONFIG_VERSION, CVAR_ARCHIVE | CVAR_PROTECTED ),
 		"Which of the engine's changed defaults the config was written after; set by the engine" );
@@ -3264,11 +3261,6 @@ void Com_Init( char *commandLine ) {
 #endif
 	// allocate the stack based hunk allocator
 	Com_InitHunkMemory();
-
-	// if any archived cvars are modified after this, we will trigger a writing
-	// of the config file; the first start with settings/ writes it all, from
-	// the config kept before
-	Com_SettingsRead();
 
 	//
 	// init commands and vars
@@ -3465,6 +3457,31 @@ void Com_ReadFromPipe( void )
 
 /*
 ===============
+Com_ConfigAppend
+
+Adds text to a config being built
+===============
+*/
+void Com_ConfigAppend( configText_t *config, const char *text ) {
+	int	length = strlen( text );
+
+	if ( config->length + length >= config->size ) {
+		int	size = MAX( 4096, 2 * ( config->length + length ) );
+		char	*grown = Z_Malloc( size );
+
+		if ( config->text ) {
+			Com_Memcpy( grown, config->text, config->length );
+			Z_Free( config->text );
+		}
+		config->text = grown;
+		config->size = size;
+	}
+	Com_Memcpy( config->text + config->length, text, length + 1 );
+	config->length += length;
+}
+
+/*
+===============
 Com_WriteConfigLines
 
 A config's lines: its first line (COM_CONFIG_HEADER), which tells the
@@ -3473,13 +3490,39 @@ asked for but those with any of hideFlags, and the version of the
 engine's defaults it was written after
 ===============
 */
-static void Com_WriteConfigLines( fileHandle_t f, qboolean binds, int hideFlags, int scopes ) {
-	FS_Printf( f, COM_CONFIG_HEADER " do not modify\n" );
+static void Com_WriteConfigLines( configText_t *config, qboolean binds, int hideFlags, int scopes ) {
+	Com_ConfigAppend( config, COM_CONFIG_HEADER " do not modify\n" );
 	if ( binds ) {
-		Key_WriteBindings( f );
+		Key_WriteBindings( config );
 	}
-	Cvar_WriteVariables( f, hideFlags, scopes );
-	FS_Printf( f, "seta com_configVersion \"" COM_CONFIG_VERSION "\"\n" );
+	Cvar_WriteVariables( config, hideFlags, scopes );
+	Com_ConfigAppend( config, "seta com_configVersion \"" COM_CONFIG_VERSION "\"\n" );
+}
+
+/*
+===============
+Com_WriteConfigText
+
+A config's text to a file opened to write it; returns whether it was
+written
+===============
+*/
+static qboolean Com_WriteConfigText( fileHandle_t f, const char *path, const configText_t *config ) {
+	int	written;
+
+	if ( !f ) {
+		Com_Printf( "Couldn't write %s.\n", path );
+		return qfalse;
+	}
+	written = FS_Write( config->text, config->length, f );
+	FS_FCloseFile( f );
+	// a short write (a full disk) isn't what the file holds, so the next
+	// write tries again
+	if ( written < config->length ) {
+		Com_Printf( "Couldn't write all of %s.\n", path );
+		return qfalse;
+	}
+	return qtrue;
 }
 
 /*
@@ -3491,62 +3534,55 @@ was written
 ===============
 */
 static qboolean Com_WriteConfigFile( const char *filename, int hideFlags, int scopes ) {
-	fileHandle_t	f = FS_FOpenFileWrite_HomeConfig( filename );
+	configText_t	config = { NULL, 0, 0 };
+	qboolean	written;
 
-	if ( !f ) {
-		Com_Printf( "Couldn't write %s.\n", filename );
-		return qfalse;
+	Com_WriteConfigLines( &config, qtrue, hideFlags, scopes );
+	written = Com_WriteConfigText( FS_FOpenFileWrite_HomeConfig( filename ), filename, &config );
+	Z_Free( config.text );
+	if ( written ) {
+		Com_ConfigWritten();
 	}
-	Com_WriteConfigLines( f, qtrue, hideFlags, scopes );
-	FS_FCloseFile( f );
-	Com_ConfigWritten();
-	return qtrue;
+	return written;
 }
 
-void Com_WriteConfigToFile( const char *filename ) {
+static void Com_WriteConfigToFile( const char *filename ) {
 	// private cvars, such as passwords, go only in the engine's own config
-	Com_WriteConfigFile( filename, Q_stricmp( FS_SkipPathPrefix( filename ), Q3CONFIG_CFG ) ? CVAR_PRIVATE : 0, -1 );
-}
-
-
-/*
-===============
-Com_WriteSettingsFile
-
-One of settings/'s files: its version line, the binds if it holds them,
-and the archived cvars of its scopes
-===============
-*/
-static void Com_WriteSettingsFile( const char *path, int scopes, qboolean binds ) {
-	fileHandle_t	f = FS_BaseDir_FOpenFileWrite_HomeConfig( path );
-
-	if ( !f ) {
-		Com_Printf( "Couldn't write %s.\n", path );
-		return;
-	}
-	Com_WriteConfigLines( f, binds, 0, scopes );
-	FS_FCloseFile( f );
+	Com_WriteConfigFile( filename, Q_stricmp( FS_SkipPathPrefix( filename ), Q3CONFIG_CFG ) ? CVAR_PRIVATE : 0,
+		CVAR_SCOPES_SAVED );
 }
 
 /*
 ===============
 Com_WriteSettings
 
-The files of settings/ whose scopes changed since the last write (all of
-them with -1), for the mod whose settings were read
+The files whose text changed: what each would hold now, compared with
+what it held as read or last written, for the game directory whose
+settings were read
 ===============
 */
-static void Com_WriteSettings( int changed ) {
+static void Com_WriteSettings( void ) {
 	qboolean	written = qfalse;
-	int		i;
+	int		count, i;
+	settingsFile_t	*files = Com_SettingsFiles( &count );
 
-	for ( i = 0; i < ARRAY_LEN( com_settingsFiles ); i++ ) {
-		const settingsFile_t	*file = &com_settingsFiles[i];
-		const char		*path = Com_SettingsPath( file );
-		if ( file->scopes & changed ) {
-			Com_WriteSettingsFile( path, file->scopes, file->binds );
-			written = qtrue;
+	for ( i = 0; i < count; i++ ) {
+		settingsFile_t	*file = &files[i];
+		configText_t	config = { NULL, 0, 0 };
+		char		path[MAX_QPATH];
+
+		Com_SettingsPath( file, path, sizeof( path ) );
+		Com_WriteConfigLines( &config, file->binds, 0, file->scopes );
+		if ( ( file->text && !strcmp( file->text, config.text ) ) ||
+			!Com_WriteConfigText( FS_BaseDir_FOpenFileWrite_HomeConfig( path ), path, &config ) ) {
+			Z_Free( config.text );
+			continue;
 		}
+		if ( file->text ) {
+			Z_Free( file->text );
+		}
+		file->text = config.text;
+		written = qtrue;
 	}
 	if ( written ) {
 		Com_ConfigWritten();
@@ -3557,7 +3593,8 @@ static void Com_WriteSettings( int changed ) {
 ===============
 Com_WriteConfiguration
 
-Writes key bindings and archived cvars to config file if modified
+Writes key bindings and archived cvars to the files whose text changed, if
+any was modified
 ===============
 */
 void Com_WriteConfiguration( void ) {
@@ -3571,13 +3608,7 @@ void Com_WriteConfiguration( void ) {
 		return;
 	}
 	cvar_modifiedFlags &= ~CVAR_ARCHIVE;
-
-	if ( Com_IsClient() ) {
-		Com_WriteSettings( cvar_modifiedScopes );
-		cvar_modifiedScopes = 0;
-	} else {
-		Com_WriteConfigToFile( Q3CONFIG_CFG );
-	}
+	Com_WriteSettings();
 
 	// not needed for dedicated or standalone
 #if !defined(DEDICATED) && !defined(STANDALONE)
@@ -3675,7 +3706,7 @@ static void Com_SettingsImport_f( void ) {
 	if ( FS_LastFileIsGameContent() ) {
 		Com_Printf( "%s is game content, which isn't imported.\n", filename );
 	} else {
-		Com_ImportConfig( text, filename, qfalse );
+		Com_Printf( "Imported %s, written by %s.\n", filename, Com_ImportConfig( text, filename, qfalse ) );
 	}
 	FS_FreeFile( text );
 }

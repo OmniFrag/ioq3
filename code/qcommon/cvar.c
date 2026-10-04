@@ -40,7 +40,6 @@ static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetP
 static void Cvar_MarkSaved( const cvar_t *var );
 static const cvarDeclaration_t	*cvar_declared;	// each cvar's scope (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
-int				cvar_modifiedScopes;
 
 /*
 ================
@@ -502,9 +501,8 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	
 	if(var)
 	{
-		// the file its saved value is in, before this registration changes
-		// its flags
-		int	savedScopes = ( var->flags & CVAR_ARCHIVE ) ? CVAR_SCOPE_BIT( Cvar_Scope( var ) ) : 0;
+		// whether it had a saved value, which registering can drop
+		qboolean	saved = var->savedString != NULL;
 
 		var_value = Cvar_Validate(var, var_value, qfalse);
 
@@ -588,13 +586,11 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		Cvar_Apply( var, qtrue );
 
 		// ZOID--needs to be set so that cvars the game sets as
-		// SERVERINFO get sent to clients; what's saved hasn't changed,
-		// unless registering archives a saved value (a set before the code
-		// registered it) or moves it to another scope's file
+		// SERVERINFO get sent to clients; a saved value may now be saved
+		// otherwise (archived, in another scope's file, the default, or
+		// not at all, read only), which the next write compares
 		cvar_modifiedFlags |= flags & ~CVAR_ARCHIVE;
-		if ( var->savedString && ( var->flags & CVAR_ARCHIVE ) &&
-			CVAR_SCOPE_BIT( Cvar_Scope( var ) ) != savedScopes ) {
-			cvar_modifiedScopes |= savedScopes;
+		if ( saved || var->savedString ) {
 			Cvar_MarkSaved( var );
 		}
 
@@ -1018,13 +1014,13 @@ cvarScope_t Cvar_Scope( const cvar_t *var ) {
 ============
 Cvar_MarkSaved
 
-What a cvar saves changed: its scope's file is to be written
+What a cvar saves changed: the config is to be written, the files whose
+text changed (Com_WriteConfiguration)
 ============
 */
 static void Cvar_MarkSaved( const cvar_t *var ) {
 	if ( var->flags & CVAR_ARCHIVE ) {
 		cvar_modifiedFlags |= CVAR_ARCHIVE;
-		cvar_modifiedScopes |= CVAR_SCOPE_BIT( Cvar_Scope( var ) );
 	}
 }
 
@@ -1474,58 +1470,65 @@ void Cvar_Reset_f( void ) {
 	Cvar_SetFromText( Cmd_Argv( 1 ), NULL );
 }
 
+static int QDECL Cvar_CompareNames( const void *a, const void *b ) {
+	return Q_stricmp( ( *(const cvar_t * const *)a )->name, ( *(const cvar_t * const *)b )->name );
+}
+
 /*
 ============
 Cvar_WriteVariables
 
 Appends a "seta variable value" line for each archived variable whose
-saved value (cvar_t) isn't its default. One no code has registered has no
-default yet, and is written as it is
+saved value (cvar_t) isn't its default, sorted by name, so the text doesn't
+depend on the order cvars were registered in. One no code has registered
+has no default yet, and is written as it is
 ============
 */
-void Cvar_WriteVariables( fileHandle_t f, int hideFlags, int scopes )
+void Cvar_WriteVariables( configText_t *config, int hideFlags, int scopes )
 {
+	static cvar_t	*sorted[MAX_CVARS];
 	cvar_t	*var;
 	char	buffer[1024];
+	int	count = 0, i;
 
-	for (var = cvar_vars; var; var = var->next)
-	{
-		const char *value;
-
-		if(!var->name || Q_stricmp( var->name, "cl_cdkey" ) == 0)
-			continue;
-		if ( var->flags & hideFlags )
-			continue;
-		if( var->flags & CVAR_ARCHIVE ) {
-			// the player's choice, even if it hasn't taken effect yet
-			// (latched, or under a server's)
-			value = Cvar_SavedValue( var );
-			if ( !value || !( scopes & CVAR_SCOPE_BIT( Cvar_Scope( var ) ) ) ) {
-				continue;
-			}
-			// a quote or a line break would end the value early, and the
-			// rest of it would run as commands when the config is executed
-			if ( strpbrk( value, "\"\r\n" ) ) {
-				Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
-						"\"%s\" has a quote or a line break, not written to file\n", var->name );
-				continue;
-			}
-			// and a comment in the name would hide the rest of the line, or
-			// with /* the lines after it (engine cvars such as
-			// //trap_GetValue aren't archived)
-			if ( strstr( var->name, "//" ) || strstr( var->name, "/*" ) || strstr( var->name, "*/" ) ) {
-				Com_Printf( S_COLOR_YELLOW "WARNING: name of variable "
-						"\"%s\" has a comment, not written to file\n", var->name );
-				continue;
-			}
-			if( strlen( var->name ) + strlen( value ) + 10 > sizeof( buffer ) ) {
-				Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
-						"\"%s\" too long to write to file\n", var->name );
-				continue;
-			}
-			Com_sprintf (buffer, sizeof(buffer), "seta %s \"%s\"\n", var->name, value);
-			FS_Write( buffer, strlen( buffer ), f );
+	// the ones written, then sorted
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->name && Q_stricmp( var->name, "cl_cdkey" ) && !( var->flags & hideFlags ) &&
+			( var->flags & CVAR_ARCHIVE ) && ( scopes & CVAR_SCOPE_BIT( Cvar_Scope( var ) ) ) &&
+			Cvar_SavedValue( var ) ) {
+			sorted[count++] = var;
 		}
+	}
+	qsort( sorted, count, sizeof( sorted[0] ), Cvar_CompareNames );
+
+	for ( i = 0; i < count; i++ ) {
+		// the player's choice, even if it hasn't taken effect yet
+		// (latched, or under a server's)
+		const char	*value = Cvar_SavedValue( sorted[i] );
+
+		var = sorted[i];
+		// a quote or a line break would end the value early, and the
+		// rest of it would run as commands when the config is executed
+		if ( strpbrk( value, "\"\r\n" ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
+					"\"%s\" has a quote or a line break, not written to file\n", var->name );
+			continue;
+		}
+		// and a comment in the name would hide the rest of the line, or
+		// with /* the lines after it (engine cvars such as
+		// //trap_GetValue aren't archived)
+		if ( strstr( var->name, "//" ) || strstr( var->name, "/*" ) || strstr( var->name, "*/" ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: name of variable "
+					"\"%s\" has a comment, not written to file\n", var->name );
+			continue;
+		}
+		if( strlen( var->name ) + strlen( value ) + 10 > sizeof( buffer ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
+					"\"%s\" too long to write to file\n", var->name );
+			continue;
+		}
+		Com_sprintf (buffer, sizeof(buffer), "seta %s \"%s\"\n", var->name, value);
+		Com_ConfigAppend( config, buffer );
 	}
 }
 
@@ -1706,9 +1709,6 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 
 	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
 	cvar_modifiedFlags |= cv->flags;
-	if ( cv->savedString ) {
-		Cvar_MarkSaved( cv );
-	}
 
 	if(cv->name)
 		Z_Free(cv->name);
@@ -1984,24 +1984,6 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 	var = Cvar_FindVar( var_name );
 	if( var && ( var->flags & CVAR_VM_CREATED ) )
 		Cvar_SetDescription( var, var_description );
-}
-
-/*
-=====================
-Cvar_ForgetOldDefault
-
-Configs written before defaults were left out hold a cvar's old default,
-since every archived cvar was written. Forget a value the config files set
-that matches it, so the cvar starts at the new default when it's
-registered. Command line settings come after, and stand.
-=====================
-*/
-void Cvar_ForgetOldDefault( const char *var_name, const char *old_default )
-{
-	cvar_t *var = Cvar_FindVar( var_name );
-
-	if( var && ( var->flags & CVAR_USER_CREATED ) && !strcmp( var->string, old_default ) )
-		Cvar_Unset( var );
 }
 
 /*
