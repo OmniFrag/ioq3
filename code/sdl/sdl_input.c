@@ -1037,31 +1037,49 @@ static void IN_JoyMove( void )
 ===============
 IN_SaveWindowSize
 
-Keeps a window's size for the next start and for a vid_restart. In
-fullscreen the size follows the display mode, so r_mode stays. A
-maximized window fills whatever desktop it's on, so its size is kept only
-for a restart, which recreates the window from it. Ask the window:
-On the web, cls.glconfig.isFullscreen is the page's fullscreen, which
-isn't the window's.
+Keeps the size the player gave the window by its edge, which has no other
+control: saved, as r_mode -1. Nothing else is the player's: the size the
+renderer gave it (r_mode's, fitted to the desktop, or back from
+fullscreen), a fullscreen or maximized window, or one covering its
+display, as a window does on its way into macOS's fullscreen. A restart,
+which makes the window again from r_mode, keeps the size of a maximized
+window, or one covering its display, for this run only. On the web the
+page sizes the canvas, and r_mode isn't used.
 ===============
 */
 static void IN_SaveWindowSize( qboolean restarting )
 {
+#ifndef __EMSCRIPTEN__
 	SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+	cvarSource_t source = CVAR_SOURCE_PLAYER;
+	SDL_Rect bounds;
 	int width, height;
 
-	if( ( flags & SDL_WINDOW_FULLSCREEN ) || ( !restarting && ( flags & SDL_WINDOW_MAXIMIZED ) ) )
+	if( !re.WindowSizeIsOwn || ( flags & SDL_WINDOW_FULLSCREEN ) || re.WindowSizeIsOwn( ) ||
+		!SDL_GetWindowSize( SDL_window, &width, &height ) )
 	{
 		return;
+	}
+
+	if( ( flags & SDL_WINDOW_MAXIMIZED ) ||
+		( SDL_GetDisplayBounds( SDL_GetDisplayForWindow( SDL_window ), &bounds ) &&
+		width >= bounds.w && height >= bounds.h ) )
+	{
+		if( !restarting )
+		{
+			return;
+		}
+		source = CVAR_SOURCE_SESSION;
 	}
 
 	// r_mode's sizes are pixels (GLimp_SetMode)
 	if( SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) && width > 0 && height > 0 )
 	{
-		Cvar_SetValue( "r_customwidth", width );
-		Cvar_SetValue( "r_customheight", height );
-		Cvar_Set( "r_mode", "-1" );
+		Cvar_SetFrom( "r_customwidth", va( "%d", width ), source, qtrue );
+		Cvar_SetFrom( "r_customheight", va( "%d", height ), source, qtrue );
+		Cvar_SetFrom( "r_mode", "-1", source, qtrue );
 	}
+#endif
 }
 
 /*
@@ -1081,7 +1099,7 @@ static void IN_WindowResized( void )
 		return;
 	}
 
-	// the new size is kept once the player stops resizing (IN_Frame)
+	// natively, the new size is kept once the player stops resizing (IN_Frame)
 	windowSizeSaveTime = Sys_Milliseconds( ) + 1000;
 
 	// follow it without a restart if we can

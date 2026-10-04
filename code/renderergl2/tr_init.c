@@ -1880,6 +1880,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.TakeVideoFrame = RE_TakeVideoFrame;
 	re.FrameReady = GLimp_FrameReady;
 	re.SetFullscreen = GLimp_SetFullscreen;
+	re.WindowSizeIsOwn = GLimp_WindowSizeIsOwn;
 
 	return &re;
 }
