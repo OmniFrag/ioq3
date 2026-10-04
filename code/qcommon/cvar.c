@@ -35,6 +35,8 @@ int			cvar_numIndexes;
 #define FILE_HASH_SIZE		256
 static	cvar_t	*hashTable[FILE_HASH_SIZE];
 
+static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetProfile)
+
 /*
 ================
 return a hash value for the filename
@@ -336,6 +338,109 @@ static const char *Cvar_Validate( cvar_t *var,
 		return value;
 }
 
+/*
+============
+Cvar_SetLayer
+
+Replaces one of a cvar's layers (cvar_t's serverString and the rest), or
+another string of its; NULL clears it
+============
+*/
+static void Cvar_SetLayer( char **layer, const char *value ) {
+	char *copy = value ? CopyString( value ) : NULL;
+
+	if ( *layer ) {
+		Z_Free( *layer );
+	}
+	*layer = copy;
+}
+
+/*
+============
+Cvar_SameString
+
+Whether two of a cvar's strings, either of which may be NULL, are the same
+============
+*/
+static qboolean Cvar_SameString( const char *a, const char *b ) {
+	return a ? b && !strcmp( a, b ) : !b;
+}
+
+/*
+============
+Cvar_Resolve
+
+A cvar's value, from its layers (cvar_t)
+============
+*/
+static const char *Cvar_Resolve( const cvar_t *var ) {
+	if ( var->serverString ) {
+		return var->serverString;
+	}
+	if ( var->userString ) {
+		return var->userString;
+	}
+	return var->resetString;
+}
+
+/*
+============
+Cvar_Apply
+
+Gives a cvar the value its layers resolve to: at once if forced, or else,
+for a latched cvar, after a restart
+============
+*/
+static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
+	const char *value = Cvar_Resolve( var );
+
+	if ( !strcmp( value, var->string ) ) {
+		Cvar_SetLayer( &var->latchedString, NULL );
+		return var;
+	}
+
+	// note what types of cvars have been modified (userinfo, serverinfo,
+	// systeminfo); the archive is the saved value's (Cvar_SetVar)
+	cvar_modifiedFlags |= var->flags & ~CVAR_ARCHIVE;
+
+	if ( !force && ( var->flags & CVAR_LATCH ) ) {
+		if ( !Cvar_SameString( value, var->latchedString ) ) {
+			Com_Printf( "%s will be changed upon restarting.\n", var->name );
+			Cvar_SetLayer( &var->latchedString, value );
+			var->modified = qtrue;
+			var->modificationCount++;
+		}
+		return var;
+	}
+
+	Cvar_SetLayer( &var->latchedString, NULL );
+	var->modified = qtrue;
+	var->modificationCount++;
+	Cvar_SetLayer( &var->string, value );
+	var->value = atof( var->string );
+	var->integer = atoi( var->string );
+
+	return var;
+}
+
+/*
+============
+Cvar_ProfileDefault
+
+A cvar's default on this platform: its profile's, if it has one
+============
+*/
+static const char *Cvar_ProfileDefault( const char *var_name, const char *var_value ) {
+	const cvarDefault_t *d;
+
+	for ( d = cvar_profile; d && d->name; d++ ) {
+		if ( !Q_stricmp( d->name, var_name ) ) {
+			return d->value;
+		}
+	}
+	return var_value;
+}
+
 
 /*
 ============
@@ -366,6 +471,11 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	}
 #endif
 
+	// this platform's default, for a registration by code
+	if ( !( flags & CVAR_USER_CREATED ) ) {
+		var_value = Cvar_ProfileDefault( var_name, var_value );
+	}
+
 	var = Cvar_FindVar (var_name);
 	
 	if(var)
@@ -380,12 +490,10 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 			if ( strcmp( var->string, var_value ) ) {
 				Com_Printf( "%s can't be set by game code or game content.\n", var_name );
 			}
-			Z_Free( var->resetString );
-			var->resetString = CopyString( var_value );
-			if ( var->latchedString ) {
-				Z_Free( var->latchedString );
-			}
-			var->latchedString = CopyString( var_value );
+			Cvar_SetLayer( &var->resetString, var_value );
+			Cvar_SetLayer( &var->serverString, NULL );
+			Cvar_SetLayer( &var->userString, NULL );
+			Cvar_SetLayer( &var->savedString, NULL );
 			var->untrusted = qfalse;
 		}
 
@@ -406,18 +514,14 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		if(var->flags & CVAR_USER_CREATED)
 		{
 			var->flags &= ~CVAR_USER_CREATED;
-			Z_Free( var->resetString );
-			var->resetString = CopyString( var_value );
+			Cvar_SetLayer( &var->resetString, var_value );
 
 			if(flags & CVAR_ROM)
 			{
 				// this variable was set by the user,
 				// so force it to value given by the engine.
-
-				if(var->latchedString)
-					Z_Free(var->latchedString);
-				
-				var->latchedString = CopyString(var_value);
+				Cvar_SetLayer( &var->userString, NULL );
+				Cvar_SetLayer( &var->savedString, NULL );
 			}
 		}
 		
@@ -438,21 +542,14 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		// only allow one non-empty reset string without a warning
 		if ( !var->resetString[0] ) {
 			// we don't have a reset string yet
-			Z_Free( var->resetString );
-			var->resetString = CopyString( var_value );
+			Cvar_SetLayer( &var->resetString, var_value );
 		} else if ( var_value[0] && strcmp( var->resetString, var_value ) ) {
 			Com_DPrintf( "Warning: cvar \"%s\" given initial values: \"%s\" and \"%s\"\n",
 				var_name, var->resetString, var_value );
 		}
-		// if we have a latched string, take that value now
-		if ( var->latchedString ) {
-			char *s;
-
-			s = var->latchedString;
-			var->latchedString = NULL;	// otherwise cvar_set2 would free it
-			Cvar_Set2( var_name, s, qtrue );
-			Z_Free( s );
-		}
+		// its value from its layers, now that its default is known, and a
+		// latched value takes effect now
+		Cvar_Apply( var, qtrue );
 
 		// ZOID--needs to be set so that cvars the game sets as 
 		// SERVERINFO get sent to clients
@@ -492,6 +589,8 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->value = atof (var->string);
 	var->integer = atoi(var->string);
 	var->resetString = CopyString( var_value );
+	var->serverString = var->userString = var->savedString = NULL;
+	var->serverStale = qfalse;
 	var->validate = qfalse;
 	var->description = NULL;
 	// its value is game code's or a server's: see cvar_t's untrusted
@@ -576,120 +675,6 @@ static const char *Cvar_Refusal( const cvar_t *var ) {
 
 /*
 ============
-Cvar_Set2
-============
-*/
-cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
-	cvar_t	*var;
-
-//	Com_DPrintf( "Cvar_Set2: %s %s\n", var_name, value );
-
-	if ( !Cvar_ValidateString( var_name ) ) {
-		Com_Printf("invalid cvar name string: %s\n", var_name );
-		var_name = "BADNAME";
-	}
-
-#if 0	// FIXME
-	if ( value && !Cvar_ValidateString( value ) ) {
-		Com_Printf("invalid cvar value string: %s\n", value );
-		var_value = "BADVALUE";
-	}
-#endif
-
-	var = Cvar_FindVar (var_name);
-	if (!var) {
-		if ( !value ) {
-			return NULL;
-		}
-		// create it
-		if ( !force ) {
-			return Cvar_Get( var_name, value, CVAR_USER_CREATED );
-		} else {
-			return Cvar_Get (var_name, value, 0);
-		}
-	}
-
-	if (!value ) {
-		value = var->resetString;
-	}
-
-	value = Cvar_Validate(var, value, qtrue);
-
-	if((var->flags & CVAR_LATCH) && var->latchedString)
-	{
-		if(!strcmp(value, var->string))
-		{
-			Z_Free(var->latchedString);
-			var->latchedString = NULL;
-			return var;
-		}
-
-		if(!strcmp(value, var->latchedString))
-			return var;
-	}
-	else if(!strcmp(value, var->string))
-		return var;
-
-	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
-	cvar_modifiedFlags |= var->flags;
-
-	if (!force)
-	{
-		const char *refusal = Cvar_Refusal( var );
-
-		if ( refusal )
-		{
-			Com_Printf ("%s is %s.\n", var_name, refusal);
-			return var;
-		}
-		
-		if (var->flags & CVAR_LATCH)
-		{
-			if (var->latchedString)
-			{
-				if (strcmp(value, var->latchedString) == 0)
-					return var;
-				Z_Free (var->latchedString);
-			}
-			else
-			{
-				if (strcmp(value, var->string) == 0)
-					return var;
-			}
-
-			Com_Printf ("%s will be changed upon restarting.\n", var_name);
-			var->latchedString = CopyString(value);
-			var->modified = qtrue;
-			var->modificationCount++;
-			return var;
-		}
-	}
-	else
-	{
-		if (var->latchedString)
-		{
-			Z_Free (var->latchedString);
-			var->latchedString = NULL;
-		}
-	}
-
-	if (!strcmp(value, var->string))
-		return var;		// not changed
-
-	var->modified = qtrue;
-	var->modificationCount++;
-	
-	Z_Free (var->string);	// free the old value string
-	
-	var->string = CopyString(value);
-	var->value = atof (var->string);
-	var->integer = atoi (var->string);
-
-	return var;
-}
-
-/*
-============
 Cvar_Set
 ============
 */
@@ -743,6 +728,162 @@ void Cvar_SetSafe( const char *var_name, const char *value )
 {
 	Cvar_CheckSafeSet( var_name, value );
 	Cvar_SetUntrusted( var_name, value, qtrue );
+}
+
+
+/*
+============
+Cvar_SetVar
+
+Sets a cvar in its source's layer (NULL clears it) and gives it the value
+its layers resolve to. The player's own value is the latest of their
+changes, the command line's or theirs, and only theirs is saved. A set
+that isn't forced is refused (Cvar_Refusal), leaving the layers as they
+were
+============
+*/
+static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source, qboolean force ) {
+	char **layer = source == CVAR_SOURCE_SERVER ? &var->serverString : &var->userString;
+	qboolean saves;
+
+	if ( value ) {
+		value = Cvar_Validate( var, value, qtrue );
+	}
+	// a read only cvar's value is state, never saved, and can be large (a
+	// server's pak lists)
+	saves = source == CVAR_SOURCE_PLAYER && !( var->flags & CVAR_ROM ) &&
+		!Cvar_SameString( var->savedString, value );
+	if ( source == CVAR_SOURCE_SERVER ) {
+		var->serverStale = qfalse;
+	}
+
+	if ( Cvar_SameString( *layer, value ) && !saves ) {
+		return var;		// not changed
+	}
+
+	if ( !force ) {
+		const char *refusal = Cvar_Refusal( var );
+
+		if ( refusal ) {
+			// quietly, as stock, when it already has that value
+			if ( strcmp( value ? value : var->resetString, var->string ) ) {
+				Com_Printf( "%s is %s.\n", var->name, refusal );
+			}
+			return var;
+		}
+	}
+
+	Cvar_SetLayer( layer, value );
+	if ( saves ) {
+		Cvar_SetLayer( &var->savedString, value );
+		cvar_modifiedFlags |= var->flags & CVAR_ARCHIVE;
+	}
+	return Cvar_Apply( var, force );
+}
+
+/*
+============
+Cvar_SetFrom
+============
+*/
+cvar_t *Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force ) {
+	cvar_t	*var;
+	int	flags = 0;
+
+//	Com_DPrintf( "Cvar_SetFrom: %s %s\n", var_name, value );
+
+	if ( !Cvar_ValidateString( var_name ) ) {
+		Com_Printf("invalid cvar name string: %s\n", var_name );
+		var_name = "BADNAME";
+	}
+
+#if 0	// FIXME
+	if ( value && !Cvar_ValidateString( value ) ) {
+		Com_Printf("invalid cvar value string: %s\n", value );
+		var_value = "BADVALUE";
+	}
+#endif
+
+	if ( source == CVAR_SOURCE_SERVER ) {
+		Cvar_CheckSafeSet( var_name, value );
+		flags = CVAR_SERVER_CREATED | CVAR_ROM;
+	} else if ( !force ) {
+		flags = CVAR_USER_CREATED;
+	}
+
+	var = Cvar_FindVar (var_name);
+	if ( !var ) {
+		if ( !value ) {
+			return NULL;
+		}
+		// create it, the player's with their value as its default until code
+		// registers it; with no default for engine code's forced set, so a
+		// registration gives it one and the value is saved
+		var = Cvar_Get( var_name, flags ? value : "", flags );
+		if ( !var ) {
+			return NULL;
+		}
+	}
+
+	var = Cvar_SetVar( var, value, source, force );
+	if ( source == CVAR_SOURCE_SERVER ) {
+		var->untrusted = qtrue;
+	}
+	return var;
+}
+
+/*
+============
+Cvar_Set2
+
+The player's set: the console's, the menus', configs', game code's and the
+engine's. NULL resets the cvar to its default
+============
+*/
+cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
+	return Cvar_SetFrom( var_name, value, CVAR_SOURCE_PLAYER, force );
+}
+
+/*
+============
+Cvar_BeginServerValues, Cvar_EndServerValues
+
+Around a server's systeminfo, and its cheat rule (Cvar_SetCheatState): a
+cvar the server no longer sets in between takes the player's own value
+again. With nothing in between, on leaving the server, that's every cvar,
+but those the server created, which have no other value
+============
+*/
+void Cvar_BeginServerValues( void ) {
+	cvar_t	*var;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		var->serverStale = var->serverString != NULL;
+	}
+}
+
+void Cvar_EndServerValues( void ) {
+	cvar_t	*var;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->serverStale && !( var->flags & CVAR_SERVER_CREATED ) ) {
+			Cvar_SetLayer( &var->serverString, NULL );
+			// a latched one, such as a renderer's, after a restart
+			Cvar_Apply( var, qfalse );
+		}
+		var->serverStale = qfalse;
+	}
+}
+
+/*
+============
+Cvar_SetProfile
+
+Called before any cvar is registered
+============
+*/
+void Cvar_SetProfile( const cvarDefault_t *defaults ) {
+	cvar_profile = defaults;
 }
 
 /*
@@ -813,6 +954,14 @@ void Cvar_SetFromVM( const char *var_name, const char *value, const char * const
 		}
 	}
 	Cvar_SetUntrusted( var_name, value, qtrue );
+
+	// a module's set of a cvar of its own wins over the server's layer, as
+	// it won over the server's value before: the single player orbit camera
+	// at a match's end sets the cgame's cheat protected cvars
+	var = Cvar_FindVar( var_name );
+	if ( var && ( var->flags & CVAR_VM_CREATED ) && var->serverString ) {
+		Cvar_SetVar( var, value, CVAR_SOURCE_SERVER, qtrue );
+	}
 }
 
 void Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed )
@@ -933,15 +1082,9 @@ void Cvar_SetCheatState(void)
 	{
 		if(var->flags & CVAR_CHEAT)
 		{
-			// the CVAR_LATCHED|CVAR_CHEAT vars might escape the reset here 
-			// because of a different var->latchedString
-			if (var->latchedString)
-			{
-				Z_Free(var->latchedString);
-				var->latchedString = NULL;
-			}
-			if (strcmp(var->resetString,var->string))
-				Cvar_Set(var->name, var->resetString);
+			// the server's rule, until it allows cheats or we leave it
+			// (Cvar_EndServerValues)
+			Cvar_SetVar( var, var->resetString, CVAR_SOURCE_SERVER, qtrue );
 		}
 	}
 }
@@ -1126,8 +1269,9 @@ void Cvar_Reset_f( void ) {
 ============
 Cvar_WriteVariables
 
-Appends lines containing "set variable value" for all variables
-with the archive flag set to qtrue.
+Appends a "seta variable value" line for each archived variable whose
+saved value (cvar_t) isn't its default. One no code has registered has no
+default yet, and is written as it is
 ============
 */
 void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
@@ -1145,9 +1289,10 @@ void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
 			continue;
 
 		if( var->flags & CVAR_ARCHIVE ) {
-			// write the latched value, even if it hasn't taken effect yet
-			value = var->latchedString ? var->latchedString : var->string;
-			if ( ( var->flags & CVAR_NODEFAULT ) && !strcmp( value, var->resetString ) ) {
+			// the player's choice, even if it hasn't taken effect yet
+			// (latched, or under a server's)
+			value = var->savedString;
+			if ( !value || ( !( var->flags & CVAR_USER_CREATED ) && !strcmp( value, var->resetString ) ) ) {
 				continue;
 			}
 			// a quote or a line break would end the value early, and the
@@ -1165,21 +1310,12 @@ void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
 						"\"%s\" has a comment, not written to file\n", var->name );
 				continue;
 			}
-			if ( var->latchedString ) {
-				if( strlen( var->name ) + strlen( var->latchedString ) + 10 > sizeof( buffer ) ) {
-					Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
-							"\"%s\" too long to write to file\n", var->name );
-					continue;
-				}
-				Com_sprintf (buffer, sizeof(buffer), "seta %s \"%s\"\n", var->name, var->latchedString);
-			} else {
-				if( strlen( var->name ) + strlen( var->string ) + 10 > sizeof( buffer ) ) {
-					Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
-							"\"%s\" too long to write to file\n", var->name );
-					continue;
-				}
-				Com_sprintf (buffer, sizeof(buffer), "seta %s \"%s\"\n", var->name, var->string);
+			if( strlen( var->name ) + strlen( value ) + 10 > sizeof( buffer ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: value of variable "
+						"\"%s\" too long to write to file\n", var->name );
+				continue;
 			}
+			Com_sprintf (buffer, sizeof(buffer), "seta %s \"%s\"\n", var->name, value);
 			FS_Write( buffer, strlen( buffer ), f );
 		}
 	}
@@ -1369,6 +1505,9 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 		Z_Free(cv->resetString);
 	if(cv->description)
 		Z_Free(cv->description);
+	Cvar_SetLayer( &cv->serverString, NULL );
+	Cvar_SetLayer( &cv->userString, NULL );
+	Cvar_SetLayer( &cv->savedString, NULL );
 
 	if(cv->prev)
 		cv->prev->next = cv->next;
@@ -1457,7 +1596,7 @@ static void Cvar_RestartKeeping(qboolean unsetVM, int keepFlags)
 		if(!(curvar->flags & (CVAR_ROM | CVAR_INIT | CVAR_NORESTART)))
 		{
 			// Just reset the rest to their default values.
-			Cvar_Set2(curvar->name, curvar->resetString, qfalse);
+			Cvar_SetVar( curvar, NULL, CVAR_SOURCE_PLAYER, qfalse );
 		}
 		
 		curvar = curvar->next;
@@ -1576,8 +1715,15 @@ void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
 	var->max = max;
 	var->integral = integral;
 
-	// Force an initial range check
-	Cvar_Set( var->name, var->string );
+	// Force an initial range check, of the default and each layer
+	Cvar_SetLayer( &var->resetString, Cvar_Validate( var, var->resetString, qfalse ) );
+	if ( var->serverString )
+		Cvar_SetLayer( &var->serverString, Cvar_Validate( var, var->serverString, qtrue ) );
+	if ( var->userString )
+		Cvar_SetLayer( &var->userString, Cvar_Validate( var, var->userString, qtrue ) );
+	if ( var->savedString )
+		Cvar_SetLayer( &var->savedString, Cvar_Validate( var, var->savedString, qfalse ) );
+	Cvar_Apply( var, qtrue );
 }
 
 /*
@@ -1622,7 +1768,7 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 =====================
 Cvar_ForgetOldDefault
 
-Configs written before a cvar became CVAR_NODEFAULT hold its old default,
+Configs written before defaults were left out hold a cvar's old default,
 since every archived cvar was written. Forget a value the config files set
 that matches it, so the cvar starts at the new default when it's
 registered. Command line settings come after, and stand.
