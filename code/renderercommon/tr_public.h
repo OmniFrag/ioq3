@@ -24,7 +24,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		10
+#define	REF_API_VERSION		11
+
+// the window's size after a crash (r_mode), whatever the player chose
+#define R_MODE_FALLBACK		3	// 640 * 480
 
 //
 // these are the functions exported by the refresh module
@@ -105,6 +108,11 @@ typedef struct {
 	// vid_restart is needed.
 	qboolean (*ResizeWindow)( glconfig_t *config );
 
+	// Asks for the window to go fullscreen, or to leave it; what happens
+	// shows in its state (SDL_GetWindowFlags). Returns qfalse if the window
+	// can't change in place, and must be made again. Not on the web.
+	qboolean (*SetFullscreen)( qboolean fullscreen );
+
 	// Whether the GPU is ready for a new frame, without waiting: where the
 	// renderer can't wait for it after the swap (WebGL), the client skips
 	// a frame instead while the last is still being drawn. May be NULL.
@@ -181,6 +189,9 @@ typedef struct {
 	void	(*IN_Init)( void *windowData );
 	void	(*IN_Shutdown)( void );
 	void	(*IN_Restart)( void );
+
+	// whether a new window is made fullscreen: the client decides
+	qboolean (*CreateFullscreen)( void );
 
 	// math
 	long    (*ftol)(float f);

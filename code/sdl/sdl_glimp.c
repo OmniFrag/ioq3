@@ -35,10 +35,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../sys/sys_local.h"
 #include "sdl_icon.h"
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
-
 typedef enum
 {
 	RSERR_OK,
@@ -1244,14 +1240,6 @@ static qboolean GLimp_StartDriverAndSetMode(int mode, qboolean fullscreen, qbool
 		ri.Cvar_Set( "r_sdlDriver", driverName );
 	}
 
-	if (fullscreen && ri.Cvar_VariableIntegerValue( "in_nograb" ) )
-	{
-		ri.Printf( PRINT_ALL, "Fullscreen not allowed with in_nograb 1\n");
-		ri.Cvar_Set( "r_fullscreen", "0" );
-		r_fullscreen->modified = qfalse;
-		fullscreen = qfalse;
-	}
-	
 	err = GLimp_SetMode(mode, fullscreen, noborder, gl3Core);
 
 	switch ( err )
@@ -1451,8 +1439,6 @@ static void GLimp_InitExtensions( qboolean fixedFunction )
 	}
 }
 
-#define R_MODE_FALLBACK 3 // 640 * 480
-
 /*
 ===============
 GLimp_Init
@@ -1463,6 +1449,10 @@ of OpenGL
 */
 void GLimp_Init( qboolean fixedFunction )
 {
+	// the client decides (cl_present.c), and says why when it's not what
+	// the player wants
+	qboolean fullscreen = ri.CreateFullscreen( );
+
 	ri.Printf( PRINT_DEVELOPER, "Glimp_Init( )\n" );
 
 	r_allowSoftwareGL = ri.Cvar_Get( "r_allowSoftwareGL", "0", CVAR_LATCH );
@@ -1479,33 +1469,16 @@ void GLimp_Init( qboolean fixedFunction )
 		"-1 (r_customwidth by r_customheight) or a mode number changes the display to the closest mode it has, at r_displayRefresh; "
 		"empty uses r_mode" );
 
-	if( ri.Cvar_VariableIntegerValue( "com_abnormalExit" ) )
-	{
-		ri.Cvar_Set( "r_mode", va( "%d", R_MODE_FALLBACK ) );
-		ri.Cvar_Set( "r_fullscreen", "0" );
-		ri.Cvar_Set( "r_centerWindow", "0" );
-		ri.Cvar_Set( "com_abnormalExit", "0" );
-	}
-
-#ifdef __EMSCRIPTEN__
-	// The page owns browser fullscreen (client.html), and r_fullscreen
-	// follows it, starting off; the page enters it on a click. A window
-	// made fullscreen by SDL would keep getting the display's size instead
-	// of the page's.
-	ri.Cvar_Set( "r_fullscreen", "0" );
-	r_fullscreen->modified = qfalse;
-#endif
-
 	ri.Sys_GLimpInit( );
 
 	// Create the window and set up the context
-	if(GLimp_StartDriverAndSetMode(r_mode->integer, r_fullscreen->integer, r_noborder->integer, fixedFunction))
+	if(GLimp_StartDriverAndSetMode(r_mode->integer, fullscreen, r_noborder->integer, fixedFunction))
 		goto success;
 
 	// Try again, this time in a platform specific "safe mode"
 	ri.Sys_GLimpSafeInit( );
 
-	if(GLimp_StartDriverAndSetMode(r_mode->integer, r_fullscreen->integer, qfalse, fixedFunction))
+	if(GLimp_StartDriverAndSetMode(r_mode->integer, fullscreen, qfalse, fixedFunction))
 		goto success;
 
 	// Finally, try the default screen resolution
@@ -1635,6 +1608,51 @@ qboolean GLimp_FrameReady( void )
 
 /*
 ===============
+GLimp_SetFullscreen
+
+The client's request (cl_present.c): the window goes fullscreen, in
+r_modeFullscreen's display mode, or leaves it. What happens comes back as
+the window's state, which the client reads; qfalse if the window can't
+change in place. Not on the web, where the page owns fullscreen.
+===============
+*/
+qboolean GLimp_SetFullscreen( qboolean fullscreen )
+{
+#ifndef __EMSCRIPTEN__
+	if( !!( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) == !!fullscreen )
+	{
+		return qtrue;
+	}
+
+	// the same display mode as a window created fullscreen
+	if( fullscreen )
+	{
+		GLimp_ApplyFullscreenMode( SDL_GetDisplayForWindow( SDL_window ) );
+	}
+
+	// the new size arrives as a window resize
+	if( !SDL_SetWindowFullscreen( SDL_window, fullscreen ) )
+	{
+		return qfalse;
+	}
+
+	glConfig.isFullscreen = fullscreen;
+
+	// the window gets back its size from before fullscreen, which may
+	// cover the desktop
+	if( !fullscreen )
+	{
+		SDL_SyncWindow( SDL_window );
+		GLimp_FitWindow( );
+	}
+
+	ri.IN_Restart( );
+#endif
+	return qtrue;
+}
+
+/*
+===============
 GLimp_EndFrame
 
 Responsible for doing a swapbuffers
@@ -1697,67 +1715,7 @@ void GLimp_EndFrame( void )
 	}
 #endif
 
-#ifdef __EMSCRIPTEN__
-	// the page owns browser fullscreen; changing r_fullscreen, e.g. with
-	// Alt+Enter, toggles it, which the key press lets the page do
-	if( r_fullscreen->modified )
-	{
-		MAIN_THREAD_EM_ASM({ Module.setFullscreen?.($0); }, r_fullscreen->integer);
-		r_fullscreen->modified = qfalse;
-	}
-#else
-	if( r_fullscreen->modified )
-	{
-		int         fullscreen;
-		qboolean    needToToggle;
-		qboolean    sdlToggled = qfalse;
-
-		// Find out the current state
-		fullscreen = !!( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN );
-
-		if( r_fullscreen->integer && ri.Cvar_VariableIntegerValue( "in_nograb" ) )
-		{
-			ri.Printf( PRINT_ALL, "Fullscreen not allowed with in_nograb 1\n");
-			ri.Cvar_Set( "r_fullscreen", "0" );
-			r_fullscreen->modified = qfalse;
-		}
-
-		// Is the state we want different from the current state?
-		needToToggle = !!r_fullscreen->integer != fullscreen;
-
-		if( needToToggle )
-		{
-			// the same display mode as a window created fullscreen
-			if( r_fullscreen->integer )
-			{
-				GLimp_ApplyFullscreenMode( SDL_GetDisplayForWindow( SDL_window ) );
-			}
-
-			sdlToggled = SDL_SetWindowFullscreen( SDL_window, r_fullscreen->integer );
-
-			// SDL_WM_ToggleFullScreen didn't work, so do it the slow way;
-			// otherwise the new size arrives as a window resize
-			if( !sdlToggled )
-				ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
-			else
-			{
-				glConfig.isFullscreen = !!r_fullscreen->integer;
-
-				// the window gets back its size from before fullscreen,
-				// which may cover the desktop
-				if( !r_fullscreen->integer )
-				{
-					SDL_SyncWindow( SDL_window );
-					GLimp_FitWindow( );
-				}
-			}
-
-			ri.IN_Restart( );
-		}
-
-		r_fullscreen->modified = qfalse;
-	}
-
+#ifndef __EMSCRIPTEN__
 	// r_mode sizes the window, at once, or when it leaves fullscreen; a
 	// fullscreen window takes a new display mode at once
 	{

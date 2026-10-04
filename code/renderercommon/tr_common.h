@@ -197,6 +197,7 @@ IMPLEMENTATION SPECIFIC FUNCTIONS
 void		GLimp_Init( qboolean fixedFunction );
 void		GLimp_Shutdown( void );
 void		GLimp_EndFrame( void );
+qboolean	GLimp_SetFullscreen( qboolean fullscreen );
 qboolean	GLimp_FrameReady( void );
 qboolean	GLimp_UpdateWindowSize( void );
 
