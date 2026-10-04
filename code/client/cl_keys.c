@@ -1289,8 +1289,7 @@ void CL_KeyDownEvent( int key, unsigned time )
 			return;
 		}
 
-		Cvar_SetValue( "r_fullscreen",
-			!Cvar_VariableIntegerValue( "r_fullscreen" ) );
+		Present_ToggleFullscreen( );
 		return;
 	}
 
