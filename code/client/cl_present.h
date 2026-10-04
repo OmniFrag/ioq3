@@ -19,8 +19,9 @@ along with Quake III Arena source code; if not, write to the Free Software
 Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
-// cl_present.h -- how the game presents itself: fullscreen, what the
-// player wants against what the platform reports
+// cl_present.h -- how the game presents itself: fullscreen and the
+// pointer, what the player and the game want against what the platform
+// reports
 
 #ifndef CL_PRESENT_H
 #define CL_PRESENT_H
@@ -52,18 +53,39 @@ typedef struct {
 	// again, and only a new window goes (macOS, for a window that lost the
 	// focus on its way in)
 	qboolean		recreateWhenStuck;
+
+	// the pointer's
+	qboolean		mouse;			// in_mouse is on
+	qboolean		holdable;		// there's a pointer to hold: none on a touch screen
+	qboolean		console;		// the console is down
+	// natively, the player clicked into the window since it got the focus,
+	// or was fullscreen since
+	qboolean		clickedIn;
+	// the platform holds the pointer for the game, which on the web the
+	// page takes at the player's click, and that click is the entry
+	qboolean		captured;
+	qboolean		capturesAtClick;
 } presentFacts_t;
+
+// what the game does with the pointer
+typedef struct {
+	qboolean		grab;			// hold it: relative mode, or the page's lock
+	qboolean		read;			// take its motion and buttons
+} presentPointer_t;
 
 void		Present_Init( void );
 qboolean	Present_CreateFullscreen( void );
 void		Present_Frame( const presentFacts_t *facts, int time );
 void		Present_ToggleFullscreen( void );
 const char	*Present_Reason( void );
+presentPointer_t	Present_Pointer( const presentFacts_t *facts );
+void		Present_Captured( qboolean captured );
 
 // the platform's (sdl_input.c), and a test's stubs: ask for fullscreen or
 // to leave it, qfalse if the window can't change in place; and a new
-// window
+// window. And the client's keys' (cl_keys.c): release every one held
 qboolean	IN_RequestFullscreen( qboolean fullscreen );
 void		IN_RecreateWindow( void );
+void		Key_ClearStates( void );
 
 #endif
