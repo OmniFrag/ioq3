@@ -3385,6 +3385,15 @@ void CL_InitRef( void ) {
 
 	Com_Printf( "----- Initializing Renderer ----\n" );
 
+	// after a crash, this run starts in a small window, not centred; the
+	// player's own settings aren't touched, and come back at the next start
+	if ( Cvar_VariableIntegerValue( "com_abnormalExit" ) ) {
+		Cvar_SetFrom( "r_mode", va( "%d", R_MODE_FALLBACK ), CVAR_SOURCE_SESSION, qtrue );
+		Cvar_SetFrom( "r_fullscreen", "0", CVAR_SOURCE_SESSION, qtrue );
+		Cvar_SetFrom( "r_centerWindow", "0", CVAR_SOURCE_SESSION, qtrue );
+		Cvar_Set( "com_abnormalExit", "0" );
+	}
+
 #ifdef USE_RENDERER_DLOPEN
 	cl_renderer = Cvar_Get("cl_renderer", "opengl2", CVAR_ARCHIVE | CVAR_LATCH);
 
@@ -3466,6 +3475,7 @@ void CL_InitRef( void ) {
 	ri.IN_Init = IN_Init;
 	ri.IN_Shutdown = IN_Shutdown;
 	ri.IN_Restart = IN_Restart;
+	ri.CreateFullscreen = Present_CreateFullscreen;
 
 	ri.ftol = Q_ftol;
 
@@ -3693,6 +3703,7 @@ void CL_Init( void ) {
 	cls.realtime = 0;
 
 	CL_InitInput ();
+	Present_Init ();
 
 	//
 	// register our variables

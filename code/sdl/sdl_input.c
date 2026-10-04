@@ -30,6 +30,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #include "../client/client.h"
 #include "../sys/sys_local.h"
 
@@ -50,6 +54,7 @@ static int mouseWheelTime;
 
 static cvar_t *in_mouse             = NULL;
 static cvar_t *in_nograb;
+static cvar_t *in_captured;
 
 static cvar_t *in_joystick          = NULL;
 static cvar_t *in_joystickThreshold = NULL;
@@ -1036,8 +1041,8 @@ Keeps a window's size for the next start and for a vid_restart. In
 fullscreen the size follows the display mode, so r_mode stays. A
 maximized window fills whatever desktop it's on, so its size is kept only
 for a restart, which recreates the window from it. Ask the window:
-IN_Frame sets cls.glconfig.isFullscreen from r_fullscreen, which on the web
-doesn't make the window fullscreen (GLimp_SetMode).
+On the web, cls.glconfig.isFullscreen is the page's fullscreen, which
+isn't the window's.
 ===============
 */
 static void IN_SaveWindowSize( qboolean restarting )
@@ -1282,11 +1287,6 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_WINDOW_FOCUS_LOST:   Cvar_SetValue( "com_unfocused", 1 ); mouseClickedIn = qfalse; break;
 		case SDL_EVENT_WINDOW_FOCUS_GAINED: Cvar_SetValue( "com_unfocused", 0 ); break;
 
-		// the window manager, the browser or its Esc key can change
-		// fullscreen too; keep r_fullscreen in step with the window
-		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN: Cvar_Set( "r_fullscreen", "1" ); break;
-		case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: Cvar_Set( "r_fullscreen", "0" ); break;
-
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
 		case SDL_EVENT_DROP_FILE:
 			{
@@ -1312,6 +1312,99 @@ void IN_ProcessEvent( const SDL_Event *e )
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+// the page's facts (client.html), as bits
+#define PAGE_FULLSCREEN		1
+#define PAGE_AVAILABLE		2
+#define PAGE_LOCKED			4
+#define PAGE_ANSWER_SHIFT	3	// 0 none, 1 waiting for a click, 2 refused
+
+// this frame's, read once
+static int pageFacts;
+#endif
+
+/*
+===============
+IN_PresentFacts
+
+What the platform reports this frame: natively SDL's window; on the web,
+the page, which owns fullscreen there
+===============
+*/
+static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
+{
+	SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
+
+	Com_Memset( facts, 0, sizeof( *facts ) );
+	facts->focused = ( flags & SDL_WINDOW_INPUT_FOCUS ) != 0;
+	facts->loading = loading;
+#ifdef __EMSCRIPTEN__
+	{
+		static const presentReason_t answers[] = { PRESENT_OK, PRESENT_NEEDS_CLICK, PRESENT_REFUSED };
+		int answer;
+
+		pageFacts = MAIN_THREAD_EM_ASM_INT({ return Module.presentationFacts?.() ?? 2; });
+		answer = pageFacts >> PAGE_ANSWER_SHIFT;
+		facts->fullscreen = ( pageFacts & PAGE_FULLSCREEN ) != 0;
+		facts->available = ( pageFacts & PAGE_AVAILABLE ) != 0;
+		facts->standing = qtrue;
+		facts->answer = answer < ARRAY_LEN( answers ) ? answers[answer] : PRESENT_OK;
+	}
+#else
+	facts->fullscreen = ( flags & SDL_WINDOW_FULLSCREEN ) != 0;
+	facts->available = qtrue;
+#ifdef __APPLE__
+	facts->recreateWhenStuck = qtrue;
+#endif
+#endif
+}
+
+/*
+===============
+IN_RequestFullscreen
+
+Natively the renderer's window goes fullscreen, or leaves it; on the web the
+page is told what the game wants, and acts on the player's next input
+===============
+*/
+qboolean IN_RequestFullscreen( qboolean fullscreen )
+{
+#ifdef __EMSCRIPTEN__
+	MAIN_THREAD_EM_ASM({ Module.present?.({ fullscreen: !!$0 }); }, fullscreen);
+	return qtrue;
+#else
+	return re.SetFullscreen( fullscreen );
+#endif
+}
+
+/*
+===============
+IN_RecreateWindow
+===============
+*/
+void IN_RecreateWindow( void )
+{
+	Com_Printf( "Making a new window to enter or leave fullscreen\n" );
+	Cbuf_ExecuteText( EXEC_APPEND, "vid_restart\n" );
+}
+
+/*
+===============
+IN_Captured
+
+Whether the pointer is the game's: natively SDL's relative mode, on the web
+the page's pointer lock
+===============
+*/
+static qboolean IN_Captured( void )
+{
+#ifdef __EMSCRIPTEN__
+	return ( pageFacts & PAGE_LOCKED ) != 0;
+#else
+	return mouseActive && SDL_GetWindowRelativeMouseMode( SDL_window );
+#endif
+}
+
 /*
 ===============
 IN_Frame
@@ -1320,6 +1413,7 @@ IN_Frame
 void IN_Frame( void )
 {
 	qboolean loading;
+	presentFacts_t facts;
 
 	IN_JoyMove( );
 
@@ -1337,8 +1431,14 @@ void IN_Frame( void )
 	// If not DISCONNECTED (main menu) or ACTIVE (in game), we're loading
 	loading = ( clc.state != CA_DISCONNECTED && clc.state != CA_ACTIVE );
 
-	// update isFullscreen since it might of changed since the last vid_restart
-	cls.glconfig.isFullscreen = Cvar_VariableIntegerValue( "r_fullscreen" ) != 0;
+	// fullscreen is the platform's fact, which the player's want is
+	// compared with (cl_present.c)
+	if( SDL_window )
+	{
+		IN_PresentFacts( &facts, loading );
+		Present_Frame( &facts, Sys_Milliseconds( ) );
+		cls.glconfig.isFullscreen = facts.fullscreen;
+	}
 
 	// a player in fullscreen is in the game, and stays in it if they switch
 	// to a window
@@ -1371,6 +1471,13 @@ void IN_Frame( void )
 #endif
 	else
 		IN_ActivateMouse( cls.glconfig.isFullscreen );
+
+	{
+		qboolean captured = IN_Captured( );
+
+		if( in_captured->integer != captured )
+			Cvar_SetValue( "in_captured", captured );
+	}
 
 	if( windowResized )
 	{
@@ -1449,6 +1556,8 @@ void IN_Init( void *windowData )
 	// mouse variables
 	in_mouse = Cvar_Get( "in_mouse", "1", CVAR_ARCHIVE );
 	in_nograb = Cvar_Get( "in_nograb", "0", CVAR_ARCHIVE );
+	in_captured = Cvar_Get( "in_captured", "0", CVAR_ROM );
+	Cvar_SetDescription( in_captured, "Whether the game has the pointer now" );
 
 	in_joystick = Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE|CVAR_LATCH );
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );
@@ -1458,9 +1567,9 @@ void IN_Init( void *windowData )
 #endif
 
 	mouseAvailable = ( in_mouse->value != 0 );
-	IN_DeactivateMouse( Cvar_VariableIntegerValue( "r_fullscreen" ) != 0 );
-
 	appState = SDL_GetWindowFlags( SDL_window );
+	IN_DeactivateMouse( ( appState & SDL_WINDOW_FULLSCREEN ) != 0 );
+
 	Cvar_SetValue( "com_unfocused",	!( appState & SDL_WINDOW_INPUT_FOCUS ) );
 	Cvar_SetValue( "com_minimized", appState & SDL_WINDOW_MINIMIZED );
 	Cvar_SetValue( "r_displayScale", SDL_GetWindowDisplayScale( SDL_window ) );
@@ -1478,7 +1587,7 @@ void IN_Shutdown( void )
 {
 	SDL_StopTextInput( SDL_window );
 
-	IN_DeactivateMouse( Cvar_VariableIntegerValue( "r_fullscreen" ) != 0 );
+	IN_DeactivateMouse( cls.glconfig.isFullscreen );
 	mouseAvailable = qfalse;
 
 	IN_ShutdownJoystick( );

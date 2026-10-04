@@ -87,6 +87,8 @@ let generatedArguments = `
 `;
 if (fs_basegame) generatedArguments += ` +set fs_basegame "${fs_basegame}" `;
 if (fs_game) generatedArguments += ` +set fs_game "${fs_game}" `;
+// ?fullscreen=0 plays this visit in the page's window, and 1 fullscreen
+if (urlParams.has('fullscreen')) generatedArguments += ` +set r_fullscreen ${urlParams.get('fullscreen') === '0' ? 0 : 1} `;
 // A player's own ?args come after, and win
 // Note that unfortunately "+" needs to be encoded as "%2b" in URL query strings or it will be stripped by the browser.
 const queryArgs = urlParams.get('args');
@@ -145,30 +147,50 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     return getContext.call(this, type, attributes);
 };
 
-// The page owns browser fullscreen; the engine follows the canvas's size.
-// Entering it also locks the pointer, which fails if asked for during the
-// fullscreen change. The first click into the game enters it, unless
-// ?fullscreen=0, and r_fullscreen toggles it (GLimp_EndFrame). A player who
-// leaves it, with Esc or the browser, wants a window, so later clicks don't
-// go back in. iOS gets none: its fullscreen ends on a downward swipe, which
-// playing by touch does all the time.
+// The page owns browser fullscreen, which a browser grants only on the
+// player's input, and the engine says whether the player wants it
+// (Module.present, cl_present.c): the page goes fullscreen at once if the
+// player's input allows, as with Alt+Enter, or else on their next click,
+// and reports what is (Module.presentationFacts). A request stands until
+// it's met: leaving fullscreen by the browser's means, even with a click a
+// moment later, doesn't bring it back, and the engine stops wanting it for
+// this visit.
+// The whole page goes fullscreen, the canvas following its size. Locking the
+// pointer in the click that asks for fullscreen fails in Safari, so the
+// lock is asked for once fullscreen is granted. iOS has none: its
+// fullscreen ends on a downward swipe, which playing by touch does all the
+// time.
 const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-let wantFullscreen = urlParams.get('fullscreen') !== '0' && !iOS;
-document.addEventListener('fullscreenchange', () => {
-    if (!document.fullscreenElement) wantFullscreen = false;
-});
-const setFullscreen = (on) => {
-    wantFullscreen = on && !iOS;
-    if (iOS) return;
-    if (on && !document.fullscreenElement)
-        document.documentElement.requestFullscreen?.()
-            .then(() => canvas.requestPointerLock())
-            .catch(() => {});
-    else if (!on && document.fullscreenElement)
-        document.exitFullscreen().catch(() => {});
+const fullscreenAvailable = !iOS && !!document.documentElement.requestFullscreen;
+const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2;
+let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE;
+const enterFullscreen = () => {
+    fullscreenAnswer = ANSWER_NONE;
+    document.documentElement.requestFullscreen()
+        .then(() => canvas.requestPointerLock())
+        .catch(() => { if (!document.fullscreenElement) fullscreenAnswer = ANSWER_REFUSED; });
 };
-canvas.addEventListener('pointerdown', () => { if (wantFullscreen) setFullscreen(true); });
+const present = ({ fullscreen }) => {
+    wantFullscreen = fullscreen && fullscreenAvailable && !document.fullscreenElement;
+    if (wantFullscreen) {
+        if (navigator.userActivation?.isActive ?? false) enterFullscreen();
+        else fullscreenAnswer = ANSWER_CLICK;
+    } else if (!fullscreen && document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+    }
+};
+canvas.addEventListener('pointerdown', () => {
+    if (wantFullscreen && !document.fullscreenElement) enterFullscreen();
+});
+document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) wantFullscreen = false;
+});
+// as bits, for the engine to read each frame (IN_PresentFacts)
+const presentationFacts = () => (document.fullscreenElement ? 1 : 0)
+    | (fullscreenAvailable ? 2 : 0)
+    | (document.pointerLockElement === canvas ? 4 : 0)
+    | (fullscreenAnswer << 3);
 
 // A right click is the game's. SDL leaves the event be, and the browser's
 // menu would open over the game while the pointer is free: on the menus,
@@ -311,7 +333,8 @@ const downloadGame = async (FS) => {
 const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
 ioquake3({
     canvas: canvas,
-    setFullscreen,
+    present,
+    presentationFacts,
     setPlaying,
     saveFile,
     configWritten,
