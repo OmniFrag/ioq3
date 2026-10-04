@@ -399,6 +399,22 @@ void CL_VoipParseTargets(void)
 
 /*
 ===============
+CL_VoipOn
+
+Whether VoIP is on: the player wants it, and the data rate allows it.
+If your data rate is too low, you'll get Connection Interrupted warnings
+when VoIP packets arrive, even if you have a broadband connection. This
+might work on rates lower than 25000, but for safety's sake, we'll just
+demand it. The player's cl_voip is left as they chose it, so raising the
+rate turns VoIP back on
+===============
+*/
+qboolean CL_VoipOn( void ) {
+	return cl_voip->integer && cl_rate->integer >= 25000;
+}
+
+/*
+===============
 CL_CaptureVoip
 
 Record more audio from the hardware if required and encode it into Opus
@@ -419,19 +435,13 @@ void CL_CaptureVoip(void)
 		return;
 #endif
 
-	// If your data rate is too low, you'll get Connection Interrupted warnings
-	//  when VoIP packets arrive, even if you have a broadband connection.
-	//  This might work on rates lower than 25000, but for safety's sake, we'll
-	//  just demand it. Who doesn't have at least a DSL line now, anyhow? If
-	//  you don't, you don't need VoIP.  :)
 	if (cl_voip->modified || cl_rate->modified) {
-		if ((cl_voip->integer) && (cl_rate->integer < 25000)) {
+		if (cl_voip->integer && !CL_VoipOn()) {
 			Com_Printf(S_COLOR_YELLOW "Your network rate is too slow for VoIP.\n");
 			Com_Printf("Set 'Data Rate' to 'LAN/Cable/xDSL' in 'Setup/System/Network'.\n");
 			Com_Printf("Until then, VoIP is disabled.\n");
-			Cvar_Set("cl_voip", "0");
 		}
-		Cvar_Set("cl_voipProtocol", cl_voip->integer ? "opus" : "");
+		Cvar_Set("cl_voipProtocol", CL_VoipOn() ? "opus" : "");
 		cl_voip->modified = qfalse;
 		cl_rate->modified = qfalse;
 	}
@@ -458,7 +468,7 @@ void CL_CaptureVoip(void)
 			dontCapture = qtrue;  // server doesn't support VoIP.
 		else if (clc.demoplaying)
 			dontCapture = qtrue;  // playing back a demo.
-		else if ( cl_voip->integer == 0 )
+		else if ( !CL_VoipOn() )
 			dontCapture = qtrue;  // client has VoIP support disabled.
 		else if ( audioMult == 0.0f )
 			dontCapture = qtrue;  // basically silenced incoming audio.
@@ -3833,7 +3843,7 @@ void CL_Init( void ) {
 
 	cl_voip = Cvar_Get ("cl_voip", "1", CVAR_ARCHIVE);
 	Cvar_CheckRange( cl_voip, 0, 1, qtrue );
-	cl_voipProtocol = Cvar_Get ("cl_voipProtocol", cl_voip->integer ? "opus" : "", CVAR_USERINFO | CVAR_ROM);
+	cl_voipProtocol = Cvar_Get ("cl_voipProtocol", CL_VoipOn() ? "opus" : "", CVAR_USERINFO | CVAR_ROM);
 #endif
 
 #ifdef USE_HTTP
