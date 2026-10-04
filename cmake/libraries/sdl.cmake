@@ -2,8 +2,9 @@ if(NOT BUILD_CLIENT)
     return()
 endif()
 
-if(EMSCRIPTEN)
-    # Emscripten provides its own self contained SDL setup
+if(EMSCRIPTEN AND USE_INTERNAL_SDL)
+    # Emscripten provides its own self contained SDL setup; with
+    # USE_INTERNAL_SDL off, an SDL3 built for Emscripten is found instead
     list(APPEND CLIENT_COMPILE_OPTIONS -sUSE_SDL=3)
     list(APPEND CLIENT_LINK_OPTIONS -sUSE_SDL=3)
     return()
