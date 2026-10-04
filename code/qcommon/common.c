@@ -2802,7 +2802,7 @@ and not saved over the player's own choices
 */
 static void Com_ExecuteScript( const char *name ) {
 	Cbuf_AddScriptText( va( "exec %s\n", name ) );
-	Cbuf_Execute();
+	Cbuf_ExecuteScripts();
 }
 
 /*

@@ -540,6 +540,10 @@ void Cbuf_Execute (void);
 // Normally called once per frame, but may be explicitly invoked.
 // Do not call inside a command function, or current args will be destroyed.
 
+void Cbuf_ExecuteScripts( void );
+// Runs only the startup scripts' text (Cbuf_AddScriptText), leaving the
+// rest for the frame
+
 //===========================================================================
 
 /*
