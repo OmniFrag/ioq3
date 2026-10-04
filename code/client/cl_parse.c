@@ -668,7 +668,7 @@ void CL_ParseDownload ( msg_t *msg ) {
 static
 qboolean CL_ShouldIgnoreVoipSender(int sender)
 {
-	if (!cl_voip->integer)
+	if (!CL_VoipOn())
 		return qtrue;  // VoIP is disabled.
 	else if ((sender == clc.clientNum) && (!clc.demoplaying))
 		return qtrue;  // ignore own voice (unless playing back a demo).
