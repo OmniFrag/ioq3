@@ -2958,6 +2958,7 @@ void Com_Init( char *commandLine ) {
 	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
 #endif
 	Cvar_Get("com_errorMessage", "", CVAR_ROM | CVAR_NORESTART);
+	Cvar_Get("com_errorCode", "", CVAR_ROM | CVAR_NORESTART);
 
 #ifdef CINEMATICS_INTRO
 	com_introPlayed = Cvar_Get( "com_introplayed", "0", CVAR_ARCHIVE);

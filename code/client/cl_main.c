@@ -3734,6 +3734,14 @@ void CL_Init( void ) {
 	cl_showMouseRate = Cvar_Get ("cl_showmouserate", "0", 0);
 
 	cl_allowDownload = Cvar_Get ("cl_allowDownload", "0", CVAR_ARCHIVE);
+	// what the client reports, which the menus read and only it writes
+	Cvar_Get( "cl_downloadName", "", CVAR_ROM );
+	Cvar_Get( "cl_downloadSize", "0", CVAR_ROM );
+	Cvar_Get( "cl_downloadCount", "0", CVAR_ROM );
+	Cvar_Get( "cl_downloadTime", "0", CVAR_ROM );
+	Cvar_Get( "cl_currentServerAddress", "", CVAR_ROM );
+	// the client's word to the renderer that the ui fills the screen
+	Cvar_Get( "r_uiFullScreen", "0", CVAR_ROM );
 
 	cl_conXOffset = Cvar_Get ("cl_conXOffset", "0", 0);
 #ifdef __APPLE__
