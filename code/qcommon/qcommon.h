@@ -524,6 +524,10 @@ void Cbuf_InsertTextRestricted( const char *text, qboolean restricted );
 // Cbuf_AddText and Cbuf_InsertText into game code's buffer, or the player's
 
 qboolean Cmd_IsRestricted( void );
+qboolean Cmd_IsScript( void );
+// whether the running command came from a script that runs at every start
+// (Cbuf_AddScriptText), whose sets aren't saved
+void Cbuf_AddScriptText( const char *text );
 // whether the running command came from game code, or text it queued or
 // ran: it can't run the commands that reveal secrets or stop the process,
 // or use private and protected cvars
@@ -644,6 +648,7 @@ typedef enum {
 	CVAR_SOURCE_GAME,	// game code, and a server running here (Cvar_SetFromVM, Cvar_SetSafe, restricted text): saved if archived
 	CVAR_SOURCE_PLAYER,	// the console and configs: saved if archived
 	CVAR_SOURCE_MENU,	// the menus, the ui module's sets: the player's choice, saved if archived
+	CVAR_SOURCE_SCRIPT,	// what runs at every start (default.cfg, autoexec.cfg): not saved
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
 	CVAR_SOURCE_SERVER	// a server's requirement, until Cvar_EndServerValues drops it
 } cvarSource_t;
@@ -664,6 +669,38 @@ typedef struct {
 	const char	*name;
 	const char	*value;
 } cvarDefault_t;
+
+// Where a cvar is saved, by its declaration (docs/design/state.md, Scopes)
+typedef enum {
+	CVAR_SCOPE_NONE,	// never saved
+	CVAR_SCOPE_PLAYER,	// the player's, everywhere
+	CVAR_SCOPE_PLAYER_MOD,	// the player's, for one mod
+	CVAR_SCOPE_DEVICE,	// this device's
+	CVAR_SCOPE_DEVICE_MOD,	// this device's, for one mod
+	CVAR_SCOPE_SERVER	// a server's own
+} cvarScope_t;
+
+#define CVAR_SCOPE_BIT( scope )	( 1 << ( scope ) )
+
+typedef struct {
+	const char	*name;
+	cvarScope_t	scope;
+} cvarDeclaration_t;
+
+extern const cvarDeclaration_t cvar_declarations[];
+// the game's, sorted as Q_stricmp compares, ending with a NULL name: the
+// build's CVAR_DECLARATIONS_SOURCE, by default an empty table
+
+void	Cvar_SetDeclarations( const cvarDeclaration_t *declarations );
+// before any cvar is registered
+cvarScope_t Cvar_Scope( const cvar_t *var );
+// where a cvar is saved: its declaration's scope; one not declared that a
+// mod or the player made, the player's for the mod running; one the engine
+// made that isn't declared, the device's, which doesn't travel
+
+extern	int			cvar_modifiedScopes;
+// the scopes whose saved values changed (CVAR_SCOPE_BIT), so their files
+// are written
 
 void	Cvar_SetProfile( const cvarDefault_t *defaults );
 // this platform's defaults where they differ from the engine's, ending with a
@@ -721,7 +758,9 @@ qboolean Cvar_Command( void );
 // command.  Returns true if the command was a variable reference that
 // was handled. (print or change)
 
-void 	Cvar_WriteVariables( fileHandle_t f, int hideFlags );
+void 	Cvar_WriteVariables( fileHandle_t f, int hideFlags, int scopes );
+// writes the archived cvars of the scopes asked for (CVAR_SCOPE_BIT), or of
+// all with -1, but those with any of hideFlags
 // writes lines containing "set variable value" for all variables
 // with the archive flag set to true, but those with any of hideFlags
 
@@ -783,6 +822,9 @@ issues.
 // (Com_WriteConfigToFile)
 #define COM_CONFIG_VERSION	"1"
 
+// the format of settings/'s files, on their first line (Com_WriteSettingsFile)
+#define COM_SETTINGS_VERSION	"1"
+
 qboolean FS_Initialized( void );
 
 void	FS_InitFilesystem ( void );
@@ -827,6 +869,11 @@ fileHandle_t FS_BaseDir_FOpenFileWrite_HomeConfig( const char *filename );
 fileHandle_t FS_BaseDir_FOpenFileWrite_HomeData( const char *filename );
 fileHandle_t FS_BaseDir_FOpenFileWrite_HomeState( const char *filename );
 long		FS_BaseDir_FOpenFileRead( const char *filename, fileHandle_t *fp );
+long		FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer );
+// reads a whole file from the home's config directory only, into a buffer
+// to Z_Free, ending with a 0; -1 if there's none
+const char	*FS_LoadedGameDir( void );
+// the game directory loaded, which fs_game names before a restart loads it
 void	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
 long		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE );
 // if uniqueFILE is true, then a new FILE will be fopened even if the file
@@ -1278,6 +1325,10 @@ NON-PORTABLE SYSTEM SERVICES
 */
 
 #define MAX_JOYSTICK_AXIS 16
+
+qboolean Com_IsClient( void );
+// whether this process is a client, rather than a dedicated server: decided
+// from the command line, before the first config runs
 
 void	Sys_Init (void);
 qboolean Sys_TouchDevice( void );

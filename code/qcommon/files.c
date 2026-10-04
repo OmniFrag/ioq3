@@ -846,6 +846,46 @@ long FS_BaseDir_FOpenFileRead(const char *filename, fileHandle_t *fp)
 
 /*
 ===========
+FS_BaseDir_ReadFile_HomeConfig
+===========
+*/
+long FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer )
+{
+	FILE	*f = Sys_FOpen( FS_BaseDir_BuildOSPath( fs_homeconfigpath->string, filename ), "rb" );
+	long	length;
+	char	*text;
+
+	*buffer = NULL;
+	if ( !f ) {
+		return -1;
+	}
+	fseek( f, 0, SEEK_END );
+	length = ftell( f );
+	fseek( f, 0, SEEK_SET );
+	if ( length < 0 ) {
+		fclose( f );
+		return -1;
+	}
+	text = Z_Malloc( length + 1 );
+	length = fread( text, 1, length, f );
+	fclose( f );
+	text[length] = 0;
+	*buffer = text;
+	return length;
+}
+
+/*
+===========
+FS_LoadedGameDir
+===========
+*/
+const char *FS_LoadedGameDir( void )
+{
+	return fs_gamedir;
+}
+
+/*
+===========
 FS_BaseDir_Rename_HomeData
 
 ===========
@@ -4411,11 +4451,14 @@ void FS_Restart( int checksumFeed ) {
 		Sys_RemovePIDFile( lastGameDir );
 		Sys_InitPIDFile( FS_GetCurrentGameDir() );
 
-		// skip the q3config.cfg if "safe" is on the command line
-		if ( !Com_SafeMode() ) {
-			// the player's config, with full rights even when restricted
-			// text (a ui's mods menu running vid_restart) caused the restart
-			Cbuf_AddTextRestricted( "exec " Q3CONFIG_CFG "\n", qfalse );
+		// skip the q3config.cfg if "safe" is on the command line; a client
+		// reads its settings again as the game directory changes
+		// (Com_GameRestart)
+		if ( !Com_SafeMode() && !Com_IsClient() ) {
+			// the player's config, in the player's buffer with full rights
+			// even when restricted text (a ui's mods menu running
+			// vid_restart) or a startup script caused the restart
+			Cbuf_ExecuteText( EXEC_APPEND, "exec " Q3CONFIG_CFG "\n" );
 		}
 	}
 
