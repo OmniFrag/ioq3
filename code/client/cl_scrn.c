@@ -414,7 +414,7 @@ void SCR_DrawVoipMeter( void ) {
 		return;  // server doesn't support VoIP.
 	else if (clc.demoplaying)
 		return;  // playing back a demo.
-	else if (!cl_voip->integer)
+	else if (!CL_VoipOn())
 		return;  // client has VoIP support disabled.
 
 	limit = (int) (clc.voipPower * 10.0f);

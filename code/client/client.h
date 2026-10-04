@@ -453,6 +453,8 @@ extern	cvar_t	*cl_voipCaptureMult;
 extern	cvar_t	*cl_voipShowMeter;
 extern	cvar_t	*cl_voip;
 
+qboolean CL_VoipOn( void );
+
 // 20ms at 48k
 #define VOIP_MAX_FRAME_SAMPLES		( 20 * 48 )
 
