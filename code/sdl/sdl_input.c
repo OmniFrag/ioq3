@@ -53,8 +53,6 @@ static float mouseWheelRemainder;
 static int mouseWheelTime;
 
 static cvar_t *in_mouse             = NULL;
-static cvar_t *in_nograb;
-static cvar_t *in_captured;
 
 static cvar_t *in_joystick          = NULL;
 static cvar_t *in_joystickThreshold = NULL;
@@ -357,20 +355,20 @@ static void IN_GobbleMotionEvents( void )
 /*
 ===============
 IN_ActivateMouse
+
+The game reads the mouse, and natively holds it (relative mode) if grab;
+on the web the page holds it
 ===============
 */
-static void IN_ActivateMouse( qboolean isFullscreen )
+static void IN_ActivateMouse( qboolean grab )
 {
-	// in_nograb makes no sense in fullscreen mode
-	bool relative = isFullscreen || !in_nograb->integer;
-
 	if (!mouseAvailable || !SDL_WasInit( SDL_INIT_VIDEO ) )
 		return;
 
-	// SDL can refuse relative mode, e.g. on the web until the pointer is
-	// over the canvas; keep asking, while the mouse works meanwhile
-	if( SDL_GetWindowRelativeMouseMode( SDL_window ) != relative )
-		SDL_SetWindowRelativeMouseMode( SDL_window, relative );
+#ifndef __EMSCRIPTEN__
+	if( SDL_GetWindowRelativeMouseMode( SDL_window ) != grab )
+		SDL_SetWindowRelativeMouseMode( SDL_window, grab );
+#endif
 
 	if( !mouseActive )
 		IN_GobbleMotionEvents( );
@@ -399,6 +397,7 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 	if( mouseActive )
 	{
 		IN_GobbleMotionEvents( );
+#ifndef __EMSCRIPTEN__
 		SDL_SetWindowRelativeMouseMode( SDL_window, false );
 
 		// Don't warp the mouse unless the cursor is within the window.
@@ -410,6 +409,7 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 			if( SDL_GetWindowSize( SDL_window, &width, &height ) )
 				SDL_WarpMouseInWindow( SDL_window, width / 2.0f, height / 2.0f );
 		}
+#endif
 
 		mouseActive = qfalse;
 	}
@@ -1225,7 +1225,8 @@ void IN_ProcessEvent( const SDL_Event *e )
 #ifndef __EMSCRIPTEN__
 			// in a window, the click that captures the mouse (IN_Frame)
 			// isn't a key press. Only that click: the mouse is also
-			// inactive with in_mouse 0, the console down, or loading.
+			// inactive with in_mouse 0, the console down, or loading. On
+			// the web the page keeps that click from SDL.
 			if( !mouseClickedIn && e->type == SDL_EVENT_MOUSE_BUTTON_DOWN )
 			{
 				mouseClickedIn = qtrue;
@@ -1335,18 +1336,56 @@ void IN_ProcessEvent( const SDL_Event *e )
 #define PAGE_FULLSCREEN		1
 #define PAGE_AVAILABLE		2
 #define PAGE_LOCKED			4
-#define PAGE_ANSWER_SHIFT	3	// 0 none, 1 waiting for a click, 2 refused
+#define PAGE_POINTER		8	// a mouse or the like, which the page can lock
+#define PAGE_ANSWER_SHIFT	4	// 0 none, 1 waiting for a click, 2 refused
 
 // this frame's, read once
 static int pageFacts;
+
+// what the page was last told the game wants of the pointer
+static qboolean pointerWanted;
+
+/*
+===============
+IN_WantPointer
+
+The page holds the pointer lock: it asks for it at the player's click
+while the game wants it, and frees it when the game stops
+===============
+*/
+static void IN_WantPointer( qboolean want )
+{
+	if( want != pointerWanted )
+	{
+		pointerWanted = want;
+		MAIN_THREAD_EM_ASM({ Module.present?.({ pointer: !!$0 }); }, want);
+	}
+}
 #endif
+
+/*
+===============
+IN_Captured
+
+Whether the pointer is the game's: natively SDL's relative mode, on the web
+the page's pointer lock
+===============
+*/
+static qboolean IN_Captured( void )
+{
+#ifdef __EMSCRIPTEN__
+	return ( pageFacts & PAGE_LOCKED ) != 0;
+#else
+	return mouseActive && SDL_GetWindowRelativeMouseMode( SDL_window );
+#endif
+}
 
 /*
 ===============
 IN_PresentFacts
 
 What the platform reports this frame: natively SDL's window; on the web,
-the page, which owns fullscreen there
+the page, which owns fullscreen and the pointer lock there
 ===============
 */
 static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
@@ -1356,6 +1395,9 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 	Com_Memset( facts, 0, sizeof( *facts ) );
 	facts->focused = ( flags & SDL_WINDOW_INPUT_FOCUS ) != 0;
 	facts->loading = loading;
+	facts->mouse = mouseAvailable;
+	facts->console = ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) != 0;
+	facts->clickedIn = mouseClickedIn;
 #ifdef __EMSCRIPTEN__
 	{
 		static const presentReason_t answers[] = { PRESENT_OK, PRESENT_NEEDS_CLICK, PRESENT_REFUSED };
@@ -1367,10 +1409,14 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 		facts->available = ( pageFacts & PAGE_AVAILABLE ) != 0;
 		facts->standing = qtrue;
 		facts->answer = answer < ARRAY_LEN( answers ) ? answers[answer] : PRESENT_OK;
+		facts->holdable = ( pageFacts & PAGE_POINTER ) != 0;
+		facts->captured = IN_Captured( );
+		facts->capturesAtClick = qtrue;
 	}
 #else
 	facts->fullscreen = ( flags & SDL_WINDOW_FULLSCREEN ) != 0;
 	facts->available = qtrue;
+	facts->holdable = qtrue;
 #ifdef __APPLE__
 	facts->recreateWhenStuck = qtrue;
 #endif
@@ -1408,23 +1454,6 @@ void IN_RecreateWindow( void )
 
 /*
 ===============
-IN_Captured
-
-Whether the pointer is the game's: natively SDL's relative mode, on the web
-the page's pointer lock
-===============
-*/
-static qboolean IN_Captured( void )
-{
-#ifdef __EMSCRIPTEN__
-	return ( pageFacts & PAGE_LOCKED ) != 0;
-#else
-	return mouseActive && SDL_GetWindowRelativeMouseMode( SDL_window );
-#endif
-}
-
-/*
-===============
 IN_Frame
 ===============
 */
@@ -1449,52 +1478,31 @@ void IN_Frame( void )
 	// If not DISCONNECTED (main menu) or ACTIVE (in game), we're loading
 	loading = ( clc.state != CA_DISCONNECTED && clc.state != CA_ACTIVE );
 
-	// fullscreen is the platform's fact, which the player's want is
-	// compared with (cl_present.c)
+	// fullscreen and the pointer are the platform's facts, which what the
+	// player and the game want are compared with (cl_present.c)
 	if( SDL_window )
 	{
+		presentPointer_t pointer;
+
 		IN_PresentFacts( &facts, loading );
+
+		// a player in fullscreen is in the game, and stays in it if they
+		// switch to a window
+		if( facts.fullscreen )
+			mouseClickedIn = facts.clickedIn = qtrue;
+
 		Present_Frame( &facts, Sys_Milliseconds( ) );
 		cls.glconfig.isFullscreen = facts.fullscreen;
-	}
 
-	// a player in fullscreen is in the game, and stays in it if they switch
-	// to a window
-	if( cls.glconfig.isFullscreen )
-		mouseClickedIn = qtrue;
-
-	if( !cls.glconfig.isFullscreen && ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) )
-	{
-		// Console is down in windowed mode
-		IN_DeactivateMouse( cls.glconfig.isFullscreen );
-	}
-	else if( !cls.glconfig.isFullscreen && loading )
-	{
-		// Loading in windowed mode
-		IN_DeactivateMouse( cls.glconfig.isFullscreen );
-	}
-	else if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_INPUT_FOCUS ) )
-	{
-		// Window not got focus
-		IN_DeactivateMouse( cls.glconfig.isFullscreen );
-	}
-#ifndef __EMSCRIPTEN__
-	else if( !mouseClickedIn )
-	{
-		// A window the player hasn't clicked into since it got focus, e.g.
-		// by its title bar to drag it: leave the mouse free. A browser asks
-		// for a click before it locks the pointer anyway.
-		IN_DeactivateMouse( cls.glconfig.isFullscreen );
-	}
+		pointer = Present_Pointer( &facts );
+#ifdef __EMSCRIPTEN__
+		IN_WantPointer( pointer.grab );
 #endif
-	else
-		IN_ActivateMouse( cls.glconfig.isFullscreen );
-
-	{
-		qboolean captured = IN_Captured( );
-
-		if( in_captured->integer != captured )
-			Cvar_SetValue( "in_captured", captured );
+		if( pointer.read )
+			IN_ActivateMouse( pointer.grab );
+		else
+			IN_DeactivateMouse( cls.glconfig.isFullscreen );
+		Present_Captured( IN_Captured( ) );
 	}
 
 	if( windowResized )
@@ -1573,9 +1581,6 @@ void IN_Init( void *windowData )
 
 	// mouse variables
 	in_mouse = Cvar_Get( "in_mouse", "1", CVAR_ARCHIVE );
-	in_nograb = Cvar_Get( "in_nograb", "0", CVAR_ARCHIVE );
-	in_captured = Cvar_Get( "in_captured", "0", CVAR_ROM );
-	Cvar_SetDescription( in_captured, "Whether the game has the pointer now" );
 
 	in_joystick = Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE|CVAR_LATCH );
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );

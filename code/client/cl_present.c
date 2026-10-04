@@ -35,6 +35,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // run: it becomes r_fullscreen's value from the command line's layer, which
 // isn't saved. What the game's own controls set (the menu, Alt+Enter, the
 // console) is saved.
+//
+// The pointer is the game's to want: held in a match and the menus, once
+// the player has entered the window, and read but for the console and
+// loading in a window. in_captured is whether the platform holds it.
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
@@ -52,6 +56,7 @@ static cvar_t	*r_fullscreen;
 static cvar_t	*in_nograb;
 static cvar_t	*com_fullscreen;
 static cvar_t	*com_fullscreenAvailable;
+static cvar_t	*in_captured;
 
 static struct {
 	int				time;			// the last frame's
@@ -90,6 +95,8 @@ void Present_Init( void )
 	Cvar_SetDescription( com_fullscreen, "Whether the game is fullscreen now; r_fullscreen is whether the player wants it" );
 	com_fullscreenAvailable = Cvar_Get( "com_fullscreenAvailable", "1", CVAR_ROM );
 	Cvar_SetDescription( com_fullscreenAvailable, "Whether this device can go fullscreen" );
+	in_captured = Cvar_Get( "in_captured", "0", CVAR_ROM );
+	Cvar_SetDescription( in_captured, "Whether the game has the pointer now" );
 }
 
 /*
@@ -270,6 +277,54 @@ void Present_Frame( const presentFacts_t *facts, int time )
 	{
 		Present_Ask( want, time );
 	}
+}
+
+/*
+===============
+Present_Pointer
+
+What the game does with the pointer this frame. It holds it with the
+mouse on, unless in_nograb in a window, where it makes sense, or a touch
+screen, which has none to hold; and reads it
+once the player has entered the window, which on the web is the page's
+lock (or the game not wanting it), but for the console and loading in a
+window, which leave it free natively. The web's lock stays through them:
+Safari shows its bar while the pointer is free, resizing the game.
+===============
+*/
+presentPointer_t Present_Pointer( const presentFacts_t *facts )
+{
+	presentPointer_t	pointer;
+	qboolean			entered;
+
+	pointer.grab = facts->mouse && facts->holdable && ( facts->fullscreen || !in_nograb->integer );
+	entered = facts->capturesAtClick ? facts->captured || !pointer.grab : facts->clickedIn;
+	pointer.read = facts->mouse && facts->focused && entered &&
+		( facts->fullscreen || !( facts->console || facts->loading ) );
+	return pointer;
+}
+
+/*
+===============
+Present_Captured
+
+Whether the platform holds the pointer, as it reports after this frame's
+change. A release it kept while it held it, a button's, or Esc's when a
+browser frees the lock, never comes: losing it lets go of every held key.
+===============
+*/
+void Present_Captured( qboolean captured )
+{
+	if( in_captured->integer == captured )
+	{
+		return;
+	}
+
+	if( !captured )
+	{
+		Key_ClearStates( );
+	}
+	Cvar_SetValue( "in_captured", captured );
 }
 
 /*

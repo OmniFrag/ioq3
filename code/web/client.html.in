@@ -114,21 +114,19 @@ if (pixelRatio?.get)
         get: () => Math.min(pixelRatio.get.call(window), maxPixelRatio),
     });
 
-// Ask for raw mouse input when locking the pointer. Without it, Chromium on
-// Windows sometimes reports a huge movementY that snaps the view straight up
-// or down. Browsers without raw input either ignore the option or reject
-// the request with NotSupportedError (Chrome on Linux); only that rejection
-// falls back to a plain lock. Other failures, such as a request made during
-// a fullscreen change, must not quietly downgrade to it.
-const requestPointerLock = Element.prototype.requestPointerLock;
-Element.prototype.requestPointerLock = function (options) {
-    const request = requestPointerLock.call(this, { ...options, unadjustedMovement: true });
-    request?.catch?.((e) => {
-        if (e?.name === 'NotSupportedError')
-            requestPointerLock.call(this, options)?.catch?.(() => {});
-    });
-    return request;
-};
+// Raw mouse input on Windows, as the native client has there (?rawMouse=0
+// or 1 overrides): without it, Chromium on Windows sometimes reports a huge
+// movementY that snaps the view straight up or down. Elsewhere the system's
+// own motion, as natively on macOS. A browser without raw input either
+// ignores the option or rejects the request with NotSupportedError; only
+// that rejection falls back to a plain lock. Other failures, such as a
+// request made during a fullscreen change, must not quietly downgrade to it.
+const rawMouse = urlParams.has('rawMouse') ? urlParams.get('rawMouse') !== '0' : /Windows/.test(navigator.userAgent);
+const lockPointer = () => canvas.requestPointerLock(rawMouse ? { unadjustedMovement: true } : undefined)?.catch?.((e) => {
+    if (rawMouse && e?.name === 'NotSupportedError')
+        canvas.requestPointerLock()?.catch?.(() => {});
+});
+const locked = () => document.pointerLockElement === canvas;
 
 // The WebGL context SDL creates, which has no attributes of its own for
 // these: the fast GPU where there are two; an opaque canvas, since the
@@ -145,14 +143,16 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     return getContext.call(this, type, attributes);
 };
 
-// The page owns browser fullscreen, which a browser grants only on the
-// player's input, and the engine says whether the player wants it
-// (Module.present, cl_present.c): the page goes fullscreen at once if the
-// player's input allows, as with Alt+Enter, or else on their next click,
-// and reports what is (Module.presentationFacts). A request stands until
-// it's met: leaving fullscreen by the browser's means, even with a click a
-// moment later, doesn't bring it back, and the engine stops wanting it for
-// this visit.
+// The page owns browser fullscreen and the pointer lock, which a browser
+// grants only on the player's input, and the engine says whether the player
+// wants fullscreen and the game the pointer (Module.present, cl_present.c
+// and sdl_input.c): the page goes fullscreen at once if the player's input
+// allows, as with Alt+Enter, or else on their next click, which also takes
+// the lock, and reports what is (Module.presentationFacts). A request for
+// fullscreen stands until it's met: leaving fullscreen by the browser's
+// means, even with a click a moment later, doesn't bring it back, and the
+// engine stops wanting it for this visit. The lock is asked for at each
+// click without it.
 // The whole page goes fullscreen, the canvas following its size. Locking the
 // pointer in the click that asks for fullscreen fails in Safari, so the
 // lock is asked for once fullscreen is granted. iOS has none: its
@@ -162,33 +162,67 @@ const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const fullscreenAvailable = !iOS && !!document.documentElement.requestFullscreen;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2;
-let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE;
+let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
 const enterFullscreen = () => {
     fullscreenAnswer = ANSWER_NONE;
     document.documentElement.requestFullscreen()
-        .then(() => canvas.requestPointerLock())
-        .catch(() => { if (!document.fullscreenElement) fullscreenAnswer = ANSWER_REFUSED; });
+        .then(() => { if (wantPointer) lockPointer(); })
+        .catch(() => {
+            if (document.fullscreenElement) return;
+            // the request stands; the lock needn't wait for it
+            fullscreenAnswer = ANSWER_REFUSED;
+            if (wantPointer) lockPointer();
+        });
 };
-const present = ({ fullscreen }) => {
-    wantFullscreen = fullscreen && fullscreenAvailable && !document.fullscreenElement;
-    if (wantFullscreen) {
-        if (navigator.userActivation?.isActive ?? false) enterFullscreen();
-        else fullscreenAnswer = ANSWER_CLICK;
-    } else if (!fullscreen && document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
+const present = ({ fullscreen, pointer }) => {
+    if (fullscreen !== undefined) {
+        wantFullscreen = fullscreen && fullscreenAvailable && !document.fullscreenElement;
+        if (wantFullscreen) {
+            if (navigator.userActivation?.isActive ?? false) enterFullscreen();
+            else fullscreenAnswer = ANSWER_CLICK;
+        } else if (!fullscreen && document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+        }
+    }
+    if (pointer !== undefined) {
+        wantPointer = pointer;
+        if (!wantPointer && locked()) document.exitPointerLock();
     }
 };
-canvas.addEventListener('pointerdown', () => {
-    if (wantFullscreen && !document.fullscreenElement) enterFullscreen();
-});
+// A click that goes fullscreen or takes the lock is the page's, never the
+// game's: SDL sees neither its press nor its release, which Safari's change
+// to fullscreen could lose, leaving the gun firing. A touch is the game's.
+// A claimed release that never came is forgotten at the next press, whose
+// release is then the game's.
+let claimedPointer;
+addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    claimedPointer = undefined;
+    if (event.target !== canvas) return;
+    const goFullscreen = wantFullscreen && !document.fullscreenElement;
+    const takeLock = wantPointer && !locked();
+    if (!goFullscreen && !takeLock) return;
+    event.stopImmediatePropagation();
+    claimedPointer = event.pointerId;
+    if (goFullscreen) enterFullscreen();
+    else lockPointer();
+}, { capture: true });
+addEventListener('pointerup', (event) => {
+    if (event.pointerId !== claimedPointer) return;
+    claimedPointer = undefined;
+    event.stopImmediatePropagation();
+}, { capture: true });
 document.addEventListener('fullscreenchange', () => {
     if (document.fullscreenElement) wantFullscreen = false;
 });
 // as bits, for the engine to read each frame (IN_PresentFacts)
+// a mouse or the like, which the lock is for; a touch screen has none
+const finePointer = matchMedia('(any-pointer: fine)');
 const presentationFacts = () => (document.fullscreenElement ? 1 : 0)
     | (fullscreenAvailable ? 2 : 0)
-    | (document.pointerLockElement === canvas ? 4 : 0)
-    | (fullscreenAnswer << 3);
+    | (locked() ? 4 : 0)
+    | (finePointer.matches ? 8 : 0)
+    | (fullscreenAnswer << 4);
 
 // A right click is the game's. SDL leaves the event be, and the browser's
 // menu would open over the game while the pointer is free: on the menus,
