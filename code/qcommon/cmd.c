@@ -36,19 +36,32 @@ typedef struct {
 	qboolean	inSlashComment;
 } cmd_t;
 
-static cmd_t	cmd_text;		// the player's, the configs' and the engine's
-static cmd_t	cmd_gameText;	// what game code queues, which runs restricted
-static byte		cmd_text_buf[MAX_CMD_BUFFER];
-static byte		cmd_gameText_buf[MAX_CMD_BUFFER];
+// The command buffers, by whose text they hold: the player's (and the
+// configs' and the engine's), or game code's, which runs restricted; each
+// either a script's that runs at every start (default.cfg, autoexec.cfg),
+// whose sets aren't saved, or not. A buffer's index is its two bits
+#define CBUF_SCRIPT		1
+#define CBUF_RESTRICTED	2
+#define CBUF_COUNT		4
+
+static cmd_t	cmd_buffers[CBUF_COUNT];
+static byte		cmd_buffersData[CBUF_COUNT][MAX_CMD_BUFFER];
 
 // the running command is restricted: it came from game code, or from text
 // that game code queued or ran
 static qboolean	cmd_restricted;
 
+// the running command came from a startup script, or from text one ran
+static qboolean	cmd_script;
+
+static cmd_t *Cbuf_For( qboolean restricted, qboolean script ) {
+	return &cmd_buffers[ ( restricted ? CBUF_RESTRICTED : 0 ) | ( script ? CBUF_SCRIPT : 0 ) ];
+}
+
 // the buffer text a command adds goes to: text a restricted command adds
-// stays restricted
+// stays restricted, and a script's stays the script's
 static cmd_t *Cbuf_Current( void ) {
-	return cmd_restricted ? &cmd_gameText : &cmd_text;
+	return Cbuf_For( cmd_restricted, cmd_script );
 }
 
 
@@ -91,12 +104,13 @@ Cbuf_Init
 */
 void Cbuf_Init (void)
 {
-	cmd_text.data = cmd_text_buf;
-	cmd_text.maxsize = MAX_CMD_BUFFER;
-	cmd_text.cursize = 0;
-	cmd_gameText.data = cmd_gameText_buf;
-	cmd_gameText.maxsize = MAX_CMD_BUFFER;
-	cmd_gameText.cursize = 0;
+	int	i;
+
+	for ( i = 0; i < CBUF_COUNT; i++ ) {
+		cmd_buffers[i].data = cmd_buffersData[i];
+		cmd_buffers[i].maxsize = MAX_CMD_BUFFER;
+		cmd_buffers[i].cursize = 0;
+	}
 }
 
 static void Cbuf_Add( cmd_t *buf, const char *text ) {
@@ -169,11 +183,33 @@ The same, into game code's buffer if restricted, or else the player's
 ============
 */
 void Cbuf_AddTextRestricted( const char *text, qboolean restricted ) {
-	Cbuf_Add( restricted ? &cmd_gameText : &cmd_text, text );
+	Cbuf_Add( Cbuf_For( restricted, cmd_script ), text );
 }
 
 void Cbuf_InsertTextRestricted( const char *text, qboolean restricted ) {
-	Cbuf_Insert( restricted ? &cmd_gameText : &cmd_text, text );
+	Cbuf_Insert( Cbuf_For( restricted, cmd_script ), text );
+}
+
+/*
+============
+Cbuf_AddScriptText
+
+Text that runs at every start (default.cfg, autoexec.cfg), with full
+rights: what it and the configs it execs set is a script's, not saved,
+whenever it runs, after waits too
+============
+*/
+void Cbuf_AddScriptText( const char *text ) {
+	Cbuf_Add( Cbuf_For( qfalse, qtrue ), text );
+}
+
+/*
+============
+Cmd_IsScript
+============
+*/
+qboolean Cmd_IsScript( void ) {
+	return cmd_script;
 }
 
 /*
@@ -199,6 +235,7 @@ An error ended the running command
 */
 void Cmd_EndRestricted( void ) {
 	cmd_restricted = qfalse;
+	cmd_script = qfalse;
 }
 
 
@@ -211,9 +248,11 @@ Cbuf_ExecuteText, restricted or not, whatever the running command is
 */
 static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolean restricted )
 {
-	qboolean	running = cmd_restricted;
+	qboolean	running = cmd_restricted, script = cmd_script;
 
+	// the engine's text, or game code's, isn't a script's
 	cmd_restricted = restricted;
+	cmd_script = qfalse;
 	switch (exec_when)
 	{
 	case EXEC_NOW:
@@ -222,7 +261,7 @@ static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolea
 			Cmd_ExecuteString (text);
 		} else {
 			Cbuf_Execute();
-			Com_DPrintf(S_COLOR_YELLOW "EXEC_NOW %s\n", cmd_text.data);
+			Com_DPrintf(S_COLOR_YELLOW "EXEC_NOW %s\n", Cbuf_For( qfalse, qfalse )->data);
 		}
 		break;
 	case EXEC_INSERT:
@@ -235,6 +274,7 @@ static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolea
 		Com_Error (ERR_DROP, "Cbuf_ExecuteText: bad exec_when");
 	}
 	cmd_restricted = running;
+	cmd_script = script;
 }
 
 /*
@@ -276,7 +316,7 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	char	*text;
 	char	line[MAX_CMD_LINE];
 	int		quotes;
-	qboolean	restricted;
+	qboolean	restricted, script;
 
 	// find a \n or ; line break or comment: // or /* */
 	// This will keep // style comments all on one line by not breaking on
@@ -334,12 +374,16 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 		memmove (text, text+i, buf->cursize);
 	}
 
-// execute the command line, restricted if it's game code's
+// execute the command line, restricted if it's game code's, and a
+// script's if it's a startup script's
 
 	restricted = cmd_restricted;
-	cmd_restricted = buf == &cmd_gameText;
+	script = cmd_script;
+	cmd_restricted = ( ( buf - cmd_buffers ) & CBUF_RESTRICTED ) != 0;
+	cmd_script = ( ( buf - cmd_buffers ) & CBUF_SCRIPT ) != 0;
 	Cmd_ExecuteString (line);
 	cmd_restricted = restricted;
+	cmd_script = script;
 }
 
 /*
@@ -349,27 +393,39 @@ Cbuf_Execute
 */
 void Cbuf_Execute (void)
 {
-	// a comment runs to the end of what one call executes, as it always has
-	cmd_text.inStarComment = cmd_text.inSlashComment = qfalse;
-	cmd_gameText.inStarComment = cmd_gameText.inSlashComment = qfalse;
+	// the order the buffers run in: the startup scripts' first, as one buffer
+	// ran them before the command line's commands even after a wait, then the
+	// player's, then game code's
+	static const int order[CBUF_COUNT] = {
+		CBUF_SCRIPT, CBUF_RESTRICTED | CBUF_SCRIPT, 0, CBUF_RESTRICTED
+	};
+	int	i;
 
-	// the player's commands first, then game code's, while neither waits
+	// a comment runs to the end of what one call executes, as it always has
+	for ( i = 0; i < CBUF_COUNT; i++ ) {
+		cmd_buffers[i].inStarComment = cmd_buffers[i].inSlashComment = qfalse;
+	}
+
+	// a line from the first buffer that has one and doesn't wait, until none
 	for ( ;; ) {
-		if ( cmd_text.cursize && cmd_text.wait <= 0 ) {
-			Cbuf_ExecuteLine( &cmd_text );
-		} else if ( cmd_gameText.cursize && cmd_gameText.wait <= 0 ) {
-			Cbuf_ExecuteLine( &cmd_gameText );
-		} else {
+		for ( i = 0; i < CBUF_COUNT; i++ ) {
+			cmd_t *buf = &cmd_buffers[ order[i] ];
+
+			if ( buf->cursize && buf->wait <= 0 ) {
+				Cbuf_ExecuteLine( buf );
+				break;
+			}
+		}
+		if ( i == CBUF_COUNT ) {
 			break;
 		}
 	}
 
 	// a buffer still holding text after a wait runs it a frame later
-	if ( cmd_text.cursize && cmd_text.wait > 0 ) {
-		cmd_text.wait--;
-	}
-	if ( cmd_gameText.cursize && cmd_gameText.wait > 0 ) {
-		cmd_gameText.wait--;
+	for ( i = 0; i < CBUF_COUNT; i++ ) {
+		if ( cmd_buffers[i].cursize && cmd_buffers[i].wait > 0 ) {
+			cmd_buffers[i].wait--;
+		}
 	}
 }
 
@@ -421,7 +477,7 @@ void Cmd_Exec_f( void ) {
 	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() );
 #else
 	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() ||
-		( !Cvar_VariableIntegerValue( "dedicated" ) && FS_LastFileIsGameContent() ) );
+		( Com_IsClient() && FS_LastFileIsGameContent() ) );
 #endif
 
 	FS_FreeFile (f.v);
