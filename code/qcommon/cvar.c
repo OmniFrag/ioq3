@@ -425,6 +425,23 @@ static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
 
 /*
 ============
+Cvar_SavedValue
+
+What the config gets for a cvar, if it's archived: the player's choice,
+where it isn't the default. One no code has registered has no default
+yet, and its value is kept as it is
+============
+*/
+static const char *Cvar_SavedValue( const cvar_t *var ) {
+	if ( !var->savedString ||
+		( !( var->flags & CVAR_USER_CREATED ) && !strcmp( var->savedString, var->resetString ) ) ) {
+		return NULL;
+	}
+	return var->savedString;
+}
+
+/*
+============
 Cvar_ProfileDefault
 
 A cvar's default on this platform: its profile's, if it has one
@@ -472,7 +489,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 #endif
 
 	// this platform's default, for a registration by code
-	if ( !( flags & CVAR_USER_CREATED ) ) {
+	if ( !( flags & ( CVAR_USER_CREATED | CVAR_SERVER_CREATED ) ) ) {
 		var_value = Cvar_ProfileDefault( var_name, var_value );
 	}
 
@@ -529,7 +546,14 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		if(var->flags & CVAR_SERVER_CREATED)
 		{
 			if(!(flags & CVAR_SERVER_CREATED))
+			{
+				// code registers it: the server's value is the server's,
+				// until it goes, and the code's default the default
 				var->flags &= ~CVAR_SERVER_CREATED;
+				if ( !var->serverString )
+					Cvar_SetLayer( &var->serverString, var->resetString );
+				Cvar_SetLayer( &var->resetString, var_value );
+			}
 		}
 		else
 		{
@@ -538,6 +562,9 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		}
 		
 		var->flags |= flags;
+		// a read only cvar's value is state, never the player's to save
+		if ( flags & CVAR_ROM )
+			Cvar_SetLayer( &var->savedString, NULL );
 
 		// only allow one non-empty reset string without a warning
 		if ( !var->resetString[0] ) {
@@ -590,6 +617,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->integer = atoi(var->string);
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->savedString = NULL;
+	var->userSource = CVAR_SOURCE_DEFAULT;
 	var->serverStale = qfalse;
 	var->validate = qfalse;
 	var->description = NULL;
@@ -623,14 +651,55 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 
 /*
 ============
+Cvar_Source
+============
+*/
+cvarSource_t Cvar_Source( const cvar_t *var ) {
+	if ( var->serverString ) {
+		return CVAR_SOURCE_SERVER;
+	}
+	if ( var->userString ) {
+		return var->userSource;
+	}
+	return CVAR_SOURCE_DEFAULT;
+}
+
+static const char * const cvar_sourceNames[] = {
+	[CVAR_SOURCE_DEFAULT] = NULL,
+	[CVAR_SOURCE_ENGINE] = "the engine's",
+	[CVAR_SOURCE_GAME] = "game code's",
+	[CVAR_SOURCE_PLAYER] = "yours",
+	[CVAR_SOURCE_MENU] = "the menus'",
+	[CVAR_SOURCE_SESSION] = "the command line's",
+	[CVAR_SOURCE_SERVER] = "the server's"
+};
+
+/*
+============
+Cvar_PrintSource
+
+Whose value a cvar has, after it, unless it's the default
+============
+*/
+static void Cvar_PrintSource( const cvar_t *var ) {
+	const char *name = cvar_sourceNames[ Cvar_Source( var ) ];
+
+	if ( name ) {
+		Com_Printf( " (%s)", name );
+	}
+}
+
+/*
+============
 Cvar_Print
 
-Prints the value, default, and latched string of the given variable
+Prints the value, whose it is, the default, and latched string of the given variable
 ============
 */
 void Cvar_Print( cvar_t *v ) {
 	Com_Printf ("\"%s\" is:\"%s" S_COLOR_WHITE "\"",
 			v->name, v->string );
+	Cvar_PrintSource( v );
 
 	if ( !( v->flags & CVAR_ROM ) ) {
 		if ( !Q_stricmp( v->string, v->resetString ) ) {
@@ -715,9 +784,9 @@ Cvar_SetUntrusted
 A set by game code or a server, which marks the cvar untrusted
 ============
 */
-static void Cvar_SetUntrusted( const char *var_name, const char *value, qboolean force )
+static void Cvar_SetUntrusted( const char *var_name, const char *value, qboolean force, cvarSource_t source )
 {
-	cvar_t	*var = Cvar_Set2( var_name, value, force );
+	cvar_t	*var = Cvar_SetFrom( var_name, value, source, force );
 
 	if ( var ) {
 		var->untrusted = qtrue;
@@ -727,7 +796,7 @@ static void Cvar_SetUntrusted( const char *var_name, const char *value, qboolean
 void Cvar_SetSafe( const char *var_name, const char *value )
 {
 	Cvar_CheckSafeSet( var_name, value );
-	Cvar_SetUntrusted( var_name, value, qtrue );
+	Cvar_SetUntrusted( var_name, value, qtrue, CVAR_SOURCE_GAME );
 }
 
 
@@ -751,8 +820,8 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	}
 	// a read only cvar's value is state, never saved, and can be large (a
 	// server's pak lists)
-	saves = source == CVAR_SOURCE_PLAYER && !( var->flags & CVAR_ROM ) &&
-		!Cvar_SameString( var->savedString, value );
+	saves = source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
+		!( var->flags & CVAR_ROM ) && !Cvar_SameString( var->savedString, value );
 	if ( source == CVAR_SOURCE_SERVER ) {
 		var->serverStale = qfalse;
 	}
@@ -774,6 +843,9 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	}
 
 	Cvar_SetLayer( layer, value );
+	if ( layer == &var->userString ) {
+		var->userSource = source;
+	}
 	if ( saves ) {
 		Cvar_SetLayer( &var->savedString, value );
 		cvar_modifiedFlags |= var->flags & CVAR_ARCHIVE;
@@ -836,12 +908,13 @@ cvar_t *Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t sour
 ============
 Cvar_Set2
 
-The player's set: the console's, the menus', configs', game code's and the
-engine's. NULL resets the cvar to its default
+A set by the engine, if forced, or else the player's (the console's and
+configs' go through Cvar_SetFromText); saved if archived. NULL resets the
+cvar to its default
 ============
 */
 cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
-	return Cvar_SetFrom( var_name, value, CVAR_SOURCE_PLAYER, force );
+	return Cvar_SetFrom( var_name, value, force ? CVAR_SOURCE_ENGINE : CVAR_SOURCE_PLAYER, force );
 }
 
 /*
@@ -889,10 +962,12 @@ void Cvar_SetProfile( const cvarDefault_t *defaults ) {
 /*
 ============
 Cvar_SetLatched
+
+The engine's set that a latched cvar waits for a restart to take
 ============
 */
 void Cvar_SetLatched( const char *var_name, const char *value) {
-	Cvar_Set2 (var_name, value, qfalse);
+	Cvar_SetFrom( var_name, value, CVAR_SOURCE_ENGINE, qfalse );
 }
 
 /*
@@ -931,7 +1006,7 @@ the console, unless its name is in allowed, which lists the ones stock
 game code sets. CVAR_LATCH cvars are still set at once.
 ============
 */
-void Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed )
+void Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed, cvarSource_t source )
 {
 	cvar_t *var;
 
@@ -953,7 +1028,7 @@ void Cvar_SetFromVM( const char *var_name, const char *value, const char * const
 			return;
 		}
 	}
-	Cvar_SetUntrusted( var_name, value, qtrue );
+	Cvar_SetUntrusted( var_name, value, qtrue, source );
 
 	// a module's set of a cvar of its own wins over the server's layer, as
 	// it won over the server's value before: the single player orbit camera
@@ -964,7 +1039,7 @@ void Cvar_SetFromVM( const char *var_name, const char *value, const char * const
 	}
 }
 
-void Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed )
+void Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed, cvarSource_t source )
 {
 	char val[32];
 
@@ -972,7 +1047,7 @@ void Cvar_SetValueFromVM( const char *var_name, float value, const char * const 
 		Com_sprintf( val, sizeof(val), "%i", (int)value );
 	else
 		Com_sprintf( val, sizeof(val), "%f", value );
-	Cvar_SetFromVM( var_name, val, allowed );
+	Cvar_SetFromVM( var_name, val, allowed, source );
 }
 
 /*
@@ -985,7 +1060,7 @@ private cvar
 */
 void Cvar_ResetSafe( const char *var_name ) {
 	Cvar_CheckSafeSet( var_name, NULL );
-	Cvar_SetUntrusted( var_name, NULL, qfalse );
+	Cvar_SetUntrusted( var_name, NULL, qfalse, CVAR_SOURCE_GAME );
 }
 
 /*
@@ -1036,15 +1111,16 @@ qboolean Cvar_AllowedFromText( const char *var_name ) {
 ============
 Cvar_SetFromText
 
-A set by a command, which marks the cvar untrusted if the command is
-restricted, and clears the mark if it isn't and the cvar now holds the
-value it gave: a refused or latched set leaves the old value, and its
-mark, in place
+A set by a command, the player's, or game code's if the command is
+restricted, which also marks the cvar untrusted; an unrestricted one
+clears the mark if the cvar now holds the value it gave: a refused or
+latched set leaves the old value, and its mark, in place
 ============
 */
 static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 {
-	cvar_t	*var = Cvar_Set2( var_name, value, qfalse );
+	cvar_t	*var = Cvar_SetFrom( var_name, value,
+		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
 
 	if ( var ) {
 		if ( Cmd_IsRestricted() ) {
@@ -1122,31 +1198,82 @@ qboolean Cvar_Command( void ) {
 
 /*
 ============
+Cvar_FromArgs
+
+The cvar a command names as its argument, or NULL with why: restricted
+text can't use a private or protected one
+============
+*/
+static cvar_t *Cvar_FromArgs( void ) {
+	cvar_t	*var;
+
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: %s <variable>\n", Cmd_Argv( 0 ) );
+		return NULL;
+	}
+	if ( !Cvar_AllowedFromText( Cmd_Argv( 1 ) ) ) {
+		return NULL;
+	}
+	var = Cvar_FindVar( Cmd_Argv( 1 ) );
+	if ( !var ) {
+		Com_Printf( "Cvar %s does not exist.\n", Cmd_Argv( 1 ) );
+	}
+	return var;
+}
+
+/*
+============
 Cvar_Print_f
 
-Prints the contents of a cvar 
+Prints the contents of a cvar
 (preferred over Cvar_Command where cvar names and commands conflict)
 ============
 */
 void Cvar_Print_f(void)
 {
-	char *name;
-	cvar_t *cv;
-	
-	if(Cmd_Argc() != 2)
-	{
-		Com_Printf ("usage: print <variable>\n");
+	cvar_t	*var = Cvar_FromArgs();
+
+	if ( var ) {
+		Cvar_Print( var );
+	}
+}
+
+/*
+============
+Cvar_Why_f
+
+Prints where a cvar's value comes from: each of its layers (cvar_t) that
+has one, after what Cvar_Print says
+============
+*/
+void Cvar_Why_f( void ) {
+	cvar_t	*var = Cvar_FromArgs();
+
+	if ( !var ) {
 		return;
 	}
+	Cvar_Print( var );
+	if ( var->serverString ) {
+		Com_Printf( "  the server requires \"%s" S_COLOR_WHITE "\" while you're on it\n", var->serverString );
+	}
+	if ( var->userString && var->userSource == CVAR_SOURCE_SESSION ) {
+		Com_Printf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
+	}
+	if ( var->savedString ) {
+		Com_Printf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
+			!( var->flags & CVAR_ARCHIVE ) ? ", which isn't archived, so it's kept for this run" :
+			Cvar_SavedValue( var ) ? "" : ", the default, so the config leaves it out" );
+	}
+	if ( var->flags & CVAR_USER_CREATED ) {
+		Com_Printf( "  no code has registered it, so it has no default\n" );
+	} else {
+		// a server created one has the server's value as its default
+		const char *profile = Cvar_ProfileDefault( var->name, NULL );
 
-	name = Cmd_Argv(1);
-
-	cv = Cvar_FindVar(name);
-	
-	if(cv)
-		Cvar_Print(cv);
-	else
-		Com_Printf ("Cvar %s does not exist.\n", name);
+		if ( profile && !strcmp( profile, var->resetString ) ) {
+			Com_Printf( "  its default is this device's\n" );
+		}
+	}
 }
 
 /*
@@ -1291,8 +1418,8 @@ void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
 		if( var->flags & CVAR_ARCHIVE ) {
 			// the player's choice, even if it hasn't taken effect yet
 			// (latched, or under a server's)
-			value = var->savedString;
-			if ( !value || ( !( var->flags & CVAR_USER_CREATED ) && !strcmp( value, var->resetString ) ) ) {
+			value = Cvar_SavedValue( var );
+			if ( !value ) {
 				continue;
 			}
 			// a quote or a line break would end the value early, and the
@@ -1389,7 +1516,9 @@ void Cvar_List_f( void ) {
 			Com_Printf(" ");
 		}
 
-		Com_Printf (" %s \"%s\"\n", var->name, var->string);
+		Com_Printf (" %s \"%s\"", var->name, var->string);
+		Cvar_PrintSource( var );
+		Com_Printf( "\n" );
 	}
 
 	Com_Printf ("\n%i total cvars\n", i);
@@ -1474,7 +1603,9 @@ void Cvar_ListModified_f( void ) {
 			Com_Printf(" ");
 		}
 
-		Com_Printf (" %s \"%s\", default \"%s\"\n", var->name, value, var->resetString);
+		Com_Printf (" %s \"%s\"", var->name, value);
+		Cvar_PrintSource( var );
+		Com_Printf (", default \"%s\"\n", var->resetString);
 	}
 
 	Com_Printf ("\n%i total modified cvars\n", totalModified);
@@ -1595,8 +1726,15 @@ static void Cvar_RestartKeeping(qboolean unsetVM, int keepFlags)
 		
 		if(!(curvar->flags & (CVAR_ROM | CVAR_INIT | CVAR_NORESTART)))
 		{
-			// Just reset the rest to their default values.
-			Cvar_SetVar( curvar, NULL, CVAR_SOURCE_PLAYER, qfalse );
+			// Just reset the rest to their default values: the player's
+			// and the command line's go, even under a server's rule that
+			// refuses a set (cheats), which still holds
+			Cvar_SetLayer( &curvar->userString, NULL );
+			if ( curvar->savedString ) {
+				Cvar_SetLayer( &curvar->savedString, NULL );
+				cvar_modifiedFlags |= curvar->flags & CVAR_ARCHIVE;
+			}
+			Cvar_Apply( curvar, qfalse );
 		}
 		
 		curvar = curvar->next;
@@ -1933,6 +2071,8 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("unset", Cvar_Unset_f);
 	Cmd_SetCommandCompletionFunc("unset", Cvar_CompleteCvarName);
 
+	Cmd_AddCommand ("cvar_why", Cvar_Why_f);
+	Cmd_SetCommandCompletionFunc( "cvar_why", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("cvarlist", Cvar_List_f);
 	Cmd_AddCommand ("cvar_modified", Cvar_ListModified_f);
 	Cmd_AddCommand ("cvar_restart", Cvar_Restart_f);

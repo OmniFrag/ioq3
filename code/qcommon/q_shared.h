@@ -991,6 +991,7 @@ struct cvar_s {
 	// choice without the command line's: what's saved, if archived
 	char		*serverString;
 	char		*userString;
+	int		userSource;	// whose userString is, a cvarSource_t (qcommon.h)
 	char		*savedString;
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 };
