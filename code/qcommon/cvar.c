@@ -37,6 +37,12 @@ static	cvar_t	*hashTable[FILE_HASH_SIZE];
 
 static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetProfile)
 
+static int Cvar_FindDeclaration( const char *var_name );
+static void Cvar_MarkSaved( const cvar_t *var );
+static const cvarDeclaration_t	*cvar_declared;	// each cvar's scope (Cvar_SetDeclarations)
+static int			cvar_numDeclared;
+int				cvar_modifiedScopes;
+
 /*
 ================
 return a hash value for the filename
@@ -497,6 +503,10 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	
 	if(var)
 	{
+		// the file its saved value is in, before this registration changes
+		// its flags
+		int	savedScopes = ( var->flags & CVAR_ARCHIVE ) ? CVAR_SCOPE_BIT( Cvar_Scope( var ) ) : 0;
+
 		var_value = Cvar_Validate(var, var_value, qfalse);
 
 		// a protected or private cvar that game code, a server or restricted
@@ -578,9 +588,16 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		// latched value takes effect now
 		Cvar_Apply( var, qtrue );
 
-		// ZOID--needs to be set so that cvars the game sets as 
-		// SERVERINFO get sent to clients
-		cvar_modifiedFlags |= flags;
+		// ZOID--needs to be set so that cvars the game sets as
+		// SERVERINFO get sent to clients; what's saved hasn't changed,
+		// unless registering archives a saved value (a set before the code
+		// registered it) or moves it to another scope's file
+		cvar_modifiedFlags |= flags & ~CVAR_ARCHIVE;
+		if ( var->savedString && ( var->flags & CVAR_ARCHIVE ) &&
+			CVAR_SCOPE_BIT( Cvar_Scope( var ) ) != savedScopes ) {
+			cvar_modifiedScopes |= savedScopes;
+			Cvar_MarkSaved( var );
+		}
 
 		return var;
 	}
@@ -618,6 +635,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->savedString = NULL;
 	var->userSource = CVAR_SOURCE_DEFAULT;
+	var->declaredScope = Cvar_FindDeclaration( var_name );
 	var->serverStale = qfalse;
 	var->validate = qfalse;
 	var->description = NULL;
@@ -633,8 +651,9 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	cvar_vars = var;
 
 	var->flags = flags;
-	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
-	cvar_modifiedFlags |= var->flags;
+	// note what types of cvars have been modified (userinfo, serverinfo,
+	// systeminfo); nothing of it is saved yet
+	cvar_modifiedFlags |= var->flags & ~CVAR_ARCHIVE;
 
 	hash = generateHashValue(var_name);
 	var->hashIndex = hash;
@@ -670,6 +689,7 @@ static const char * const cvar_sourceNames[] = {
 	[CVAR_SOURCE_GAME] = "game code's",
 	[CVAR_SOURCE_PLAYER] = "yours",
 	[CVAR_SOURCE_MENU] = "the menus'",
+	[CVAR_SOURCE_SCRIPT] = "a script's",
 	[CVAR_SOURCE_SESSION] = "the command line's",
 	[CVAR_SOURCE_SERVER] = "the server's"
 };
@@ -820,7 +840,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	}
 	// a read only cvar's value is state, never saved, and can be large (a
 	// server's pak lists)
-	saves = source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
+	saves = source != CVAR_SOURCE_SCRIPT && source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
 		!( var->flags & CVAR_ROM ) && !Cvar_SameString( var->savedString, value );
 	if ( source == CVAR_SOURCE_SERVER ) {
 		var->serverStale = qfalse;
@@ -848,7 +868,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	}
 	if ( saves ) {
 		Cvar_SetLayer( &var->savedString, value );
-		cvar_modifiedFlags |= var->flags & CVAR_ARCHIVE;
+		Cvar_MarkSaved( var );
 	}
 	return Cvar_Apply( var, force );
 }
@@ -945,6 +965,69 @@ void Cvar_EndServerValues( void ) {
 			Cvar_Apply( var, qfalse );
 		}
 		var->serverStale = qfalse;
+	}
+}
+
+/*
+============
+Cvar_SetDeclarations
+============
+*/
+void Cvar_SetDeclarations( const cvarDeclaration_t *declarations ) {
+	cvar_declared = declarations;
+	for ( cvar_numDeclared = 0; declarations && declarations[cvar_numDeclared].name; cvar_numDeclared++ ) {
+	}
+}
+
+/*
+============
+Cvar_FindDeclaration
+
+A cvar's declared scope, or -1 if it has no declaration
+============
+*/
+static int Cvar_FindDeclaration( const char *var_name ) {
+	int	low = 0, high = cvar_numDeclared - 1;
+
+	while ( low <= high ) {
+		int mid = ( low + high ) / 2;
+		int order = Q_stricmp( var_name, cvar_declared[mid].name );
+
+		if ( !order ) {
+			return cvar_declared[mid].scope;
+		}
+		if ( order < 0 ) {
+			high = mid - 1;
+		} else {
+			low = mid + 1;
+		}
+	}
+	return -1;
+}
+
+/*
+============
+Cvar_Scope
+============
+*/
+cvarScope_t Cvar_Scope( const cvar_t *var ) {
+	if ( var->declaredScope >= 0 ) {
+		return var->declaredScope;
+	}
+	return ( var->flags & ( CVAR_VM_CREATED | CVAR_USER_CREATED ) ) ? CVAR_SCOPE_PLAYER_MOD : CVAR_SCOPE_DEVICE;
+}
+
+/*
+============
+Cvar_MarkSaved
+
+What a cvar saves changed: its scope's file is to be written
+============
+*/
+static void Cvar_MarkSaved( const cvar_t *var ) {
+	if ( var->flags & CVAR_ARCHIVE ) {
+		cvar_modifiedFlags |= CVAR_ARCHIVE;
+		cvar_modifiedScopes |= CVAR_SCOPE_BIT( Cvar_Scope( var ) );
 	}
 }
 
@@ -1119,7 +1202,9 @@ latched set leaves the old value, and its mark, in place
 */
 static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 {
-	cvar_t	*var = Cvar_SetFrom( var_name, value,
+	// a startup script's sets aren't saved, its game content's too
+	// (default.cfg from a pak), which runs restricted
+	cvar_t	*var = Cvar_SetFrom( var_name, value, Cmd_IsScript() ? CVAR_SOURCE_SCRIPT :
 		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
 
 	if ( var ) {
@@ -1358,7 +1443,7 @@ void Cvar_Set_f( void ) {
 		case 'a':
 			if( !( v->flags & CVAR_ARCHIVE ) ) {
 				v->flags |= CVAR_ARCHIVE;
-				cvar_modifiedFlags |= CVAR_ARCHIVE;
+				Cvar_MarkSaved( v );
 			}
 			break;
 		case 'u':
@@ -1401,7 +1486,7 @@ saved value (cvar_t) isn't its default. One no code has registered has no
 default yet, and is written as it is
 ============
 */
-void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
+void Cvar_WriteVariables( fileHandle_t f, int hideFlags, int scopes )
 {
 	cvar_t	*var;
 	char	buffer[1024];
@@ -1414,12 +1499,11 @@ void Cvar_WriteVariables( fileHandle_t f, int hideFlags )
 			continue;
 		if ( var->flags & hideFlags )
 			continue;
-
 		if( var->flags & CVAR_ARCHIVE ) {
 			// the player's choice, even if it hasn't taken effect yet
 			// (latched, or under a server's)
 			value = Cvar_SavedValue( var );
-			if ( !value ) {
+			if ( !value || !( scopes & CVAR_SCOPE_BIT( Cvar_Scope( var ) ) ) ) {
 				continue;
 			}
 			// a quote or a line break would end the value early, and the
@@ -1625,6 +1709,9 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 
 	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
 	cvar_modifiedFlags |= cv->flags;
+	if ( cv->savedString ) {
+		Cvar_MarkSaved( cv );
+	}
 
 	if(cv->name)
 		Z_Free(cv->name);
@@ -1732,7 +1819,7 @@ static void Cvar_RestartKeeping(qboolean unsetVM, int keepFlags)
 			Cvar_SetLayer( &curvar->userString, NULL );
 			if ( curvar->savedString ) {
 				Cvar_SetLayer( &curvar->savedString, NULL );
-				cvar_modifiedFlags |= curvar->flags & CVAR_ARCHIVE;
+				Cvar_MarkSaved( curvar );
 			}
 			Cvar_Apply( curvar, qfalse );
 		}

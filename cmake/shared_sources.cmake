@@ -3,6 +3,12 @@ include_guard(GLOBAL)
 include(utils/add_git_dependency)
 include(utils/disable_warnings)
 
+# the game's cvar declarations (qcommon.h's cvar_declarations): an empty
+# table unless the game gives its own
+if(NOT CVAR_DECLARATIONS_SOURCE)
+    set(CVAR_DECLARATIONS_SOURCE ${SOURCE_DIR}/qcommon/cvar_declarations.c)
+endif()
+
 set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cm_load.c
     ${SOURCE_DIR}/qcommon/cm_patch.c
@@ -12,6 +18,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cmd.c
     ${SOURCE_DIR}/qcommon/common.c
     ${SOURCE_DIR}/qcommon/cvar.c
+    ${CVAR_DECLARATIONS_SOURCE}
     ${SOURCE_DIR}/qcommon/files.c
     ${SOURCE_DIR}/qcommon/md4.c
     ${SOURCE_DIR}/qcommon/md5.c

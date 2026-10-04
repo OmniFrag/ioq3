@@ -930,8 +930,10 @@ void Key_SetBinding( int keynum, const char *binding ) {
 	keys[keynum].restricted = qfalse;
 
 	// consider this like modifying an archived cvar, so the
-	// file write will be triggered at the next opportunity
+	// file write will be triggered at the next opportunity; binds are the
+	// player's (settings/player.cfg)
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
+	cvar_modifiedScopes |= CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER );
 }
 
 
