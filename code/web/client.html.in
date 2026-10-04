@@ -79,10 +79,8 @@ const com_basegame = urlParams.get('com_basegame') || BASEGAME;
 const fs_basegame = urlParams.get('fs_basegame') || '';
 const fs_game = urlParams.get('fs_game') || '';
 // Set for this visit only. The web's defaults, and a touch device's, are the
-// engine's; r_mode -2, the canvas's size, stays here while a resized canvas
-// is kept as the player's r_mode -1
+// engine's; the canvas has its CSS box's size, and r_mode isn't used
 let generatedArguments = `
-    +set r_mode -2
     +set com_basegame "${com_basegame}"
 `;
 if (fs_basegame) generatedArguments += ` +set fs_basegame "${fs_basegame}" `;
