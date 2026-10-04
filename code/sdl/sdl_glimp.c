@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <stdlib.h>
 #include <math.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#endif
+
 #include "../renderercommon/tr_common.h"
 #include "../sys/sys_local.h"
 #include "sdl_icon.h"
@@ -57,6 +61,9 @@ cvar_t *r_modeFullscreen;
 
 // a new r_mode for the window, which waits while it's fullscreen
 static qboolean windowSizePending;
+
+// the size the renderer last gave the window, in the window's coordinates
+static int givenWidth, givenHeight;
 
 // the last frame's fence, which GLimp_EndFrame waits on after the next swap
 static GLsync frameFence;
@@ -481,6 +488,33 @@ static void GLimp_WindowedSize( SDL_DisplayID display, int *width, int *height )
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+===============
+GLimp_CanvasSize
+
+The page sizes the canvas, so a window has the canvas's CSS box, whatever
+its mode: one made at another size, which SDL3 keeps as its windowed size,
+comes back whenever SDL leaves fullscreen, and draws squeezed into the box.
+qfalse while the canvas has no box.
+===============
+*/
+static qboolean GLimp_CanvasSize( int *width, int *height )
+{
+	double cssWidth, cssHeight;
+
+	if( emscripten_get_element_css_size( "#canvas", &cssWidth, &cssHeight ) != EMSCRIPTEN_RESULT_SUCCESS ||
+		cssWidth < 1.0 || cssHeight < 1.0 )
+	{
+		return qfalse;
+	}
+
+	*width = (int)cssWidth;
+	*height = (int)cssHeight;
+	return qtrue;
+}
+#endif
+
 /*
 ===============
 GLimp_FitWindow
@@ -514,6 +548,8 @@ static void GLimp_FitWindow( void )
 	}
 
 	GLimp_WindowedSize( display, &width, &height );
+	givenWidth = width;
+	givenHeight = height;
 	SDL_SetWindowSize( SDL_window, width, height );
 	SDL_SetWindowPosition( SDL_window, SDL_WINDOWPOS_CENTERED_DISPLAY( display ),
 		SDL_WINDOWPOS_CENTERED_DISPLAY( display ) );
@@ -662,7 +698,8 @@ GLimp_ModeSize
 
 A window's size for an r_mode, in the window's coordinates, which on macOS
 and Wayland are points, and in pixels. -2 is the desktop's size, of which
-a native window gets three quarters
+a native window gets three quarters. On the web every mode is the
+canvas's size.
 ===============
 */
 static qboolean GLimp_ModeSize( SDL_DisplayID display, int mode, float density,
@@ -670,6 +707,17 @@ static qboolean GLimp_ModeSize( SDL_DisplayID display, int mode, float density,
 {
 	const SDL_DisplayMode *desktopMode = SDL_GetDesktopDisplayMode( display );
 	float aspect;
+
+#ifdef __EMSCRIPTEN__
+	// the screen's size only while the canvas has none
+	if( GLimp_CanvasSize( windowWidth, windowHeight ) )
+	{
+		*pixelWidth = SDL_lroundf( *windowWidth * density );
+		*pixelHeight = SDL_lroundf( *windowHeight * density );
+		return qtrue;
+	}
+	mode = -2;
+#endif
 
 	if( mode == -2 && desktopMode )
 	{
@@ -737,6 +785,8 @@ static void GLimp_ResizeWindow( void )
 		ri.Printf( PRINT_ALL, "Invalid mode %d\n", r_mode->integer );
 		return;
 	}
+	givenWidth = width;
+	givenHeight = height;
 
 	// already that size, as when IN_SaveWindowSize keeps a resize. Ask the
 	// window: glConfig follows it only once its resize event arrives, so
@@ -1203,6 +1253,10 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	SDL_ShowWindow( SDL_window );
 
+	// the size it keeps for a window, also when made fullscreen
+	givenWidth = windowWidth;
+	givenHeight = windowHeight;
+
 	// fullscreen takes effect once the window is shown
 	SDL_SyncWindow( SDL_window );
 	GLimp_UpdateWindowSize( );
@@ -1578,6 +1632,22 @@ qboolean GLimp_UpdateWindowSize( void )
 	glConfig.vidHeight = height;
 	glConfig.windowAspect = (float)width / (float)height;
 	return qtrue;
+}
+
+/*
+===============
+GLimp_WindowSizeIsOwn
+
+Whether the window has the size the renderer last gave it: r_mode's, or
+fitted to the desktop. Any other is the player's, or the system's.
+===============
+*/
+qboolean GLimp_WindowSizeIsOwn( void )
+{
+	int width, height;
+
+	return SDL_window && SDL_GetWindowSize( SDL_window, &width, &height ) &&
+		width == givenWidth && height == givenHeight;
 }
 
 /*

@@ -113,6 +113,11 @@ typedef struct {
 	// can't change in place, and must be made again. Not on the web.
 	qboolean (*SetFullscreen)( qboolean fullscreen );
 
+	// Whether the window has the size the renderer last gave it (r_mode's,
+	// or fitted to the desktop), so that the client saves only the
+	// player's resizes
+	qboolean (*WindowSizeIsOwn)( void );
+
 	// Whether the GPU is ready for a new frame, without waiting: where the
 	// renderer can't wait for it after the swap (WebGL), the client skips
 	// a frame instead while the last is still being drawn. May be NULL.
