@@ -21,7 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // cvar_declarations.c -- the game's cvar declarations, where it has none:
 // an undeclared cvar is saved by who made it (Cvar_Scope). A game gives
-// its own table through CVAR_DECLARATIONS_SOURCE
+// its own tables through CVAR_DECLARATIONS_SOURCE
 
 #include "q_shared.h"
 #include "qcommon.h"
@@ -29,3 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 const cvarDeclaration_t cvar_declarations[] = {
 	{ NULL, CVAR_SCOPE_NONE }
 };
+
+// and no other program's defaults, so an imported config's values are all
+// taken as chosen
+const cvarDefault_t cvar_q3Defaults[] = { { NULL, NULL } };
+const cvarDefault_t cvar_ioq3Defaults[] = { { NULL, NULL } };
