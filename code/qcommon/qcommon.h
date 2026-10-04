@@ -639,15 +639,20 @@ cvar_t	*Cvar_Set2(const char *var_name, const char *value, qboolean force);
 // same as Cvar_Set, but allows more control over setting of cvar
 
 typedef enum {
-	CVAR_SOURCE_PLAYER,	// the console, menus, configs, game code: saved if archived
+	CVAR_SOURCE_DEFAULT,	// no one's: the default (Cvar_Source)
+	CVAR_SOURCE_ENGINE,	// engine code (Cvar_Set): saved if archived
+	CVAR_SOURCE_GAME,	// game code, and a server running here (Cvar_SetFromVM, Cvar_SetSafe, restricted text): saved if archived
+	CVAR_SOURCE_PLAYER,	// the console and configs: saved if archived
+	CVAR_SOURCE_MENU,	// the menus, the ui module's sets: the player's choice, saved if archived
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
 	CVAR_SOURCE_SERVER	// a server's requirement, until Cvar_EndServerValues drops it
 } cvarSource_t;
 
 cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
-// a set, in the layer its source gives (cvar_t's serverString and the rest);
-// Cvar_Set2 is the player's. A server may not set protected or private cvars
-// (as Cvar_SetSafe)
+// a set, in the layer its source gives (cvar_t's serverString and the rest).
+// A server may not set protected or private cvars (as Cvar_SetSafe)
+cvarSource_t Cvar_Source( const cvar_t *var );
+// whose value a cvar has
 
 void	Cvar_BeginServerValues( void );
 void	Cvar_EndServerValues( void );
@@ -674,8 +679,8 @@ qboolean Cvar_RunsRestricted( const char *var_name );
 qboolean Cvar_AllowedFromText( const char *var_name );
 // false, with a message, if the running command is restricted and the
 // cvar private or protected
-void	Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed );
-void	Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed );
+void	Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed, cvarSource_t source );
+void	Cvar_SetValueFromVM( const char *var_name, float value, const char * const *allowed, cvarSource_t source );
 // a game module's set: as Cvar_SetSafe, and an engine cvar that is read
 // only, set at startup or cheat protected keeps its value, unless its
 // name is in allowed

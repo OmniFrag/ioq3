@@ -829,9 +829,10 @@ static const char * const cl_uiSyscallNames[] = {
 };
 
 // the engine's read-only and startup cvars q3_ui sets: it clears the
-// error message (ui_menu.c), pauses (ui_atoms.c) and switches mods
-// (ui_mods.c, ui_menu.c)
-static const char * const uiSetCvars[] = { "com_errorMessage", "cl_paused", "fs_game", NULL };
+// error message (ui_menu.c), pauses (ui_atoms.c), switches mods
+// (ui_mods.c, ui_menu.c) and stops the server here (ui_menu.c, and Team
+// Arena's ui_main.c)
+static const char * const uiSetCvars[] = { "com_errorMessage", "cl_paused", "fs_game", "sv_killserver", NULL };
 
 /*
 ====================
@@ -863,7 +864,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case UI_CVAR_SET:
 		// no value resets the cvar
-		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), uiSetCvars );
+		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), uiSetCvars, CVAR_SOURCE_MENU );
 		return 0;
 
 	case UI_CVAR_VARIABLEVALUE:
@@ -874,7 +875,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case UI_CVAR_SETVALUE:
-		Cvar_SetValueFromVM( VMA_STR( 1 ), VMF(2), uiSetCvars );
+		Cvar_SetValueFromVM( VMA_STR( 1 ), VMF(2), uiSetCvars, CVAR_SOURCE_MENU );
 		return 0;
 
 	case UI_CVAR_RESET:

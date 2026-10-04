@@ -548,7 +548,7 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return 0;
 	case CG_CVAR_SET:
 		// a NULL value resets the cvar
-		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), NULL );
+		Cvar_SetFromVM( VMA_STR( 1 ), VMA_STR_OPT( 2 ), NULL, CVAR_SOURCE_GAME );
 		return 0;
 	case CG_CVAR_VARIABLESTRINGBUFFER:
 		Cvar_VariableStringBufferSafe( VMA_STR( 1 ), VMA_STRBUF( 2, args[3] ), args[3] );
