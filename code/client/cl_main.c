@@ -1464,6 +1464,10 @@ void CL_Disconnect( qboolean showMainMenu ) {
 
 	clc.state = CA_DISCONNECTED;
 
+	// what the server required goes, and the player's own values come back
+	Cvar_BeginServerValues();
+	Cvar_EndServerValues();
+
 	// allow cheats locally
 	Cvar_Set( "sv_cheats", "1" );
 

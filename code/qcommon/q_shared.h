@@ -946,8 +946,8 @@ default values.
 #define CVAR_SERVER_CREATED	0x0800	// cvar was created by a server the client connected to.
 #define CVAR_VM_CREATED		0x1000	// cvar was created exclusively in one of the VMs.
 #define CVAR_PROTECTED		0x2000	// prevent modifying this var from VMs or the server
-#define CVAR_NODEFAULT		0x4000	// not written to the config while it holds its
-					// default, so a later default reaches it
+#define CVAR_NODEFAULT		0x4000	// kept for Quake3e's name: no archived cvar is
+					// written while it holds its default now
 #define CVAR_ARCHIVE_ND		(CVAR_ARCHIVE | CVAR_NODEFAULT)	// Quake3e's name and value
 #define CVAR_PRIVATE		0x8000	// game code can't read or change it (a path, a
 					// password); Quake3e's name and value
@@ -982,6 +982,17 @@ struct cvar_s {
 
 	qboolean	untrusted;	// game code or a server created it, or they or restricted text set it
 						// last: see Cvar_RunsRestricted
+
+	// Where string comes from (Cvar_Resolve), highest first, each NULL if
+	// unset: what the server we're connected to requires; the player's own
+	// value, the latest of what they, their configs, game code or the
+	// command line set; and below them resetString, the default (this
+	// platform's, where its profile has one). savedString is the player's
+	// choice without the command line's: what's saved, if archived
+	char		*serverString;
+	char		*userString;
+	char		*savedString;
+	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 };
 
 #define	MAX_CVAR_VALUE_STRING	256
