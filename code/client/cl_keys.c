@@ -930,10 +930,8 @@ void Key_SetBinding( int keynum, const char *binding ) {
 	keys[keynum].restricted = qfalse;
 
 	// consider this like modifying an archived cvar, so the
-	// file write will be triggered at the next opportunity; binds are the
-	// player's (settings/player.cfg)
+	// file write will be triggered at the next opportunity
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
-	cvar_modifiedScopes |= CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER );
 }
 
 
@@ -1084,10 +1082,10 @@ Key_WriteBindings
 Writes lines containing "bind key value"
 ============
 */
-void Key_WriteBindings( fileHandle_t f ) {
+void Key_WriteBindings( configText_t *config ) {
 	int		i;
 
-	FS_Printf (f, "unbindall\n" );
+	Com_ConfigAppend( config, "unbindall\n" );
 
 	for (i=0 ; i<MAX_KEYS ; i++) {
 		if (keys[i].binding && keys[i].binding[0] ) {
@@ -1099,7 +1097,7 @@ void Key_WriteBindings( fileHandle_t f ) {
 					"or a line break, not written to file\n", Key_KeynumToString(i) );
 				continue;
 			}
-			FS_Printf (f, "bind %s \"%s\"\n", Key_KeynumToString(i), keys[i].binding);
+			Com_ConfigAppend( config, va( "bind %s \"%s\"\n", Key_KeynumToString(i), keys[i].binding ) );
 
 		}
 
