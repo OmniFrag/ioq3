@@ -711,10 +711,6 @@ cvarScope_t Cvar_Scope( const cvar_t *var );
 // mod or the player made, the player's for the mod running; one the engine
 // made that isn't declared, the device's, which doesn't travel
 
-extern	int			cvar_modifiedScopes;
-// the scopes whose saved values changed (CVAR_SCOPE_BIT), so their files
-// are written
-
 void	Cvar_SetProfile( const cvarDefault_t *defaults );
 // this platform's defaults where they differ from the engine's, ending with a
 // NULL name, for the cvars registered after
@@ -771,11 +767,23 @@ qboolean Cvar_Command( void );
 // command.  Returns true if the command was a variable reference that
 // was handled. (print or change)
 
-void 	Cvar_WriteVariables( fileHandle_t f, int hideFlags, int scopes );
-// writes the archived cvars of the scopes asked for (CVAR_SCOPE_BIT), or of
-// all with -1, but those with any of hideFlags
-// writes lines containing "set variable value" for all variables
-// with the archive flag set to true, but those with any of hideFlags
+// a config's text, built in memory, so a file is written only when what it
+// would hold changed
+typedef struct {
+	char	*text;	// Z_Malloc'd; NULL until something is appended
+	int	length;
+	int	size;
+} configText_t;
+
+void Com_ConfigAppend( configText_t *config, const char *text );
+
+// every scope that's saved: all but none's
+#define CVAR_SCOPES_SAVED	( ~CVAR_SCOPE_BIT( CVAR_SCOPE_NONE ) )
+
+void 	Cvar_WriteVariables( configText_t *config, int hideFlags, int scopes );
+// appends a "seta" line for each archived cvar of the scopes asked for
+// (CVAR_SCOPE_BIT) whose saved value isn't its default, sorted by name, but
+// those with any of hideFlags
 
 void	Cvar_Init( void );
 
@@ -790,7 +798,6 @@ void	Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize );
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
 void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
-void Cvar_ForgetOldDefault( const char *var_name, const char *old_default );
 
 void	Cvar_Restart(qboolean unsetVM);
 void	Cvar_Restart_f( void );
@@ -832,7 +839,7 @@ issues.
 #endif
 
 // which of the engine's changed defaults a config was written after
-// (Com_WriteConfigToFile)
+// (Com_WriteConfigLines)
 #define COM_CONFIG_VERSION	"1"
 
 // a config's first line, the engine's own (settings/'s files among them),
@@ -1293,7 +1300,7 @@ void CL_Snd_Shutdown(void);
 void Key_KeynameCompletion( void(*callback)(const char *s) );
 // for keyname autocompletion
 
-void Key_WriteBindings( fileHandle_t f );
+void Key_WriteBindings( configText_t *config );
 // for writing the config files
 
 void S_ClearSoundBuffer( void );

@@ -4451,15 +4451,8 @@ void FS_Restart( int checksumFeed ) {
 		Sys_RemovePIDFile( lastGameDir );
 		Sys_InitPIDFile( FS_GetCurrentGameDir() );
 
-		// skip the q3config.cfg if "safe" is on the command line; a client
-		// reads its settings again as the game directory changes
-		// (Com_GameRestart)
-		if ( !Com_SafeMode() && !Com_IsClient() ) {
-			// the player's config, in the player's buffer with full rights
-			// even when restricted text (a ui's mods menu running
-			// vid_restart) or a startup script caused the restart
-			Cbuf_ExecuteText( EXEC_APPEND, "exec " Q3CONFIG_CFG "\n" );
-		}
+		// the settings are read again as the game directory changes
+		// (Com_GameRestart's Com_ExecuteCfg)
 	}
 
 	Q_strncpyz(lastValidBase, fs_basepath->string, sizeof(lastValidBase));

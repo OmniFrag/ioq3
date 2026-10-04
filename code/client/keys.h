@@ -48,7 +48,7 @@ extern	int				anykeydown;
 extern	qboolean	chat_team;
 extern	int			chat_playerNum;
 
-void Key_WriteBindings( fileHandle_t f );
+void Key_WriteBindings( configText_t *config );
 void Key_SetBinding( int keynum, const char *binding );
 char *Key_GetBinding( int keynum );
 qboolean Key_IsDown( int keynum );
