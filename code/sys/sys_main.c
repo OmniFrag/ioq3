@@ -56,12 +56,33 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #ifndef APP_ID // the build sets it (cmake/identity.cmake)
 #define APP_ID "org.ioquake3.ioquake3"
 #endif
 
 static char binaryPath[ MAX_OSPATH ] = { 0 };
 static char installPath[ MAX_OSPATH ] = { 0 };
+
+/*
+=================
+Sys_TouchDevice
+
+Whether the main pointer is a finger, as on a phone or tablet: only a
+browser tells it apart
+=================
+*/
+qboolean Sys_TouchDevice( void )
+{
+#ifdef __EMSCRIPTEN__
+	return MAIN_THREAD_EM_ASM_INT( { return matchMedia( '(pointer: coarse)' ).matches; } ) != 0;
+#else
+	return qfalse;
+#endif
+}
 
 /*
 =================

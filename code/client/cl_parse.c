@@ -370,6 +370,10 @@ void CL_SystemInfoChanged( void ) {
 		return;
 	}
 
+	// what the server requires; our own server's values are ours already,
+	// and go in as they are, as stock
+	Cvar_BeginServerValues();
+
 	s = Info_ValueForKey( systemInfo, "sv_cheats" );
 	cl_connectedToCheatServer = atoi( s );
 	if ( !cl_connectedToCheatServer ) {
@@ -425,9 +429,18 @@ void CL_SystemInfoChanged( void ) {
 				}
 			}
 
-			Cvar_SetSafe(key, value);
+			// fs_game has a restore of its own (CL_OldGame), with its
+			// filesystem restart. Our own server is the one on loopback:
+			// connecting elsewhere leaves a local server running
+			if ( ( com_sv_running->integer && clc.serverAddress.type == NA_LOOPBACK ) ||
+				!Q_stricmp( key, "fs_game" ) )
+				Cvar_SetSafe( key, value );
+			else
+				Cvar_SetFrom( key, value, CVAR_SOURCE_SERVER, qtrue );
 		}
 	}
+
+	Cvar_EndServerValues();
 	// if game folder should not be set and it is set at the client side
 	if ( !gameSet && *Cvar_VariableString("fs_game") ) {
 		Cvar_Set( "fs_game", "" );

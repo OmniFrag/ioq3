@@ -638,6 +638,32 @@ void 	Cvar_Set( const char *var_name, const char *value );
 cvar_t	*Cvar_Set2(const char *var_name, const char *value, qboolean force);
 // same as Cvar_Set, but allows more control over setting of cvar
 
+typedef enum {
+	CVAR_SOURCE_PLAYER,	// the console, menus, configs, game code: saved if archived
+	CVAR_SOURCE_SESSION,	// the command line: for this run only
+	CVAR_SOURCE_SERVER	// a server's requirement, until Cvar_EndServerValues drops it
+} cvarSource_t;
+
+cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
+// a set, in the layer its source gives (cvar_t's serverString and the rest);
+// Cvar_Set2 is the player's. A server may not set protected or private cvars
+// (as Cvar_SetSafe)
+
+void	Cvar_BeginServerValues( void );
+void	Cvar_EndServerValues( void );
+// around a server's systeminfo: what it no longer requires is dropped at the
+// end, and the player's own value comes back; with nothing between them, on
+// leaving the server
+
+typedef struct {
+	const char	*name;
+	const char	*value;
+} cvarDefault_t;
+
+void	Cvar_SetProfile( const cvarDefault_t *defaults );
+// this platform's defaults where they differ from the engine's, ending with a
+// NULL name, for the cvars registered after
+
 void	Cvar_SetSafe( const char *var_name, const char *value );
 // sometimes we set variables from an untrusted source: fail if flags &
 // CVAR_PROTECTED, or CVAR_PRIVATE (but for password)
@@ -747,6 +773,10 @@ issues.
 #else
 #	define Q3CONFIG_CFG CONFIG_PREFIX ".cfg"
 #endif
+
+// which of the engine's changed defaults a config was written after
+// (Com_WriteConfigToFile)
+#define COM_CONFIG_VERSION	"1"
 
 qboolean FS_Initialized( void );
 
@@ -1245,6 +1275,8 @@ NON-PORTABLE SYSTEM SERVICES
 #define MAX_JOYSTICK_AXIS 16
 
 void	Sys_Init (void);
+qboolean Sys_TouchDevice( void );
+// whether the main pointer is a finger, as on a phone or tablet
 
 // general development dll loading for virtual machine testing
 void	* QDECL Sys_LoadGameDll( const char *name, vmMainProc *entryPoint,

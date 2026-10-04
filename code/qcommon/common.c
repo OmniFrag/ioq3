@@ -507,10 +507,7 @@ void Com_StartupVariable( const char *match ) {
 		
 		if(!match || !strcmp(s, match))
 		{
-			if(Cvar_Flags(s) == CVAR_NONEXISTENT)
-				Cvar_Get(s, Cmd_ArgsFrom(2), CVAR_USER_CREATED);
-			else
-				Cvar_Set2(s, Cmd_ArgsFrom(2), qfalse);
+			Cvar_SetFrom(s, Cmd_ArgsFrom(2), CVAR_SOURCE_SESSION, qfalse);
 		}
 	}
 }
@@ -2763,6 +2760,16 @@ static void Com_InitRand(void)
 		srand(time(NULL));
 }
 
+// A touch device's defaults where they differ from the engine's
+// (Cvar_SetProfile): half-size textures without filtering at an angle,
+// until a phone profile is measured, as full-size textures take four times
+// the memory
+static const cvarDefault_t com_touchProfile[] = {
+	{ "r_picmip", "1" },
+	{ "r_ext_texture_filter_anisotropic", "0" },
+	{ NULL, NULL }
+};
+
 /*
 =================
 Com_Init
@@ -2789,6 +2796,10 @@ void Com_Init( char *commandLine ) {
 
 	Com_InitSmallZoneMemory();
 	Cvar_Init ();
+	// before any cvar is set or registered
+	if ( Sys_TouchDevice() ) {
+		Cvar_SetProfile( com_touchProfile );
+	}
 
 	// prepare enough of the subsystems to handle
 	// cvar and command buffer management
@@ -2864,10 +2875,10 @@ void Com_Init( char *commandLine ) {
 		Cvar_ForgetOldDefault( "r_dlightMode", "0" );
 		Cvar_ForgetOldDefault( "con_scale", "1" );
 	}
-	// always written, so the next start knows the config is this new
-	Cvar_SetDescription( Cvar_Get( "com_configVersion", "1", CVAR_ARCHIVE | CVAR_PROTECTED ),
+	// the config states it (Com_WriteConfigToFile), so the next start knows
+	// the config is this new
+	Cvar_SetDescription( Cvar_Get( "com_configVersion", COM_CONFIG_VERSION, CVAR_ARCHIVE | CVAR_PROTECTED ),
 		"Which of the engine's changed defaults the config was written after; set by the engine" );
-	Cvar_Set( "com_configVersion", "1" );
 
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
@@ -3100,6 +3111,9 @@ void Com_WriteConfigToFile( const char *filename ) {
 	Key_WriteBindings (f);
 	// private cvars, such as passwords, go only in the engine's own config
 	Cvar_WriteVariables( f, Q_stricmp( FS_SkipPathPrefix( filename ), Q3CONFIG_CFG ) ? CVAR_PRIVATE : 0 );
+	// which of the engine's changed defaults it was written after, which as
+	// the default isn't among the cvars written
+	FS_Printf( f, "seta com_configVersion \"" COM_CONFIG_VERSION "\"\n" );
 	FS_FCloseFile( f );
 
 #ifdef __EMSCRIPTEN__
