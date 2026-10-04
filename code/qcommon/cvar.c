@@ -37,7 +37,6 @@ static	cvar_t	*hashTable[FILE_HASH_SIZE];
 
 static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetProfile)
 
-static int Cvar_FindDeclaration( const char *var_name );
 static void Cvar_MarkSaved( const cvar_t *var );
 static const cvarDeclaration_t	*cvar_declared;	// each cvar's scope (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
@@ -635,7 +634,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->savedString = NULL;
 	var->userSource = CVAR_SOURCE_DEFAULT;
-	var->declaredScope = Cvar_FindDeclaration( var_name );
+	var->declaredScope = Cvar_DeclaredScope( var_name );
 	var->serverStale = qfalse;
 	var->validate = qfalse;
 	var->description = NULL;
@@ -981,12 +980,10 @@ void Cvar_SetDeclarations( const cvarDeclaration_t *declarations ) {
 
 /*
 ============
-Cvar_FindDeclaration
-
-A cvar's declared scope, or -1 if it has no declaration
+Cvar_DeclaredScope
 ============
 */
-static int Cvar_FindDeclaration( const char *var_name ) {
+int Cvar_DeclaredScope( const char *var_name ) {
 	int	low = 0, high = cvar_numDeclared - 1;
 
 	while ( low <= high ) {
