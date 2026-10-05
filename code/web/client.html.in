@@ -243,6 +243,8 @@ const present = ({ fullscreen, pointer }) => {
 const sound = (() => {
     const buffers = [], strips = [], streams = [];
     let context = null, master = null, merger = null;
+    // held while hidden, until the engine has heard so
+    let held = false;
     const STATES = ['suspended', 'running', 'closed', 'interrupted'];
     function ended() {
         this.disconnect();
@@ -283,6 +285,8 @@ const sound = (() => {
     const begin = (event) => {
         // with no userActivation, any trusted input is let try
         if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
+        // a hidden page's sound is held, whatever reaches it
+        if (document.hidden) return;
         if (!context) {
             try {
                 context = new AudioContext({ latencyHint: 0 });
@@ -303,8 +307,17 @@ const sound = (() => {
     // engine sees it stop and start, and plays what the game's time has.
     document.addEventListener('visibilitychange', () => {
         if (!context) return;
-        if (document.hidden) context.suspend().catch(() => {});
-        else if (context.state !== 'running') context.resume().catch(() => {});
+        if (document.hidden) {
+            // no frame runs to tell the engine, so the sound stops here,
+            // and the next update says it was held: the engine then starts
+            // what the game's time has, not what the paused nodes had
+            held = true;
+            strips.forEach(stopStrip);
+            streams.forEach((_, i) => stopStream(i));
+            context.suspend().catch(() => {});
+        } else if (context.state !== 'running') {
+            context.resume().catch(() => {});
+        }
     });
     return {
         state: () => context ? STATES.indexOf(context.state) + 1 : 0,
@@ -353,6 +366,10 @@ const sound = (() => {
                 case 3: if (strips[s]?.source) strips[s].source.playbackRate.value = commands[k + 2]; break;
                 case 4: master.gain.value = commands[k + 2]; break;
                 }
+            }
+            if (held) {
+                held = false;
+                return false;
             }
             return context.state === 'running';
         },
