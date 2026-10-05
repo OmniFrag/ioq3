@@ -1254,12 +1254,27 @@ const void	*RB_DrawBuffer( const void *data ) {
 
 	qglDrawBuffer( cmd->buffer );
 
-	// clear screen for debugging
-	if ( r_clear->integer ) {
-		if (glRefConfig.framebufferObject && tr.renderFbo) {
-			FBO_Bind(tr.renderFbo);
-		}
+	if (glRefConfig.framebufferObject && tr.renderFbo)
+	{
+#ifdef __EMSCRIPTEN__
+		// a WebGL canvas that doesn't preserve its drawing buffer is
+		// cleared by the browser before the frame's first draw, whatever
+		// framebuffer is bound; Chrome binds the canvas's to do it, which
+		// would split the render FBO's pass in two on a tile-based GPU. A
+		// clear of the whole canvas here takes its place
+		FBO_ClearWhole(GL_COLOR_BUFFER_BIT, colorBlack);
+#endif
 
+		// the frame's targets are cleared whole as it first draws into each
+		// (FBO_Bind): a tile-based GPU then starts their passes with a clear
+		// rather than loading the last frame's samples from memory
+		tr.renderFbo->clearOnBind = qtrue;
+		if (tr.viewFbo)
+			tr.viewFbo->clearOnBind = qtrue;
+	}
+	else if ( r_clear->integer )
+	{
+		// clear screen for debugging
 		qglClearColor( 1, 0, 0.5, 1 );
 		qglClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 	}
