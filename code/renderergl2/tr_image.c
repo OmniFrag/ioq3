@@ -2879,15 +2879,14 @@ static void R_CreateDefaultImage( void ) {
 
 /*
 ==================
-R_RenderFormat
+R_ViewFormat
 
-What the frame and its views are drawn into: RGBA16F with r_hdr, or with
-r_hdr 2 32-bit packed floats, which take half its bandwidth but have no
-alpha, so not where shaders blend with the alpha they draw
-(r_ignoreDstAlpha 0)
+What world views are drawn into: RGBA16F with r_hdr, or with r_hdr 2
+32-bit packed floats, which take half its bandwidth but have no alpha, so
+not where shaders blend with the alpha they draw (r_ignoreDstAlpha 0)
 ==================
 */
-int R_RenderFormat( void ) {
+int R_ViewFormat( void ) {
 	if (!r_hdr->integer || !glRefConfig.textureFloat)
 		return GL_RGBA8;
 
@@ -2895,6 +2894,21 @@ int R_RenderFormat( void ) {
 		return GL_R11F_G11F_B10F;
 
 	return GL_RGBA16F_ARB;
+}
+
+/*
+==================
+R_RenderFormat
+
+What the frame is drawn into, the 2D over the views: their format, but
+RGBA8 beside packed floats, too coarse in bright tones for the 2D
+(R_ViewFormat); world views then draw apart (R_UpdateViewScale)
+==================
+*/
+int R_RenderFormat( void ) {
+	int format = R_ViewFormat();
+
+	return format == GL_R11F_G11F_B10F ? GL_RGBA8 : format;
 }
 
 /*
@@ -2944,7 +2958,7 @@ void R_CreateBuiltinImages( void ) {
 
 	if (glRefConfig.framebufferObject)
 	{
-		int width, height, hdrFormat, renderFormat, rgbFormat;
+		int width, height, hdrFormat, rgbFormat;
 
 		// R_ResizeScreenImages resizes the images sized from these
 		width = glConfig.vidWidth;
@@ -2954,12 +2968,9 @@ void R_CreateBuiltinImages( void ) {
 		if (r_hdr->integer && glRefConfig.textureFloat)
 			hdrFormat = GL_RGBA16F_ARB;
 
-		// what the frame and its views are drawn into (FBO_Init)
-		renderFormat = R_RenderFormat();
-
 		rgbFormat = GL_RGBA8;
 
-		tr.renderImage = R_CreateImage("_render", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, renderFormat);
+		tr.renderImage = R_CreateImage("_render", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, R_RenderFormat());
 
 		if (r_shadowBlur->integer || r_hdr->integer)
 			tr.screenScratchImage = R_CreateImage("screenScratch", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, rgbFormat);
@@ -2973,7 +2984,7 @@ void R_CreateBuiltinImages( void ) {
 		tr.renderDepthImage  = R_CreateImage("*renderdepth",  NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 
 		// sized by R_UpdateViewScale
-		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, renderFormat);
+		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, R_ViewFormat());
 		tr.viewDepthImage = R_CreateImage("*viewdepth", NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 		tr.textureDepthImage = R_CreateImage("*texturedepth", NULL, PSHADOW_MAP_SIZE, PSHADOW_MAP_SIZE, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 
@@ -3069,7 +3080,7 @@ void R_ResizeScreenImages( void )
 {
 	int width = tr.sceneWidth, height = tr.sceneHeight;
 	// the view images are unused at the window's size
-	int viewWidth = tr.viewScaled ? width : 1, viewHeight = tr.viewScaled ? height : 1;
+	int viewWidth = tr.viewApart ? width : 1, viewHeight = tr.viewApart ? height : 1;
 	int i;
 
 	R_ResizeImage( tr.renderImage, glConfig.vidWidth, glConfig.vidHeight );

@@ -1355,9 +1355,9 @@ void R_Register( void )
 	r_externalGLSL = ri.Cvar_Get( "r_externalGLSL", "0", CVAR_LATCH );
 
 	r_hdr = ri.Cvar_Get( "r_hdr", "1", CVAR_ARCHIVE | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_hdr, "Render in floating point, for the tone map and HDR lightmaps: 1 in 16-bit floats; "
-		"2 in 32-bit packed floats (R11F_G11F_B10F), half the bandwidth, less precise and with no alpha for blends to read, "
-		"where the GPU renders them and r_ignoreDstAlpha is on (else as 1); 0 in 8 bits" );
+	ri.Cvar_SetDescription( r_hdr, "Render in floating point, for the tone map and HDR lightmaps: 1 in RGBA16F; "
+		"2 world views in R11F_G11F_B10F, half the bandwidth but coarser and with no alpha, and the 2D in 8 bits "
+		"(as 1 with r_ignoreDstAlpha 0); 0 in 8 bits" );
 	r_floatLightmap = ri.Cvar_Get( "r_floatLightmap", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_postProcess = ri.Cvar_Get( "r_postProcess", "1", CVAR_ARCHIVE );
 
@@ -1682,8 +1682,9 @@ R_UpdateViewScale
 
 Sizes what world views draw into for r_viewScale and the window's size.
 At a scale that leaves the window's size, they draw into the render FBO.
-At any other, into the view FBO at the scaled size, which RB_PostProcess
-scales into the render FBO; the screen-space images they use follow.
+At any other, or in a format of their own (packed floats, r_hdr 2), into
+the view FBO at the scaled size, which RB_PostProcess scales or copies
+into the render FBO; the screen-space images they use follow.
 The images and framebuffers get new storage in place.
 =============
 */
@@ -1694,7 +1695,7 @@ void R_UpdateViewScale( void ) {
 	r_viewScale->modified = qfalse;
 	tr.sceneWidth = glConfig.vidWidth;
 	tr.sceneHeight = glConfig.vidHeight;
-	tr.viewScaled = qfalse;
+	tr.viewApart = qfalse;
 
 	if ( !glRefConfig.framebufferObject ) {
 		if ( r_viewScale->value != 1.0f && !noted ) {
@@ -1707,14 +1708,15 @@ void R_UpdateViewScale( void ) {
 	maxSide = MIN( glConfig.maxTextureSize, glRefConfig.maxRenderbufferSize );
 	tr.sceneWidth = R_ScaleViewSide( glConfig.vidWidth, r_viewScale->value, maxSide );
 	tr.sceneHeight = R_ScaleViewSide( glConfig.vidHeight, r_viewScale->value, maxSide );
-	tr.viewScaled = tr.sceneWidth != glConfig.vidWidth || tr.sceneHeight != glConfig.vidHeight;
+	tr.viewApart = tr.sceneWidth != glConfig.vidWidth || tr.sceneHeight != glConfig.vidHeight
+		|| tr.viewImage->internalFormat != tr.renderImage->internalFormat;
 
 	// nothing to do if the images already have these sizes, as at a start
 	// at 1 or a scale that rounds to the same; the screen-space images
 	// follow the view images' size, or the render images' at 1
 	if ( tr.renderDepthImage->width == glConfig.vidWidth && tr.renderDepthImage->height == glConfig.vidHeight &&
-		tr.viewDepthImage->width == ( tr.viewScaled ? tr.sceneWidth : 1 ) &&
-		tr.viewDepthImage->height == ( tr.viewScaled ? tr.sceneHeight : 1 ) ) {
+		tr.viewDepthImage->width == ( tr.viewApart ? tr.sceneWidth : 1 ) &&
+		tr.viewDepthImage->height == ( tr.viewApart ? tr.sceneHeight : 1 ) ) {
 		return;
 	}
 

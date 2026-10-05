@@ -889,13 +889,14 @@ const void *RB_StretchPic ( const void *data ) {
 
 /*
 =============
-RB_ViewScaled
+RB_ViewApart
 
 Whether the current world view draws into the view FBO, at r_viewScale's
-size, rather than into the render FBO (R_UpdateViewScale)
+size or in packed floats, rather than into the render FBO
+(R_UpdateViewScale)
 =============
 */
-qboolean RB_ViewScaled(void)
+qboolean RB_ViewApart(void)
 {
 	return tr.viewFbo && backEnd.viewParms.targetFbo == tr.viewFbo;
 }
@@ -958,14 +959,14 @@ const void	*RB_DrawSurfs( const void *data ) {
 		// it; a shadow view's stays in its framebuffer
 		if (depthRead)
 		{
-			qboolean scaled = RB_ViewScaled();
-			FBO_t *resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
-			image_t *depthImage = scaled ? tr.viewDepthImage : tr.renderDepthImage;
+			qboolean apart = RB_ViewApart();
+			FBO_t *resolveFbo = apart ? tr.viewResolveFbo : tr.msaaResolveFbo;
+			image_t *depthImage = apart ? tr.viewDepthImage : tr.renderDepthImage;
 
 			if (resolveFbo)
 			{
 				// If we're using multisampling, resolve the depth first
-				FBO_FastBlit(scaled ? tr.viewFbo : tr.renderFbo, NULL, resolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+				FBO_FastBlit(apart ? tr.viewFbo : tr.renderFbo, NULL, resolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 			}
 			else if (tr.renderFbo == NULL && tr.renderDepthImage)
 			{
@@ -1604,10 +1605,11 @@ static void RB_CopyFboRect(FBO_t *fbo, int x, int y, int w, int h, int dstX, int
 =============
 RB_DrawScaledView
 
-Draws a world view that r_viewScale scaled, from the view FBO it was drawn
-and post-processed in, into its own rectangle of the render FBO, which is
-single-sampled then (FBO_UseRenderTarget), filtered linearly: scaling up
-smooths, and scaling down by 2 averages each 2x2
+Draws a world view drawn apart from the frame, scaled or in packed floats,
+from the view FBO it was drawn and post-processed in, into its own
+rectangle of the render FBO, which is single-sampled then
+(FBO_UseRenderTarget), filtered linearly: scaling up smooths, and scaling
+down by 2 averages each 2x2
 =============
 */
 static void RB_DrawScaledView(FBO_t *src)
@@ -1619,8 +1621,10 @@ static void RB_DrawScaledView(FBO_t *src)
 	// the view's edge columns and rows again just outside it, so that
 	// filtering at its edges reads them as clamping to the edge would,
 	// not what lies around a view smaller than the view FBO (as opengl1's).
-	// OpenGL ES and WebGL2 refuse a blit within one image
-	if (glRefConfig.framebufferBlit && !qglesMajorVersion)
+	// OpenGL ES and WebGL2 refuse a blit within one image. A view copied at
+	// its own size reads no texel outside it
+	if (glRefConfig.framebufferBlit && !qglesMajorVersion
+		&& (w != backEnd.refdef.width || h != backEnd.refdef.height))
 	{
 		int x0 = MAX(x - 1, 0), x1 = MIN(x + w + 1, src->width);
 
@@ -1651,7 +1655,7 @@ const void *RB_PostProcess(const void *data)
 	const postProcessCommand_t *cmd = data;
 	FBO_t *srcFbo, *dstFbo, *resolveFbo;
 	ivec4_t srcBox, dstBox;
-	qboolean autoExposure, scaled, effects;
+	qboolean autoExposure, apart, effects;
 
 	// finish any 2D drawing if needed
 	if(tess.numIndexes)
@@ -1669,21 +1673,21 @@ const void *RB_PostProcess(const void *data)
 		backEnd.viewParms = cmd->viewParms;
 	}
 
-	// a view r_viewScale scaled is scaled into place here, with or
-	// without its effects
-	scaled = RB_ViewScaled();
+	// a view drawn apart from the frame, scaled or in packed floats, is
+	// drawn into its place here, with or without its effects
+	apart = RB_ViewApart();
 	effects = r_postProcess->integer && (r_ssao->integer || r_drawSunRays->integer
 		|| (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
 		|| backEnd.refdef.blurFactor * 10.0f >= 0.004f);
 
-	srcFbo = dstFbo = scaled ? tr.viewFbo : tr.renderFbo;
-	resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
+	srcFbo = dstFbo = apart ? tr.viewFbo : tr.renderFbo;
+	resolveFbo = apart ? tr.viewResolveFbo : tr.msaaResolveFbo;
 
 	// nothing to do: the view stays in the render FBO, where the 2D is
 	// drawn after it, and is resolved once, at RB_PresentToScreen. On a
 	// tile-based GPU, resolving it here and copying it back stores and
 	// reloads every sample for nothing
-	if (!effects && !scaled)
+	if (!effects && !apart)
 	{
 		// but without a depth prepass, flares read the depth resolved
 		// here, a frame late (RB_TestFlare)
@@ -1736,7 +1740,14 @@ const void *RB_PostProcess(const void *data)
 				// Use an intermediate FBO because it can't blit to the same FBO directly
 				// and can't read from an MSAA dstFbo later.
 				RB_ToneMap(srcFbo, srcBox, tr.screenScratchFbo, srcBox, autoExposure);
-				FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+				// packed floats would undo the tone map's dither, so the view
+				// goes on from the scratch FBO's 8 bits, the frame's format
+				// then (R_RenderFormat), to be copied into the frame
+				if (tr.viewImage->internalFormat == GL_R11F_G11F_B10F)
+					srcFbo = tr.screenScratchFbo;
+				else
+					FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 			}
 			// Without the tone map, the view keeps the colours it was drawn with,
 			// as without framebuffers: r_cameraExposure is the tone map's, and its
@@ -1752,7 +1763,7 @@ const void *RB_PostProcess(const void *data)
 			RB_GaussianBlur(srcFbo, srcFbo, backEnd.refdef.blurFactor);
 	}
 
-	if (scaled)
+	if (apart)
 		RB_DrawScaledView(srcFbo);
 	else if (srcFbo != dstFbo)
 		FBO_FastBlit(srcFbo, srcBox, dstFbo, dstBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
