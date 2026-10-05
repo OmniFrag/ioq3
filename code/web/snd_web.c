@@ -282,6 +282,7 @@ static void S_WebSync( void )
 
 	if ( nowRunning != running ) {
 		running = nowRunning;
+		Cvar_Set( "s_running", running ? "1" : "0" );
 		S_WebStopAll( );
 	}
 }
