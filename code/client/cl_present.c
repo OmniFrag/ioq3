@@ -77,7 +77,7 @@ static const char *presentReasons[] = {
 	"the system didn't go fullscreen",
 	"it starts with a click",
 	"the browser refused it",
-	"it's the browser's own fullscreen, which only its key (F11) leaves"
+	"it's the browser's own fullscreen, which only the browser leaves (F11, or Control+Command+F on a Mac)"
 };
 
 /*

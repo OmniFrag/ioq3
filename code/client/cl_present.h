@@ -36,7 +36,7 @@ typedef enum {
 	PRESENT_NO_ANSWER,		// the system didn't act on the request
 	PRESENT_NEEDS_CLICK,	// a browser acts only on the player's input
 	PRESENT_REFUSED,		// the browser refused
-	PRESENT_BROWSERS_OWN	// the browser's own fullscreen, which only its key leaves
+	PRESENT_BROWSERS_OWN	// the browser's own fullscreen, which only the browser leaves
 } presentReason_t;
 
 // what the platform reports, each frame
