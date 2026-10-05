@@ -1591,9 +1591,11 @@ typedef struct {
 	FBO_t                   *renderCubeFbo;
 
 	// the size world views draw at, and the screen-space images they use
-	// have: the window's, or with viewScaled, r_viewScale's (R_UpdateViewScale)
+	// have: the window's, or r_viewScale's; and whether they draw apart
+	// from the frame, in the view FBO, at that scale or in their own format
+	// (R_UpdateViewScale)
 	int						sceneWidth, sceneHeight;
-	qboolean				viewScaled;
+	qboolean				viewApart;
 
 	shader_t				*defaultShader;
 	shader_t				*shadowShader;
@@ -2025,6 +2027,7 @@ void	R_ScreenShot_f( void );
 void	R_InitFogTable( void );
 float	R_FogFactor( float s, float t );
 void	R_InitImages( void );
+int		R_ViewFormat( void );
 int		R_RenderFormat( void );
 void	R_ResizeScreenImages( void );
 void	R_UpdateViewScale( void );
@@ -2037,7 +2040,7 @@ int R_ComputeLOD( trRefEntity_t *ent );
 
 const void *RB_TakeVideoFrameCmd( const void *data );
 void RB_TakeCaptures( void );
-qboolean RB_ViewScaled( void );
+qboolean RB_ViewApart( void );
 
 //
 // tr_shader.c
