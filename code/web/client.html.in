@@ -297,6 +297,15 @@ const sound = (() => {
         if (context.state !== 'running') context.resume().catch(() => {});
     };
     for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, begin, { capture: true });
+    // A hidden page's sound waits: the game draws no frames there, and a
+    // loop would play on alone. Shown again it resumes, or at the next input
+    // where the browser wants one (Safari, after an interruption). The
+    // engine sees it stop and start, and plays what the game's time has.
+    document.addEventListener('visibilitychange', () => {
+        if (!context) return;
+        if (document.hidden) context.suspend().catch(() => {});
+        else if (context.state !== 'running') context.resume().catch(() => {});
+    });
     return {
         state: () => context ? STATES.indexOf(context.state) + 1 : 0,
         rate: () => context?.sampleRate ?? 0,
