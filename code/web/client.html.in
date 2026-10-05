@@ -251,6 +251,15 @@ addEventListener('pointerup', (event) => {
     claimedPointer = undefined;
     event.stopImmediatePropagation();
 }, { capture: true });
+// The mouse's motion is the game's only under the lock. As the lock ends
+// (Esc, leaving fullscreen) the browser puts the cursor back where it was,
+// which SDL would pass on as one long move, and the engine, learning of the
+// loss a frame later, would turn the view by it: while the game wants the
+// lock and hasn't got it, the motion stays the page's.
+for (const type of ['pointermove', 'mousemove'])
+    addEventListener(type, (event) => {
+        if (wantPointer && !locked() && (event.pointerType ?? 'mouse') === 'mouse') event.stopImmediatePropagation();
+    }, { capture: true });
 
 // Alt+Enter (Option+Return on a Mac) is the page's too: Firefox grants
 // fullscreen only while the key is handled, and the engine reads its keys a
