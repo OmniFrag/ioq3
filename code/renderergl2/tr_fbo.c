@@ -219,6 +219,32 @@ void FBO_AttachImage(FBO_t *fbo, image_t *image, GLenum attachment, GLuint cubem
 
 /*
 ============
+FBO_ClearWhole
+
+Clears every pixel and channel of the bound framebuffer, whatever the
+scissor and masks, and leaves them as they were: a clear a tile-based GPU
+can make its pass's load action, rather than loading what the framebuffer
+held from memory
+============
+*/
+void FBO_ClearWhole(GLbitfield buffers, const vec4_t color)
+{
+	qglDisable(GL_SCISSOR_TEST);
+	qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	if (buffers & GL_DEPTH_BUFFER_BIT)
+		qglDepthMask(GL_TRUE);
+
+	qglClearColor(color[0], color[1], color[2], color[3]);
+	qglClear(buffers);
+
+	if ((buffers & GL_DEPTH_BUFFER_BIT) && !(glState.glStateBits & GLS_DEPTHMASK_TRUE))
+		qglDepthMask(GL_FALSE);
+	qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
+	qglEnable(GL_SCISSOR_TEST);
+}
+
+/*
+============
 FBO_Bind
 ============
 */
@@ -241,6 +267,16 @@ void FBO_Bind(FBO_t * fbo)
 
 	GL_BindFramebuffer(GL_FRAMEBUFFER, fbo ? fbo->frameBuffer : 0);
 	glState.currentFBO = fbo;
+
+	// the frame's first draw into it: r_clear's colour shows what nothing
+	// drew over
+	if (fbo && fbo->clearOnBind)
+	{
+		static const vec4_t clearColor = { 1.0f, 0.0f, 0.5f, 1.0f };
+
+		fbo->clearOnBind = qfalse;
+		FBO_ClearWhole(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, r_clear->integer ? clearColor : colorBlack);
+	}
 }
 
 /*
