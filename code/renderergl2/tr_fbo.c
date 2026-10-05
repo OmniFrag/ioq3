@@ -356,7 +356,8 @@ static void FBO_ResizeRenderTarget(FBO_t *fbo, FBO_t *resolveFbo, image_t *depth
 FBO_UseRenderTarget
 
 Picks what the frame is drawn into: the window-sized render target, or,
-while r_viewScale scales world views, its resolve FBO's images directly.
+while world views draw apart from it (scaled, or in packed floats), its
+resolve FBO's images directly.
 Then only the view FBO needs multisampling, and the scaled view and the
 2D are drawn single-sampled, as without multisampling, so that a frame
 stores and resolves one multisampled target, at the view's size, not a
@@ -364,12 +365,12 @@ second at the window's as well. On a tile-based GPU every multisampled
 target that's stored costs all its samples' bandwidth. The 2D, drawn in
 rectangles, looks the same either way, except where a rectangle's edge
 falls between pixels; views without the world (the HUD's heads) lose
-their multisampling at that scale
+their multisampling then
 ============
 */
 static void FBO_UseRenderTarget(void)
 {
-	if (tr.viewScaled && tr.renderTargetResolveFbo)
+	if (tr.viewApart && tr.renderTargetResolveFbo)
 	{
 		tr.renderFbo = tr.renderTargetResolveFbo;
 		tr.msaaResolveFbo = NULL;
@@ -392,10 +393,10 @@ keeping the framebuffers and their attachments (R_ResizeScreenImages)
 void FBO_Resize(void)
 {
 	// what world views draw their depth into
-	image_t *sceneDepthImage = tr.viewScaled ? tr.viewDepthImage : tr.renderDepthImage;
+	image_t *sceneDepthImage = tr.viewApart ? tr.viewDepthImage : tr.renderDepthImage;
 	int i;
 
-	FBO_ResizeRenderTarget(tr.renderTargetFbo, tr.renderTargetResolveFbo, tr.renderDepthImage, tr.viewScaled);
+	FBO_ResizeRenderTarget(tr.renderTargetFbo, tr.renderTargetResolveFbo, tr.renderDepthImage, tr.viewApart);
 	FBO_ResizeRenderTarget(tr.viewFbo, tr.viewResolveFbo, tr.viewDepthImage, qfalse);
 	FBO_UseRenderTarget();
 
@@ -427,7 +428,7 @@ FBO_Init
 void FBO_Init(void)
 {
 	int             i;
-	int             hdrFormat, multisample = 0;
+	int             multisample = 0;
 
 	ri.Printf(PRINT_ALL, "------- FBO_Init -------\n");
 
@@ -439,8 +440,6 @@ void FBO_Init(void)
 	GL_CheckErrors();
 
 	R_IssuePendingRenderCommands();
-
-	hdrFormat = R_RenderFormat();
 
 	if (glRefConfig.framebufferMultisample)
 		qglGetIntegerv(GL_MAX_SAMPLES, &multisample);
@@ -459,13 +458,14 @@ void FBO_Init(void)
 	// greyscale and brightness (RB_PresentToScreen); with multisampling,
 	// into renderbuffers resolved into the render image
 	tr.renderTargetFbo = FBO_CreateRenderTarget("_render", "_msaaResolve", tr.renderImage, tr.renderDepthImage,
-		hdrFormat, &tr.renderTargetResolveFbo);
+		R_RenderFormat(), &tr.renderTargetResolveFbo);
 	FBO_UseRenderTarget();
 
-	// world views at r_viewScale's size, scaled into the render FBO after
-	// their post-processing (RB_PostProcess)
+	// world views drawn apart from the frame, at r_viewScale's size or in
+	// packed floats, drawn into the render FBO after their post-processing
+	// (RB_PostProcess)
 	tr.viewFbo = FBO_CreateRenderTarget("_view", "_viewResolve", tr.viewImage, tr.viewDepthImage,
-		hdrFormat, &tr.viewResolveFbo);
+		R_ViewFormat(), &tr.viewResolveFbo);
 
 	// clear render buffer
 	// this fixes the corrupt screen bug with r_hdr 1 on older hardware

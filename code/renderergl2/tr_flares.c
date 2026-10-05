@@ -288,7 +288,7 @@ void RB_TestFlare( flare_t *f ) {
 
 	// if we're doing multisample rendering, read from the correct FBO
 	oldFbo = glState.currentFBO;
-	resolveFbo = RB_ViewScaled() ? tr.viewResolveFbo : tr.msaaResolveFbo;
+	resolveFbo = RB_ViewApart() ? tr.viewResolveFbo : tr.msaaResolveFbo;
 	if (resolveFbo)
 	{
 		FBO_Bind(resolveFbo);

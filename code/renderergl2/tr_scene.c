@@ -552,9 +552,10 @@ void RE_RenderScene( const refdef_t *fd ) {
 	parms.viewportHeight = tr.refdef.height;
 	parms.isPortal = qfalse;
 
-	// r_viewScale: a world view draws into the view FBO, scaled with the
-	// window to its size, and RB_PostProcess scales it back into its place
-	if ( tr.viewScaled && !( fd->rdflags & RDF_NOWORLDMODEL ) ) {
+	// a world view drawn apart (r_viewScale, or packed floats) draws into
+	// the view FBO, scaled with the window to its size, and RB_PostProcess
+	// draws it back into its place
+	if ( tr.viewApart && !( fd->rdflags & RDF_NOWORLDMODEL ) ) {
 		float xScale = tr.sceneWidth / (float)glConfig.vidWidth;
 		float yScale = tr.sceneHeight / (float)glConfig.vidHeight;
 
