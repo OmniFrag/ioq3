@@ -32,9 +32,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 // A change the platform makes by its own means while nothing is asked (the
 // window manager's, the browser's Esc or F11) is the player's too, for this
-// run: it becomes r_fullscreen's value from the command line's layer, which
-// isn't saved. What the game's own controls set (the menu, Alt+Enter, the
-// console) is saved.
+// run: it becomes r_fullscreen's value from the system's source
+// (CVAR_SOURCE_SYSTEM), which isn't saved. What the game's own controls
+// set (the menu, Alt+Enter, the console) is saved.
 //
 // The pointer is the game's to want: held in a match and the menus, once
 // the player has entered the window, and read but for the console and
@@ -77,7 +77,7 @@ static const char *presentReasons[] = {
 	"the system didn't go fullscreen",
 	"it starts with a click",
 	"the browser refused it",
-	"it's the browser's own fullscreen, which only the browser leaves (F11, or Control+Command+F on a Mac)"
+	"it's the browser's own fullscreen, left with F11 (Control+Command+F on a Mac)"
 };
 
 /*
@@ -90,6 +90,7 @@ void Present_Init( void )
 	Com_Memset( &present, 0, sizeof( present ) );
 
 	r_fullscreen = Cvar_Get( "r_fullscreen", "1", CVAR_ARCHIVE );
+	Cvar_SetReason( r_fullscreen, NULL );
 	in_nograb = Cvar_Get( "in_nograb", "0", CVAR_ARCHIVE );
 
 	com_fullscreen = Cvar_Get( "com_fullscreen", "0", CVAR_ROM );
@@ -130,6 +131,8 @@ Present_SetReason
 */
 static void Present_SetReason( presentReason_t reason, qboolean want )
 {
+	char	line[256];
+
 	if( reason == present.reason )
 	{
 		return;
@@ -137,11 +140,18 @@ static void Present_SetReason( presentReason_t reason, qboolean want )
 
 	present.reason = reason;
 	present.reasonFor = want;
+	line[0] = '\0';
+	if( reason != PRESENT_OK )
+	{
+		Com_sprintf( line, sizeof( line ), "Not %s: %s",
+			want ? "fullscreen" : "in a window", presentReasons[reason] );
+	}
+	Cvar_SetReason( r_fullscreen, line );
 
 	// a browser waiting for the player's click is how it starts, not news
 	if( reason != PRESENT_OK && reason != PRESENT_NEEDS_CLICK )
 	{
-		Com_Printf( "Not %s: %s\n", want ? "fullscreen" : "in a window", presentReasons[reason] );
+		Com_Printf( "%s\n", line );
 	}
 }
 
@@ -211,7 +221,7 @@ void Present_Frame( const presentFacts_t *facts, int time )
 	else if( !present.asking && facts->fullscreen != com_fullscreen->integer && facts->fullscreen != want )
 	{
 		// the platform's own: the player's choice, for this run
-		Cvar_SetFrom( "r_fullscreen", facts->fullscreen ? "1" : "0", CVAR_SOURCE_SESSION, qtrue );
+		Cvar_SetFrom( "r_fullscreen", facts->fullscreen ? "1" : "0", CVAR_SOURCE_SYSTEM, qtrue );
 		want = facts->fullscreen;
 	}
 
@@ -357,7 +367,7 @@ void Present_ToggleFullscreen( void )
 	Cvar_SetFrom( "r_fullscreen", com_fullscreen->integer ? "0" : "1", CVAR_SOURCE_PLAYER, qtrue );
 
 	present.asking = qfalse;
-	present.reason = PRESENT_OK;
+	Present_SetReason( PRESENT_OK, present.reasonFor );
 	present.recreated = qfalse;
 }
 
@@ -365,10 +375,11 @@ void Present_ToggleFullscreen( void )
 ===============
 Present_Reason
 
-Why the window isn't what the player wants, or "" when it is
+Why the window isn't what the player wants, as the console says it ("Not
+fullscreen: the browser refused it"), or "" when it is
 ===============
 */
 const char *Present_Reason( void )
 {
-	return presentReasons[present.reason];
+	return r_fullscreen && r_fullscreen->reason ? r_fullscreen->reason : "";
 }

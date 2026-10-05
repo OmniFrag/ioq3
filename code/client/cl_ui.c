@@ -720,6 +720,9 @@ static const vmExtension_t cl_uiExtensions[] = {
 	{ "trap_SetTextFocus_OF", COM_TRAP_SETTEXTFOCUS },
 	{ "trap_FollowWindowSize_OF", COM_TRAP_FOLLOWWINDOWSIZE },
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
+	// why fullscreen isn't what the player wants, as the console says it,
+	// "" when it is
+	{ "fullscreenReason_OF", 0, Present_Reason },
 	{ NULL, 0 }
 };
 
