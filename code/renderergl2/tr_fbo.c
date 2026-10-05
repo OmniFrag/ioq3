@@ -793,6 +793,16 @@ void FBO_FastBlit(const FBO_t *src, ivec4_t srcBox, FBO_t *dst, ivec4_t dstBox, 
 		return;
 	}
 
+	// a blit writes like a draw, so the frame's clear of its target comes
+	// first (FBO_Bind), unless the blit covers all of it, colour and depth
+	if (dst && dst->clearOnBind)
+	{
+		if (dstBox || buffers != (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))
+			FBO_Bind(dst);
+		else
+			dst->clearOnBind = qfalse;
+	}
+
 	srcFb = src ? src->frameBuffer : 0;
 	dstFb = dst ? dst->frameBuffer : 0;
 
