@@ -353,8 +353,9 @@ const sound = (() => {
     const begin = (event) => {
         // with no userActivation, any trusted input is let try
         if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
-        // a hidden page's sound is held, whatever reaches it
-        if (document.hidden) return;
+        // a hidden page's sound is held, whatever reaches it; a browser
+        // without Web Audio (Windows' WebKit) plays none
+        if (document.hidden || !window.AudioContext) return;
         if (!context) {
             try {
                 context = new AudioContext({ latencyHint: 0 });
