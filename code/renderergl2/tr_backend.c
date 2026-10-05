@@ -908,7 +908,7 @@ RB_DrawSurfs
 */
 const void	*RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t	*cmd;
-	qboolean isShadowView;
+	qboolean isShadowView, depthRead;
 
 	// finish any 2D drawing if needed
 	if ( tess.numIndexes ) {
@@ -922,6 +922,12 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 	isShadowView = !!(backEnd.viewParms.flags & VPF_DEPTHSHADOW);
 
+	// what reads the view's depth from the depth prepass: the sun's shadow
+	// mask, SSAO and the shadow blur (through hdrDepth), flares, and the sun
+	// rays' sun, which tests against it (sunRaysFbo)
+	depthRead = !isShadowView && (tr.hdrDepthFbo || r_flares->integer || r_drawSunRays->integer
+		|| (r_sunlightMode->integer && (backEnd.viewParms.flags & VPF_USESUNLIGHT)));
+
 	// clear the z buffer, set the modelview, etc
 	RB_BeginDrawingView ();
 
@@ -930,7 +936,12 @@ const void	*RB_DrawSurfs( const void *data ) {
 		qglEnable(GL_DEPTH_CLAMP);
 	}
 
-	if (glRefConfig.framebufferObject && !(backEnd.refdef.rdflags & RDF_NOWORLDMODEL) && (r_depthPrepass->integer || isShadowView))
+	// a shadow view is only its depth; another view draws its depth first
+	// for what reads it, or always with r_depthPrepass 2. Without a reader
+	// the prepass only draws the geometry twice: on a tile-based GPU, hidden
+	// surface removal already shades only the visible fragments
+	if (glRefConfig.framebufferObject && !(backEnd.refdef.rdflags & RDF_NOWORLDMODEL)
+		&& (isShadowView || (r_depthPrepass->integer && depthRead) || r_depthPrepass->integer > 1))
 	{
 		FBO_t *oldFbo = glState.currentFBO;
 		vec4_t viewInfo;
@@ -944,12 +955,8 @@ const void	*RB_DrawSurfs( const void *data ) {
 		backEnd.depthFill = qfalse;
 
 		// the view's depth, resolved or copied to a texture, for what reads
-		// it: the sun's shadow mask, SSAO and the shadow blur (through
-		// hdrDepth), flares, and the sun rays' sun, which tests against it
-		// (sunRaysFbo); otherwise the view stays in its framebuffer, which on
-		// a tile-based GPU spares storing and reloading it
-		if (!isShadowView && (tr.hdrDepthFbo || r_flares->integer || r_drawSunRays->integer
-			|| (r_sunlightMode->integer && (backEnd.viewParms.flags & VPF_USESUNLIGHT))))
+		// it; a shadow view's stays in its framebuffer
+		if (depthRead)
 		{
 			qboolean scaled = RB_ViewScaled();
 			FBO_t *resolveFbo = scaled ? tr.viewResolveFbo : tr.msaaResolveFbo;
