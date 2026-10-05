@@ -198,6 +198,11 @@ void R_ImageList_f( void ) {
 				// 8 bytes per pixel
 				estSize *= 8;
 				break;
+			case GL_R11F_G11F_B10F:
+				format = "R11B10F";
+				// 4 bytes per pixel
+				estSize *= 4;
+				break;
 			case GL_RGBA16:
 				format = "RGBA16 ";
 				// 8 bytes per pixel
@@ -2252,6 +2257,10 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 				dataFormat = GL_RGBA;
 				dataType = GL_FLOAT;
 				break;
+			case GL_R11F_G11F_B10F:
+				dataFormat = GL_RGB;
+				dataType = GL_FLOAT;
+				break;
 			case GL_R32F:
 				// raw depth, which needs the 32 bits at a distance; where
 				// they can't be rendered and filtered, 16 bits still beat
@@ -2870,6 +2879,26 @@ static void R_CreateDefaultImage( void ) {
 
 /*
 ==================
+R_RenderFormat
+
+What the frame and its views are drawn into: RGBA16F with r_hdr, or with
+r_hdr 2 32-bit packed floats, which take half its bandwidth but have no
+alpha, so not where shaders blend with the alpha they draw
+(r_ignoreDstAlpha 0)
+==================
+*/
+int R_RenderFormat( void ) {
+	if (!r_hdr->integer || !glRefConfig.textureFloat)
+		return GL_RGBA8;
+
+	if (r_hdr->integer == 2 && glRefConfig.packedFloat && r_ignoreDstAlpha->integer)
+		return GL_R11F_G11F_B10F;
+
+	return GL_RGBA16F_ARB;
+}
+
+/*
+==================
 R_CreateBuiltinImages
 ==================
 */
@@ -2915,7 +2944,7 @@ void R_CreateBuiltinImages( void ) {
 
 	if (glRefConfig.framebufferObject)
 	{
-		int width, height, hdrFormat, rgbFormat;
+		int width, height, hdrFormat, renderFormat, rgbFormat;
 
 		// R_ResizeScreenImages resizes the images sized from these
 		width = glConfig.vidWidth;
@@ -2925,9 +2954,12 @@ void R_CreateBuiltinImages( void ) {
 		if (r_hdr->integer && glRefConfig.textureFloat)
 			hdrFormat = GL_RGBA16F_ARB;
 
+		// what the frame and its views are drawn into (FBO_Init)
+		renderFormat = R_RenderFormat();
+
 		rgbFormat = GL_RGBA8;
 
-		tr.renderImage = R_CreateImage("_render", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, hdrFormat);
+		tr.renderImage = R_CreateImage("_render", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, renderFormat);
 
 		if (r_shadowBlur->integer || r_hdr->integer)
 			tr.screenScratchImage = R_CreateImage("screenScratch", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, rgbFormat);
@@ -2941,7 +2973,7 @@ void R_CreateBuiltinImages( void ) {
 		tr.renderDepthImage  = R_CreateImage("*renderdepth",  NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 
 		// sized by R_UpdateViewScale
-		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, hdrFormat);
+		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, renderFormat);
 		tr.viewDepthImage = R_CreateImage("*viewdepth", NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 		tr.textureDepthImage = R_CreateImage("*texturedepth", NULL, PSHADOW_MAP_SIZE, PSHADOW_MAP_SIZE, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
 
