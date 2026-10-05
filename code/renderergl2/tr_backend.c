@@ -1605,8 +1605,9 @@ static void RB_CopyFboRect(FBO_t *fbo, int x, int y, int w, int h, int dstX, int
 RB_DrawScaledView
 
 Draws a world view that r_viewScale scaled, from the view FBO it was drawn
-and post-processed in, into its own rectangle of the render FBO, filtered
-linearly: scaling up smooths, and scaling down by 2 averages each 2x2
+and post-processed in, into its own rectangle of the render FBO, which is
+single-sampled then (FBO_UseRenderTarget), filtered linearly: scaling up
+smooths, and scaling down by 2 averages each 2x2
 =============
 */
 static void RB_DrawScaledView(FBO_t *src)

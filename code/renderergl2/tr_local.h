@@ -1567,8 +1567,12 @@ typedef struct {
 	
 	image_t					*textureDepthImage;
 
-	FBO_t					*renderFbo;
-	FBO_t					*msaaResolveFbo;
+	FBO_t					*renderFbo;			// what the frame is drawn into (FBO_UseRenderTarget)
+	FBO_t					*msaaResolveFbo;	// renderFbo's resolve, if it's multisampled
+	// the window-sized target and its resolve, as FBO_Init made them, which
+	// renderFbo and msaaResolveFbo are picked from (FBO_UseRenderTarget)
+	FBO_t					*renderTargetFbo;
+	FBO_t					*renderTargetResolveFbo;
 	FBO_t					*viewFbo;			// world views draw here when r_viewScale scales them
 	FBO_t					*viewResolveFbo;
 	FBO_t					*sunRaysFbo;
