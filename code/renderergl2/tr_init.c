@@ -1355,6 +1355,9 @@ void R_Register( void )
 	r_externalGLSL = ri.Cvar_Get( "r_externalGLSL", "0", CVAR_LATCH );
 
 	r_hdr = ri.Cvar_Get( "r_hdr", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_hdr, "Render in floating point, for the tone map and HDR lightmaps: 1 in 16-bit floats; "
+		"2 in 32-bit packed floats (R11F_G11F_B10F), half the bandwidth, less precise and with no alpha for blends to read, "
+		"where the GPU renders them and r_ignoreDstAlpha is on (else as 1); 0 in 8 bits" );
 	r_floatLightmap = ri.Cvar_Get( "r_floatLightmap", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_postProcess = ri.Cvar_Get( "r_postProcess", "1", CVAR_ARCHIVE );
 
