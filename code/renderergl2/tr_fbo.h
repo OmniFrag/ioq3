@@ -57,6 +57,7 @@ typedef struct FBO_s
 void FBO_AttachImage(FBO_t *fbo, image_t *image, GLenum attachment, GLuint cubemapside);
 void FBO_Bind(FBO_t *fbo);
 void FBO_ClearWhole(GLbitfield buffers, const vec4_t color);
+int FBO_Samples(int format);
 void FBO_Init(void);
 void FBO_Resize(void);
 void FBO_Shutdown(void);
