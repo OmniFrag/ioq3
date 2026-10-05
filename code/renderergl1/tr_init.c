@@ -1115,7 +1115,7 @@ void R_Register( void )
 	r_noborder = ri.Cvar_Get("r_noborder", "0", CVAR_ARCHIVE | CVAR_LATCH);
 	r_customwidth = ri.Cvar_Get( "r_customwidth", "1600", CVAR_ARCHIVE );
 	r_customheight = ri.Cvar_Get( "r_customheight", "1024", CVAR_ARCHIVE );
-	ri.Cvar_SetDescription( r_mode, "Window size: -2 is three quarters of the desktop (on the web, the page), -1 is r_customwidth by r_customheight, "
+	ri.Cvar_SetDescription( r_mode, "Window size: -2 is three quarters of the desktop, -1 is r_customwidth by r_customheight, "
 		"the rest are listed by modelist; sizes are in pixels. Fullscreen keeps the display's own mode unless r_modeFullscreen "
 		"asks for one" );
 	ri.Cvar_SetDescription( r_customwidth, "Window width in pixels, for r_mode -1" );

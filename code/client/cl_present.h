@@ -35,7 +35,8 @@ typedef enum {
 	PRESENT_NOGRAB,			// in_nograb is on
 	PRESENT_NO_ANSWER,		// the system didn't act on the request
 	PRESENT_NEEDS_CLICK,	// a browser acts only on the player's input
-	PRESENT_REFUSED			// the browser refused
+	PRESENT_REFUSED,		// the browser refused
+	PRESENT_BROWSERS_OWN	// the browser's own fullscreen, which only its key leaves
 } presentReason_t;
 
 // what the platform reports, each frame
@@ -49,6 +50,11 @@ typedef struct {
 	// the player's input)
 	qboolean		standing;
 	presentReason_t	answer;
+	// the player's Alt+Enter, which the platform asked for itself since the
+	// last frame (the web, where a browser grants fullscreen only during
+	// the key's own handling), and what it asked for
+	qboolean		playerAsked;
+	qboolean		playerWants;
 	// a window that didn't go fullscreen stays out, however it's asked
 	// again, and only a new window goes (macOS, for a window that lost the
 	// focus on its way in)
