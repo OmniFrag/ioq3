@@ -85,7 +85,7 @@ static loopSound_t		loopSounds[MAX_GENTITIES];
 static	channel_t		*freelist = NULL;
 
 int						s_rawend[MAX_RAW_STREAMS];
-portable_samplepair_t s_rawsamples[MAX_RAW_STREAMS][MAX_RAW_SAMPLES];
+portable_samplepair_t s_rawsamples[MAX_RAW_STREAMS][RAW_SAMPLES_KEPT];
 
 
 // ====================================================================
@@ -363,7 +363,12 @@ sfxHandle_t	S_Base_RegisterSound( const char *name, qboolean compressed ) {
 		return 0;
 	}
 
-	if ( sfx->soundData ) {
+	if ( sfx->soundData
+#ifdef USE_WEB_AUDIO
+		// the page keeps the samples, so soundData stays NULL
+		|| sfx->inMemory
+#endif
+		) {
 		if ( sfx->defaultSound ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: could not find %s - using default\n", sfx->soundName );
 			return 0;
@@ -929,6 +934,7 @@ void S_AddLoopSounds (void) {
 		ch->master_vol = 127;
 		ch->leftvol = left_total;
 		ch->rightvol = right_total;
+		ch->entnum = i;
 		ch->thesfx = loop->sfx;
 		ch->doppler = loop->doppler;
 		ch->dopplerScale = loop->dopplerScale;
@@ -981,6 +987,7 @@ void S_Base_RawSamples( int stream, int samples, int rate, int width, int numCha
 	int		i;
 	int		src, dst;
 	float	scale;
+	float	left, right;
 	int		intVolumeLeft, intVolumeRight;
 	portable_samplepair_t *rawsamples;
 
@@ -994,8 +1001,9 @@ void S_Base_RawSamples( int stream, int samples, int rate, int width, int numCha
 
 	rawsamples = s_rawsamples[stream];
 
+	// the stream's gains, before the master volume
 	if ( s_muted->integer ) {
-		intVolumeLeft = intVolumeRight = 0;
+		left = right = 0;
 	} else {
 		int leftvol, rightvol;
 
@@ -1006,14 +1014,23 @@ void S_Base_RawSamples( int stream, int samples, int rate, int width, int numCha
 			leftvol = rightvol = 256;
 		}
 
-		intVolumeLeft = leftvol * volume * s_volume->value;
-		intVolumeRight = rightvol * volume * s_volume->value;
+		left = leftvol * volume / 256;
+		right = rightvol * volume / 256;
 	}
 
 	if ( s_rawend[stream] < s_soundtime ) {
 		Com_DPrintf( "S_Base_RawSamples: resetting minimum: %i < %i\n", s_rawend[stream], s_soundtime );
 		s_rawend[stream] = s_soundtime;
 	}
+
+#ifdef USE_WEB_AUDIO
+	// the page's master gain has the master volume
+	S_WebRawSamples( stream, samples, rate, width, numChannels, data, left, right );
+	return;
+#endif
+
+	intVolumeLeft = 256 * left * s_volume->value;
+	intVolumeRight = 256 * right * s_volume->value;
 
 	scale = (float)rate / dma.speed;
 
@@ -1230,11 +1247,16 @@ void S_Base_Update( void ) {
 		Com_Printf ("----(%i)---- painted: %i\n", total, s_paintedtime);
 	}
 
+#ifdef USE_WEB_AUDIO
+	// the page mixes what plays
+	S_WebUpdate();
+#else
 	// add raw data from streamed samples
 	S_UpdateBackgroundTrack();
 
 	// mix some sound
 	S_Update_();
+#endif
 }
 
 void S_GetSoundtime(void)

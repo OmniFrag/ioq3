@@ -205,7 +205,14 @@ extern	dma_t	dma;
 // past it, new samples overwrite ones not yet played
 #define	MAX_RAW_SAMPLES	32768
 #define MAX_RAW_STREAMS (MAX_CLIENTS * 2 + 1)
-extern	portable_samplepair_t s_rawsamples[MAX_RAW_STREAMS][MAX_RAW_SAMPLES];
+#ifdef USE_WEB_AUDIO
+// the page queues the streams (web/snd_web.c) and snd_mix.c never paints
+// them, so the base mixer's buffer, 34 MB, holds nothing
+#define RAW_SAMPLES_KEPT 1
+#else
+#define RAW_SAMPLES_KEPT MAX_RAW_SAMPLES
+#endif
+extern	portable_samplepair_t s_rawsamples[MAX_RAW_STREAMS][RAW_SAMPLES_KEPT];
 extern	int		s_rawend[MAX_RAW_STREAMS];
 
 extern cvar_t *s_volume;
@@ -254,6 +261,18 @@ extern sfx_t *sfxScratchPointer;
 extern int	   sfxScratchIndex;
 
 qboolean S_Base_Init( soundInterface_t *si );
+
+#ifdef USE_WEB_AUDIO
+// the base backend's output through Web Audio (web/snd_web.c)
+struct snd_info_s;
+extern int s_soundtime;
+qboolean S_ScanChannelStarts( void );
+void S_GetSoundtime( void );
+qboolean S_Web_Init( soundInterface_t *si );
+void S_WebUpdate( void );
+void S_WebRawSamples( int stream, int samples, int rate, int width, int channels, const byte *data, float left, float right );
+void S_WebLoadSound( sfx_t *sfx, const struct snd_info_s *info, const byte *data );
+#endif
 
 // OpenAL stuff
 typedef enum
