@@ -50,10 +50,13 @@ typedef struct FBO_s
 
 	int             width;
 	int             height;
+
+	qboolean        clearOnBind;	// cleared whole as the frame first binds it (RB_DrawBuffer)
 } FBO_t;
 
 void FBO_AttachImage(FBO_t *fbo, image_t *image, GLenum attachment, GLuint cubemapside);
 void FBO_Bind(FBO_t *fbo);
+void FBO_ClearWhole(GLbitfield buffers, const vec4_t color);
 void FBO_Init(void);
 void FBO_Resize(void);
 void FBO_Shutdown(void);
