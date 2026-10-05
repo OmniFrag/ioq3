@@ -331,21 +331,53 @@ static FBO_t *FBO_CreateRenderTarget(const char *name, const char *resolveName, 
 FBO_ResizeRenderTarget
 
 Fits a framebuffer from FBO_CreateRenderTarget to its resized images; with
-multisampling its renderbuffers get new storage
+multisampling its renderbuffers get new storage, a single pixel's while
+nothing draws into them (FBO_UseRenderTarget)
 ============
 */
-static void FBO_ResizeRenderTarget(FBO_t *fbo, FBO_t *resolveFbo, image_t *depthImage)
+static void FBO_ResizeRenderTarget(FBO_t *fbo, FBO_t *resolveFbo, image_t *depthImage, qboolean unused)
 {
 	if (resolveFbo)
 	{
-		fbo->width = depthImage->width;
-		fbo->height = depthImage->height;
+		fbo->width = unused ? 1 : depthImage->width;
+		fbo->height = unused ? 1 : depthImage->height;
 		FBO_CreateBuffer(fbo, fbo->colorFormat, 0, tr.multisample);
 		FBO_CreateBuffer(fbo, fbo->depthFormat, 0, tr.multisample);
 		FBO_Fit(resolveFbo, depthImage);
+		R_CheckFBO(fbo);
 	}
+	else
+		FBO_Fit(fbo, depthImage);
+}
 
-	FBO_Fit(fbo, depthImage);
+/*
+============
+FBO_UseRenderTarget
+
+Picks what the frame is drawn into: the window-sized render target, or,
+while r_viewScale scales world views, its resolve FBO's images directly.
+Then only the view FBO needs multisampling, and the scaled view and the
+2D are drawn single-sampled, as without multisampling, so that a frame
+stores and resolves one multisampled target, at the view's size, not a
+second at the window's as well. On a tile-based GPU every multisampled
+target that's stored costs all its samples' bandwidth. The 2D, drawn in
+rectangles, looks the same either way, except where a rectangle's edge
+falls between pixels; views without the world (the HUD's heads) lose
+their multisampling at that scale
+============
+*/
+static void FBO_UseRenderTarget(void)
+{
+	if (tr.viewScaled && tr.renderTargetResolveFbo)
+	{
+		tr.renderFbo = tr.renderTargetResolveFbo;
+		tr.msaaResolveFbo = NULL;
+	}
+	else
+	{
+		tr.renderFbo = tr.renderTargetFbo;
+		tr.msaaResolveFbo = tr.renderTargetResolveFbo;
+	}
 }
 
 /*
@@ -362,8 +394,9 @@ void FBO_Resize(void)
 	image_t *sceneDepthImage = tr.viewScaled ? tr.viewDepthImage : tr.renderDepthImage;
 	int i;
 
-	FBO_ResizeRenderTarget(tr.renderFbo, tr.msaaResolveFbo, tr.renderDepthImage);
-	FBO_ResizeRenderTarget(tr.viewFbo, tr.viewResolveFbo, tr.viewDepthImage);
+	FBO_ResizeRenderTarget(tr.renderTargetFbo, tr.renderTargetResolveFbo, tr.renderDepthImage, tr.viewScaled);
+	FBO_ResizeRenderTarget(tr.viewFbo, tr.viewResolveFbo, tr.viewDepthImage, qfalse);
+	FBO_UseRenderTarget();
 
 	// these test against a world view's depth
 	if (tr.screenScratchFbo)
@@ -426,8 +459,9 @@ void FBO_Init(void)
 	// render into an FBO, which the present pass draws to the screen with
 	// greyscale and brightness (RB_PresentToScreen); with multisampling,
 	// into renderbuffers resolved into the render image
-	tr.renderFbo = FBO_CreateRenderTarget("_render", "_msaaResolve", tr.renderImage, tr.renderDepthImage,
-		hdrFormat, &tr.msaaResolveFbo);
+	tr.renderTargetFbo = FBO_CreateRenderTarget("_render", "_msaaResolve", tr.renderImage, tr.renderDepthImage,
+		hdrFormat, &tr.renderTargetResolveFbo);
+	FBO_UseRenderTarget();
 
 	// world views at r_viewScale's size, scaled into the render FBO after
 	// their post-processing (RB_PostProcess)
