@@ -1202,6 +1202,12 @@ qboolean S_ScanChannelStarts( void ) {
 		if ( ch->startSample == START_SAMPLE_IMMEDIATE ) {
 			ch->startSample = s_paintedtime;
 			newSamples = qtrue;
+			// the sounds that begin, after S_Base_StartSoundEx's rules and
+			// any theft of their channel since
+			if ( s_show->integer == 3 ) {
+				Com_Printf( "start %i %i %i %i %i %s\n", ch->startSample, dma.speed, i, ch->entnum,
+					ch->entchannel, ch->thesfx->soundName );
+			}
 			continue;
 		}
 
