@@ -22,7 +22,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 
 
-#define	CMD_BACKUP			64	
+// the client's last commands, at most one a millisecond (CL_CreateNewCommands):
+// half a second or more, as 64 were at 125fps. Modules built with 64 ask for
+// no more than they did
+#define	CMD_BACKUP			512
 #define	CMD_MASK			(CMD_BACKUP - 1)
 // allow a lot of command backups for very fast systems
 // multiple commands may be combined into a single packet, so this
