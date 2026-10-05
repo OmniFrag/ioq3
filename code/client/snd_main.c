@@ -504,6 +504,9 @@ void S_Init( void )
 	s_muted = Cvar_Get("s_muted", "0", CVAR_ROM);
 	s_doppler = Cvar_Get( "s_doppler", "1", CVAR_ARCHIVE );
 	s_backend = Cvar_Get( "s_backend", "", CVAR_ROM );
+	Cvar_SetDescription( Cvar_Get( "s_running", "0", CVAR_ROM ),
+		"Whether sound plays now: once the device opens, and on the web while the browser lets it" );
+	Cvar_Set( "s_running", "0" );
 	s_muteWhenMinimized = Cvar_Get( "s_muteWhenMinimized", "1", CVAR_ARCHIVE_ND );
 	s_muteWhenUnfocused = Cvar_Get( "s_muteWhenUnfocused", "0", CVAR_ARCHIVE );
 
@@ -543,6 +546,10 @@ void S_Init( void )
 				Com_Error( ERR_FATAL, "Sound interface invalid" );
 			}
 
+#ifndef USE_WEB_AUDIO
+			// the page says when the browser lets it (web/snd_web.c)
+			Cvar_Set( "s_running", "1" );
+#endif
 			S_SoundInfo( );
 			Com_Printf( "Sound initialization successful.\n" );
 		} else {
@@ -565,6 +572,7 @@ void S_Shutdown( void )
 	}
 
 	Com_Memset( &si, 0, sizeof( soundInterface_t ) );
+	Cvar_Set( "s_running", "0" );
 
 	Cmd_RemoveCommand( "play" );
 	Cmd_RemoveCommand( "music");
