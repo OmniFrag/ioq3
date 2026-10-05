@@ -76,7 +76,8 @@ static const char *presentReasons[] = {
 	"in_nograb is on",
 	"the system didn't go fullscreen",
 	"it starts with a click",
-	"the browser refused it"
+	"the browser refused it",
+	"it's the browser's own fullscreen, which only its key (F11) leaves"
 };
 
 /*
@@ -169,9 +170,25 @@ Present_Frame
 */
 void Present_Frame( const presentFacts_t *facts, int time )
 {
-	qboolean	want = r_fullscreen->integer != 0;
+	qboolean	want;
 
 	present.time = time;
+
+	// the player's own request, which the platform made at their key: the
+	// want, saved, and a request out, unless the device has no fullscreen,
+	// whose reason follows
+	if( facts->playerAsked )
+	{
+		Cvar_SetFrom( "r_fullscreen", facts->playerWants ? "1" : "0", CVAR_SOURCE_PLAYER, qtrue );
+		present.recreated = qfalse;
+		if( !facts->playerWants || facts->available )
+		{
+			present.asking = qtrue;
+			present.askedFor = facts->playerWants;
+			present.askTime = time;
+		}
+	}
+	want = r_fullscreen->integer != 0;
 
 	// making a window, and loading after it, isn't the system's time to
 	// answer: that starts with the window's first frame

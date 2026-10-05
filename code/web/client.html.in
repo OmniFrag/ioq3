@@ -11,14 +11,24 @@ canvas { display: block; width: 100vw; height: 100dvh; border: 0; padding: 0; }
 canvas:focus { outline: none; }
 /* The page's word over the game: the download's progress, or an error.
    Clicks go through it to the canvas, where SDL asks for the pointer. */
-#status { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
-    font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
+#status, #hints { position: fixed; pointer-events: none; font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
+#status { inset: 0; display: grid; place-items: center; }
 #status[hidden] { display: none; }
-#status > div { background: rgba(0, 0, 0, 0.7); padding: 16px 24px; border-radius: 8px; max-width: min(32em, 80vw); }
+#status > div, .hint { background: rgba(0, 0, 0, 0.7); border-radius: 8px; }
+#status > div { padding: 16px 24px; max-width: min(32em, 80vw); }
 #status progress { display: block; width: 100%; margin-top: 8px; }
 #status progress[hidden] { display: none; }
 /* an error stays, and its words can be copied */
 #status.error { pointer-events: auto; user-select: text; }
+/* The page's hints near the top centre, where a browser says how to leave
+   fullscreen: how to leave it and come back, and "Click to play"; #status
+   is the download's and errors'. Clicks go through them. A hint fades in
+   from nothing and, faded out and emptied, takes no room */
+#hints { top: 48px; left: 16px; right: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.hint { padding: 8px 16px; opacity: 0; transition: opacity 0.4s; }
+.hint:empty { display: none; }
+.hint.shown { opacity: 1; }
+@starting-style { .hint.shown { opacity: 0; } }
 </style>
 
 <!-- The game takes keys only while its canvas has focus (the engine sets
@@ -26,6 +36,7 @@ canvas:focus { outline: none; }
      the page stay there; tabindex lets the canvas have focus -->
 <canvas id=canvas tabindex=0></canvas>
 <div id=status hidden><div><span></span><progress hidden></progress></div></div>
+<div id=hints><div id=hint class=hint></div><div id=play class=hint></div></div>
 
 <script type=module>
 // These strings are set in the generated HTML file in the build directory.
@@ -147,9 +158,9 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
 // grants only on the player's input, and the engine says whether the player
 // wants fullscreen and the game the pointer (Module.present, cl_present.c
 // and sdl_input.c): the page goes fullscreen at once if the player's input
-// allows, as with Alt+Enter, or else on their next click, which also takes
-// the lock, and reports what is (Module.presentationFacts). A request for
-// fullscreen stands until it's met: leaving fullscreen by the browser's
+// allows, as with the menu's click, or else on their next click, which also
+// takes the lock, and reports what is (Module.presentationFacts). A request
+// for fullscreen stands until it's met: leaving fullscreen by the browser's
 // means, even with a click a moment later, doesn't bring it back, and the
 // engine stops wanting it for this visit. The lock is asked for at each
 // click without it.
@@ -160,10 +171,30 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
 // time.
 const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// for what a browser does with fullscreen's keys, and says of them
+const browser = /Firefox\//.test(navigator.userAgent) ? 'firefox' : /Chrome\//.test(navigator.userAgent) ? 'chromium'
+    : /Safari\//.test(navigator.userAgent) ? 'safari' : 'other';
+const mac = /Macintosh/.test(navigator.userAgent);
 const fullscreenAvailable = !iOS && !!document.documentElement.requestFullscreen;
-const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2;
+// The browser's own fullscreen (F11 in Chrome, Edge and Firefox on Windows
+// and Linux) isn't the page's, and only the browser's key leaves it: it's
+// reported as fullscreen all the same, the platform's own. It's told from
+// the page's by beginning without it: the media query may match in the
+// page's fullscreen too, and lag its end.
+const browserFullscreen = matchMedia('(display-mode: fullscreen)');
+let browsersOwn = browserFullscreen.matches;
+const isFullscreen = () => Boolean(document.fullscreenElement) || browsersOwn;
+// the facts' bits, as sdl_input.c reads them
+const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8, FACT_ASKED = 16, FACT_ASKED_FULL = 32,
+    FACT_ANSWER_SHIFT = 6;
+const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
+// a request out, which a second one would only get in the way of; and
+// leaving that the game asked for, which needs no hint
+let entering = false, leaving = false;
 const enterFullscreen = () => {
+    if (entering) return;
+    entering = true;
     fullscreenAnswer = ANSWER_NONE;
     document.documentElement.requestFullscreen()
         .then(() => { if (wantPointer) lockPointer(); })
@@ -172,21 +203,29 @@ const enterFullscreen = () => {
             // the request stands; the lock needn't wait for it
             fullscreenAnswer = ANSWER_REFUSED;
             if (wantPointer) lockPointer();
-        });
+        })
+        .finally(() => { entering = false; });
+};
+const exitFullscreen = () => {
+    leaving = true;
+    document.exitFullscreen().catch(() => { leaving = false; });
 };
 const present = ({ fullscreen, pointer }) => {
     if (fullscreen !== undefined) {
-        wantFullscreen = fullscreen && fullscreenAvailable && !document.fullscreenElement;
+        fullscreenAnswer = ANSWER_NONE;
+        wantFullscreen = fullscreen && fullscreenAvailable && !isFullscreen();
         if (wantFullscreen) {
             if (navigator.userActivation?.isActive ?? false) enterFullscreen();
             else fullscreenAnswer = ANSWER_CLICK;
-        } else if (!fullscreen && document.fullscreenElement) {
-            document.exitFullscreen().catch(() => {});
+        } else if (!fullscreen) {
+            if (document.fullscreenElement) exitFullscreen();
+            else if (browsersOwn) fullscreenAnswer = ANSWER_BROWSERS_OWN;
         }
     }
     if (pointer !== undefined) {
         wantPointer = pointer;
         if (!wantPointer && locked()) document.exitPointerLock();
+        showPlay();
     }
 };
 // A click that goes fullscreen or takes the lock is the page's, never the
@@ -199,7 +238,7 @@ addEventListener('pointerdown', (event) => {
     if (event.pointerType !== 'mouse') return;
     claimedPointer = undefined;
     if (event.target !== canvas) return;
-    const goFullscreen = wantFullscreen && !document.fullscreenElement;
+    const goFullscreen = wantFullscreen && !isFullscreen();
     const takeLock = wantPointer && !locked();
     if (!goFullscreen && !takeLock) return;
     event.stopImmediatePropagation();
@@ -212,17 +251,108 @@ addEventListener('pointerup', (event) => {
     claimedPointer = undefined;
     event.stopImmediatePropagation();
 }, { capture: true });
+
+// Alt+Enter (Option+Return on a Mac) is the page's too: Firefox grants
+// fullscreen only while the key is handled, and the engine reads its keys a
+// frame later. The page asks for the other of what's on screen at the key,
+// SDL sees neither its press nor its release, and the engine is told what
+// was asked, as the player's own request, which it saves (cl_present.c).
+// A claimed release that never came is forgotten at the next press, as a
+// click's is.
+let asked = 0, claimedEnter = false;
+addEventListener('keydown', (event) => {
+    if (event.code !== 'Enter') return;
+    claimedEnter = false;
+    if (event.target !== canvas || !event.altKey) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    claimedEnter = true;
+    if (event.repeat) return;
+    const fullscreen = !isFullscreen();
+    asked = FACT_ASKED | (fullscreen ? FACT_ASKED_FULL : 0);
+    present({ fullscreen });
+}, { capture: true });
+addEventListener('keyup', (event) => {
+    if (event.code !== 'Enter' || !claimedEnter) return;
+    claimedEnter = false;
+    event.stopImmediatePropagation();
+}, { capture: true });
+
+// The page's hints: the timed ones, held about four seconds, and each only
+// the first time in a visit; and "Click to play", while the game wants the
+// pointer in a match and doesn't have it. It stays up through a click the
+// browser refuses, as Chrome does for a second or two after the player's
+// Esc in a window, and says nothing more.
+const hintBox = document.getElementById('hint');
+const playBox = document.getElementById('play');
+const hinted = new Set();
+let hintTimer, playing = false;
+const fade = (box, text) => {
+    if (text) box.textContent = text;
+    box.classList.toggle('shown', Boolean(text));
+};
+for (const box of [hintBox, playBox])
+    box.addEventListener('transitionend', () => { if (!box.classList.contains('shown')) box.textContent = ''; });
+const hintOnce = (text) => {
+    if (hinted.has(text)) return;
+    hinted.add(text);
+    fade(hintBox, text);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => fade(hintBox), 4000);
+};
+const showPlay = () => fade(playBox, playing && wantPointer && !locked() ? 'Click to play' : '');
+document.addEventListener('pointerlockchange', showPlay);
+
+// In the page's fullscreen, Esc and F11 are the game's where the browser has
+// Keyboard Lock (Chrome, and Safari from 26.4): Esc opens the menu, as
+// natively, F11 takes a screenshot, and a held Esc leaves fullscreen. The
+// browser lets go of the keys as fullscreen ends. Chrome says how to leave
+// itself, as Firefox does, where the page's hint would go; elsewhere the
+// page says it: with Keyboard Lock a held Esc, and without it, in Safari,
+// one Esc frees the pointer and a second leaves. On leaving, by any means
+// but the game's, it says how to come back.
+const keyboardLock = navigator.keyboard?.lock ? navigator.keyboard : null;
+// The hint waits for the lock's answer: a refused lock leaves Esc the
+// browser's.
+const hintLeaving = (keysLocked) => {
+    const hint = browser === 'chromium' || browser === 'firefox' ? ''
+        : keysLocked ? 'Hold Esc to leave fullscreen'
+        : browser === 'safari' && wantPointer ? 'Press Esc twice to leave fullscreen'
+        : 'Press Esc to leave fullscreen';
+    if (hint && document.fullscreenElement) hintOnce(hint);
+};
 document.addEventListener('fullscreenchange', () => {
-    if (document.fullscreenElement) wantFullscreen = false;
+    if (document.fullscreenElement) {
+        wantFullscreen = false;
+        if (keyboardLock) keyboardLock.lock(['Escape', 'F11']).then(() => hintLeaving(true), () => hintLeaving(false));
+        else hintLeaving(false);
+    } else {
+        keyboardLock?.unlock();
+        if (!leaving) hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
+        leaving = false;
+    }
 });
-// as bits, for the engine to read each frame (IN_PresentFacts)
+// The browser's own fullscreen fires no fullscreenchange: entering it meets
+// a standing request, so leaving it by its key doesn't make a click go in.
+browserFullscreen.addEventListener('change', () => {
+    browsersOwn = browserFullscreen.matches && !document.fullscreenElement;
+    if (browsersOwn) wantFullscreen = false;
+});
+
+// as bits, for the engine to read each frame (IN_PresentFacts); Alt+Enter's
+// request only once
 // a mouse or the like, which the lock is for; a touch screen has none
 const finePointer = matchMedia('(any-pointer: fine)');
-const presentationFacts = () => (document.fullscreenElement ? 1 : 0)
-    | (fullscreenAvailable ? 2 : 0)
-    | (locked() ? 4 : 0)
-    | (finePointer.matches ? 8 : 0)
-    | (fullscreenAnswer << 4);
+const presentationFacts = () => {
+    const facts = (isFullscreen() ? FACT_FULLSCREEN : 0)
+        | (fullscreenAvailable ? FACT_AVAILABLE : 0)
+        | (locked() ? FACT_LOCKED : 0)
+        | (finePointer.matches ? FACT_POINTER : 0)
+        | asked
+        | (fullscreenAnswer << FACT_ANSWER_SHIFT);
+    asked = 0;
+    return facts;
+};
 
 // A right click is the game's. SDL leaves the event be, and the browser's
 // menu would open over the game while the pointer is free: on the menus,
@@ -237,9 +367,11 @@ const confirmLeave = (event) => {
     event.preventDefault();
     event.returnValue = '';
 };
-const setPlaying = (playing) => {
+const setPlaying = (inMatch) => {
+    playing = inMatch;
     if (playing) addEventListener('beforeunload', confirmLeave);
     else removeEventListener('beforeunload', confirmLeave);
+    showPlay();
 };
 
 // The engine's files live in the page's memory: a screenshot it writes

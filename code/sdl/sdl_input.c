@@ -1337,7 +1337,9 @@ void IN_ProcessEvent( const SDL_Event *e )
 #define PAGE_AVAILABLE		2
 #define PAGE_LOCKED			4
 #define PAGE_POINTER		8	// a mouse or the like, which the page can lock
-#define PAGE_ANSWER_SHIFT	4	// 0 none, 1 waiting for a click, 2 refused
+#define PAGE_ASKED			16	// the player's Alt+Enter, asked for by the page since the last frame
+#define PAGE_ASKED_FULL		32	// and what it asked for
+#define PAGE_ANSWER_SHIFT	6	// 0 none, 1 waiting for a click, 2 refused, 3 the browser's own
 
 // this frame's, read once
 static int pageFacts;
@@ -1400,7 +1402,7 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 	facts->clickedIn = mouseClickedIn;
 #ifdef __EMSCRIPTEN__
 	{
-		static const presentReason_t answers[] = { PRESENT_OK, PRESENT_NEEDS_CLICK, PRESENT_REFUSED };
+		static const presentReason_t answers[] = { PRESENT_OK, PRESENT_NEEDS_CLICK, PRESENT_REFUSED, PRESENT_BROWSERS_OWN };
 		int answer;
 
 		pageFacts = MAIN_THREAD_EM_ASM_INT({ return Module.presentationFacts?.() ?? 2; });
@@ -1409,6 +1411,8 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 		facts->available = ( pageFacts & PAGE_AVAILABLE ) != 0;
 		facts->standing = qtrue;
 		facts->answer = answer < ARRAY_LEN( answers ) ? answers[answer] : PRESENT_OK;
+		facts->playerAsked = ( pageFacts & PAGE_ASKED ) != 0;
+		facts->playerWants = ( pageFacts & PAGE_ASKED_FULL ) != 0;
 		facts->holdable = ( pageFacts & PAGE_POINTER ) != 0;
 		facts->captured = IN_Captured( );
 		facts->capturesAtClick = qtrue;
