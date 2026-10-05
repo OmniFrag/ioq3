@@ -995,6 +995,8 @@ struct cvar_s {
 	char		*savedString;
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1
+
+	char		*reason;	// its owner's word on why what's so isn't what it wants (Cvar_SetReason), or NULL
 };
 
 #define	MAX_CVAR_VALUE_STRING	256

@@ -1047,7 +1047,11 @@ intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions ) {
 	}
 	for ( ; extensions->key; extensions++ ) {
 		if ( !Q_stricmp( key, extensions->key ) ) {
-			Com_sprintf( value, valueSize, "%i", extensions->trap );
+			if ( extensions->value ) {
+				Q_strncpyz( value, extensions->value(), valueSize );
+			} else {
+				Com_sprintf( value, valueSize, "%i", extensions->trap );
+			}
 			return qtrue;
 		}
 	}
