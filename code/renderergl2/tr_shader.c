@@ -218,6 +218,11 @@ static int NameToSrcBlendMode( const char *name )
 	}
 	else if ( !Q_stricmp( name, "GL_SRC_ALPHA_SATURATE" ) )
 	{
+		// min(source alpha, 1 - destination alpha), which with no alpha
+		// drawn is 0
+		if (r_ignoreDstAlpha->integer)
+			return GLS_SRCBLEND_ZERO;
+
 		return GLS_SRCBLEND_ALPHA_SATURATE;
 	}
 
