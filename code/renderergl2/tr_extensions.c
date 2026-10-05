@@ -209,9 +209,11 @@ void GLimp_InitExtraExtensions(void)
 		// float colour buffers on OpenGL ES 3.0, to render HDR into
 		// (tr_image.c gives them the formats OpenGL ES needs). 16-bit
 		// floats are enough for HDR, and many phones render only those;
-		// 32-bit ones also need linear filtering to stand in for desktop's
+		// 32-bit ones also need linear filtering to stand in for desktop's.
+		// Packed floats render only with GL_EXT_color_buffer_float
 		glRefConfig.textureFloat = qfalse;
 		glRefConfig.textureFloat32 = qfalse;
+		glRefConfig.packedFloat = qfalse;
 		if (qglesMajorVersion >= 3)
 		{
 			qboolean float32 = SDL_GL_ExtensionSupported("GL_EXT_color_buffer_float");
@@ -222,6 +224,7 @@ void GLimp_InitExtraExtensions(void)
 				glRefConfig.textureFloat = !!r_ext_texture_float->integer;
 				glRefConfig.textureFloat32 = glRefConfig.textureFloat && float32
 					&& SDL_GL_ExtensionSupported("GL_OES_texture_float_linear");
+				glRefConfig.packedFloat = glRefConfig.textureFloat && float32;
 				ri.Printf(PRINT_ALL, result[glRefConfig.textureFloat], extension);
 			}
 			else
@@ -268,6 +271,10 @@ void GLimp_InitExtraExtensions(void)
 	if (q_gl_version_at_least_3_0 || SDL_GL_ExtensionSupported(extension))
 	{
 		glRefConfig.textureFloat = !!r_ext_texture_float->integer;
+
+		// OpenGL 3.0 - GL_EXT_packed_float
+		glRefConfig.packedFloat = glRefConfig.textureFloat
+			&& (q_gl_version_at_least_3_0 || SDL_GL_ExtensionSupported("GL_EXT_packed_float"));
 
 		ri.Printf(PRINT_ALL, result[glRefConfig.textureFloat], extension);
 	}

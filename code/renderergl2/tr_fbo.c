@@ -131,6 +131,7 @@ void FBO_CreateBuffer(FBO_t *fbo, int format, int index, int multisample)
 		case GL_RGBA8:
 		case GL_RGB16F_ARB:
 		case GL_RGBA16F_ARB:
+		case GL_R11F_G11F_B10F:
 		case GL_RGB32F_ARB:
 		case GL_RGBA32F_ARB:
 			fbo->colorFormat = format;
@@ -439,9 +440,7 @@ void FBO_Init(void)
 
 	R_IssuePendingRenderCommands();
 
-	hdrFormat = GL_RGBA8;
-	if (r_hdr->integer && glRefConfig.textureFloat)
-		hdrFormat = GL_RGBA16F_ARB;
+	hdrFormat = R_RenderFormat();
 
 	if (glRefConfig.framebufferMultisample)
 		qglGetIntegerv(GL_MAX_SAMPLES, &multisample);
