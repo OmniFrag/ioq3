@@ -686,7 +686,8 @@ static const char * const cvar_sourceNames[] = {
 	[CVAR_SOURCE_MENU] = "the menus'",
 	[CVAR_SOURCE_SCRIPT] = "a script's",
 	[CVAR_SOURCE_SESSION] = "the command line's",
-	[CVAR_SOURCE_SERVER] = "the server's"
+	[CVAR_SOURCE_SERVER] = "the server's",
+	[CVAR_SOURCE_SYSTEM] = "the system's"
 };
 
 /*
@@ -836,6 +837,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	// a read only cvar's value is state, never saved, and can be large (a
 	// server's pak lists)
 	saves = source != CVAR_SOURCE_SCRIPT && source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
+		source != CVAR_SOURCE_SYSTEM &&
 		!( var->flags & CVAR_ROM ) && !Cvar_SameString( var->savedString, value );
 	if ( source == CVAR_SOURCE_SERVER ) {
 		var->serverStale = qfalse;
@@ -1321,7 +1323,7 @@ void Cvar_Print_f(void)
 Cvar_Why_f
 
 Prints where a cvar's value comes from: each of its layers (cvar_t) that
-has one, after what Cvar_Print says
+has one, after what Cvar_Print says, and its owner's account
 ============
 */
 void Cvar_Why_f( void ) {
@@ -1336,6 +1338,12 @@ void Cvar_Why_f( void ) {
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SESSION ) {
 		Com_Printf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
+	}
+	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
+		Com_Printf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
+	}
+	if ( var->reason ) {
+		Com_Printf( "  %s\n", var->reason );
 	}
 	if ( var->savedString ) {
 		Com_Printf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
@@ -1723,6 +1731,7 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	Cvar_SetLayer( &cv->serverString, NULL );
 	Cvar_SetLayer( &cv->userString, NULL );
 	Cvar_SetLayer( &cv->savedString, NULL );
+	Cvar_SetLayer( &cv->reason, NULL );
 
 	if(cv->prev)
 		cv->prev->next = cv->next;
@@ -1963,6 +1972,16 @@ void Cvar_SetDescription( cvar_t *var, const char *var_description )
 		}
 		var->description = CopyString( var_description );
 	}
+}
+
+/*
+=====================
+Cvar_SetReason
+=====================
+*/
+void Cvar_SetReason( cvar_t *var, const char *reason )
+{
+	Cvar_SetLayer( &var->reason, reason && reason[0] ? reason : NULL );
 }
 
 /*

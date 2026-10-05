@@ -1069,7 +1069,7 @@ static void IN_SaveWindowSize( qboolean restarting )
 		{
 			return;
 		}
-		source = CVAR_SOURCE_SESSION;
+		source = CVAR_SOURCE_SYSTEM;
 	}
 
 	// r_mode's sizes are pixels (GLimp_SetMode)

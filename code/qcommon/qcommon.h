@@ -384,10 +384,12 @@ extern vmLinkedModule_t vm_linkedModules[];
 // so the fixed syscall numbers don't change.
 #define	COM_TRAP_GETVALUE	700
 
-// an extension a module can look up: its key and syscall number
+// an extension a module can look up: its key and syscall number, or for a
+// plain value (a key without "trap_"), the function that gives it
 typedef struct {
 	const char	*key;
 	int			trap;
+	const char	*(*value)( void );
 } vmExtension_t;
 
 // Extension syscalls, found through trap_GetValue, are numbered from 800 up,
@@ -654,12 +656,18 @@ typedef enum {
 	CVAR_SOURCE_MENU,	// the menus, the ui module's sets: the player's choice, saved if archived
 	CVAR_SOURCE_SCRIPT,	// what runs at every start (default.cfg, autoexec.cfg): not saved
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
-	CVAR_SOURCE_SERVER	// a server's requirement, until Cvar_EndServerValues drops it
+	CVAR_SOURCE_SERVER,	// a server's requirement, until Cvar_EndServerValues drops it
+	CVAR_SOURCE_SYSTEM	// the system's or browser's own change (fullscreen, a maximized window's size): for this run only
 } cvarSource_t;
 
 cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
 // a set, in the layer its source gives (cvar_t's serverString and the rest).
 // A server may not set protected or private cvars (as Cvar_SetSafe)
+
+void	Cvar_SetReason( cvar_t *var, const char *reason );
+// its owner's word on why what's so isn't what the cvar wants, which
+// cvar_why prints; NULL or "" when it is
+
 cvarSource_t Cvar_Source( const cvar_t *var );
 // whose value a cvar has
 
