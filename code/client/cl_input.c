@@ -638,10 +638,12 @@ void CL_CreateNewCommands( void ) {
 
 	frame_msec = com_frameTime - old_com_frameTime;
 
-	// if running over 1000fps, act as if each frame is 1ms
-	// prevents divisions by zero
+	// a frame in the same millisecond as the last command makes none: a
+	// command carries whole milliseconds, and over 1000fps a command a frame
+	// would fill the backup (CMD_BACKUP) in a fraction of a second, which
+	// cgame takes for a lost connection. Its input goes into the next.
 	if ( frame_msec < 1 ) {
-		frame_msec = 1;
+		return;
 	}
 
 	// if running less than 5fps, truncate the extra time to prevent
