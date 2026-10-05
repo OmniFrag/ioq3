@@ -422,13 +422,38 @@ void FBO_Resize(void)
 
 /*
 ============
+FBO_Samples
+
+The samples a render target of format is drawn with: what the player
+asks (r_ext_framebuffer_multisample), within what the GPU and the format
+take (GLimp_InitExtraExtensions); none below 2, or without blits to
+resolve them
+============
+*/
+int FBO_Samples(int format)
+{
+	int samples = MIN(r_ext_framebuffer_multisample->integer, glRefConfig.maxSamples);
+
+	if (format == GL_RGBA16F_ARB)
+		samples = MIN(samples, glRefConfig.halfFloatSamples);
+	else if (format == GL_R11F_G11F_B10F)
+		samples = MIN(samples, glRefConfig.packedFloatSamples);
+
+	if (samples < 2 || !glRefConfig.framebufferMultisample || !glRefConfig.framebufferBlit)
+		return 0;
+
+	return samples;
+}
+
+/*
+============
 FBO_Init
 ============
 */
 void FBO_Init(void)
 {
 	int             i;
-	int             multisample = 0;
+	int             multisample;
 
 	ri.Printf(PRINT_ALL, "------- FBO_Init -------\n");
 
@@ -441,14 +466,9 @@ void FBO_Init(void)
 
 	R_IssuePendingRenderCommands();
 
-	if (glRefConfig.framebufferMultisample)
-		qglGetIntegerv(GL_MAX_SAMPLES, &multisample);
-
-	if (r_ext_framebuffer_multisample->integer < multisample)
-		multisample = r_ext_framebuffer_multisample->integer;
-
-	if (multisample < 2 || !glRefConfig.framebufferBlit)
-		multisample = 0;
+	// the render targets' format, the views', takes the fewest samples:
+	// an 8-bit frame beside them takes GL_MAX_SAMPLES
+	multisample = FBO_Samples(R_ViewFormat());
 
 	// what the GPU allows, apart from what the player asked for, which a
 	// config keeps for the next GPU

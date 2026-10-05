@@ -30,6 +30,26 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 #include "tr_dsa.h"
 
+/*
+===============
+GLimp_FormatSamples
+
+The most samples a renderbuffer of format takes, as
+GL_ARB_internalformat_query says (the counts come largest first, and none
+for a format that can't be multisampled); without it, GL_MAX_SAMPLES
+===============
+*/
+static int GLimp_FormatSamples(GLenum format)
+{
+	GLint samples = 0;
+
+	if (!qglGetInternalformativ)
+		return glRefConfig.maxSamples;
+
+	qglGetInternalformativ(GL_RENDERBUFFER, format, GL_SAMPLES, 1, &samples);
+	return samples;
+}
+
 void GLimp_InitExtraExtensions(void)
 {
 	char *extension;
@@ -93,6 +113,7 @@ void GLimp_InitExtraExtensions(void)
 	glRefConfig.framebufferObject = qfalse;
 	glRefConfig.framebufferBlit = qfalse;
 	glRefConfig.framebufferMultisample = qfalse;
+	glRefConfig.maxSamples = 0;
 	if (q_gl_version_at_least_3_0 || QGLES_VERSION_ATLEAST(3, 0) || SDL_GL_ExtensionSupported(extension))
 	{
 		glRefConfig.framebufferObject = !!r_ext_framebuffer_object->integer;
@@ -101,6 +122,7 @@ void GLimp_InitExtraExtensions(void)
 
 		qglGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &glRefConfig.maxRenderbufferSize);
 		qglGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &glRefConfig.maxColorAttachments);
+		qglGetIntegerv(GL_MAX_SAMPLES, &glRefConfig.maxSamples);
 
 		QGL_ARB_framebuffer_object_PROCS;
 
@@ -403,6 +425,33 @@ void GLimp_InitExtraExtensions(void)
 	}
 
 done:
+
+	// OpenGL 4.2 and OpenGL ES 3.0 - GL_ARB_internalformat_query: the most
+	// samples each float format takes, as OpenGL ES promises GL_MAX_SAMPLES
+	// only for the formats it requires to multisample (FBO_Samples)
+	extension = "GL_ARB_internalformat_query";
+	if (QGL_VERSION_ATLEAST(4, 2) || QGLES_VERSION_ATLEAST(3, 0) || SDL_GL_ExtensionSupported(extension))
+	{
+		QGL_ARB_internalformat_query_PROCS;
+		ri.Printf(PRINT_ALL, result[1], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	glRefConfig.halfFloatSamples = 0;
+	glRefConfig.packedFloatSamples = 0;
+	if (glRefConfig.framebufferMultisample)
+	{
+		if (glRefConfig.textureFloat)
+			glRefConfig.halfFloatSamples = GLimp_FormatSamples(GL_RGBA16F_ARB);
+		if (glRefConfig.packedFloat)
+			glRefConfig.packedFloatSamples = GLimp_FormatSamples(GL_R11F_G11F_B10F);
+
+		ri.Printf(PRINT_ALL, "...multisampling up to %d samples, RGBA16F %d, R11F_G11F_B10F %d\n",
+			glRefConfig.maxSamples, glRefConfig.halfFloatSamples, glRefConfig.packedFloatSamples);
+	}
 
 	// Determine GLSL version
 	if (1)

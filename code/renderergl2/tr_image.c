@@ -2890,7 +2890,9 @@ int R_ViewFormat( void ) {
 	if (!r_hdr->integer || !glRefConfig.textureFloat)
 		return GL_RGBA8;
 
-	if (r_hdr->integer == 2 && glRefConfig.packedFloat && r_ignoreDstAlpha->integer)
+	// packed floats only where they take the samples RGBA16F would
+	if (r_hdr->integer == 2 && glRefConfig.packedFloat && r_ignoreDstAlpha->integer
+		&& FBO_Samples(GL_R11F_G11F_B10F) >= FBO_Samples(GL_RGBA16F_ARB))
 		return GL_R11F_G11F_B10F;
 
 	return GL_RGBA16F_ARB;
