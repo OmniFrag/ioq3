@@ -48,6 +48,7 @@ QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
 QGL_ARB_map_buffer_range_PROCS;
+QGL_ARB_internalformat_query_PROCS;
 QGL_EXT_direct_state_access_PROCS;
 #undef GLE
 
@@ -1430,6 +1431,7 @@ typedef struct {
 	qboolean textureFloat;
 	qboolean textureFloat32; // OpenGL ES: 32-bit float colour buffers, filtered linearly
 	qboolean packedFloat; // R11F_G11F_B10F colour buffers, for r_hdr 2
+	int maxSamples, halfFloatSamples, packedFloatSamples; // the most samples, and each float format's
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
 	

@@ -268,6 +268,10 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 	GLE(void *, MapBufferRange, GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) \
 	GLE(GLboolean, UnmapBuffer, GLenum target) \
 
+// GL_ARB_internalformat_query, built-in to OpenGL 4.2 and OpenGL ES 3.0
+#define QGL_ARB_internalformat_query_PROCS \
+	GLE(void, GetInternalformativ, GLenum target, GLenum internalformat, GLenum pname, GLsizei bufSize, GLint *params) \
+
 // GL_ARB_vertex_array_object, built-in to OpenGL 3.0
 #define QGL_ARB_vertex_array_object_PROCS \
 	GLE(void, BindVertexArray, GLuint array) \
@@ -340,6 +344,7 @@ QGL_ARB_occlusion_query_PROCS;
 QGL_ARB_framebuffer_object_PROCS;
 QGL_ARB_vertex_array_object_PROCS;
 QGL_ARB_map_buffer_range_PROCS;
+QGL_ARB_internalformat_query_PROCS;
 QGL_EXT_direct_state_access_PROCS;
 #undef GLE
 
