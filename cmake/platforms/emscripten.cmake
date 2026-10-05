@@ -15,6 +15,16 @@ set(USE_OPENAL_DLOPEN OFF CACHE INTERNAL "")
 set(BUILD_GAME_LIBRARIES OFF CACHE INTERNAL "")
 set(USE_HTTP OFF CACHE INTERNAL "")
 
+# Sound through Web Audio (code/web/snd_web.c): the base backend decides what
+# plays, and the browser mixes each sound's node on its audio thread, its
+# samples outside the heap. Off, Emscripten's OpenAL plays it, or SDL's
+# ScriptProcessorNode with s_useOpenAL 0.
+option(USE_WEB_AUDIO "Play sound through Web Audio nodes" ON)
+if(USE_WEB_AUDIO)
+    # not in the cache, so turning USE_WEB_AUDIO off brings OpenAL back
+    set(USE_OPENAL OFF)
+endif()
+
 # Disable LTO since the libraries Emscripten provides aren't LTO enabled
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 

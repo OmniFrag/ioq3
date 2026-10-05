@@ -228,6 +228,159 @@ const present = ({ fullscreen, pointer }) => {
         showPlay();
     }
 };
+// The game's sound (snd_web.c): the engine decides what plays, as its base
+// backend does, and sends what changed once a frame (update), which answers
+// whether the sound runs. Each sound is an AudioBuffer here, outside the
+// engine's memory; each channel a strip, a splitter into two gains, left and
+// right, as the base mixer's volumes; and each playing sound a source node
+// into its channel's strip, mixed by the browser on its audio thread. The
+// page makes the one AudioContext in the player's first input, at the
+// smallest latency the browser gives, so the browser has no context to
+// refuse or warn about, and resumes it in a later input if the browser held
+// it. Until it runs, the engine starts nothing, and a stream's samples are
+// dropped rather than held to play at once. Its listeners come before the
+// presentation's below, which keep the clicks they claim from the rest.
+const sound = (() => {
+    const buffers = [], strips = [], streams = [];
+    let context = null, master = null, merger = null;
+    const STATES = ['suspended', 'running', 'closed', 'interrupted'];
+    function ended() {
+        this.disconnect();
+        if (this.strip?.source === this) this.strip.source = null;
+        streams[this.stream]?.delete(this);
+    }
+    const stop = (source) => {
+        source.onended = null;
+        try { source.stop(); } catch { /* never started */ }
+        source.disconnect();
+    };
+    const strip = (i) => {
+        if (!strips[i]) {
+            // a mono sound to both gains, as the base mixer plays it: the
+            // input mixes it up to stereo, which a splitter, always
+            // discrete, would not
+            const input = new GainNode(context, { channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers' });
+            const split = new ChannelSplitterNode(context, { numberOfOutputs: 2 });
+            const left = new GainNode(context, { gain: 0 }), right = new GainNode(context, { gain: 0 });
+            input.connect(split);
+            split.connect(left, 0);
+            split.connect(right, 1);
+            left.connect(merger, 0, 0);
+            right.connect(merger, 0, 1);
+            strips[i] = { input, left, right, source: null };
+        }
+        return strips[i];
+    };
+    const stopStrip = (s) => {
+        if (!s?.source) return;
+        stop(s.source);
+        s.source = null;
+    };
+    const stopStream = (i) => {
+        streams[i]?.forEach(stop);
+        streams[i] = undefined;
+    };
+    const begin = (event) => {
+        // with no userActivation, any trusted input is let try
+        if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
+        if (!context) {
+            try {
+                context = new AudioContext({ latencyHint: 0 });
+            } catch {
+                context = new AudioContext();
+            }
+            master = new GainNode(context, { gain: 0 });
+            merger = new ChannelMergerNode(context, { numberOfInputs: 2 });
+            merger.connect(master);
+            master.connect(context.destination);
+        }
+        if (context.state !== 'running') context.resume().catch(() => {});
+    };
+    for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, begin, { capture: true });
+    return {
+        state: () => context ? STATES.indexOf(context.state) + 1 : 0,
+        rate: () => context?.sampleRate ?? 0,
+        latency: () => context ? context.baseLatency + (context.outputLatency || 0) : 0,
+        // a sound's samples, a channel after another
+        load(id, samples, frames, channels, rate) {
+            let buffer;
+            try {
+                // a rate the browser can't hold leaves the sound silent
+                buffer = new AudioBuffer({ numberOfChannels: channels, length: Math.max(frames, 1), sampleRate: rate });
+            } catch {
+                buffers[id] = undefined;
+                return;
+            }
+            for (let c = 0; c < channels; c++) buffer.copyToChannel(samples.subarray(c * frames, (c + 1) * frames), c);
+            buffers[id] = buffer;
+        },
+        // snd_web.c's operations: op, strip, then its values
+        update(commands) {
+            if (!context) return false;
+            for (let k = 0; k < commands.length; k += 6) {
+                const s = commands[k + 1];
+                switch (commands[k]) {
+                case 0: { // start: sfx, offset, loop, rate
+                    const buffer = buffers[commands[k + 2]];
+                    if (!buffer) break;
+                    const loop = Boolean(commands[k + 4]), offset = commands[k + 3];
+                    const into = strip(s);
+                    stopStrip(into);
+                    const source = new AudioBufferSourceNode(context, { buffer, loop, playbackRate: commands[k + 5] });
+                    source.strip = into;
+                    source.onended = ended;
+                    source.connect(into.input);
+                    source.start(0, loop ? offset % buffer.duration : Math.max(offset, 0));
+                    into.source = source;
+                    break;
+                }
+                case 1: stopStrip(strips[s]); break;
+                case 2: {
+                    const into = strip(s);
+                    into.left.gain.value = commands[k + 2] / 256;
+                    into.right.gain.value = commands[k + 3] / 256;
+                    break;
+                }
+                case 3: if (strips[s]?.source) strips[s].source.playbackRate.value = commands[k + 2]; break;
+                case 4: master.gain.value = commands[k + 2]; break;
+                }
+            }
+            return context.state === 'running';
+        },
+        // a stream's samples, left then right, with their gains in them,
+        // after its last
+        stream(i, samples, frames, rate) {
+            if (context?.state !== 'running' || !frames) {
+                stopStream(i);
+                return;
+            }
+            let buffer;
+            try {
+                buffer = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: rate });
+            } catch {
+                return;
+            }
+            buffer.copyToChannel(samples.subarray(0, frames), 0);
+            buffer.copyToChannel(samples.subarray(frames), 1);
+            const queued = streams[i] ??= new Set();
+            const source = new AudioBufferSourceNode(context, { buffer });
+            source.stream = i;
+            source.onended = ended;
+            source.connect(master);
+            // back to back, or a moment from now if it ran out
+            const at = Math.max(queued.next ?? 0, context.currentTime + 0.02);
+            source.start(at);
+            queued.next = at + buffer.duration;
+            queued.add(source);
+        },
+        stopStream,
+        stopAll() {
+            strips.forEach(stopStrip);
+            streams.forEach((_, i) => stopStream(i));
+        },
+    };
+})();
+
 // A click that goes fullscreen or takes the lock is the page's, never the
 // game's: SDL sees neither its press nor its release, which Safari's change
 // to fullscreen could lose, leaving the gun firing. A touch is the game's.
@@ -522,6 +675,7 @@ ioquake3({
     canvas: canvas,
     present,
     presentationFacts,
+    sound,
     setPlaying,
     saveFile,
     configWritten,
