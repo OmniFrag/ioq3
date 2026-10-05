@@ -40,6 +40,12 @@ set(CLIENT_SOURCES
     ${CLIENT_PLATFORM_SOURCES}
 )
 
+if(USE_WEB_AUDIO)
+    list(REMOVE_ITEM CLIENT_SOURCES ${SOURCE_DIR}/sdl/sdl_snd.c)
+    list(APPEND CLIENT_SOURCES ${SOURCE_DIR}/web/snd_web.c)
+    list(APPEND CLIENT_DEFINITIONS USE_WEB_AUDIO)
+endif()
+
 add_git_dependency(${SOURCE_DIR}/client/cl_console.c)
 
 set(CLIENT_BINARY ${CLIENT_NAME})

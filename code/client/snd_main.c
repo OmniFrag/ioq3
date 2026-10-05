@@ -529,8 +529,13 @@ void S_Init( void )
 		}
 
 		if( !started ) {
+#ifdef USE_WEB_AUDIO
+			started = S_Web_Init( &si );
+			Cvar_Set( "s_backend", "web" );
+#else
 			started = S_Base_Init( &si );
 			Cvar_Set( "s_backend", "base" );
+#endif
 		}
 
 		if( started ) {

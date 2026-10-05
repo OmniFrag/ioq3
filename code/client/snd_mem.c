@@ -79,6 +79,12 @@ void SND_setup(void) {
 	cvar_t	*cv;
 	int scs;
 
+#ifdef USE_WEB_AUDIO
+	// the page keeps the samples (web/snd_web.c): no pool, which wouldn't fit
+	// beside the game in the web build's memory
+	return;
+#endif
+
 	cv = Cvar_Get( "com_soundMegs", DEF_COMSOUNDMEGS, CVAR_LATCH | CVAR_ARCHIVE );
 
 	scs = (cv->integer*1536);
@@ -224,6 +230,15 @@ qboolean S_LoadSound( sfx_t *sfx )
 	if(!data)
 		return qfalse;
 
+	sfx->lastTimeUsed = Com_Milliseconds()+1;
+
+#ifdef USE_WEB_AUDIO
+	// the samples go to the page, outside the heap (web/snd_web.c)
+	S_WebLoadSound(sfx, &info, data + info.dataofs);
+	Hunk_FreeTempMemory(data);
+	return qtrue;
+#endif
+
 	if ( info.width == 1 ) {
 		Com_DPrintf(S_COLOR_YELLOW "WARNING: %s is a 8 bit audio file\n", sfx->soundName);
 	}
@@ -233,8 +248,6 @@ qboolean S_LoadSound( sfx_t *sfx )
 	}
 
 	samples = Hunk_AllocateTempMemory(info.channels * info.samples * sizeof(short) * 2);
-
-	sfx->lastTimeUsed = Com_Milliseconds()+1;
 
 	// each of these compression schemes works just fine
 	// but the 16bit quality is much nicer and with a local
