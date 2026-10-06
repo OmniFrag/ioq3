@@ -482,17 +482,22 @@ int PC_StringizeTokens(token_t *tokens, token_t *token)
 //============================================================================
 int PC_MergeTokens(token_t *t1, token_t *t2)
 {
+	size_t length1 = strlen(t1->string), length2 = strlen(t2->string);
+
 	//merging of a name with a name or number
 	if (t1->type == TT_NAME && (t2->type == TT_NAME || t2->type == TT_NUMBER))
 	{
+		if (length1 + length2 >= sizeof(t1->string)) return qfalse;
 		strcat(t1->string, t2->string);
 		return qtrue;
 	} //end if
 	//merging of two strings
 	if (t1->type == TT_STRING && t2->type == TT_STRING)
 	{
+		//without the inner double quotes
+		if (length1 + length2 - 2 >= sizeof(t1->string)) return qfalse;
 		//remove trailing double quote
-		t1->string[strlen(t1->string)-1] = '\0';
+		t1->string[length1-1] = '\0';
 		//concat without leading double quote
 		strcat(t1->string, &t2->string[1]);
 		return qtrue;

@@ -1942,6 +1942,14 @@ bot_replychat_t *BotLoadReplyChat(char *filename)
 						return NULL;
 					} //end if
 					StripDoubleQuotes(token.string);
+					//the names, separated by backslashes
+					if (strlen(namebuffer) + 1 + strlen(token.string) >= sizeof(namebuffer))
+					{
+						SourceError(source, "bot names longer than %d characters", (int) sizeof(namebuffer) - 1);
+						BotFreeReplyChat(replychatlist);
+						FreeSource(source);
+						return NULL;
+					} //end if
 					if (strlen(namebuffer)) strcat(namebuffer, "\\");
 					strcat(namebuffer, token.string);
 				} while(PC_CheckTokenString(source, ","));
