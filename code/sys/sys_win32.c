@@ -46,9 +46,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define KEY_WOW64_32KEY 0x0200
 #endif
 
-#ifndef DEDICATED
 static UINT timerResolution = 0;
-#endif
 
 /*
 ================
@@ -1009,6 +1007,31 @@ void Sys_RegisterProtocolHandler( void )
 }
 #endif
 
+#ifdef DEDICATED
+/*
+==============
+Sys_KeepTimerResolution
+
+Windows 11 ignores a process's timer resolution while it has no window
+anyone sees, and a dedicated server's frames then come on the default
+15.6 ms ticks whatever it asked for. Ask it not to, where it can be asked
+(SetProcessInformation, Windows 8 and later)
+==============
+*/
+static void Sys_KeepTimerResolution( void )
+{
+	typedef BOOL (WINAPI *setProcessInformation_t)( HANDLE, int, LPVOID, DWORD );
+	// PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling and
+	// PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, which older SDKs lack
+	struct { ULONG version, controlMask, stateMask; } state = { 1, 0x4, 0 };
+	setProcessInformation_t setProcessInformation = (setProcessInformation_t)(void *)
+		GetProcAddress( GetModuleHandleA( "kernel32.dll" ), "SetProcessInformation" );
+
+	if( setProcessInformation )
+		setProcessInformation( GetCurrentProcess( ), 4, &state, sizeof( state ) );
+}
+#endif
+
 /*
 ==============
 Sys_PlatformInit
@@ -1018,13 +1041,14 @@ Windows specific initialisation
 */
 void Sys_PlatformInit( void )
 {
-#ifndef DEDICATED
 	TIMECAPS ptc;
-#endif
 
 	Sys_SetFloatEnv();
 
-#ifndef DEDICATED
+	// The dedicated server needs it as much as the client: it sleeps in
+	// NET_Sleep between its frames, which at the default resolution of
+	// about 15.6 ms wake late enough to put an sv_fps 40 server's frames
+	// and snapshots off by several ms
 	if(timeGetDevCaps(&ptc, sizeof(ptc)) == MMSYSERR_NOERROR)
 	{
 		timerResolution = ptc.wPeriodMin;
@@ -1039,6 +1063,9 @@ void Sys_PlatformInit( void )
 	}
 	else
 		timerResolution = 0;
+
+#ifdef DEDICATED
+	Sys_KeepTimerResolution();
 #endif
 }
 
@@ -1051,10 +1078,8 @@ Windows specific initialisation
 */
 void Sys_PlatformExit( void )
 {
-#ifndef DEDICATED
 	if(timerResolution)
 		timeEndPeriod(timerResolution);
-#endif
 }
 
 /*
