@@ -308,6 +308,11 @@ void S_AdpcmEncodeSound( sfx_t *sfx, short *samples ) {
 		}
 
 		newchunk = SND_malloc();
+		if (newchunk == NULL) {
+			// S_LoadSound refuses the sound
+			sfx->soundLength = -1;
+			return;
+		}
 		if (sfx->soundData == NULL) {
 			sfx->soundData = newchunk;
 		} else if (chunk != NULL) {
