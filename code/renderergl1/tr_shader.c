@@ -363,7 +363,7 @@ static void ParseTexMod( char *_text, shaderStage_t *stage )
 	texModInfo_t *tmi;
 
 	if ( stage->bundle[0].numTexMods == TR_MAX_TEXMODS ) {
-		ri.Error( ERR_DROP, "ERROR: too many tcMod stages in shader '%s'", shader.name );
+		ri.Printf( PRINT_WARNING, "WARNING: too many tcMod stages in shader '%s', ignoring the rest\n", shader.name );
 		return;
 	}
 
