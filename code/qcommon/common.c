@@ -2550,17 +2550,6 @@ static void Com_SettingsPath( const settingsFile_t *file, char *path, int size )
 
 /*
 =================
-Com_SameValue
-
-Whether two values are the same, as numbers if both are: "1.0" is "1"
-=================
-*/
-static qboolean Com_SameValue( const char *a, const char *b ) {
-	return !strcmp( a, b ) || ( Q_isanumber( a ) && Q_isanumber( b ) && atof( a ) == atof( b ) );
-}
-
-/*
-=================
 Com_IsDefault
 
 Whether a value is one of a cvar's defaults in a program's table, which
@@ -2569,7 +2558,7 @@ can list a name once per default
 */
 static qboolean Com_IsDefault( const cvarDefault_t *defaults, const char *name, const char *value ) {
 	for ( ; defaults && defaults->name; defaults++ ) {
-		if ( !Q_stricmp( defaults->name, name ) && Com_SameValue( defaults->value, value ) ) {
+		if ( !Q_stricmp( defaults->name, name ) && Cvar_SameValue( defaults->value, value ) ) {
 			return qtrue;
 		}
 	}
