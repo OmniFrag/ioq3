@@ -315,9 +315,16 @@ static shader_t *ShaderForShaderNum( int shaderNum, int lightmapNum ) {
 
 static surfaceType_t	skipData = SF_SKIP;
 
+// the surfaces of the map being loaded that name a fog it doesn't have
+static int		s_badFogs;
+
 /*
 ===============
 R_SurfaceFogIndex
+
+A surface naming a fog the map doesn't have is drawn without fog. Stock
+maps have them (q3dm17's name fog 0, and it has none), so they're counted
+for R_LoadSurfaces to mention, not warned of one by one.
 ===============
 */
 static int R_SurfaceFogIndex( dsurface_t *ds ) {
@@ -325,7 +332,7 @@ static int R_SurfaceFogIndex( dsurface_t *ds ) {
 
 	// -1 is no fog, fog index 0
 	if ( fogNum < -1 || fogNum >= s_worldData.numfogs - 1 ) {
-		ri.Printf( PRINT_WARNING, "WARNING: bad fog %i in %s\n", fogNum, s_worldData.name );
+		s_badFogs++;
 		return 0;
 	}
 	return fogNum + 1;
@@ -1330,6 +1337,7 @@ static	void R_LoadSurfaces( lump_t *surfs, lump_t *verts, lump_t *indexLump ) {
 	numMeshes = 0;
 	numTriSurfs = 0;
 	numFlares = 0;
+	s_badFogs = 0;
 
 	in = (void *)(fileBase + surfs->fileofs);
 	if (surfs->filelen % sizeof(*in))
@@ -1385,6 +1393,10 @@ static	void R_LoadSurfaces( lump_t *surfs, lump_t *verts, lump_t *indexLump ) {
 
 	ri.Printf( PRINT_ALL, "...loaded %d faces, %i meshes, %i trisurfs, %i flares\n", 
 		numFaces, numMeshes, numTriSurfs, numFlares );
+	if ( s_badFogs ) {
+		ri.Printf( PRINT_DEVELOPER, "%i surfaces in %s name a fog it doesn't have, and are drawn without fog\n",
+			s_badFogs, s_worldData.name );
+	}
 }
 
 
