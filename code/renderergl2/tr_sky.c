@@ -453,9 +453,10 @@ static void DrawSkySide( struct image_s *image, const int mins[2], const int max
 		
 		GLSL_SetUniformMat4(sp, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.modelviewProjection);
 		
+		// at the scale the frame is drawn at, as opengl1 draws it
 		color[0] = 
 		color[1] = 
-		color[2] =
+		color[2] = tr.frameLight;
 		color[3] = 1.0f;
 		GLSL_SetUniformVec4(sp, UNIFORM_BASECOLOR, color);
 

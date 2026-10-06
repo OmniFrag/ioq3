@@ -406,6 +406,11 @@ void GLimp_InitExtraExtensions(void)
 
 done:
 
+	// 16-bit normalized colour buffers, which clamp, for r_stockBlending:
+	// core since OpenGL 3.0; OpenGL ES and WebGL 2 with GL_EXT_texture_norm16
+	glRefConfig.renderNorm16 = qglesMajorVersion ? SDL_GL_ExtensionSupported("GL_EXT_texture_norm16")
+		: q_gl_version_at_least_3_0;
+
 	// OpenGL 4.2 and OpenGL ES 3.0 - GL_ARB_internalformat_query: the
 	// sample counts each format takes, as OpenGL ES promises GL_MAX_SAMPLES
 	// only for the formats it requires to multisample (FBO_Samples)

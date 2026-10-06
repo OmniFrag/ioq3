@@ -341,7 +341,8 @@ void RE_BeginScene(const refdef_t *fd)
 	}
 	else
 	{
-		float scale = (1 << r_mapOverBrightBits->integer) / 255.0f;
+		// at the scale the frame is drawn at, as lightmaps are
+		float scale = (1 << r_mapOverBrightBits->integer) / 255.0f * tr.frameLight;
 
 		if (r_forceSun->integer)
 			VectorScale(tr.sunLight, scale * r_forceSunLightScale->value, tr.refdef.sunCol);

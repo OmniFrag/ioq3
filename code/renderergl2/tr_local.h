@@ -713,7 +713,8 @@ typedef enum
 
 	UNIFORM_GREYSCALE,
 	UNIFORM_GAMMA,
-	UNIFORM_OVERBRIGHT, // 1 << tr.overbrightBits, which the frame is drawn brightened by
+	UNIFORM_OVERBRIGHT, // 1 << tr.overbrightBits, which the present pass brightens the frame by
+	UNIFORM_FRAMESCALE, // what brings the frame to Quake III's own scale
 
 	UNIFORM_FBUFSCALE, // 1 / the screen's width and height
 
@@ -1431,6 +1432,7 @@ typedef struct {
 	qboolean textureFloat;
 	qboolean textureFloat32; // OpenGL ES: 32-bit float colour buffers, filtered linearly
 	qboolean packedFloat; // R11F_G11F_B10F colour buffers, for r_hdr 2
+	qboolean renderNorm16; // RGBA16 colour buffers, for r_stockBlending
 	int maxSamples;
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
@@ -1652,6 +1654,10 @@ typedef struct {
 	float					identityLight;		// 1.0 / ( 1 << overbrightBits )
 	int						identityLightByte;	// identityLight * 255
 	int						overbrightBits;		// r_overbrightBits->integer, which the shaders apply
+	qboolean				stockBlending;		// r_stockBlending, where the present pass brightens the frame
+	int						viewFormat;			// R_ViewFormat's, once picked
+	float					frameLight;			// what opengl1's colours are drawn at: tr.identityLight with
+												// stockBlending, else 1, in display units
 	int						multisample;		// the render FBO's samples: r_ext_framebuffer_multisample, as far as the GPU allows
 
 	orientationr_t			or;					// for current entity
@@ -1861,6 +1867,7 @@ extern  cvar_t  *r_shadowCascadeZNear;
 extern  cvar_t  *r_shadowCascadeZFar;
 extern  cvar_t  *r_shadowCascadeZBias;
 extern  cvar_t  *r_ignoreDstAlpha;
+extern  cvar_t  *r_stockBlending;
 
 extern	cvar_t	*r_greyscale;
 

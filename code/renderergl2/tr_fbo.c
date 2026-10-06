@@ -132,6 +132,8 @@ void FBO_CreateBuffer(FBO_t *fbo, int format, int index, int multisample)
 		case GL_RGB16F_ARB:
 		case GL_RGBA16F_ARB:
 		case GL_R11F_G11F_B10F:
+		case GL_RGBA16:
+		case GL_RGB10_A2:
 		case GL_RGB32F_ARB:
 		case GL_RGBA32F_ARB:
 			fbo->colorFormat = format;

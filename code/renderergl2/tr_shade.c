@@ -578,11 +578,14 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 		|| ((blend & GLS_DSTBLEND_BITS) == GLS_DSTBLEND_SRC_COLOR)
 		|| ((blend & GLS_DSTBLEND_BITS) == GLS_DSTBLEND_ONE_MINUS_SRC_COLOR);
 
-	// opengl1 draws at tr.identityLight and brightens the finished frame,
-	// 2D included, by 1 << overbrightBits, so a colour it doesn't dim comes
-	// out that much brighter there, and is scaled up here to match. A
-	// blend that multiplies the frame matches without it.
-	float overbright = isBlend ? 1.0f : (float)(1 << tr.overbrightBits);
+	// Quake III draws at tr.identityLight and brightens the finished
+	// frame, 2D included, by 1 << overbrightBits, as opengl1 does, and so
+	// does this with r_stockBlending: the colours are opengl1's. In
+	// display units, a colour it doesn't dim comes out that much brighter
+	// there, and is scaled up here to match; a blend that multiplies the
+	// frame matches without it. light dims what opengl1 dims.
+	float overbright = isBlend ? 1.0f : tr.frameLight / tr.identityLight;
+	float light = tr.frameLight;
 
 	fog_t *fog;
 
@@ -629,17 +632,17 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 
 			vertColor[0] =
 			vertColor[1] =
-			vertColor[2] =
+			vertColor[2] = light;
 			vertColor[3] = 1.0f;
 			break;
 		case CGEN_ONE_MINUS_VERTEX:
 			baseColor[0] = 
 			baseColor[1] =
-			baseColor[2] = 1.0f;
+			baseColor[2] = light;
 
 			vertColor[0] =
 			vertColor[1] =
-			vertColor[2] = -1.0f;
+			vertColor[2] = -light;
 			break;
 		case CGEN_FOG:
 			fog = tr.world->fogs + tess.fogNum;
@@ -681,6 +684,10 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 			baseColor[2] = overbright;
 			break;
 		case CGEN_IDENTITY_LIGHTING:
+			baseColor[0] =
+			baseColor[1] =
+			baseColor[2] = light;
+			break;
 		case CGEN_BAD:
 			break;
 	}
