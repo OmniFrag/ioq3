@@ -260,6 +260,20 @@ for (const type of ['pointermove', 'mousemove'])
     addEventListener(type, (event) => {
         if (wantPointer && !locked() && (event.pointerType ?? 'mouse') === 'mouse') event.stopImmediatePropagation();
     }, { capture: true });
+// Safari bundles a frame's mouse moves into one pointermove whose movement
+// is only the last move's, not their sum, so under the lock most of the
+// mouse's motion was lost (WebKit bug 235116). Where an event shows that,
+// its movement becomes the sum of its bundled moves before SDL reads it;
+// browsers that sum already are left alone. Not with raw input, where
+// Safari makes only the event's own movement raw.
+addEventListener('pointermove', (event) => {
+    if (rawMouse || event.pointerType !== 'mouse' || !locked()) return;
+    const moves = event.getCoalescedEvents?.() ?? [];
+    const last = moves.at(-1);
+    if (moves.length < 2 || event.movementX !== last.movementX || event.movementY !== last.movementY) return;
+    const sum = (axis) => moves.reduce((total, move) => total + move[axis], 0);
+    Object.defineProperties(event, { movementX: { value: sum('movementX') }, movementY: { value: sum('movementY') } });
+}, { capture: true });
 
 // Alt+Enter (Option+Return on a Mac) is the page's too: Firefox grants
 // fullscreen only while the key is handled, and the engine reads its keys a
