@@ -2584,6 +2584,67 @@ static qboolean Com_IsPerModScope( const char *name ) {
 	return flags == CVAR_NONEXISTENT || ( flags & ( CVAR_VM_CREATED | CVAR_USER_CREATED ) );
 }
 
+// a cvar of ours another program saves under its own name, and what an
+// imported line of it sets
+typedef struct {
+	const char	*name;
+	const char	*ours;	// NULL: the line is left out
+	const char	*also;	// a line it sets as well, or NULL
+	const char	*pair;	// the writer's name for the other half of a pair
+				// set together, which a config leaving it at the
+				// writer's default gets at that default, or NULL
+} cvarRename_t;
+
+// CNQ3's mouse, which computes as ours does, its v-sync and its window's
+// size, which ours has only at r_mode -1: a width or height chosen alone
+// keeps CNQ3's default for the other (1280x1024 is r_height alone). Its
+// r_mode is its fullscreen resolution, the desktop's or upscaled, where
+// ours is always the desktop's, and is left out
+static const cvarRename_t com_cnq3Renames[] = {
+	{ "m_speed", "sensitivity", NULL, NULL },
+	{ "m_accel", "cl_mouseAccel", NULL, NULL },
+	{ "m_accelStyle", "cl_mouseAccelStyle", NULL, NULL },
+	{ "m_accelOffset", "cl_mouseAccelOffset", NULL, NULL },
+	{ "m_limit", "cl_mouseAccelLimit", NULL, NULL },
+	{ "r_vsync", "r_swapInterval", NULL, NULL },
+	{ "r_width", "r_customwidth", "seta r_mode -1", "r_height" },
+	{ "r_height", "r_customheight", "seta r_mode -1", "r_width" },
+	{ "r_mode", NULL, NULL, NULL },
+	{ NULL, NULL, NULL, NULL }
+};
+
+/*
+=================
+Com_DefaultOf
+
+A cvar's first default in a writer's table, or NULL if it has none
+=================
+*/
+static const char *Com_DefaultOf( const cvarDefault_t *defaults, const char *name ) {
+	for ( ; defaults && defaults->name; defaults++ ) {
+		if ( !Q_stricmp( defaults->name, name ) ) {
+			return defaults->value;
+		}
+	}
+	return NULL;
+}
+
+/*
+=================
+Com_Rename
+
+A name's rename in a writer's table, or NULL
+=================
+*/
+static const cvarRename_t *Com_Rename( const cvarRename_t *renames, const char *name ) {
+	for ( ; renames && renames->name; renames++ ) {
+		if ( !Q_stricmp( renames->name, name ) ) {
+			return renames;
+		}
+	}
+	return NULL;
+}
+
 /*
 =================
 Com_ApplyConfig
@@ -2592,19 +2653,22 @@ A config's settings and binds, as the player's own, with full rights, as
 they're read. A config is data, so anything else in it is left out, with a
 warning: Quake III's aliases are cvars (vstr), which apply as settings. An
 imported config's values that are its writer's defaults are left out too
-(Com_ConfigWriter), as it saved them unchosen; and with modOnly, all but
-the cvars saved for the game directory, a mod's config read on the mod's
-first visit
+(Com_ConfigWriter), as it saved them unchosen, and those its writer names
+otherwise set ours (renames); and with modOnly, all but the cvars saved
+for the game directory, a mod's config read on the mod's first visit
 =================
 */
-static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *defaults, qboolean modOnly ) {
+static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *defaults,
+	const cvarRename_t *renames, qboolean modOnly ) {
 	char		*line, *next;
 	int		number = 0;
 	qboolean	inMod = Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) != 0;
+	qboolean	paired = qfalse;	// a half of the writer's one pair is set
 
 	for ( line = text; line; line = next ) {
-		const char	*command;
-		qboolean	set;
+		const char		*command, *name;
+		const cvarRename_t	*rename;
+		qboolean		set;
 
 		next = strchr( line, '\n' );
 		if ( next ) {
@@ -2617,14 +2681,46 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 		}
 		command = Cmd_Argv( 0 );
 		set = !Q_stricmp( command, "seta" ) || !Q_stricmp( command, "set" );
-		if ( modOnly && ( !set || !Com_IsPerModScope( Cmd_Argv( 1 ) ) ) ) {
+		rename = set ? Com_Rename( renames, Cmd_Argv( 1 ) ) : NULL;
+		if ( rename && !rename->ours ) {
+			continue;
+		}
+		name = rename ? rename->ours : Cmd_Argv( 1 );
+		if ( modOnly && ( !set || !Com_IsPerModScope( name ) ) ) {
 			continue;
 		}
 		if ( set ) {
-			// the tables hold the base game's defaults, not a mod's own
-			if ( ( inMod && Com_IsPerModScope( Cmd_Argv( 1 ) ) ) ||
+			// the tables hold the base game's defaults, under the writer's
+			// names, not a mod's own
+			if ( ( inMod && Com_IsPerModScope( name ) ) ||
 				!Com_IsDefault( defaults, Cmd_Argv( 1 ), Cmd_ArgsFrom( 2 ) ) ) {
-				Cbuf_ExecuteText( EXEC_NOW, line );
+				if ( rename ) {
+					char			setting[MAX_STRING_CHARS], partner[MAX_STRING_CHARS] = "";
+					const cvarRename_t	*other = rename->pair ? Com_Rename( renames, rename->pair ) : NULL;
+					const char		*otherDefault = other && other->ours && !paired ?
+						Com_DefaultOf( defaults, rename->pair ) : NULL;
+
+					// both lines made before either runs, which retokenizes
+					Com_sprintf( setting, sizeof( setting ), "%s %s \"%s\"", command, name, Cmd_ArgsFrom( 2 ) );
+					// the pair's first half chosen gives the other the
+					// writer's default, which the other's own line, if
+					// the config chose it too, then sets over
+					if ( otherDefault ) {
+						Com_sprintf( partner, sizeof( partner ), "%s %s \"%s\"", command, other->ours, otherDefault );
+					}
+					if ( rename->pair ) {
+						paired = qtrue;
+					}
+					Cbuf_ExecuteText( EXEC_NOW, setting );
+					if ( partner[0] ) {
+						Cbuf_ExecuteText( EXEC_NOW, partner );
+					}
+					if ( rename->also ) {
+						Cbuf_ExecuteText( EXEC_NOW, rename->also );
+					}
+				} else {
+					Cbuf_ExecuteText( EXEC_NOW, line );
+				}
 			}
 		} else if ( !Q_stricmp( command, "bind" ) || !Q_stricmp( command, "unbind" ) ||
 			!Q_stricmp( command, "unbindall" ) ) {
@@ -2636,21 +2732,35 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 	}
 }
 
+// a program writing stock Quake III's first line, whose configs the
+// importer reads
+typedef struct {
+	const char		*name;
+	const cvarDefault_t	*defaults;	// its saved cvars' defaults
+	const char * const	*marks;		// cvars it saves that no other has
+	const cvarRename_t	*renames;	// its names for cvars of ours, or NULL
+} configWriter_t;
+
+// each told by its marks, a cvar it saves that no other program even
+// registers, so the player can't have set it with seta; stock, with no
+// marks, last
+static const configWriter_t com_quakeWriters[] = {
+	{ "CNQ3", cvar_cnq3Defaults, cvar_cnq3Marks, com_cnq3Renames },
+	{ "Quake3e", cvar_q3eDefaults, cvar_q3eMarks, NULL },
+	{ "ioquake3", cvar_ioq3Defaults, cvar_ioq3Marks, NULL },	// before 2025-10-17
+	{ "Quake III", cvar_q3Defaults, NULL, NULL }
+};
+
 /*
 =================
-Com_SavesIoq3Only
+Com_SavesAny
 
-Whether a config saves a cvar only ioquake3 saves, which stock Quake III's
-never holds
+Whether a config saves any of the cvars named
 =================
 */
-static qboolean Com_SavesIoq3Only( const char *text ) {
-	const cvarDefault_t *d, *q3;
-
-	for ( d = cvar_ioq3Defaults; d->name; d++ ) {
-		for ( q3 = cvar_q3Defaults; q3->name && Q_stricmp( q3->name, d->name ); q3++ ) {
-		}
-		if ( !q3->name && strstr( text, va( "\nseta %s ", d->name ) ) ) {
+static qboolean Com_SavesAny( const char *text, const char * const *names ) {
+	for ( ; names && *names; names++ ) {
+		if ( strstr( text, va( "\nseta %s ", *names ) ) ) {
 			return qtrue;
 		}
 	}
@@ -2662,16 +2772,19 @@ static qboolean Com_SavesIoq3Only( const char *text ) {
 Com_ConfigWriter
 
 The program that wrote a config, by its first line (COM_CONFIG_HEADER),
-and the defaults it saved unchosen cvars at: stock Quake III's;
-ioquake3's, whose older releases wrote the same first line as stock, so
-one saving a cvar only ioquake3 saves is ioquake3's; or this engine's,
-whose values are all chosen once it states its version, and which before
-that held ioquake3's defaults. A config anyone else wrote, by hand among
-them, is all chosen
+the defaults it saved unchosen cvars at, and its names for cvars of ours
+(cvarRename_t): stock Quake III's, or that of another program writing
+its first line, by its marks (com_quakeWriters); ioquake3's; or this
+engine's, whose values are all chosen once it states its version, and
+which before that held ioquake3's defaults. A config anyone else wrote,
+by hand among them, is all chosen
 =================
 */
-static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **defaults ) {
+static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **defaults, const cvarRename_t **renames ) {
+	int	writer;
+
 	*defaults = NULL;
+	*renames = NULL;
 	// first, as it can be ioquake3's own first line (PRODUCT_NAME "ioq3")
 	if ( !Q_strncmp( text, COM_CONFIG_HEADER, strlen( COM_CONFIG_HEADER ) ) ) {
 		if ( !strstr( text, "\nseta com_configVersion " ) ) {
@@ -2680,12 +2793,14 @@ static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **def
 		return PRODUCT_NAME;
 	}
 	if ( !Q_strncmp( text, "// generated by quake,", strlen( "// generated by quake," ) ) ) {
-		if ( Com_SavesIoq3Only( text ) ) {
-			*defaults = cvar_ioq3Defaults;
-			return "ioquake3";
+		for ( writer = 0; writer < ARRAY_LEN( com_quakeWriters ) - 1; writer++ ) {
+			if ( Com_SavesAny( text, com_quakeWriters[writer].marks ) ) {
+				break;
+			}
 		}
-		*defaults = cvar_q3Defaults;
-		return "Quake III";
+		*defaults = com_quakeWriters[writer].defaults;
+		*renames = com_quakeWriters[writer].renames;
+		return com_quakeWriters[writer].name;
 	}
 	if ( !Q_strncmp( text, "// generated by ioq3,", strlen( "// generated by ioq3," ) ) ) {
 		*defaults = cvar_ioq3Defaults;
@@ -2704,9 +2819,10 @@ Applies a config (Com_ApplyConfig) as its writer saved it
 */
 static const char *Com_ImportConfig( char *text, const char *path, qboolean modOnly ) {
 	const cvarDefault_t	*defaults;
-	const char		*writer = Com_ConfigWriter( text, &defaults );
+	const cvarRename_t	*renames;
+	const char		*writer = Com_ConfigWriter( text, &defaults, &renames );
 
-	Com_ApplyConfig( text, path, defaults, modOnly );
+	Com_ApplyConfig( text, path, defaults, renames, modOnly );
 	return writer;
 }
 

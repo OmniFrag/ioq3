@@ -710,10 +710,18 @@ int	Cvar_DeclaredScope( const char *var_name );
 
 extern const cvarDefault_t cvar_q3Defaults[];
 extern const cvarDefault_t cvar_ioq3Defaults[];
-// the defaults stock Quake III's and ioquake3's configs hold their saved
-// cvars at, which the importer leaves out as not chosen: a name once per
-// default, ending with a NULL name; given by the build with the
-// declarations (CVAR_DECLARATIONS_SOURCE), empty by default
+extern const cvarDefault_t cvar_cnq3Defaults[];
+extern const cvarDefault_t cvar_q3eDefaults[];
+// the defaults stock Quake III's, ioquake3's, CNQ3's and Quake3e's configs
+// hold their saved cvars at, which the importer leaves out as not chosen:
+// a name once per default, ending with a NULL name; given by the build
+// with the declarations (CVAR_DECLARATIONS_SOURCE), empty by default
+extern const char * const cvar_ioq3Marks[];
+extern const char * const cvar_cnq3Marks[];
+extern const char * const cvar_q3eMarks[];
+// the cvars each saves that no other program registers, which tell its
+// configs from stock's, with the same first line; ending with NULL, and
+// given by the build as the defaults are
 cvarScope_t Cvar_Scope( const cvar_t *var );
 // where a cvar is saved: its declaration's scope; one not declared that a
 // mod or the player made, the player's for the mod running; one the engine
