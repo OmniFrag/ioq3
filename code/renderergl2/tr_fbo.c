@@ -422,27 +422,66 @@ void FBO_Resize(void)
 
 /*
 ============
+FBO_FormatSamples
+
+The most samples, up to samples, that a renderbuffer of format takes
+exactly, from the counts GL_ARB_internalformat_query lists for it, largest
+first (none for a format that can't be multisampled); without the query,
+samples, which OpenGL may round up. WebGL answers GL_SAMPLES but not
+GL_NUM_SAMPLE_COUNTS, so the list is read into zeros, which end it
+============
+*/
+static int FBO_FormatSamples(GLenum format, int samples)
+{
+	GLint counts[16] = { 0 };
+	int i;
+
+	if (!qglGetInternalformativ)
+		return samples;
+
+	qglGetInternalformativ(GL_RENDERBUFFER, format, GL_SAMPLES, ARRAY_LEN(counts), counts);
+	for (i = 0; i < (int)ARRAY_LEN(counts) && counts[i] > 0; i++)
+	{
+		if (counts[i] <= samples)
+			return counts[i];
+	}
+
+	return 0;
+}
+
+/*
+============
 FBO_Samples
 
 The samples a render target of format is drawn with: what the player
-asks (r_ext_framebuffer_multisample), within what the GPU and the format
-take (GLimp_InitExtraExtensions); none below 2, or without blits to
-resolve them
+asks (r_ext_framebuffer_multisample), searched downwards for a count the
+format, the frame drawn beside it (R_RenderFormatFor) and their depth
+all take, since a framebuffer's attachments must have the same, and
+asking for one a format doesn't list may round up differently in each;
+none below 2, or without blits to resolve them
 ============
 */
 int FBO_Samples(int format)
 {
+	const GLenum formats[] = { format, R_RenderFormatFor(format), GL_DEPTH_COMPONENT24 };
 	int samples = MIN(r_ext_framebuffer_multisample->integer, glRefConfig.maxSamples);
+	int i, taken;
 
-	if (format == GL_RGBA16F_ARB)
-		samples = MIN(samples, glRefConfig.halfFloatSamples);
-	else if (format == GL_R11F_G11F_B10F)
-		samples = MIN(samples, glRefConfig.packedFloatSamples);
-
-	if (samples < 2 || !glRefConfig.framebufferMultisample || !glRefConfig.framebufferBlit)
+	if (!glRefConfig.framebufferMultisample || !glRefConfig.framebufferBlit)
 		return 0;
 
-	return samples;
+	for (i = 0; samples >= 2 && i < (int)ARRAY_LEN(formats); i++)
+	{
+		taken = FBO_FormatSamples(formats[i], samples);
+		if (taken != samples)
+		{
+			// fewer, which every format must take again
+			samples = taken;
+			i = -1;
+		}
+	}
+
+	return samples >= 2 ? samples : 0;
 }
 
 /*
@@ -466,9 +505,9 @@ void FBO_Init(void)
 
 	R_IssuePendingRenderCommands();
 
-	// the render targets' format, the views', takes the fewest samples:
-	// an 8-bit frame beside them takes GL_MAX_SAMPLES
+	// one count for the views' format and the frame's
 	multisample = FBO_Samples(R_ViewFormat());
+	ri.Printf(PRINT_ALL, "...multisampling with %d samples, %d asked\n", multisample, r_ext_framebuffer_multisample->integer);
 
 	// what the GPU allows, apart from what the player asked for, which a
 	// config keeps for the next GPU
