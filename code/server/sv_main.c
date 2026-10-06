@@ -1052,7 +1052,10 @@ static void SV_CheckTimeouts( void ) {
 			cl->state = CS_FREE;	// don't bother with zombie state
 			continue;
 		}
-		if ( cl->state >= CS_CONNECTED && cl->lastPacketTime < droppoint) {
+		// a bot sends no packets: it's marked alive only as the game reads
+		// its console messages, which it doesn't while bot_pause is set
+		if ( cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
+			cl->lastPacketTime < droppoint ) {
 			// wait several frames so a debugger session doesn't
 			// cause a timeout
 			if ( ++cl->timeoutCount > 5 ) {
