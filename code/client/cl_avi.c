@@ -42,7 +42,7 @@ typedef struct aviFileData_s
 {
   qboolean      fileOpen;
   fileHandle_t  f;
-  char          fileName[ MAX_QPATH ];
+  char          fileName[ MAX_OSPATH ];
   int           fileSize;
   int           moviOffset;
   int           moviSize;
@@ -315,6 +315,18 @@ void CL_WriteAVIHeader( void )
 
 /*
 ===============
+CL_FreeAVIBuffers
+===============
+*/
+static void CL_FreeAVIBuffers( void )
+{
+  free( afd.cBuffer );
+  free( afd.eBuffer );
+  afd.cBuffer = afd.eBuffer = NULL;
+}
+
+/*
+===============
 CL_OpenAVIForWriting
 
 Creates an AVI file and gets it into a state where
@@ -335,17 +347,13 @@ qboolean CL_OpenAVIForWriting( const char *fileName )
     return qfalse;
   }
 
-  if( ( afd.f = FS_FOpenFileWrite_HomeData( fileName ) ) <= 0 )
-    return qfalse;
-
-  if( ( afd.idxF = FS_FOpenFileWrite_HomeData(
-          va( "%s" INDEX_FILE_EXTENSION, fileName ) ) ) <= 0 )
+  // closing reopens the index by this name, so it must fit whole
+  if( strlen( fileName ) >= sizeof( afd.fileName ) )
   {
-    FS_FCloseFile( afd.f );
+    Com_Printf( S_COLOR_RED "Video file name too long: %s\n", fileName );
     return qfalse;
   }
-
-  Q_strncpyz( afd.fileName, fileName, MAX_QPATH );
+  Q_strncpyz( afd.fileName, fileName, sizeof( afd.fileName ) );
 
   afd.frameRate = cl_aviFrameRate->integer;
   afd.framePeriod = (int)( 1000000.0f / afd.frameRate );
@@ -360,11 +368,34 @@ qboolean CL_OpenAVIForWriting( const char *fileName )
   // Capture buffer stores RGB pixels but OpenGL ES reads RGBA and converts to RGB in-place.
   // Encode buffer only needs to store RGB pixels.
   // Allocate a bit more space for the capture buffer to account for possible
-  // padding at the end of pixel lines, and padding for alignment
+  // padding at the end of pixel lines, and padding for alignment.
+  // They're the window's size, 58 MB at 3840x2160, more than the zone
+  // holds, so they come from the system
   #define MAX_PACK_LEN 16
-  afd.cBuffer = Z_Malloc((afd.width * 4 + MAX_PACK_LEN - 1) * afd.height + MAX_PACK_LEN - 1);
+  afd.cBuffer = malloc((afd.width * 4 + MAX_PACK_LEN - 1) * afd.height + MAX_PACK_LEN - 1);
   // raw avi files have pixel lines start on 4-byte boundaries
-  afd.eBuffer = Z_Malloc(PAD(afd.width * 3, AVI_LINE_PADDING) * afd.height);
+  afd.eBuffer = malloc(PAD(afd.width * 3, AVI_LINE_PADDING) * afd.height);
+  if( !afd.cBuffer || !afd.eBuffer )
+  {
+    Com_Printf( S_COLOR_RED "Not enough memory to capture %dx%d video\n",
+        afd.width, afd.height );
+    CL_FreeAVIBuffers( );
+    return qfalse;
+  }
+
+  if( ( afd.f = FS_FOpenFileWrite_HomeData( fileName ) ) <= 0 )
+  {
+    CL_FreeAVIBuffers( );
+    return qfalse;
+  }
+
+  if( ( afd.idxF = FS_FOpenFileWrite_HomeData(
+          va( "%s" INDEX_FILE_EXTENSION, fileName ) ) ) <= 0 )
+  {
+    FS_FCloseFile( afd.f );
+    CL_FreeAVIBuffers( );
+    return qfalse;
+  }
 
   afd.a.rate = dma.speed;
   afd.a.format = WAV_FORMAT_PCM;
@@ -616,6 +647,7 @@ qboolean CL_CloseAVI( void )
           &afd.idxF, qtrue ) ) <= 0 )
   {
     FS_FCloseFile( afd.f );
+    CL_FreeAVIBuffers( );
     return qfalse;
   }
 
@@ -649,8 +681,7 @@ qboolean CL_CloseAVI( void )
 
   SafeFS_Write( buffer, bufIndex, afd.f );
 
-  Z_Free( afd.cBuffer );
-  Z_Free( afd.eBuffer );
+  CL_FreeAVIBuffers( );
   FS_FCloseFile( afd.f );
 
   Com_Printf( "Wrote %d:%d frames to %s\n", afd.numVideoFrames, afd.numAudioFrames, afd.fileName );
