@@ -966,6 +966,28 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 
 /*
 ============
+Cvar_ServerCreated
+
+How many cvars a server created that no code has registered since, and
+the bytes their names and values take
+============
+*/
+int Cvar_ServerCreated( int *bytes ) {
+	cvar_t	*var;
+	int	count = 0;
+
+	*bytes = 0;
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->flags & CVAR_SERVER_CREATED ) {
+			count++;
+			*bytes += strlen( var->name ) + strlen( var->string );
+		}
+	}
+	return count;
+}
+
+/*
+============
 Cvar_BeginServerValues, Cvar_EndServerValues
 
 Around a server's systeminfo, and its cheat rule (Cvar_SetCheatState): a
