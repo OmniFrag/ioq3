@@ -48,6 +48,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 static UINT timerResolution = 0;
 
+#ifndef DEDICATED
+// A laptop with a second, discrete GPU (NVIDIA Optimus, AMD PowerXpress)
+// runs a program's OpenGL on its integrated GPU unless the program's
+// executable exports these, set to 1
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+#endif
+
 /*
 ================
 Sys_SetFPUCW
