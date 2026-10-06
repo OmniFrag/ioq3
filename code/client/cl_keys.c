@@ -1336,9 +1336,7 @@ void CL_KeyDownEvent( int key, unsigned time )
 			}
 			else if ( clc.state != CA_DISCONNECTED ) {
 				// a demo stopped by hand ends the list it's in
-				if ( clc.demoplaying ) {
-					Cvar_Set( "nextdemo", "" );
-				}
+				// (CL_NextDemoAfterError)
 				CL_Disconnect_f();
 				S_StopAllSounds();
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_MAIN );

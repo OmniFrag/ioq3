@@ -329,6 +329,7 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		if ( restartClient ) {
 			CL_Init();
 		}
+		CL_NextDemoAfterError( code );
 		CL_Disconnect( qtrue );
 		CL_FlushMemory( );
 		VM_Forced_Unload_Done();
@@ -343,6 +344,7 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		if ( restartClient ) {
 			CL_Init();
 		}
+		CL_NextDemoAfterError( code );
 		CL_Disconnect( qtrue );
 		CL_FlushMemory( );
 		VM_Forced_Unload_Done();

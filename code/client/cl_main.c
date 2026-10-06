@@ -1079,6 +1079,12 @@ static void CL_CompleteDemoName( char *args, int argNum )
 	}
 }
 
+// an error ended a demo, whose list goes on at the next frame; and the demos
+// in a row an error has ended, whose nextdemo ran all the same
+#define	MAX_DEMO_ERRORS	3
+static qboolean	demoErrorPending;
+static int		demoErrors;
+
 /*
 ====================
 CL_PlayDemo_f
@@ -1107,6 +1113,8 @@ void CL_PlayDemo_f( void ) {
 	Q_strncpyz( arg, Cmd_Argv(1), sizeof( arg ) );
 	
 	CL_Disconnect( qtrue );
+	// from here, so an error opening it ends it as one (CL_NextDemoAfterError)
+	clc.demoplaying = qtrue;
 
 	// check for an extension .DEMOEXT_?? (?? is protocol)
 	ext_test = strrchr(arg, '.');
@@ -1157,7 +1165,6 @@ void CL_PlayDemo_f( void ) {
 	Con_Close();
 
 	clc.state = CA_CONNECTED;
-	clc.demoplaying = qtrue;
 	Q_strncpyz( clc.servername, arg, sizeof( clc.servername ) );
 
 #ifdef LEGACY_PROTOCOL
@@ -1192,13 +1199,13 @@ void CL_StartDemoLoop( void ) {
 
 /*
 ==================
-CL_NextDemo
+CL_QueueNextDemo
 
-Called when a demo or cinematic finishes
-If the "nextdemo" cvar is set, that command will be issued
+If the "nextdemo" cvar is set, adds that command to the buffer, clears it,
+and returns qtrue
 ==================
 */
-void CL_NextDemo( void ) {
+static qboolean CL_QueueNextDemo( void ) {
 	char	v[MAX_STRING_CHARS];
 	qboolean	restricted;
 
@@ -1206,7 +1213,7 @@ void CL_NextDemo( void ) {
 	v[MAX_STRING_CHARS-1] = 0;
 	Com_DPrintf("CL_NextDemo: %s\n", v );
 	if (!v[0]) {
-		return;
+		return qfalse;
 	}
 
 	// with the rights of whoever set it
@@ -1214,7 +1221,87 @@ void CL_NextDemo( void ) {
 	Cvar_Set ("nextdemo","");
 	Cbuf_AddTextRestricted( v, restricted );
 	Cbuf_AddTextRestricted( "\n", restricted );
-	Cbuf_Execute();
+	return qtrue;
+}
+
+/*
+==================
+CL_NextDemo
+
+Called when a demo or cinematic finishes
+If the "nextdemo" cvar is set, that command will be issued
+==================
+*/
+void CL_NextDemo( void ) {
+	demoErrors = 0;
+	if ( CL_QueueNextDemo( ) ) {
+		Cbuf_Execute();
+	}
+}
+
+/*
+==================
+CL_NextDemoAfterError
+
+Called as Com_Error drops the client, before it disconnects. When an error
+(ERR_DROP), or a disconnect the demo recorded (ERR_SERVERDISCONNECT), ended a
+demo, or kept one from starting, "nextdemo" goes on as at a demo's end, and
+the error is only printed, not shown: a list of demos plays on past one
+that's damaged or missing. A disconnect of the player's own (ERR_DISCONNECT:
+Escape, or the disconnect command) stops the demo and ends its list.
+
+It goes on at the next frame (CL_ContinueDemos), once the rest of the
+commands that started the demo have run: a list sets nextdemo after its
+demo command ("demo four; set nextdemo vstr d2"), which a demo that won't
+open stops short of.
+
+An error in a demo that played, a second or more after the last, starts
+the count of errors in a row afresh: it isn't a list failing a frame
+apart, but one whose demos end in a disconnect they recorded, say
+==================
+*/
+void CL_NextDemoAfterError( int code ) {
+	static int	lastError;
+	int			now = Sys_Milliseconds( );
+
+	demoErrorPending = clc.demoplaying && code != ERR_DISCONNECT;
+	if ( !demoErrorPending ) {
+		if ( clc.demoplaying ) {
+			Cvar_Set( "nextdemo", "" );
+		}
+		demoErrors = 0;
+	} else if ( clc.state == CA_ACTIVE && now - lastError >= 1000 ) {
+		demoErrors = 0;
+	}
+	lastError = now;
+}
+
+/*
+==================
+CL_ContinueDemos
+
+After CL_NextDemoAfterError, runs "nextdemo", if it's set, before the menu
+comes up. After MAX_DEMO_ERRORS in a row it stops there: a list going round
+demos that all fail would fail a frame apart, and four errors that close
+are fatal (Com_Error). CL_NextDemoAfterError restarts the count after a
+demo that played
+==================
+*/
+static void CL_ContinueDemos( void ) {
+	demoErrorPending = qfalse;
+	if ( !Cvar_VariableString( "nextdemo" )[0] ) {
+		demoErrors = 0;
+		return;
+	}
+	if ( ++demoErrors >= MAX_DEMO_ERRORS ) {
+		Com_Printf( "%i demos in a row ended in an error, so nextdemo stops here\n", demoErrors );
+		Cvar_Set( "nextdemo", "" );
+		demoErrors = 0;
+		return;
+	}
+	Cvar_Set( "com_errorMessage", "" );
+	CL_QueueNextDemo( );
+	Cbuf_Execute( );
 }
 
 
@@ -3049,6 +3136,10 @@ void CL_Frame ( int msec ) {
 		}
 	}
 #endif
+
+	if ( demoErrorPending ) {
+		CL_ContinueDemos( );
+	}
 
 	if ( cls.cddialog ) {
 		// bring up the cd error dialog if needed
