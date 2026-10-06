@@ -160,6 +160,7 @@ static uniformInfo_t uniformsInfo[] =
 	{ "u_BoneMatrix", GLSL_MAT16_BONEMATRIX },
 	{ "u_Greyscale", GLSL_FLOAT },
 	{ "u_Gamma", GLSL_FLOAT },
+	{ "u_Overbright", GLSL_FLOAT },
 
 	{ "u_FBufScale", GLSL_VEC2 }
 };

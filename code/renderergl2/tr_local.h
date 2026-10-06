@@ -713,6 +713,7 @@ typedef enum
 
 	UNIFORM_GREYSCALE,
 	UNIFORM_GAMMA,
+	UNIFORM_OVERBRIGHT, // 1 << tr.overbrightBits, which the frame is drawn brightened by
 
 	UNIFORM_FBUFSCALE, // 1 / the screen's width and height
 
