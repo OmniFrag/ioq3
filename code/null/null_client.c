@@ -51,6 +51,9 @@ void CL_CharEvent( int key ) {
 void CL_Disconnect( qboolean showMainMenu ) {
 }
 
+void CL_NextDemoAfterError( int code ) {
+}
+
 void CL_MapLoading( void ) {
 }
 
