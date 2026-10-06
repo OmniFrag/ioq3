@@ -44,6 +44,7 @@ memory management
 
 static	sndBuffer	*buffer = NULL;
 static	sndBuffer	*freelist = NULL;
+static	int bufferCount = 0;
 static	int inUse = 0;
 static	int totalInUse = 0;
 
@@ -57,12 +58,14 @@ void	SND_free(sndBuffer *v) {
 	inUse += sizeof(sndBuffer);
 }
 
+// NULL when the pool is full and no other sound can be freed
 sndBuffer*	SND_malloc(void) {
 	sndBuffer *v;
-redo:
-	if (freelist == NULL) {
-		S_FreeOldestSound();
-		goto redo;
+
+	while (freelist == NULL) {
+		if (!S_FreeOldestSound()) {
+			return NULL;
+		}
 	}
 
 	inUse -= sizeof(sndBuffer);
@@ -72,6 +75,16 @@ redo:
 	freelist = *(sndBuffer **)freelist;
 	v->next = NULL;
 	return v;
+}
+
+void S_FreeSoundData( sfx_t *sfx ) {
+	sndBuffer *v, *next;
+
+	for (v = sfx->soundData; v != NULL; v = next) {
+		next = v->next;
+		SND_free(v);
+	}
+	sfx->soundData = NULL;
 }
 
 void SND_setup(void) {
@@ -88,6 +101,7 @@ void SND_setup(void) {
 	cv = Cvar_Get( "com_soundMegs", DEF_COMSOUNDMEGS, CVAR_LATCH | CVAR_ARCHIVE );
 
 	scs = (cv->integer*1536);
+	bufferCount = scs;
 
 	buffer = malloc(scs*sizeof(sndBuffer) );
 	// allocate the stack based hunk allocator
@@ -153,6 +167,9 @@ static int ResampleSfx( sfx_t *sfx, int channels, int inrate, int inwidth, int s
 			if (part == 0) {
 				sndBuffer	*newchunk;
 				newchunk = SND_malloc();
+				if (newchunk == NULL) {
+					return -1;
+				}
 				if (chunk == NULL) {
 					sfx->soundData = newchunk;
 				} else {
@@ -247,6 +264,14 @@ qboolean S_LoadSound( sfx_t *sfx )
 		Com_DPrintf(S_COLOR_YELLOW "WARNING: %s is not a 22kHz audio file\n", sfx->soundName);
 	}
 
+	// a sound larger than the whole pool can't be loaded: refuse it before
+	// freeing the other sounds for room
+	if ( (int64_t)info.samples * dma.speed / info.rate * info.channels > (int64_t)bufferCount * SND_CHUNK_SIZE ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s doesn't fit in the sound memory (com_soundMegs)\n", sfx->soundName );
+		Hunk_FreeTempMemory(data);
+		return qfalse;
+	}
+
 	samples = Hunk_AllocateTempMemory(info.channels * info.samples * sizeof(short) * 2);
 
 	// each of these compression schemes works just fine
@@ -282,6 +307,14 @@ qboolean S_LoadSound( sfx_t *sfx )
 	
 	Hunk_FreeTempMemory(samples);
 	Hunk_FreeTempMemory(data);
+
+	// the pool ran out with nothing left to free
+	if ( sfx->soundLength < 0 ) {
+		S_FreeSoundData( sfx );
+		sfx->soundLength = 0;
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s doesn't fit in the sound memory (com_soundMegs)\n", sfx->soundName );
+		return qfalse;
+	}
 
 	return qtrue;
 }
