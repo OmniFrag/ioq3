@@ -1321,7 +1321,6 @@ void		R_Modellist_f (void);
 
 
 #define	MAX_DRAWSURFS			0x10000
-#define	DRAWSURF_MASK			(MAX_DRAWSURFS-1)
 
 /*
 
