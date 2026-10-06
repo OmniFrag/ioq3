@@ -631,6 +631,8 @@ Create a new usercmd_t structure for this frame
 =================
 */
 void CL_CreateNewCommands( void ) {
+	static int64_t	lastInput;
+	int64_t		newestInput;
 	int			cmdNum;
 
 	// no need to create usercmds until we have a gamestate
@@ -660,6 +662,13 @@ void CL_CreateNewCommands( void ) {
 	cl.cmdNumber++;
 	cmdNum = cl.cmdNumber & CMD_MASK;
 	cl.cmds[cmdNum] = CL_CreateCmd ();
+
+	// for com_speeds, how old the newest input it took is, if any came
+	newestInput = IN_NewestInput();
+	if ( newestInput > lastInput ) {
+		time_inputAge = (int)( ( Sys_Nanoseconds() - newestInput ) / 1000 );
+		lastInput = newestInput;
+	}
 }
 
 /*

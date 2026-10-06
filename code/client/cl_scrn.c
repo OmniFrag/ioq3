@@ -606,6 +606,7 @@ text to the screen.
 */
 void SCR_UpdateScreen( void ) {
 	static int	recursive;
+	static int64_t	lastSwap;
 
 	if ( !scr_initialized ) {
 		return;				// not initialized yet
@@ -634,6 +635,17 @@ void SCR_UpdateScreen( void ) {
 			re.EndFrame( &time_frontend, &time_backend );
 		} else {
 			re.EndFrame( NULL, NULL );
+		}
+
+		// for com_speeds: the frame has been swapped (natively; a browser
+		// shows it once the frame returns)
+		{
+			int64_t now = Sys_Nanoseconds();
+
+			if ( lastSwap ) {
+				time_swap = (int)( ( now - lastSwap ) / 1000 );
+			}
+			lastSwap = now;
 		}
 	}
 	
