@@ -1178,6 +1178,11 @@ extern	int		time_game;
 extern	int		time_frontend;
 extern	int		time_backend;		// renderer backend time
 
+// com_speeds pacing, in microseconds, or -1 for none this frame
+extern	int		time_late;			// the frame's start after it was due
+extern	int		time_inputAge;		// the newest input's age as the usercmd is built
+extern	int		time_swap;			// since the last frame's swap
+
 extern	int		com_frameTime;
 
 extern	qboolean	com_errorEntered;
@@ -1361,6 +1366,7 @@ void IN_Frame( void );
 void IN_Shutdown( void );
 void IN_Restart( void );
 qboolean IN_GetSafeArea( int rect[4] );
+int64_t IN_NewestInput( void );	// the newest key or mouse event, in Sys_Nanoseconds
 
 /*
 ==============================================================

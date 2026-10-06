@@ -119,6 +119,11 @@ int		time_game;
 int		time_frontend;		// renderer frontend time
 int		time_backend;		// renderer backend time
 
+// com_speeds pacing, in microseconds, or -1 for none this frame
+int		time_late;			// the frame's start after it was due
+int		time_inputAge;		// the newest input's age as the usercmd is built
+int		time_swap;			// since the last frame's swap
+
 int			com_frameTime;
 int			com_frameNumber;
 
@@ -3953,6 +3958,7 @@ static int Com_FrameMinMsec( void ) {
 
 #ifndef DEDICATED
 static int64_t	com_frameDue;	// when the next client frame is due, in Sys_Nanoseconds
+static int64_t	com_frameLate = -1;	// how late the wait for it ended, if it slept (com_speeds)
 
 /*
 =================
@@ -4103,12 +4109,15 @@ static qboolean Com_WaitClientFrame( void ) {
 
 		if(left <= 0)
 		{
+			if(com_frameLate >= 0)
+				com_frameLate = -left;
 			NET_Sleep(0);
 			return qtrue;
 		}
 
 		// a millisecond sleep can overshoot, so one ends 2 ms before the
 		// frame at the latest, whenever a queued packet is due
+		com_frameLate = 0;
 		if(com_busyWait->integer || wait < 1000000)
 			NET_Sleep(0);
 		else if(left > 3000000)
@@ -4118,8 +4127,10 @@ static qboolean Com_WaitClientFrame( void ) {
 		else
 			Sys_SleepPrecise(left);
 
-		if(left > 3000000)
-			return Sys_Nanoseconds() >= com_frameDue;
+		// a sleep that overshot the frame goes round once more, so
+		// com_speeds sees how late it ended
+		if(left > 3000000 && Sys_Nanoseconds() < com_frameDue)
+			return qfalse;
 	}
 #endif
 }
@@ -4224,6 +4235,20 @@ void Com_Frame( void ) {
 	timeBeforeClient = 0;
 	timeAfter = 0;
 
+	// how late the wait for this frame ended (Com_WaitClientFrame), if it
+	// had to wait: a frame that was due already, behind a swap that
+	// waited for the display, say, has none, and nor has a browser's,
+	// which runs frames on its refreshes
+	time_late = -1;
+#ifndef DEDICATED
+	if ( com_frameLate >= 0 ) {
+		time_late = (int)( com_frameLate / 1000 );
+		com_frameLate = -1;
+	}
+#endif
+	time_inputAge = -1;
+	time_swap = -1;
+
 	// write config file if anything changed
 	Com_WriteConfiguration(); 
 
@@ -4327,11 +4352,13 @@ void Com_Frame( void ) {
 		sv -= time_game;
 		cl -= time_frontend + time_backend;
 
-		// and the frame's game time, and the time since the last frame
-		// started, in microseconds
-		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i ms:%i dt:%i\n",
+		// and its pacing, in microseconds (-1 for none): how late it
+		// started, the newest input's age as the usercmd was built, the
+		// time since the last frame's swap; then its game time, and the
+		// time since the last frame started, the cap to cap
+		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i late:%i in:%i sw:%i ms:%i dt:%i\n",
 					 com_frameNumber, all, sv, ev, cl, time_game, time_frontend, time_backend,
-					 msec, (int)( sinceLastFrame / 1000 ) );
+					 time_late, time_inputAge, time_swap, msec, (int)( sinceLastFrame / 1000 ) );
 	}	
 
 	//
