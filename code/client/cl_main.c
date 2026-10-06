@@ -89,6 +89,7 @@ cvar_t	*cl_sensitivity;
 cvar_t	*cl_mouseAccel;
 cvar_t	*cl_mouseAccelOffset;
 cvar_t	*cl_mouseAccelStyle;
+cvar_t	*cl_mouseAccelLimit;
 cvar_t	*cl_showMouseRate;
 
 cvar_t	*m_pitch;
@@ -3751,6 +3752,9 @@ void CL_Init( void ) {
 	// this should be set to the max rate value
 	cl_mouseAccelOffset = Cvar_Get( "cl_mouseAccelOffset", "5", CVAR_ARCHIVE );
 	Cvar_CheckRange(cl_mouseAccelOffset, 0.001f, 50000.0f, qfalse);
+	// the most style 0 takes the sensitivity to, 0 for no limit
+	cl_mouseAccelLimit = Cvar_Get( "cl_mouseAccelLimit", "0", CVAR_ARCHIVE );
+	Cvar_CheckRange(cl_mouseAccelLimit, 0.0f, 100.0f, qfalse);
 
 	cl_showMouseRate = Cvar_Get ("cl_showmouserate", "0", 0);
 
