@@ -38,6 +38,7 @@ static	cvar_t	*hashTable[FILE_HASH_SIZE];
 static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetProfile)
 
 static void Cvar_MarkSaved( const cvar_t *var );
+cvar_t *Cvar_Unset( cvar_t *cv );
 static const cvarDeclaration_t	*cvar_declared;	// each cvar's scope (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
 
@@ -992,8 +993,9 @@ Cvar_BeginServerValues, Cvar_EndServerValues
 
 Around a server's systeminfo, and its cheat rule (Cvar_SetCheatState): a
 cvar the server no longer sets in between takes the player's own value
-again. With nothing in between, on leaving the server, that's every cvar,
-but those the server created, which have no other value
+again, and one the server created, which has no other, and which no code
+has registered (Joe, 2026-10-06, CNQ-007), goes. With nothing in
+between, on leaving the server, that's every cvar
 ============
 */
 void Cvar_BeginServerValues( void ) {
@@ -1005,15 +1007,22 @@ void Cvar_BeginServerValues( void ) {
 }
 
 void Cvar_EndServerValues( void ) {
-	cvar_t	*var;
+	cvar_t	*var = cvar_vars;
 
-	for ( var = cvar_vars; var; var = var->next ) {
-		if ( var->serverStale && !( var->flags & CVAR_SERVER_CREATED ) ) {
+	while ( var ) {
+		if ( var->serverStale && ( var->flags & CVAR_SERVER_CREATED ) ) {
+			// read only, so never the player's: only a module reads it, by
+			// name, while the server sends it
+			var = Cvar_Unset( var );
+			continue;
+		}
+		if ( var->serverStale ) {
 			Cvar_SetLayer( &var->serverString, NULL );
 			// a latched one, such as a renderer's, after a restart
 			Cvar_Apply( var, qfalse );
 		}
 		var->serverStale = qfalse;
+		var = var->next;
 	}
 }
 
