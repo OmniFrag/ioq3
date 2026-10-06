@@ -11,10 +11,10 @@ canvas { display: block; width: 100vw; height: 100dvh; border: 0; padding: 0; }
 canvas:focus { outline: none; }
 /* The page's word over the game: the download's progress, or an error.
    Clicks go through it to the canvas, where SDL asks for the pointer. */
-#status, #hints { position: fixed; pointer-events: none; font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
+#status, #hints, #leaving { position: fixed; pointer-events: none; font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
 #status { inset: 0; display: grid; place-items: center; }
 #status[hidden] { display: none; }
-#status > div, .hint { background: rgba(0, 0, 0, 0.7); border-radius: 8px; }
+#status > div, .hint, #leaving span { background: rgba(0, 0, 0, 0.7); border-radius: 8px; }
 #status > div { padding: 16px 24px; max-width: min(32em, 80vw); }
 #status progress { display: block; width: 100%; margin-top: 8px; }
 #status progress[hidden] { display: none; }
@@ -29,6 +29,18 @@ canvas:focus { outline: none; }
 .hint:empty { display: none; }
 .hint.shown { opacity: 1; }
 @starting-style { .hint.shown { opacity: 0; } }
+/* The ring that fills while Esc is held to leave fullscreen, low in the
+   centre: it shows after --ring-after, so a tap never shows it, and is full
+   after --ring-fill more (the page's script sets both) */
+#leaving { left: 50%; bottom: 15%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; opacity: 0; transition: opacity 0.15s; }
+#leaving.holding { opacity: 1; transition-delay: var(--ring-after); }
+#leaving span { padding: 8px 16px; }
+#leaving svg { width: 48px; height: 48px; transform: rotate(-90deg); }
+#leaving circle { fill: none; }
+#leaving .track { stroke: rgba(0, 0, 0, 0.7); stroke-width: 8; }
+#leaving .fill { stroke: rgb(235, 235, 235); stroke-width: 4; stroke-dasharray: 1; stroke-dashoffset: 1; }
+#leaving.holding .fill { animation: leaving-fill var(--ring-fill) linear var(--ring-after) forwards; }
+@keyframes leaving-fill { to { stroke-dashoffset: 0; } }
 </style>
 
 <!-- The game takes keys only while its canvas has focus (the engine sets
@@ -37,6 +49,7 @@ canvas:focus { outline: none; }
 <canvas id=canvas tabindex=0></canvas>
 <div id=status hidden><div><span></span><progress hidden></progress></div></div>
 <div id=hints><div id=hint class=hint></div><div id=play class=hint></div></div>
+<div id=leaving><svg viewBox="0 0 48 48"><circle class=track cx=24 cy=24 r=20 /><circle class=fill cx=24 cy=24 r=20 pathLength=1 /></svg><span>Leaving fullscreen</span></div>
 
 <script type=module>
 // These strings are set in the generated HTML file in the build directory.
@@ -192,11 +205,26 @@ let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
 // a request out, which a second one would only get in the way of; and
 // leaving that the game asked for, which needs no hint
 let entering = false, leaving = false;
+// Keyboard Lock as the request's option (Firefox from 151, Safari from
+// 26.4), which only a browser that has it reads: lockOption says it did. One
+// that knows the option but not the lock refuses the request with
+// NotSupportedError, and is asked again without it, then and from then on;
+// should the first request have used up the player's activation, the
+// standing request takes their next click.
+let lockOption = false;
+let fullscreenOptions = { get keyboardLock() { lockOption = true; return 'browser'; } };
+const requestFullscreen = () => document.documentElement.requestFullscreen(fullscreenOptions)
+    .catch((e) => {
+        if (e?.name !== 'NotSupportedError' || !fullscreenOptions) throw e;
+        fullscreenOptions = undefined;
+        lockOption = false;
+        return document.documentElement.requestFullscreen();
+    });
 const enterFullscreen = () => {
     if (entering) return;
     entering = true;
     fullscreenAnswer = ANSWER_NONE;
-    document.documentElement.requestFullscreen()
+    requestFullscreen()
         .then(() => { if (wantPointer) lockPointer(); })
         .catch(() => {
             if (document.fullscreenElement) return;
@@ -206,9 +234,9 @@ const enterFullscreen = () => {
         })
         .finally(() => { entering = false; });
 };
-const exitFullscreen = () => {
-    leaving = true;
-    document.exitFullscreen().catch(() => { leaving = false; });
+const exitFullscreen = (byGame = true) => {
+    leaving = byGame;
+    return document.exitFullscreen().catch(() => { leaving = false; });
 };
 const present = ({ fullscreen, pointer }) => {
     if (fullscreen !== undefined) {
@@ -580,18 +608,86 @@ const hintOnce = (text) => {
 const showPlay = () => fade(playBox, playing && wantPointer && !locked() ? 'Click to play' : '');
 document.addEventListener('pointerlockchange', showPlay);
 
-// In the page's fullscreen, Esc and F11 are the game's where the browser has
-// Keyboard Lock (Chrome, and Safari from 26.4): Esc opens the menu, as
-// natively, F11 takes a screenshot, and a held Esc leaves fullscreen. The
-// browser lets go of the keys as fullscreen ends. Chrome says how to leave
-// itself, as Firefox does, where the page's hint would go; elsewhere the
-// page says it: with Keyboard Lock a held Esc, and without it, in Safari,
-// one Esc frees the pointer and a second leaves. On leaving, by any means
-// but the game's, it says how to come back.
+// In the page's fullscreen, Esc and F11 are the page's where the browser has
+// Keyboard Lock: as the fullscreen request's option (Firefox, Safari), or
+// navigator.keyboard's (Chrome). F11 is the game's, which takes a
+// screenshot. Esc is the page's first (Joe, 2026-10-06): a tap is the
+// game's, given to it whole as the key comes up, so the menu opens, closes
+// or goes back as natively; held ESC_HOLD ms, it frees the pointer and
+// leaves fullscreen, as the browser's own longer hold does (1.5 s in Chrome
+// and Safari), and the game never sees it, so the player stays where they
+// were. A ring fills from ESC_RING ms, which a tap never reaches. The
+// browser lets go of the keys as fullscreen ends. Chrome and Firefox say how
+// to leave, where the page's hint would go; elsewhere the page says it: with
+// Keyboard Lock a held Esc, and without it, in Safari, one Esc frees the
+// pointer and a second leaves. On leaving, by any means but the game's, it
+// says how to come back.
+const ESC_HOLD = 750, ESC_RING = 250;
 const keyboardLock = navigator.keyboard?.lock ? navigator.keyboard : null;
+const leavingBox = document.getElementById('leaving');
+leavingBox.style.setProperty('--ring-after', `${ESC_RING}ms`);
+leavingBox.style.setProperty('--ring-fill', `${ESC_HOLD - ESC_RING}ms`);
+let keysLocked = false, escHeld = null;
+// the tap's press and release, given on to the game with the press's
+// modifiers, which the page's listeners let by. SDL3 takes them as it does
+// the player's keys, by their code, and doesn't ask isTrusted; the replay's
+// keys are made too, so only the Mac lane's real ones would show if it did
+const givenEscs = new WeakSet();
+const giveEsc = (press) => {
+    for (const type of ['keydown', 'keyup']) {
+        const event = new KeyboardEvent(type, { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true,
+            shiftKey: press.shiftKey, ctrlKey: press.ctrlKey, altKey: press.altKey, metaKey: press.metaKey });
+        givenEscs.add(event);
+        canvas.dispatchEvent(event);
+    }
+};
+const ring = (shown) => leavingBox.classList.toggle('holding', shown);
+const endHold = () => {
+    clearTimeout(escHeld?.timer);
+    escHeld = null;
+    ring(false);
+};
+// as the browser's own hold does, so with the hint for coming back; the
+// pointer once fullscreen has gone, so "Click to play" never shows in it
+const leave = () => exitFullscreen(false).then(() => document.exitPointerLock());
+const leaveByHold = () => {
+    escHeld.left = true;
+    ring(false);
+    leave();
+};
+addEventListener('keydown', (event) => {
+    if (event.code !== 'Escape' || givenEscs.has(event)) return;
+    // a new press after a hold that left, whose release never came
+    if (escHeld?.left && !event.repeat) endHold();
+    if (!(keysLocked || escHeld)) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    // repeats are nobody's, and never start a hold: a hold's, or one's
+    // whose press went elsewhere, as fullscreen began or focus came back
+    if (escHeld || event.repeat) return;
+    escHeld = { press: event, timer: setTimeout(leaveByHold, ESC_HOLD) };
+    ring(true);
+}, { capture: true });
+addEventListener('keyup', (event) => {
+    if (event.code !== 'Escape' || givenEscs.has(event) || !escHeld) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    const { press, left } = escHeld;
+    endHold();
+    if (left) return;
+    // held long enough by the keys' own times, though the page, busy, as
+    // with a map's load, missed its moment
+    if (event.timeStamp - press.timeStamp >= ESC_HOLD) leave();
+    else giveEsc(press);
+}, { capture: true });
+// a hold whose release won't come to the page is nobody's; one that left
+// stays, to keep its repeats and release from the game, as Safari blurs the
+// window as it leaves fullscreen
+addEventListener('blur', () => { if (!escHeld?.left) endHold(); });
 // The hint waits for the lock's answer: a refused lock leaves Esc the
-// browser's.
-const hintLeaving = (keysLocked) => {
+// browser's. An answer after fullscreen ended locks nothing.
+const lockedKeys = (locked) => {
+    keysLocked = locked && Boolean(document.fullscreenElement);
     const hint = browser === 'chromium' || browser === 'firefox' ? ''
         : keysLocked ? 'Hold Esc to leave fullscreen'
         : browser === 'safari' && wantPointer ? 'Press Esc twice to leave fullscreen'
@@ -601,9 +697,13 @@ const hintLeaving = (keysLocked) => {
 document.addEventListener('fullscreenchange', () => {
     if (document.fullscreenElement) {
         wantFullscreen = false;
-        if (keyboardLock) keyboardLock.lock(['Escape', 'F11']).then(() => hintLeaving(true), () => hintLeaving(false));
-        else hintLeaving(false);
+        endHold();
+        if (lockOption) lockedKeys(true);
+        else if (keyboardLock) keyboardLock.lock(['Escape', 'F11']).then(() => lockedKeys(true), () => lockedKeys(false));
+        else lockedKeys(false);
     } else {
+        keysLocked = false;
+        if (!escHeld?.left) endHold();
         keyboardLock?.unlock();
         if (!leaving) hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
         leaving = false;
