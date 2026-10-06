@@ -202,9 +202,11 @@ const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8
     FACT_ANSWER_SHIFT = 6;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
-// a request out, which a second one would only get in the way of; and
-// leaving that the game asked for, which needs no hint
-let entering = false, leaving = false;
+// a request out, which a second one would only get in the way of; leaving
+// that the game asked for, which needs no hint; and any leaving the page
+// asked for, until it's done, while "Click to play" waits: the browser frees
+// the pointer a frame or two before fullscreen ends
+let entering = false, leaving = false, exiting = false;
 // Keyboard Lock as the request's option (Firefox from 151, Safari from
 // 26.4), which only a browser that has it reads: lockOption says it did. One
 // that knows the option but not the lock refuses the request with
@@ -236,7 +238,11 @@ const enterFullscreen = () => {
 };
 const exitFullscreen = (byGame = true) => {
     leaving = byGame;
-    return document.exitFullscreen().catch(() => { leaving = false; });
+    exiting = true;
+    return document.exitFullscreen().catch(() => {
+        leaving = exiting = false;
+        showPlay();
+    });
 };
 const present = ({ fullscreen, pointer }) => {
     if (fullscreen !== undefined) {
@@ -605,7 +611,7 @@ const hintOnce = (text) => {
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => fade(hintBox), 4000);
 };
-const showPlay = () => fade(playBox, playing && wantPointer && !locked() ? 'Click to play' : '');
+const showPlay = () => fade(playBox, playing && wantPointer && !locked() && !exiting ? 'Click to play' : '');
 document.addEventListener('pointerlockchange', showPlay);
 
 // In the page's fullscreen, Esc and F11 are the page's where the browser has
@@ -706,7 +712,8 @@ document.addEventListener('fullscreenchange', () => {
         if (!escHeld?.left) endHold();
         keyboardLock?.unlock();
         if (!leaving) hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
-        leaving = false;
+        leaving = exiting = false;
+        showPlay();
     }
 });
 // The browser's own fullscreen fires no fullscreenchange: entering it meets
