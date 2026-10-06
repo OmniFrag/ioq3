@@ -294,19 +294,6 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		len -= 4 + sizeof(*ddsHeader);
 	}
 
-	if (width)
-		*width = ddsHeader->width;
-	if (height)
-		*height = ddsHeader->height;
-
-	if (numMips)
-	{
-		if (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT)
-			*numMips = ddsHeader->numMips;
-		else
-			*numMips = 1;
-	}
-
 	// FIXME: handle cube map
 	//if ((ddsHeader->caps2 & DDSCAPS2_CUBEMAP) == DDSCAPS2_CUBEMAP)
 
@@ -477,6 +464,29 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 			ri.FS_FreeFile(buffer.v);
 			return;
 		}
+	}
+
+	if (!R_CheckImageSize(filename, ddsHeader->width, ddsHeader->height, len))
+	{
+		// R_LoadImage tries the other formats next, as an RGBA picture
+		*picFormat = GL_RGBA8;
+		ri.FS_FreeFile(buffer.v);
+		return;
+	}
+
+	// only for a loaded image: another format's picture, loaded instead of
+	// a refused one, has one level, not this file's mipmaps
+	if (width)
+		*width = ddsHeader->width;
+	if (height)
+		*height = ddsHeader->height;
+
+	if (numMips)
+	{
+		if (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT)
+			*numMips = ddsHeader->numMips;
+		else
+			*numMips = 1;
 	}
 
 	*pic = ri.Malloc(len);

@@ -505,7 +505,7 @@ static qboolean FindChunk(struct BufferedFile *BF, uint32_t ChunkType)
  *  Decompress all IDATs
  */
 
-static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
+static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer, const char *name, int width, int height)
 {
 	uint8_t  *DecompressedData;
 	uint32_t  DecompressedDataLength;
@@ -736,6 +736,18 @@ static uint32_t DecompressIDATs(struct BufferedFile *BF, uint8_t **Buffer)
 
 	puffResult = puff(puffDest, &puffDestLen, puffSrc, &puffSrcLen);
 	if(!((puffResult == 0) && (puffDestLen > 0)))
+	{
+		ri.Free(CompressedData);
+
+		return((uint32_t)-1);
+	}
+
+	/*
+	 *  A few bytes of zlib can decompress to a great many:
+	 *  the picture must fit beside them.
+	 */
+
+	if(!R_CheckImageSize(name, width, height, (int64_t)width * height * Q3IMAGE_BYTESPERPIXEL + puffDestLen))
 	{
 		ri.Free(CompressedData);
 
@@ -2089,8 +2101,15 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 	}
 
 	/*
-	 *  Do we need to check if the dimensions of the image are valid for Quake3?
+	 *  The picture must fit, with its decompressed data beside it.
 	 */
+
+	if(!R_CheckImageSize(name, IHDR_Width, IHDR_Height, (int64_t)IHDR_Width * IHDR_Height * Q3IMAGE_BYTESPERPIXEL))
+	{
+		CloseBufferedFile(ThePNG);
+
+		return;
+	}
 
 	/*
 	 *  Check if CompressionMethod and FilterMethod are valid.
@@ -2407,7 +2426,7 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 	 *  Decompress all IDAT chunks
 	 */
 
-	DecompressedDataLength = DecompressIDATs(ThePNG, &DecompressedData);
+	DecompressedDataLength = DecompressIDATs(ThePNG, &DecompressedData, name, IHDR_Width, IHDR_Height);
 	if(!(DecompressedDataLength && DecompressedData))
 	{
 		CloseBufferedFile(ThePNG);

@@ -102,7 +102,8 @@ void R_LoadJPG(const char *filename, unsigned char **pic, int *width, int *heigh
   unsigned int row_stride;	/* physical row width in output buffer */
   unsigned int pixelcount, memcount;
   unsigned int sindex, dindex;
-  byte *out;
+  /* volatile: set after the setjmp, and freed by its error path */
+  byte *volatile out = NULL;
   int len;
 	union {
 		byte *b;
@@ -141,6 +142,10 @@ void R_LoadJPG(const char *filename, unsigned char **pic, int *width, int *heigh
     jpeg_destroy_decompress(&cinfo);
     ri.FS_FreeFile(fbuffer.v);
 
+    /* The picture, unless it was finished before the error */
+    if (out && *pic != out)
+      ri.Free(out);
+
     /* Append the filename to the error for easier debugging */
     ri.Printf(PRINT_ALL, ", loading file %s\n", filename);
     return;
@@ -161,6 +166,17 @@ void R_LoadJPG(const char *filename, unsigned char **pic, int *width, int *heigh
    *   (b) we passed TRUE to reject a tables-only JPEG file as an error.
    * See libjpeg.doc for more info.
    */
+
+  /* Refuse an image too large to load before the decompressor sizes its
+   * buffers for it: a few bytes of header can claim 65500 by 65500 pixels.
+   */
+  if (!R_CheckImageSize(filename, cinfo.image_width, cinfo.image_height,
+      (int64_t)cinfo.image_width * cinfo.image_height * 4))
+  {
+    jpeg_destroy_decompress(&cinfo);
+    ri.FS_FreeFile(fbuffer.v);
+    return;
+  }
 
   /* Step 4: set parameters for decompression */
 
@@ -195,9 +211,11 @@ void R_LoadJPG(const char *filename, unsigned char **pic, int *width, int *heigh
     // Free the memory to make sure we don't leak memory
     ri.FS_FreeFile (fbuffer.v);
     jpeg_destroy_decompress(&cinfo);
-  
-    ri.Error(ERR_DROP, "LoadJPG: %s has an invalid image format: %dx%d*4=%d, components: %d", filename,
+
+    // the default image stands in for it
+    ri.Printf(PRINT_WARNING, "WARNING: LoadJPG: %s has an invalid image format: %dx%d*4=%d, components: %d\n", filename,
 		    cinfo.output_width, cinfo.output_height, pixelcount * 4, cinfo.output_components);
+    return;
   }
 
   memcount = pixelcount * 4;
