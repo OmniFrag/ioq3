@@ -241,6 +241,32 @@ void Cvar_CommandCompletion(void (*callback)(const char *s))
 
 /*
 ============
+Cvar_FormatValue
+
+A number as a cvar's value: a whole one as an integer, and else with the
+fewest decimals that read back as the same float: 0.8 is "0.8", as a
+default of 0.8 is written, not "0.800000". A float reads back from 9
+significant digits, so one of 1 or more needs at most 9 decimals, and a
+smaller one its leading zeros too, as many as fit ("-0." and the end)
+============
+*/
+static void Cvar_FormatValue( char *buf, int size, float value ) {
+	int	decimals;
+
+	if ( Q_isintegral( value ) ) {
+		Com_sprintf( buf, size, "%i", (int)value );
+		return;
+	}
+	for ( decimals = 1; decimals <= 48 && decimals + 4 <= size; decimals++ ) {
+		Com_sprintf( buf, size, "%.*f", decimals, value );
+		if ( (float)atof( buf ) == value ) {
+			return;
+		}
+	}
+}
+
+/*
+============
 Cvar_Validate
 ============
 */
@@ -321,20 +347,10 @@ static const char *Cvar_Validate( cvar_t *var,
 
 	if( changed )
 	{
-		if( Q_isintegral( valuef ) )
-		{
-			Com_sprintf( s, sizeof( s ), "%d", (int)valuef );
+		Cvar_FormatValue( s, sizeof( s ), valuef );
 
-			if( warn )
-				Com_Printf( ", setting to %d\n", (int)valuef );
-		}
-		else
-		{
-			Com_sprintf( s, sizeof( s ), "%f", valuef );
-
-			if( warn )
-				Com_Printf( ", setting to %f\n", valuef );
-		}
+		if( warn )
+			Com_Printf( ", setting to %s\n", s );
 
 		return s;
 	}
@@ -1056,11 +1072,7 @@ Cvar_SetValue
 void Cvar_SetValue( const char *var_name, float value) {
 	char	val[32];
 
-	if ( value == (int)value ) {
-		Com_sprintf (val, sizeof(val), "%i",(int)value);
-	} else {
-		Com_sprintf (val, sizeof(val), "%f",value);
-	}
+	Cvar_FormatValue( val, sizeof( val ), value );
 	Cvar_Set (var_name, val);
 }
 
@@ -1121,10 +1133,7 @@ void Cvar_SetValueFromVM( const char *var_name, float value, const char * const 
 {
 	char val[32];
 
-	if( Q_isintegral( value ) )
-		Com_sprintf( val, sizeof(val), "%i", (int)value );
-	else
-		Com_sprintf( val, sizeof(val), "%f", value );
+	Cvar_FormatValue( val, sizeof( val ), value );
 	Cvar_SetFromVM( var_name, val, allowed, source );
 }
 
