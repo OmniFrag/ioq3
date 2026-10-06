@@ -34,3 +34,8 @@ const cvarDeclaration_t cvar_declarations[] = {
 // taken as chosen
 const cvarDefault_t cvar_q3Defaults[] = { { NULL, NULL } };
 const cvarDefault_t cvar_ioq3Defaults[] = { { NULL, NULL } };
+const cvarDefault_t cvar_cnq3Defaults[] = { { NULL, NULL } };
+const cvarDefault_t cvar_q3eDefaults[] = { { NULL, NULL } };
+const char * const cvar_ioq3Marks[] = { NULL };
+const char * const cvar_cnq3Marks[] = { NULL };
+const char * const cvar_q3eMarks[] = { NULL };
