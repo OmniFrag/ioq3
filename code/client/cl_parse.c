@@ -330,6 +330,14 @@ void CL_ParseSnapshot( msg_t *msg ) {
 int cl_connectedToPureServer;
 int cl_connectedToCheatServer;
 
+// a server's systeminfo keys the client has no cvar for become cvars; at
+// most this many, of names and values this long in all, as a server can
+// send new ones without end, and each takes a cvar and memory. The bytes
+// bound what the cvars a server created keep in the small zone, where
+// they outlive the systeminfos that sent them
+#define MAX_SERVER_CVARS	512
+#define MAX_SERVER_CVAR_BYTES	0x8000
+
 /*
 ==================
 CL_SystemInfoChanged
@@ -345,6 +353,7 @@ void CL_SystemInfoChanged( void ) {
 	char			key[BIG_INFO_KEY];
 	char			value[BIG_INFO_VALUE];
 	qboolean		gameSet;
+	int			created, createdBytes;
 
 	systemInfo = cl.gameState.stringData + cl.gameState.stringOffsets[ CS_SYSTEMINFO ];
 	// NOTE TTimo:
@@ -390,6 +399,7 @@ void CL_SystemInfoChanged( void ) {
 	FS_PureServerSetReferencedPaks( s, t );
 
 	gameSet = qfalse;
+	created = Cvar_ServerCreated( &createdBytes );
 	// scan through all the variables in the systeminfo and locally set cvars to match
 	s = systemInfo;
 	while ( s ) {
@@ -413,7 +423,19 @@ void CL_SystemInfoChanged( void ) {
 		}
 
 		if((cvar_flags = Cvar_Flags(key)) == CVAR_NONEXISTENT)
+		{
+			createdBytes += strlen( key ) + strlen( value );
+			if ( ++created > MAX_SERVER_CVARS || createdBytes > MAX_SERVER_CVAR_BYTES ) {
+				if ( !clc.serverCvarsRefused ) {
+					Com_Printf( S_COLOR_YELLOW "WARNING: server sent more new cvars than the %d "
+						"(%d bytes) it may create; the rest are ignored\n",
+						MAX_SERVER_CVARS, MAX_SERVER_CVAR_BYTES );
+					clc.serverCvarsRefused = qtrue;
+				}
+				continue;
+			}
 			Cvar_Get(key, value, CVAR_SERVER_CREATED | CVAR_ROM);
+		}
 		else
 		{
 			// If this cvar may not be modified by a server discard the value.

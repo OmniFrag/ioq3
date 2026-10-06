@@ -755,6 +755,10 @@ void	Cvar_SetValue( const char *var_name, float value );
 qboolean	Cvar_SameValue( const char *a, const char *b );
 // whether two values are the same, as numbers if both are
 
+int	Cvar_ServerCreated( int *bytes );
+// how many cvars a server created that no code has registered, and the
+// bytes their names and values take
+
 float	Cvar_VariableValue( const char *var_name );
 int		Cvar_VariableIntegerValue( const char *var_name );
 // returns 0 if not defined or non numeric
