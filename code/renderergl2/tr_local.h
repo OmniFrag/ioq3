@@ -1431,7 +1431,7 @@ typedef struct {
 	qboolean textureFloat;
 	qboolean textureFloat32; // OpenGL ES: 32-bit float colour buffers, filtered linearly
 	qboolean packedFloat; // R11F_G11F_B10F colour buffers, for r_hdr 2
-	int maxSamples, halfFloatSamples, packedFloatSamples; // the most samples, and each float format's
+	int maxSamples;
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
 	
@@ -2031,6 +2031,7 @@ float	R_FogFactor( float s, float t );
 void	R_InitImages( void );
 int		R_ViewFormat( void );
 int		R_RenderFormat( void );
+int		R_RenderFormatFor( int viewFormat );
 void	R_ResizeScreenImages( void );
 void	R_UpdateViewScale( void );
 void	R_DeleteTextures( void );
