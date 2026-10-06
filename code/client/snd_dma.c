@@ -409,7 +409,8 @@ void S_Base_BeginRegistration( void ) {
 }
 
 void S_memoryLoad(sfx_t	*sfx) {
-	// load the sound file
+	// load the sound file; one the sound memory refused before may fit now
+	sfx->defaultSound = qfalse;
 	if ( !S_LoadSound ( sfx ) ) {
 //		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't load sound: %s\n", sfx->soundName );
 		sfx->defaultSound = qtrue;
@@ -1529,37 +1530,39 @@ void S_UpdateBackgroundTrack( void ) {
 /*
 ======================
 S_FreeOldestSound
+
+Returns qfalse when there was no sound to free, but the default sound
 ======================
 */
 
-void S_FreeOldestSound( void ) {
+qboolean S_FreeOldestSound( void ) {
 	int	i, oldest, used;
 	sfx_t	*sfx;
-	sndBuffer	*buffer, *nbuffer;
 
-	oldest = Com_Milliseconds();
+	oldest = 0;
 	used = 0;
 
+	// any sound in memory, even one loaded or played this millisecond: the
+	// sound being loaded isn't in memory until it's loaded
 	for (i=1 ; i < s_numSfx ; i++) {
 		sfx = &s_knownSfx[i];
-		if (sfx->inMemory && sfx->lastTimeUsed<oldest) {
+		if (sfx->inMemory && sfx->soundData && (!used || sfx->lastTimeUsed<oldest)) {
 			used = i;
 			oldest = sfx->lastTimeUsed;
 		}
+	}
+
+	if (!used) {
+		return qfalse;
 	}
 
 	sfx = &s_knownSfx[used];
 
 	Com_DPrintf("S_FreeOldestSound: freeing sound %s\n", sfx->soundName);
 
-	buffer = sfx->soundData;
-	while(buffer != NULL) {
-		nbuffer = buffer->next;
-		SND_free(buffer);
-		buffer = nbuffer;
-	}
+	S_FreeSoundData(sfx);
 	sfx->inMemory = qfalse;
-	sfx->soundData = NULL;
+	return qtrue;
 }
 
 // =======================================================================

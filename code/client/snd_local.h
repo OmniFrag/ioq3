@@ -226,6 +226,7 @@ qboolean S_LoadSound( sfx_t *sfx );
 
 void		SND_free(sndBuffer *v);
 sndBuffer*	SND_malloc( void );
+void		S_FreeSoundData( sfx_t *sfx );
 void		SND_setup( void );
 void		SND_shutdown(void);
 
@@ -246,7 +247,7 @@ void S_AdpcmGetSamples(sndBuffer *chunk, short *to);
 #define SENTINEL_MULAW_ZERO_RUN 127
 #define SENTINEL_MULAW_FOUR_BIT_RUN 126
 
-void S_FreeOldestSound( void );
+qboolean S_FreeOldestSound( void );
 
 #define	NXStream byte
 
