@@ -2631,6 +2631,32 @@ static const char *Com_DefaultOf( const cvarDefault_t *defaults, const char *nam
 	return NULL;
 }
 
+// what the player feels at once, the mouse's speed, the volume and the
+// brightness: an imported config's value comes across even at its
+// writer's default, where the player played with it, as a default of ours
+// that differs would change the game under them (Joe, 2026-10-06, open
+// question 25, option D). Only CNQ3's differ (2, 0.2 and 1.2 against 5,
+// 0.8 and 1); one that is ours as well isn't saved
+static const char * const com_feltSettings[] = { "sensitivity", "s_volume", "r_gamma", NULL };
+
+/*
+=================
+Com_IsFelt
+
+Whether a cvar is one of com_feltSettings
+=================
+*/
+static qboolean Com_IsFelt( const char *name ) {
+	const char * const	*felt;
+
+	for ( felt = com_feltSettings; *felt; felt++ ) {
+		if ( !Q_stricmp( *felt, name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 /*
 =================
 Com_Rename
@@ -2655,8 +2681,9 @@ A config's settings and binds, as the player's own, with full rights, as
 they're read. A config is data, so anything else in it is left out, with a
 warning: Quake III's aliases are cvars (vstr), which apply as settings. An
 imported config's values that are its writer's defaults are left out too
-(Com_ConfigWriter), as it saved them unchosen, and those its writer names
-otherwise set ours (renames); and with modOnly, all but the cvars saved
+(Com_ConfigWriter), as it saved them unchosen, but for those the player
+feels at once (com_feltSettings), and those its writer names otherwise
+set ours (renames); and with modOnly, all but the cvars saved
 for the game directory, a mod's config read on the mod's first visit
 =================
 */
@@ -2694,7 +2721,7 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 		if ( set ) {
 			// the tables hold the base game's defaults, under the writer's
 			// names, not a mod's own
-			if ( ( inMod && Com_IsPerModScope( name ) ) ||
+			if ( ( inMod && Com_IsPerModScope( name ) ) || Com_IsFelt( name ) ||
 				!Com_IsDefault( defaults, Cmd_Argv( 1 ), Cmd_ArgsFrom( 2 ) ) ) {
 				if ( rename ) {
 					char			setting[MAX_STRING_CHARS], partner[MAX_STRING_CHARS] = "";
