@@ -674,8 +674,8 @@ cvarSource_t Cvar_Source( const cvar_t *var );
 void	Cvar_BeginServerValues( void );
 void	Cvar_EndServerValues( void );
 // around a server's systeminfo: what it no longer requires is dropped at the
-// end, and the player's own value comes back; with nothing between them, on
-// leaving the server
+// end, and the player's own value comes back, and a cvar it created that no
+// code registered goes; with nothing between them, on leaving the server
 
 typedef struct {
 	const char	*name;

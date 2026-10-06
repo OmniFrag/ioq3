@@ -334,7 +334,10 @@ int cl_connectedToCheatServer;
 // most this many, of names and values this long in all, as a server can
 // send new ones without end, and each takes a cvar and memory. The bytes
 // bound what the cvars a server created keep in the small zone, where
-// they outlive the systeminfos that sent them
+// each holds its name and its value three times (its string, default and
+// the server's layer); as each goes once a systeminfo leaves it out
+// (Cvar_EndServerValues), that's at most two systeminfos' worth, under
+// MAX_GAMESTATE_CHARS twice, a backstop
 #define MAX_SERVER_CVARS	512
 #define MAX_SERVER_CVAR_BYTES	0x8000
 
@@ -434,7 +437,8 @@ void CL_SystemInfoChanged( void ) {
 				}
 				continue;
 			}
-			Cvar_Get(key, value, CVAR_SERVER_CREATED | CVAR_ROM);
+			// the server's value in its layer, which the sweep drops
+			Cvar_SetFrom( key, value, CVAR_SOURCE_SERVER, qtrue );
 		}
 		else
 		{
