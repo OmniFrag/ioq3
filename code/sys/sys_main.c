@@ -1116,11 +1116,37 @@ void Sys_SleepPrecise( int64_t ns )
 
 /*
 =================
+Sys_TakeQueuedEvents
+
+Hands the client the events SDL has queued since the last frame took its
+input, without pumping for more: pumping can start a Windows modal loop,
+which runs frames from inside it (Sys_WindowsMessageHook). Windows' raw
+input comes in on a thread of SDL's own and is queued as it arrives, so
+this takes what came during the wait for the frame; elsewhere events
+reach the queue only as it's pumped, before SDL_AppIterate, and there
+are none.
+=================
+*/
+static void Sys_TakeQueuedEvents( void )
+{
+	SDL_Event e;
+
+	while( SDL_PeepEvents( &e, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST ) > 0 )
+	{
+		SDL_AppEvent( NULL, &e );
+	}
+}
+
+/*
+=================
 Sys_Frame
+
+Runs a frame that's due, with the freshest input there is
 =================
 */
 static void Sys_Frame( void )
 {
+	Sys_TakeQueuedEvents( );
 	inFrame = qtrue;
 	Com_Frame( );
 	inFrame = qfalse;
@@ -1141,24 +1167,17 @@ but Windows fires timers only when no input is waiting, so a moving mouse
 holds them off. When a frame comes due, post the window a message to run
 it: posted messages come before input, and after the step of the move or
 resize at hand. The frame first takes the events SDL has queued, as SDL
-does before SDL_AppIterate.
+does before SDL_AppIterate (Sys_Frame).
 =================
 */
 static bool SDLCALL Sys_WindowsMessageHook( void *userdata, MSG *msg )
 {
-	SDL_Event e;
-
 	if( msg->message == SYS_FRAME_MESSAGE )
 	{
 		framePosted = qfalse;
 
 		if( !inFrame && Sys_InModalLoop( ) )
 		{
-			while( SDL_PeepEvents( &e, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST ) > 0 )
-			{
-				IN_ProcessEvent( &e );
-			}
-
 			// it's due; this sends the server's queued packets
 			Com_WaitFrame( );
 			Sys_Frame( );
