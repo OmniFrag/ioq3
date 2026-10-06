@@ -674,6 +674,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 	int			start, end;
 	vec4_t quadVerts[4];
 	vec2_t texCoords[4];
+	vec4_t color;
 
 	if ( !tr.registered ) {
 		return;
@@ -729,7 +730,9 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 	GLSL_BindProgram(&tr.textureColorShader);
 	
 	GLSL_SetUniformMat4(&tr.textureColorShader, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.modelviewProjection);
-	GLSL_SetUniformVec4(&tr.textureColorShader, UNIFORM_COLOR, colorWhite);
+	// at the scale the frame is drawn at, as opengl1 draws it
+	VectorSet4(color, tr.frameLight, tr.frameLight, tr.frameLight, 1.0f);
+	GLSL_SetUniformVec4(&tr.textureColorShader, UNIFORM_COLOR, color);
 
 	RB_InstantQuad2(quadVerts, texCoords);
 }
@@ -1440,6 +1443,7 @@ static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GREYSCALE, backEnd.greyscale);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GAMMA, gamma);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_OVERBRIGHT, 1 << tr.overbrightBits);
+	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_FRAMESCALE, tr.identityLight / tr.frameLight);
 	GL_BindToTMU(src->colorImage[0], 0);
 
 	vec4_t quadVerts[4] = {
@@ -1470,7 +1474,8 @@ static void RB_PresentToScreen(void)
 {
 	const FBO_t *src;
 	float gamma = r_gamma->value;
-	qboolean shade = backEnd.greyscale > 0.0f || gamma != 1.0f;
+	// drawn at Quake III's own scale, the frame is brightened here too
+	qboolean shade = backEnd.greyscale > 0.0f || gamma != 1.0f || (tr.stockBlending && tr.overbrightBits);
 
 	if (!tr.renderFbo)
 		return;
@@ -1678,7 +1683,7 @@ const void *RB_PostProcess(const void *data)
 	// drawn into its place here, with or without its effects
 	apart = RB_ViewApart();
 	effects = r_postProcess->integer && (r_ssao->integer || r_drawSunRays->integer
-		|| (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
+		|| (r_hdr->integer && !tr.stockBlending && (r_toneMap->integer || r_forceToneMap->integer))
 		|| backEnd.refdef.blurFactor * 10.0f >= 0.004f);
 
 	srcFbo = dstFbo = apart ? tr.viewFbo : tr.renderFbo;
@@ -1734,7 +1739,8 @@ const void *RB_PostProcess(const void *data)
 
 		if (srcFbo)
 		{
-			if (r_hdr->integer && (r_toneMap->integer || r_forceToneMap->integer))
+			// a range above 1, which a framebuffer that clamps hasn't
+			if (r_hdr->integer && !tr.stockBlending && (r_toneMap->integer || r_forceToneMap->integer))
 			{
 				autoExposure = r_autoExposure->integer || r_forceAutoExposure->integer;
 

@@ -676,8 +676,9 @@ void LoadDrawVertToSrfVert(srfVert_t *s, drawVert_t *d, int realLightmapNum, flo
 	}
 	else
 	{
-		//hack: convert LDR vertex colors to HDR
-		if (r_hdr->integer)
+		//hack: convert LDR vertex colors to HDR, which Quake III's
+		//arithmetic doesn't
+		if (r_hdr->integer && !tr.stockBlending)
 		{
 			v[0] = MAX(d->color[0], 0.499f);
 			v[1] = MAX(d->color[1], 0.499f);
@@ -2283,9 +2284,10 @@ static	void R_LoadFogs( lump_t *l, lump_t *brushesLump, lump_t *sidesLump ) {
 
 		out->parms = shader->fogParms;
 
-		out->colorInt = ColorBytes4 ( shader->fogParms.color[0],
-			                          shader->fogParms.color[1],
-			                          shader->fogParms.color[2], 1.0 );
+		// at the scale the frame is drawn at, as opengl1's
+		out->colorInt = ColorBytes4 ( shader->fogParms.color[0] * tr.frameLight,
+			                          shader->fogParms.color[1] * tr.frameLight,
+			                          shader->fogParms.color[2] * tr.frameLight, 1.0 );
 
 		d = shader->fogParms.depthForOpaque < 1 ? 1 : shader->fogParms.depthForOpaque;
 		out->tcScale = 1.0f / ( d * 8 );

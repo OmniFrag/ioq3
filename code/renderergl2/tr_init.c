@@ -165,6 +165,7 @@ cvar_t  *r_shadowCascadeZNear;
 cvar_t  *r_shadowCascadeZFar;
 cvar_t  *r_shadowCascadeZBias;
 cvar_t  *r_ignoreDstAlpha;
+cvar_t  *r_stockBlending;
 
 cvar_t	*r_ignoreGLErrors;
 cvar_t	*r_logFile;
@@ -310,6 +311,10 @@ static void InitOpenGL( void )
 	// see gamma support, so their Brightness works, and textures no longer
 	// have r_gamma baked in, so it takes effect at once
 	glConfig.deviceSupportsGamma = glRefConfig.framebufferObject;
+
+	// Quake III's arithmetic draws at its own scale, which the present pass
+	// brightens, so it needs the framebuffer too
+	tr.stockBlending = r_stockBlending->integer && glRefConfig.framebufferObject;
 
 	// check for GLSL function textureCubeLod()
 	if ( r_cubeMapping->integer && !QGL_VERSION_ATLEAST( 3, 0 ) ) {
@@ -1355,9 +1360,10 @@ void R_Register( void )
 	r_externalGLSL = ri.Cvar_Get( "r_externalGLSL", "0", CVAR_LATCH );
 
 	r_hdr = ri.Cvar_Get( "r_hdr", "1", CVAR_ARCHIVE | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_hdr, "Render in floating point, for the tone map and HDR lightmaps: 1 in RGBA16F; "
-		"2 world views in R11F_G11F_B10F, half the bandwidth but coarser and with no alpha, and the 2D in 8 bits "
-		"(as 1 with r_ignoreDstAlpha 0); 0 in 8 bits" );
+	ri.Cvar_SetDescription( r_hdr, "Render with more than 8 bits a channel: with r_stockBlending, 1 in 16 "
+		"(RGBA16) and 2 in 10 (RGB10_A2, as 1 with r_ignoreDstAlpha 0); without, in floating point, for the "
+		"tone map and HDR lightmaps, 1 in RGBA16F and 2 world views in R11F_G11F_B10F, half the bandwidth but "
+		"coarser and with no alpha, and the 2D in 8 bits (as 1 with r_ignoreDstAlpha 0); 0 in 8 bits" );
 	r_floatLightmap = ri.Cvar_Get( "r_floatLightmap", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_postProcess = ri.Cvar_Get( "r_postProcess", "1", CVAR_ARCHIVE );
 
@@ -1420,6 +1426,10 @@ void R_Register( void )
 	r_shadowCascadeZFar = ri.Cvar_Get( "r_shadowCascadeZFar", "1024", CVAR_ARCHIVE | CVAR_LATCH );
 	r_shadowCascadeZBias = ri.Cvar_Get( "r_shadowCascadeZBias", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_ignoreDstAlpha = ri.Cvar_Get( "r_ignoreDstAlpha", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	r_stockBlending = ri.Cvar_Get( "r_stockBlending", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_stockBlending, "Draw with Quake III's arithmetic, as opengl1 does: at its own scale, "
+		"in a framebuffer that clamps (16 bits with r_hdr where OpenGL renders them, 10 with r_hdr 2, else 8), "
+		"with overbright and r_gamma applied once to the finished frame. 0 draws in display units, in floating point" );
 
 	//
 	// temporary latched variables that can only change over a restart
