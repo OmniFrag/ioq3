@@ -264,6 +264,8 @@ typedef struct {
 	qboolean compat;
 #endif
 
+	qboolean	serverCvarsRefused;	// said once: a systeminfo's new keys past the limits
+
 	// big stuff at end of structure so most offsets are 15 bits or less
 	netchan_t	netchan;
 } clientConnection_t;
