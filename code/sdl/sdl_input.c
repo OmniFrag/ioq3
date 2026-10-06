@@ -67,6 +67,7 @@ static int windowSizeSaveTime = 0;	// IN_SaveWindowSize once resizing settles
 static qboolean windowResized = qfalse;
 
 static int in_eventTime = 0;
+static int64_t in_newestInput = 0;	// the newest key or mouse event, in Sys_Nanoseconds
 
 static SDL_Window *SDL_window = NULL;
 
@@ -1118,15 +1119,15 @@ static void IN_WindowResized( void )
 
 /*
 ===============
-IN_EventTime
+IN_EventNanoseconds
 
-When an event happened, by Sys_Milliseconds. SDL stamps each event, by its
+When an event happened, by Sys_Nanoseconds. SDL stamps each event, by its
 own clock, as the system reports it, which is sooner than it reaches
 the game between frames: how long ago that was, by SDL's clock, is taken
-from Sys_Nanoseconds. None is earlier than the last frame's input.
+from Sys_Nanoseconds.
 ===============
 */
-static int IN_EventTime( const SDL_Event *e )
+static int64_t IN_EventNanoseconds( const SDL_Event *e )
 {
 	Uint64 sdlNow = SDL_GetTicksNS( );
 	int64_t now = Sys_Nanoseconds( );
@@ -1136,7 +1137,20 @@ static int IN_EventTime( const SDL_Event *e )
 		now -= (int64_t)( sdlNow - e->common.timestamp );
 	}
 
-	return MAX( (int)( now / 1000000 ), in_eventTime );
+	return now;
+}
+
+/*
+===============
+IN_NewestInput
+
+When the newest key or mouse event SDL delivered happened, by
+Sys_Nanoseconds, for com_speeds' input age
+===============
+*/
+int64_t IN_NewestInput( void )
+{
+	return in_newestInput;
 }
 
 /*
@@ -1148,12 +1162,29 @@ SDL hands each event to the client between frames (sys_main.c)
 */
 void IN_ProcessEvent( const SDL_Event *e )
 {
-	int time = IN_EventTime( e );
+	int64_t happened = IN_EventNanoseconds( e );
+	// by Sys_Milliseconds, none earlier than the last frame's input
+	int time = MAX( (int)( happened / 1000000 ), in_eventTime );
 	keyNum_t key = 0;
 	static keyNum_t lastKeyDown = 0;
 
 	if( !SDL_WasInit( SDL_INIT_VIDEO ) )
 			return;
+
+	switch( e->type )
+	{
+		case SDL_EVENT_KEY_DOWN:
+		case SDL_EVENT_KEY_UP:
+		case SDL_EVENT_MOUSE_MOTION:
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+		case SDL_EVENT_MOUSE_WHEEL:
+			in_newestInput = MAX( in_newestInput, happened );
+			break;
+
+		default:
+			break;
+	}
 
 	switch( e->type )
 	{
