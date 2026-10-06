@@ -208,6 +208,11 @@ void R_ImageList_f( void ) {
 				// 8 bytes per pixel
 				estSize *= 8;
 				break;
+			case GL_RGB10_A2:
+				format = "RGB10A2";
+				// 4 bytes per pixel
+				estSize *= 4;
+				break;
 			case GL_RGBA4:
 			case GL_RGBA8:
 			case GL_RGBA:
@@ -2261,6 +2266,14 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 				dataFormat = GL_RGB;
 				dataType = GL_FLOAT;
 				break;
+			case GL_RGB10_A2:
+				dataFormat = GL_RGBA;
+				dataType = GL_UNSIGNED_INT_2_10_10_10_REV;
+				break;
+			case GL_RGBA16:
+				dataFormat = GL_RGBA;
+				dataType = GL_UNSIGNED_SHORT;
+				break;
 			case GL_R32F:
 				// raw depth, which needs the 32 bits at a distance; where
 				// they can't be rendered and filtered, 16 bits still beat
@@ -2881,12 +2894,29 @@ static void R_CreateDefaultImage( void ) {
 ==================
 R_ViewFormat
 
-What world views are drawn into: RGBA16F with r_hdr, or with r_hdr 2
-32-bit packed floats, which take half its bandwidth but have no alpha, so
-not where shaders blend with the alpha they draw (r_ignoreDstAlpha 0)
+What world views are drawn into. With Quake III's arithmetic
+(r_stockBlending), a format that clamps; in display units, RGBA16F with
+r_hdr, or with r_hdr 2 32-bit packed floats, which take half its bandwidth
+but have no alpha, so not where shaders blend with the alpha they draw
+(r_ignoreDstAlpha 0). Picked once a renderer, as it asks OpenGL how many
+samples each takes
 ==================
 */
-int R_ViewFormat( void ) {
+static int R_PickViewFormat( void ) {
+	// a framebuffer that clamps, as Quake III's: 16 bits a channel where
+	// OpenGL renders them with the samples 8 bits take, 10 with r_hdr 2,
+	// whose 2 bits of alpha only shaders that blend with it would miss,
+	// else 8
+	if (tr.stockBlending)
+	{
+		if (r_hdr->integer == 2 && r_ignoreDstAlpha->integer)
+			return GL_RGB10_A2;
+		if (r_hdr->integer && glRefConfig.renderNorm16
+			&& FBO_Samples(GL_RGBA16) >= FBO_Samples(GL_RGBA8))
+			return GL_RGBA16;
+		return GL_RGBA8;
+	}
+
 	if (!r_hdr->integer || !glRefConfig.textureFloat)
 		return GL_RGBA8;
 
@@ -2896,6 +2926,13 @@ int R_ViewFormat( void ) {
 		return GL_R11F_G11F_B10F;
 
 	return GL_RGBA16F_ARB;
+}
+
+int R_ViewFormat( void ) {
+	if (!tr.viewFormat)
+		tr.viewFormat = R_PickViewFormat();
+
+	return tr.viewFormat;
 }
 
 /*
@@ -3127,6 +3164,7 @@ void R_SetColorMappings( void ) {
 
 	tr.identityLight = 1.0f / ( 1 << tr.overbrightBits );
 	tr.identityLightByte = 255 * tr.identityLight;
+	tr.frameLight = tr.stockBlending ? tr.identityLight : 1.0f;
 
 
 	if ( r_intensity->value <= 1 ) {
