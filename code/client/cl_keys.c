@@ -1302,9 +1302,12 @@ void CL_KeyDownEvent( int key, unsigned time )
 	}
 
 
-	// keys can still be used for bound actions
+	// any key stops a cinematic, and the list it's in (nextdemo). A demo
+	// stops only for Escape, below: other keys do what they're bound to, as
+	// in a match (the scores, say), and a tap on a touch screen, which is a
+	// click, doesn't stop it
 	if ( ( key < 128 || key == K_MOUSE1 ) &&
-		( clc.demoplaying || clc.state == CA_CINEMATIC ) && Key_GetCatcher( ) == 0 ) {
+		clc.state == CA_CINEMATIC && Key_GetCatcher( ) == 0 ) {
 
 		if (Cvar_VariableValue ("com_cameraMode") == 0) {
 			Cvar_Set ("nextdemo","");
@@ -1332,6 +1335,10 @@ void CL_KeyDownEvent( int key, unsigned time )
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
 			}
 			else if ( clc.state != CA_DISCONNECTED ) {
+				// a demo stopped by hand ends the list it's in
+				if ( clc.demoplaying ) {
+					Cvar_Set( "nextdemo", "" );
+				}
 				CL_Disconnect_f();
 				S_StopAllSounds();
 				VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
