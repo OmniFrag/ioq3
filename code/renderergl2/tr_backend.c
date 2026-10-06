@@ -1439,6 +1439,7 @@ static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 	GLSL_SetUniformInt(&tr.greyscaleShader, UNIFORM_TEXTUREMAP, 0);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GREYSCALE, backEnd.greyscale);
 	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_GAMMA, gamma);
+	GLSL_SetUniformFloat(&tr.greyscaleShader, UNIFORM_OVERBRIGHT, 1 << tr.overbrightBits);
 	GL_BindToTMU(src->colorImage[0], 0);
 
 	vec4_t quadVerts[4] = {
