@@ -167,6 +167,15 @@ IMAGE LOADERS
 =============================================================
 */
 
+// the largest image the loaders decode: a side every OpenGL ES 3 and WebGL 2
+// device can draw, and the memory a 2048-square 8-bit RGBA PNG takes to
+// decode (its picture, and its data with a filter byte a row, under two a
+// row interlaced), a third of the default zone (com_zoneMegs 48) left over
+#define MAX_IMAGE_SIDE	2048
+#define MAX_IMAGE_BYTES	( 2 * MAX_IMAGE_SIDE * MAX_IMAGE_SIDE * 4 + 2 * MAX_IMAGE_SIDE )
+
+qboolean R_CheckImageSize( const char *name, int width, int height, int64_t bytes );
+
 void R_LoadBMP( const char *name, byte **pic, int *width, int *height );
 void R_LoadJPG( const char *name, byte **pic, int *width, int *height );
 void R_LoadPCX( const char *name, byte **pic, int *width, int *height );
