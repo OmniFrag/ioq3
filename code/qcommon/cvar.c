@@ -445,16 +445,30 @@ static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
 
 /*
 ============
+Cvar_SameValue
+
+Whether two values are the same, as numbers if both are: "0.800000" is
+"0.8"
+============
+*/
+qboolean Cvar_SameValue( const char *a, const char *b ) {
+	return !strcmp( a, b ) || ( Q_isanumber( a ) && Q_isanumber( b ) && atof( a ) == atof( b ) );
+}
+
+/*
+============
 Cvar_SavedValue
 
 What the config gets for a cvar, if it's archived: the player's choice,
-where it isn't the default. One no code has registered has no default
-yet, and its value is kept as it is
+where it isn't the default, as a number too (Cvar_SameValue), so a
+value written as "0.800000" by an older engine gives way to a later
+default. One no code has registered has no default yet, and its value is
+kept as it is
 ============
 */
 static const char *Cvar_SavedValue( const cvar_t *var ) {
 	if ( !var->savedString ||
-		( !( var->flags & CVAR_USER_CREATED ) && !strcmp( var->savedString, var->resetString ) ) ) {
+		( !( var->flags & CVAR_USER_CREATED ) && Cvar_SameValue( var->savedString, var->resetString ) ) ) {
 		return NULL;
 	}
 	return var->savedString;
