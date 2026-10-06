@@ -2930,7 +2930,20 @@ static int R_PickViewFormat( void ) {
 
 int R_ViewFormat( void ) {
 	if (!tr.viewFormat)
+	{
+		const char *name;
+
 		tr.viewFormat = R_PickViewFormat();
+		switch (tr.viewFormat)
+		{
+			case GL_RGBA16:            name = "RGBA16";         break;
+			case GL_RGBA16F_ARB:       name = "RGBA16F";        break;
+			case GL_R11F_G11F_B10F:    name = "R11F_G11F_B10F"; break;
+			case GL_RGB10_A2:          name = "RGB10_A2";       break;
+			default:                   name = "RGBA8";          break;
+		}
+		ri.Printf(PRINT_ALL, "...view format %s\n", name);
+	}
 
 	return tr.viewFormat;
 }
