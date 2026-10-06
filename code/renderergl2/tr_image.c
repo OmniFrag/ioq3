@@ -2907,10 +2907,12 @@ RGBA8 beside packed floats, too coarse in bright tones for the 2D
 (R_ViewFormat); world views then draw apart (R_UpdateViewScale)
 ==================
 */
-int R_RenderFormat( void ) {
-	int format = R_ViewFormat();
+int R_RenderFormatFor( int viewFormat ) {
+	return viewFormat == GL_R11F_G11F_B10F ? GL_RGBA8 : viewFormat;
+}
 
-	return format == GL_R11F_G11F_B10F ? GL_RGBA8 : format;
+int R_RenderFormat( void ) {
+	return R_RenderFormatFor( R_ViewFormat() );
 }
 
 /*
