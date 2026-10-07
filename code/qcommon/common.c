@@ -2644,6 +2644,12 @@ static const char *Com_DefaultOf( const cvarDefault_t *defaults, const char *nam
 // 0.8 and 1); one that is ours as well isn't saved
 static const char * const com_feltSettings[] = { "sensitivity", "s_volume", "r_gamma", NULL };
 
+// a stock menu's top choice, saved as chosen though it meant "the fastest
+// there is": Quake III's Data Rate list tops out at LAN/Cable/xDSL, 25000,
+// which every other writer has as its default. From any program's config
+// it's left out as a default is, so ours applies (2026-10-07)
+static const cvarDefault_t com_menuTops[] = { { "rate", "25000" }, { NULL, NULL } };
+
 /*
 =================
 Com_IsFelt
@@ -2686,10 +2692,11 @@ A config's settings and binds, as the player's own, with full rights, as
 they're read. A config is data, so anything else in it is left out, with a
 warning: Quake III's aliases are cvars (vstr), which apply as settings. An
 imported config's values that are its writer's defaults are left out too
-(Com_ConfigWriter), as it saved them unchosen, but for those the player
-feels at once (com_feltSettings), and those its writer names otherwise
-set ours (renames); and with modOnly, all but the cvars saved
-for the game directory, a mod's config read on the mod's first visit
+(Com_ConfigWriter), as it saved them unchosen, and so is a stock menu's top
+choice (com_menuTops), but for those the player feels at once
+(com_feltSettings), and those its writer names otherwise set ours
+(renames); and with modOnly, all but the cvars saved for the game
+directory, a mod's config read on the mod's first visit
 =================
 */
 static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *defaults,
@@ -2726,8 +2733,11 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 		if ( set ) {
 			// the tables hold the base game's defaults, under the writer's
 			// names, not a mod's own
-			if ( ( inMod && Com_IsPerModScope( name ) ) || Com_IsFelt( name ) ||
-				!Com_IsDefault( defaults, Cmd_Argv( 1 ), Cmd_ArgsFrom( 2 ) ) ) {
+			const char	*value = Cmd_ArgsFrom( 2 );
+			qboolean	unchosen = Com_IsDefault( defaults, Cmd_Argv( 1 ), value ) ||
+				( defaults && Com_IsDefault( com_menuTops, Cmd_Argv( 1 ), value ) );
+
+			if ( ( inMod && Com_IsPerModScope( name ) ) || Com_IsFelt( name ) || !unchosen ) {
 				if ( rename ) {
 					char			setting[MAX_STRING_CHARS], partner[MAX_STRING_CHARS] = "";
 					const cvarRename_t	*other = rename->pair ? Com_Rename( renames, rename->pair ) : NULL;
