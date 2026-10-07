@@ -408,6 +408,8 @@ static const vmExtension_t cl_cgameExtensions[] = {
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_IsRecordingDemo", COM_TRAP_ISRECORDINGDEMO },
 	{ "trap_GetSafeArea_OF", COM_TRAP_GETSAFEAREA },
+	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ NULL, 0 }
 };
 
@@ -521,6 +523,7 @@ static const char * const cl_cgameSyscallNames[] = {
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
 	SYSCALL( COM_TRAP_ISRECORDINGDEMO ),
 	SYSCALL( COM_TRAP_GETSAFEAREA ),
+	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 };
 
 /*
@@ -861,6 +864,10 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case COM_TRAP_CVAR_SETDESCRIPTION:
 		// NULL for either is ignored
 		Cvar_SetDescriptionByName( VMA_STR_OPT( 1 ), VMA_STR_OPT( 2 ) );
+		return 0;
+
+	case COM_TRAP_CVAR_SETRANGE:
+		Cvar_SetRangeByName( VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
 		return 0;
 
 	case COM_TRAP_ISRECORDINGDEMO:
