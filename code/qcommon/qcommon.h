@@ -416,6 +416,21 @@ typedef struct {
 // overscan; the whole window where the system reports none
 #define	COM_TRAP_GETSAFEAREA	804
 
+// CNQ3's, under its key names, so mods written for it (CPMA) take the same
+// paths here, in every module: trap_Cvar_SetHelp( const char *name, const
+// char *help ) is trap_Cvar_SetDescription_Q3E's syscall, and
+// trap_Cvar_SetRange( const char *name, int type, const char *min, const
+// char *max ) gives a cvar a range (Cvar_SetRangeByName)
+#define	COM_TRAP_CVAR_SETRANGE	805
+
+// trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colours,
+// are left unchecked
+#define	CVAR_RANGE_STRING	0	// no range
+#define	CVAR_RANGE_FLOAT	1
+#define	CVAR_RANGE_INTEGER	2
+#define	CVAR_RANGE_BITMASK	3	// an integer's range
+#define	CVAR_RANGE_BOOL		4
+
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );
@@ -821,6 +836,7 @@ void	Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize );
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
 void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
+void Cvar_SetRangeByName( const char *var_name, int type, const char *min, const char *max );
 
 void	Cvar_Restart(qboolean unsetVM);
 void	Cvar_Restart_f( void );

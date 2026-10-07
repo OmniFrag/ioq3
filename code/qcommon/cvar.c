@@ -24,6 +24,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 
+#include <float.h>
+
 cvar_t		*cvar_vars = NULL;
 cvar_t		*cvar_cheats;
 int			cvar_modifiedFlags;
@@ -534,6 +536,12 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	{
 		// whether it had a saved value, which registering can drop
 		qboolean	saved = var->savedString != NULL;
+
+		// engine code taking over a cvar game code created drops the range
+		// the module gave it (Cvar_SetRangeByName), before that range could
+		// bend the engine's default
+		if ( ( var->flags & CVAR_VM_CREATED ) && !( flags & CVAR_VM_CREATED ) )
+			var->validate = qfalse;
 
 		var_value = Cvar_Validate(var, var_value, qfalse);
 
@@ -2040,6 +2048,21 @@ void Cvar_SetReason( cvar_t *var, const char *reason )
 
 /*
 =====================
+Cvar_FindVMVar
+
+The cvar a game module names, if the game code created it itself: what a
+module may describe or bound, unlike the engine's
+=====================
+*/
+static cvar_t *Cvar_FindVMVar( const char *var_name )
+{
+	cvar_t *var = var_name ? Cvar_FindVar( var_name ) : NULL;
+
+	return var && ( var->flags & CVAR_VM_CREATED ) ? var : NULL;
+}
+
+/*
+=====================
 Cvar_SetDescriptionByName
 
 Describes an existing cvar, for game modules, which name cvars rather
@@ -2050,13 +2073,74 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 {
 	cvar_t *var;
 
-	if( !var_name || !var_description || strlen( var_description ) >= MAX_STRING_CHARS )
+	if( !var_description || strlen( var_description ) >= MAX_STRING_CHARS )
 		return;
 
-	// only a cvar the game code created itself
-	var = Cvar_FindVar( var_name );
-	if( var && ( var->flags & CVAR_VM_CREATED ) )
+	var = Cvar_FindVMVar( var_name );
+	if( var )
 		Cvar_SetDescription( var, var_description );
+}
+
+/*
+=====================
+Cvar_SetRangeByName
+
+CNQ3's trap_Cvar_SetRange, for game modules: gives a cvar the game code
+created the range of a type (CVAR_RANGE_*, CNQ3's), which Cvar_CheckRange
+then keeps it in. A NULL min or max is no bound.
+=====================
+*/
+void Cvar_SetRangeByName( const char *var_name, int type, const char *minString, const char *maxString )
+{
+	cvar_t	*var;
+	float	min, max;
+
+	var = Cvar_FindVMVar( var_name );
+	if( !var )
+		return;
+
+	switch( type )
+	{
+	case CVAR_RANGE_STRING:
+	default:	// CPMA's colours, unchecked
+		var->validate = qfalse;
+		return;
+	case CVAR_RANGE_FLOAT:
+		min = -FLT_MAX;
+		max = FLT_MAX;
+		break;
+	case CVAR_RANGE_INTEGER:
+	case CVAR_RANGE_BITMASK:
+		min = INT_MIN;
+		max = INT_MAX;
+		break;
+	case CVAR_RANGE_BOOL:
+		Cvar_CheckRange( var, 0, 1, qtrue );
+		return;
+	}
+
+	if( ( minString && !Q_isanumber( minString ) ) || ( maxString && !Q_isanumber( maxString ) ) )
+	{
+		Com_Printf( "WARNING: cvar '%s' given a range that isn't numbers\n", var->name );
+		return;
+	}
+	if( minString )
+		min = atof( minString );
+	if( maxString )
+		max = atof( maxString );
+	// an integer's bounds are whole numbers, inside the ones given
+	if( type != CVAR_RANGE_FLOAT )
+	{
+		min = ceilf( min );
+		max = floorf( max );
+	}
+	// also refuses NaN
+	if( !( min <= max ) )
+	{
+		Com_Printf( "WARNING: cvar '%s' given a range whose min is over its max\n", var->name );
+		return;
+	}
+	Cvar_CheckRange( var, min, max, type != CVAR_RANGE_FLOAT );
 }
 
 /*
