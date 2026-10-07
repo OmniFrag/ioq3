@@ -1128,6 +1128,39 @@ int SV_FrameMsec(void)
 
 /*
 ==================
+SV_FrameRateChanged
+
+At the start, and when sv_fps changes. Frames are whole milliseconds, so a
+rate that doesn't divide 1000 runs a little faster than set: say what it
+runs, and the nearest rates that run exactly. Clients' snapshot rates,
+which sv_fps caps, follow it.
+==================
+*/
+static void SV_FrameRateChanged( void ) {
+	int		fps = sv_fps->integer;
+	int		frameMsec = 1000 / fps;
+	int		below, above;
+	client_t	*cl;
+	int		i;
+
+	if ( 1000 % fps ) {
+		for ( below = fps - 1; 1000 % below; below-- ) {
+		}
+		for ( above = fps + 1; 1000 % above; above++ ) {
+		}
+		Com_Printf( "sv_fps %i runs %i ms frames, %g a second; %i or %i run exactly as set\n",
+			fps, frameMsec, floor( 10000.0 / frameMsec ) / 10, below, above );
+	}
+
+	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+		if ( cl->state >= CS_CONNECTED ) {
+			SV_UpdateSnapshotRate( cl );
+		}
+	}
+}
+
+/*
+==================
 SV_Frame
 
 Player movement occurs as a result of packet events, which
@@ -1161,11 +1194,12 @@ void SV_Frame( int msec ) {
 		return;
 	}
 
-	// if it isn't time for the next frame, do nothing
-	if ( sv_fps->integer < 1 ) {
-		Cvar_Set( "sv_fps", "10" );
+	if ( sv_fps->modified ) {
+		sv_fps->modified = qfalse;
+		SV_FrameRateChanged();
 	}
 
+	// if it isn't time for the next frame, do nothing
 	frameMsec = 1000 / sv_fps->integer * com_timescale->value;
 	// don't let it scale below 1ms
 	if(frameMsec < 1)
