@@ -1505,6 +1505,37 @@ qboolean SV_IsUnlimitedRate( client_t *cl ) {
 
 /*
 =================
+SV_UpdateSnapshotRate
+
+The client's snapshots a second, from its snaps userinfo, capped by
+sv_fps: on a userinfo change, and when sv_fps changes
+=================
+*/
+void SV_UpdateSnapshotRate( client_t *cl ) {
+	char	*val;
+	int		i;
+
+	// none given: every frame
+	val = Info_ValueForKey (cl->userinfo, "snaps");
+	i = *val ? atoi(val) : sv_fps->integer;
+
+	if(i < 1)
+		i = 1;
+	else if(i > sv_fps->integer)
+		i = sv_fps->integer;
+
+	i = 1000 / i;
+
+	if(i != cl->snapshotMsec)
+	{
+		// Reset last sent snapshot so we avoid desync between server frame time and snapshot send time
+		cl->lastSnapshotTime = 0;
+		cl->snapshotMsec = i;
+	}
+}
+
+/*
+=================
 SV_UserinfoChanged
 
 Pull specific info from a newly changed userinfo string
@@ -1548,30 +1579,8 @@ void SV_UserinfoChanged( client_t *cl ) {
 		}
 	}
 
-	// snaps command
-	val = Info_ValueForKey (cl->userinfo, "snaps");
-	
-	if(strlen(val))
-	{
-		i = atoi(val);
-		
-		if(i < 1)
-			i = 1;
-		else if(i > sv_fps->integer)
-			i = sv_fps->integer;
+	SV_UpdateSnapshotRate( cl );
 
-		i = 1000 / i;
-	}
-	else
-		i = 50;
-
-	if(i != cl->snapshotMsec)
-	{
-		// Reset last sent snapshot so we avoid desync between server frame time and snapshot send time
-		cl->lastSnapshotTime = 0;
-		cl->snapshotMsec = i;		
-	}
-	
 #ifdef USE_VOIP
 #ifdef LEGACY_PROTOCOL
 	if(cl->compat)
