@@ -321,6 +321,8 @@ static int	FloatAsInt( float f ) {
 // each has its case in SV_GameSystemCalls
 static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ NULL, 0 }
 };
 
@@ -523,6 +525,7 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( TRAP_CEIL ),
 	SYSCALL( COM_TRAP_GETVALUE ),
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
+	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 };
 
 /*
@@ -1187,6 +1190,10 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case COM_TRAP_CVAR_SETDESCRIPTION:
 		// NULL does nothing
 		Cvar_SetDescriptionByName( VMA_STR_OPT( 1 ), VMA_STR_OPT( 2 ) );
+		return 0;
+
+	case COM_TRAP_CVAR_SETRANGE:
+		Cvar_SetRangeByName( VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
 		return 0;
 
 	default:

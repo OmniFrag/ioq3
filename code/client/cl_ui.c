@@ -720,6 +720,8 @@ static const vmExtension_t cl_uiExtensions[] = {
 	{ "trap_SetTextFocus_OF", COM_TRAP_SETTEXTFOCUS },
 	{ "trap_FollowWindowSize_OF", COM_TRAP_FOLLOWWINDOWSIZE },
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
+	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	// why fullscreen isn't what the player wants, as the console says it,
 	// "" when it is
 	{ "fullscreenReason_OF", 0, Present_Reason },
@@ -828,7 +830,8 @@ static const char * const cl_uiSyscallNames[] = {
 	SYSCALL( COM_TRAP_GETVALUE ),
 	SYSCALL( COM_TRAP_SETTEXTFOCUS ),
 	SYSCALL( COM_TRAP_FOLLOWWINDOWSIZE ),
-	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION )
+	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
+	SYSCALL( COM_TRAP_CVAR_SETRANGE )
 };
 
 // the engine's read-only and startup cvars q3_ui sets: it clears the
@@ -1231,6 +1234,10 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case COM_TRAP_CVAR_SETDESCRIPTION:
 		// NULL for either is ignored
 		Cvar_SetDescriptionByName( VMA_STR_OPT( 1 ), VMA_STR_OPT( 2 ) );
+		return 0;
+
+	case COM_TRAP_CVAR_SETRANGE:
+		Cvar_SetRangeByName( VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
 		return 0;
 
 	default:
