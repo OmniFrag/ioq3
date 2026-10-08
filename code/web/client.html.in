@@ -202,11 +202,11 @@ const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8
     FACT_ANSWER_SHIFT = 6;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
-// a request out, which a second one would only get in the way of; leaving
-// that the game asked for, which needs no hint; and any leaving the page
-// asked for, until it's done, while "Click to play" waits: the browser frees
-// the pointer a frame or two before fullscreen ends
-let entering = false, leaving = false, exiting = false;
+// a request out, which a second one would only get in the way of; and who
+// asked to leave fullscreen, 'game' or 'page', until it's done, while "Click
+// to play" waits (the browser frees the pointer a frame or two before
+// fullscreen ends), and the game's leaving needs no hint
+let entering = false, exiting = null;
 // Keyboard Lock as the request's option (Firefox from 151, Safari from
 // 26.4), which only a browser that has it reads: lockOption says it did. One
 // that knows the option but not the lock refuses the request with
@@ -237,10 +237,9 @@ const enterFullscreen = () => {
         .finally(() => { entering = false; });
 };
 const exitFullscreen = (byGame = true) => {
-    leaving = byGame;
-    exiting = true;
+    exiting = byGame ? 'game' : 'page';
     return document.exitFullscreen().catch(() => {
-        leaving = exiting = false;
+        exiting = null;
         showPlay();
     });
 };
@@ -711,8 +710,8 @@ document.addEventListener('fullscreenchange', () => {
         keysLocked = false;
         if (!escHeld?.left) endHold();
         keyboardLock?.unlock();
-        if (!leaving) hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
-        leaving = exiting = false;
+        if (exiting !== 'game') hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
+        exiting = null;
         showPlay();
     }
 });
