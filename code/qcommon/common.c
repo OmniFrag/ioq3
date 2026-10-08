@@ -3971,8 +3971,8 @@ static int Com_FrameMinMsec( void ) {
 }
 
 #ifndef DEDICATED
-static int64_t	com_frameDue;	// when the next client frame is due, in Sys_Nanoseconds
-static qboolean	com_frameWaited;	// whether the wait for it slept (com_speeds' late)
+static int64_t	com_frameLastDue;	// when the last client frame was due, in Sys_Nanoseconds
+static qboolean	com_frameWaited;	// whether the wait for the next slept (com_speeds' late)
 
 /*
 =================
@@ -4049,28 +4049,49 @@ static int64_t Com_FrameInterval( void ) {
 =================
 Com_NextFrameDue
 
-As a client frame ends, when the next one is due: an interval after this
-one was due, so that a rate that isn't a whole number of milliseconds a
-frame keeps its average, and a frame that started late is made up by the
-next. One that started more than an interval late starts the count
-again, rather than run frames back to back: on a whole millisecond of
-the clock game time counts, so frames of whole milliseconds each move
-game time by exactly that much.
+When the next client frame is due: an interval after the last one was due,
+the interval as it is now, so that a changed cap, or the game coming back
+from the background, takes effect at once, not after a frame at the old
+rate. Counted from when the last frame was due, not when it started, a rate
+that isn't a whole number of milliseconds a frame keeps its average, and a
+frame that started late is made up by the next.
 =================
 */
-static void Com_NextFrameDue( int64_t frameStart ) {
+static int64_t Com_NextFrameDue( void ) {
+	return com_frameLastDue + Com_FrameInterval();
+}
+
+/*
+=================
+Com_ClientFrameStarted
+
+As a client frame starts, it's the last one due, and com_speeds' late is how
+long after it was due it started, if the wait for it slept. A frame that
+started more than an interval late starts the count again, rather than run
+frames back to back: on a whole millisecond of the clock game time counts,
+so frames of whole milliseconds each move game time by exactly that much.
+=================
+*/
+static void Com_ClientFrameStarted( int64_t frameStart ) {
 	int64_t	interval = Com_FrameInterval();
+	int64_t	due = com_frameLastDue + interval;
+
+	if(com_frameWaited)
+	{
+		time_late = (int)((frameStart - due) / 1000);
+		com_frameWaited = qfalse;
+	}
 
 #ifdef __EMSCRIPTEN__
 	// A browser runs frames on the display's refreshes: counted from this
 	// frame's start, on one, the next is due on the refresh nearest its
 	// time, and an interval measured a little short can't creep earlier.
-	com_frameDue = frameStart + interval - Sys_RefreshInterval() / 2;
+	com_frameLastDue = frameStart - Sys_RefreshInterval() / 2;
 #else
-	if(frameStart - com_frameDue > interval)
-		com_frameDue = frameStart - frameStart % 1000000;
+	if(frameStart - due > interval)
+		due = frameStart - frameStart % 1000000;
 
-	com_frameDue += interval;
+	com_frameLastDue = due;
 #endif
 }
 
@@ -4092,13 +4113,13 @@ static qboolean Com_WaitClientFrame( void ) {
 	if(com_sv_running->integer)
 		SV_SendQueuedPackets();
 
-	return Sys_Nanoseconds() >= com_frameDue;
+	return Sys_Nanoseconds() >= Com_NextFrameDue();
 #else
 	int64_t	left, wait;
 
 	for(;;)
 	{
-		left = com_frameDue - Sys_Nanoseconds();
+		left = Com_NextFrameDue() - Sys_Nanoseconds();
 		wait = left;
 		if(com_sv_running->integer)
 			wait = MIN(wait, SV_SendQueuedPackets() * (int64_t)1000000);
@@ -4122,7 +4143,7 @@ static qboolean Com_WaitClientFrame( void ) {
 			Sys_SleepPrecise(left);
 
 		if(left > 3000000)
-			return Sys_Nanoseconds() >= com_frameDue;
+			return Sys_Nanoseconds() >= Com_NextFrameDue();
 	}
 #endif
 }
@@ -4138,7 +4159,7 @@ Whether the next frame is due, without waiting for it
 qboolean Com_FrameDue( void ) {
 #ifndef DEDICATED
 	if(Com_PacedFrames())
-		return Sys_Nanoseconds() >= com_frameDue;
+		return Sys_Nanoseconds() >= Com_NextFrameDue();
 #endif
 
 	return !Com_TimeVal(Com_FrameMinMsec());
@@ -4234,10 +4255,7 @@ void Com_Frame( void ) {
 	// own start, so a wait cut short by an error still gives its frame's
 	time_late = -1;
 #ifndef DEDICATED
-	if ( com_frameWaited ) {
-		time_late = (int)( ( frameStart - com_frameDue ) / 1000 );
-		com_frameWaited = qfalse;
-	}
+	Com_ClientFrameStarted( frameStart );
 #endif
 	time_inputAge = -1;
 	time_swap = -1;
@@ -4371,11 +4389,6 @@ void Com_Frame( void ) {
 	}
 
 	Com_ReadFromPipe( );
-
-#ifndef DEDICATED
-	// after the frame's input and commands, which can change the cap
-	Com_NextFrameDue( frameStart );
-#endif
 
 	com_frameNumber++;
 }
