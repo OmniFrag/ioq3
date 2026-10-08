@@ -290,7 +290,9 @@ static const char *Cvar_Validate( cvar_t *var,
 	{
 		valuef = atof( value );
 
-		if( var->integral )
+		// whole numbers only, within the range: one outside it is held at
+		// the bound below instead, since an int can't hold every float
+		if( var->integral && valuef >= var->min && valuef <= var->max )
 		{
 			if( !Q_isintegral( valuef ) )
 			{
@@ -2128,11 +2130,13 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 		min = atof( minString );
 	if( maxString )
 		max = atof( maxString );
-	// an integer's bounds are whole numbers, inside the ones given
+	// an integer's bounds are whole numbers, inside the ones given and
+	// inside an int: INT_MAX as a float is 2^31, one past it, which a value
+	// held at the bound would overflow as it's written back as an int
 	if( type != CVAR_RANGE_FLOAT )
 	{
-		min = ceilf( min );
-		max = floorf( max );
+		min = MAX( ceilf( min ), (float)INT_MIN );
+		max = MIN( floorf( max ), 2147483520.0f );	// the largest float under 2^31
 	}
 	// also refuses NaN
 	if( !( min <= max ) )
