@@ -366,7 +366,8 @@ void CL_SystemInfoChanged( void ) {
 	cl.serverId = atoi( Info_ValueForKey( systemInfo, "sv_serverid" ) );
 	// the server's own value, not the cvar, which takes the player's again
 	// where the server sends none (Cvar_EndServerValues)
-	cl.movesByFrame = !atoi( Info_ValueForKey( systemInfo, "pmove_fixed" ) );
+	cl.movesByFrame = Com_MovesByFrame( Info_ValueForKey( systemInfo, "pmove_fixed" ),
+		Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[ CS_SERVERINFO ], "gamename" ) );
 
 #ifdef USE_VOIP
 #ifdef LEGACY_PROTOCOL

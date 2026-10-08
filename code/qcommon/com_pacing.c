@@ -63,6 +63,22 @@ int64_t Com_CapInterval( int fps ) {
 
 /*
 =================
+Com_MovesByFrame
+
+Whether a server moves the player by the frame, so that the frame rate
+sets how high a jump goes, from its systeminfo's pmove_fixed ("" where it
+sends none, as stock's and most mods' game code) and its serverinfo's
+gamename. CPMA has movement of its own that doesn't follow the frame rate
+in any of its rulesets (47.27 units a jump at 60, 125 and 165 fps), and
+sends no pmove_fixed
+=================
+*/
+qboolean Com_MovesByFrame( const char *pmoveFixed, const char *gamename ) {
+	return !atoi( pmoveFixed ) && Q_stricmp( gamename, "cpma" );
+}
+
+/*
+=================
 Com_MaxFpsInterval
 
 com_maxfps's cap as an interval in nanoseconds, given the display's refresh
@@ -70,8 +86,8 @@ period (0 if unknown): a number of frames a second (Com_CapInterval); the
 display's refresh rate (COM_MAXFPS_DISPLAY), exactly; 3% under it
 (COM_MAXFPS_BELOW_DISPLAY), for a display of variable refresh rate with
 vsync; or 0, no cap. The display's two are 125 where the rate isn't known,
-or where the server moves players by the frame (movesByFrame: pmove_fixed
-0), whose jumps are the classic height at 8 ms frames
+or where the server moves players by the frame (movesByFrame,
+Com_MovesByFrame), whose jumps are the classic height at 8 ms frames
 =================
 */
 int64_t Com_MaxFpsInterval( int maxfps, int64_t refresh, qboolean movesByFrame ) {
