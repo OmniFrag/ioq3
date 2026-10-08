@@ -4076,9 +4076,11 @@ static void Com_ClientFrameStarted( int64_t frameStart ) {
 	int64_t	interval = Com_FrameInterval();
 	int64_t	due = com_frameLastDue + interval;
 
+	// one that started before it was due, as a wait cut short by an error
+	// does, is on time: -1 is com_speeds' none
 	if(com_frameWaited)
 	{
-		time_late = (int)((frameStart - due) / 1000);
+		time_late = (int)(MAX(frameStart - due, 0) / 1000);
 		com_frameWaited = qfalse;
 	}
 
@@ -4252,7 +4254,7 @@ void Com_Frame( void ) {
 	// (Com_WaitClientFrame) slept: a frame that was due already, behind a
 	// swap that waited for the display, say, has none, and nor has a
 	// browser's, which runs frames on its refreshes. Taken from the frame's
-	// own start, so a wait cut short by an error still gives its frame's
+	// own start, so a wait cut short by an error still gives its frame one
 	time_late = -1;
 #ifndef DEDICATED
 	Com_ClientFrameStarted( frameStart );
