@@ -1300,8 +1300,8 @@ void CL_Frame( int msec );
 
 // whether the renderer is ready for a new frame (re.FrameReady)
 qboolean CL_FrameReady( void );
-// whether the server moves the player by the frame (pmove_fixed 0), so the
-// frame rate sets jumps
+// whether the server moves the player by the frame (Com_MovesByFrame), so
+// the frame rate sets jumps
 qboolean CL_MovesByFrame( void );
 qboolean CL_GameCommand( void );
 void CL_KeyEvent (int key, qboolean down, unsigned time);
@@ -1444,6 +1444,7 @@ int64_t	Sys_RefreshInterval( void );
 int64_t	Com_RefreshNanoseconds( int numerator, int denominator );
 int64_t	Com_CapInterval( int fps );
 int64_t	Com_MaxFpsInterval( int maxfps, int64_t refresh, qboolean movesByFrame );
+qboolean	Com_MovesByFrame( const char *pmoveFixed, const char *gamename );
 
 qboolean Sys_RandomBytes( byte *string, int len );
 

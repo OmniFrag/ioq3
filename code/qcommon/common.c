@@ -3428,7 +3428,7 @@ void Com_Init( char *commandLine ) {
 	Cvar_CheckRange( com_maxfps, -2, 1000, qtrue );	// down to COM_MAXFPS_BELOW_DISPLAY
 	Cvar_SetDescription( com_maxfps, "Frames a second at most; 0 for no cap, -1 for the display's refresh rate, "
 		"-2 for 3% under it (a display of variable refresh rate, with vsync); both are 125 on a server "
-		"without fixed movement steps (pmove_fixed 0), whose jumps are the classic height there" );
+		"that moves the player by the frame (pmove_fixed 0 or none, not CPMA), whose jumps are the classic height there" );
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
 	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP | CVAR_PROTECTED );
