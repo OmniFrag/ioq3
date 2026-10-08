@@ -3421,9 +3421,9 @@ void Com_Init( char *commandLine ) {
 	// browser-driven event loop. So default throttling to off.
 	com_maxfps = Cvar_Get ("com_maxfps", "0", CVAR_ARCHIVE);
 #else
-	// 125 fps: 8 ms frames, which vanilla movement physics are tuned for, as
-	// Quake3e and CNQ3 default to
-	com_maxfps = Cvar_Get ("com_maxfps", "125", CVAR_ARCHIVE_ND);
+	// the display's refresh rate: with movement in fixed steps (pmove_fixed),
+	// the frame rate no longer sets how the game moves
+	com_maxfps = Cvar_Get ("com_maxfps", "-1", CVAR_ARCHIVE_ND);
 #endif
 	Cvar_CheckRange( com_maxfps, -2, 1000, qtrue );	// down to COM_MAXFPS_BELOW_DISPLAY
 	Cvar_SetDescription( com_maxfps, "Frames a second at most; 0 for no cap, -1 for the display's refresh rate, "
