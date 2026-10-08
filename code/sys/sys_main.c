@@ -1092,12 +1092,10 @@ int64_t Sys_RefreshInterval( void )
 	}
 
 	mode = window ? SDL_GetCurrentDisplayMode( SDL_GetDisplayForWindow( window ) ) : NULL;
-	if( !mode || mode->refresh_rate_numerator <= 0 || mode->refresh_rate_denominator <= 0 )
-	{
-		return 0;
-	}
 
-	return (int64_t)1000000000 * mode->refresh_rate_denominator / mode->refresh_rate_numerator;
+	// the rate as a fraction, exact (59.94 is 60000/1001), which SDL works
+	// out where a backend gives only the float
+	return mode ? Com_RefreshNanoseconds( mode->refresh_rate_numerator, mode->refresh_rate_denominator ) : 0;
 }
 #endif
 
