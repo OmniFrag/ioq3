@@ -135,6 +135,7 @@ typedef struct {
 
 	int			serverId;			// included in each client message so the server
 												// can tell if it is for a prior map_restart
+	qboolean	movesByFrame;		// the systeminfo's pmove_fixed is 0 or absent (CL_MovesByFrame)
 	// big stuff at end of structure so most offsets are 15 bits or less
 	clSnapshot_t	snapshots[PACKET_BACKUP];
 
