@@ -423,6 +423,12 @@ typedef struct {
 // char *max ) gives a cvar a range (Cvar_SetRangeByName)
 #define	COM_TRAP_CVAR_SETRANGE	805
 
+// trap_ToggleFullscreen() in ui: a menu's fullscreen toggle, as Alt+Enter: the
+// other of what's on screen, as the player's choice, and asked for again
+// after a refusal, where setting r_fullscreen to what it already is asks
+// nothing
+#define	COM_TRAP_TOGGLEFULLSCREEN	806
+
 // trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colours,
 // are left unchecked
 #define	CVAR_RANGE_STRING	0	// no range

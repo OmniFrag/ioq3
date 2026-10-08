@@ -722,6 +722,7 @@ static const vmExtension_t cl_uiExtensions[] = {
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
+	{ "trap_ToggleFullscreen_OF", COM_TRAP_TOGGLEFULLSCREEN },
 	// why fullscreen isn't what the player wants, as the console says it,
 	// "" when it is
 	{ "fullscreenReason_OF", 0, Present_Reason },
@@ -831,7 +832,8 @@ static const char * const cl_uiSyscallNames[] = {
 	SYSCALL( COM_TRAP_SETTEXTFOCUS ),
 	SYSCALL( COM_TRAP_FOLLOWWINDOWSIZE ),
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
-	SYSCALL( COM_TRAP_CVAR_SETRANGE )
+	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
+	SYSCALL( COM_TRAP_TOGGLEFULLSCREEN )
 };
 
 // the engine's read-only and startup cvars q3_ui sets: it clears the
@@ -1238,6 +1240,12 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_CVAR_SETRANGE:
 		Cvar_SetRangeByName( VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
+		return 0;
+
+	case COM_TRAP_TOGGLEFULLSCREEN:
+		// no more than the ui could do with r_fullscreen, and a refusal's
+		// next chance, as Alt+Enter gives it
+		Present_ToggleFullscreen();
 		return 0;
 
 	default:
