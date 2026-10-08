@@ -106,6 +106,7 @@ typedef struct {
 	int				messageSent;		// time the message was transmitted
 	int				messageAcked;		// time the message was acked
 	int				messageSize;		// used to rate drop packets
+	qboolean		commandsOnly;		// sent without the snapshot, after an overflow
 } clientSnapshot_t;
 
 typedef enum {
@@ -145,6 +146,13 @@ typedef struct client_s {
 	int				reliableSequence;		// last added reliable message, not necessarily sent or acknowledged yet
 	int				reliableAcknowledge;	// last acknowledged reliable message
 	int				reliableSent;			// last sent reliable message, not necessarily acknowledged yet
+	// The last reliable message the client has had with a snapshot. A client
+	// sent commands without one (after an overflow) acknowledges commands its
+	// game hasn't run, so the limit of pending commands counts from here when
+	// this is older, or its newest would cycle out ones it hasn't run
+	int				snapshotAcknowledge;
+	int				overflowSequence;		// the message that began an overflow, warned of once
+											// until the client has a snapshot sent after it; 0 for none
 	int				messageAcknowledge;
 
 	int				gamestateMessageNum;	// netchan->outgoingSequence of gamestate

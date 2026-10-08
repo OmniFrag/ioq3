@@ -691,6 +691,7 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	// if the client lacks sufficient space for another reliable command
 	// it also guarantees that the client receives both the print and disconnect commands
 	drop->reliableSequence = drop->reliableAcknowledge;
+	drop->snapshotAcknowledge = drop->reliableAcknowledge;
 	// Setting the gamestate message number to -1 ensures that SV_AddServerCommand()
 	// will not call SV_DropClient() again, even though it is unlikely the client
 	// will receive many server commands during the drop
@@ -776,6 +777,7 @@ static void SV_SendClientGameState( client_t *client ) {
 	// with a gamestate and it sets the clc.serverCommandSequence at
 	// the client side
 	SV_UpdateServerCommandsToClient( client, &msg );
+	client->snapshotAcknowledge = client->reliableSequence;
 
 	// send the gamestate
 	MSG_WriteByte( &msg, svc_gamestate );
@@ -1881,6 +1883,18 @@ static void SV_UserMove( client_t *cl, msg_t *msg, qboolean delta ) {
 
 	// save time for ping calculation
 	cl->frames[ cl->messageAcknowledge & PACKET_MASK ].messageAcked = svs.time;
+
+	// the newest message the client has, if it had the snapshot, had every
+	// command up to the newest it has, which its game will run; and one sent
+	// after an overflow began ends it
+	if ( cl->netchan.outgoingSequence - cl->messageAcknowledge > 0
+		&& cl->netchan.outgoingSequence - cl->messageAcknowledge <= PACKET_BACKUP
+		&& !cl->frames[ cl->messageAcknowledge & PACKET_MASK ].commandsOnly ) {
+		cl->snapshotAcknowledge = cl->reliableAcknowledge;
+		if ( cl->overflowSequence && cl->messageAcknowledge - cl->overflowSequence > 0 ) {
+			cl->overflowSequence = 0;
+		}
+	}
 
 	// TTimo
 	// catch the no-cp-yet situation before SV_ClientEnterWorld
