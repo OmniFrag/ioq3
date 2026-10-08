@@ -3427,7 +3427,8 @@ void Com_Init( char *commandLine ) {
 #endif
 	Cvar_CheckRange( com_maxfps, -2, 1000, qtrue );	// down to COM_MAXFPS_BELOW_DISPLAY
 	Cvar_SetDescription( com_maxfps, "Frames a second at most; 0 for no cap, -1 for the display's refresh rate, "
-		"-2 for 3% under it (a display of variable refresh rate, with vsync)" );
+		"-2 for 3% under it (a display of variable refresh rate, with vsync); both are 125 on a server "
+		"without fixed movement steps (pmove_fixed 0), whose jumps are the classic height there" );
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
 	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP | CVAR_PROTECTED );
@@ -4000,7 +4001,7 @@ static int64_t Com_FrameInterval( void ) {
 	// the display's refresh interval, read only where a cap follows it or
 	// vsync waits for it
 	display = com_maxfps->integer < 0 || com_swapIntervalActive->integer ? Sys_RefreshInterval() : 0;
-	cap = Com_MaxFpsInterval(com_maxfps->integer, display);
+	cap = Com_MaxFpsInterval(com_maxfps->integer, display, CL_MovesByFrame());
 	if(cap > 0)
 	{
 #ifdef __EMSCRIPTEN__

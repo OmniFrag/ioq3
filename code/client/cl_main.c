@@ -3368,6 +3368,20 @@ qboolean CL_FrameReady( void ) {
 
 /*
 ============
+CL_MovesByFrame
+
+Whether the server moves the player in steps of the frame's length rather
+than in fixed steps: pmove_fixed 0 in its systeminfo, or none (stock's
+default, and mods'), where the frame rate sets jumps. Menus and demos
+don't
+============
+*/
+qboolean CL_MovesByFrame( void ) {
+	return clc.state == CA_ACTIVE && !clc.demoplaying && cl.movesByFrame;
+}
+
+/*
+============
 CL_InitRenderer
 ============
 */

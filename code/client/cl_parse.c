@@ -364,6 +364,9 @@ void CL_SystemInfoChanged( void ) {
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=475
 	// in some cases, outdated cp commands might get sent with this news serverId
 	cl.serverId = atoi( Info_ValueForKey( systemInfo, "sv_serverid" ) );
+	// the server's own value, not the cvar, which takes the player's again
+	// where the server sends none (Cvar_EndServerValues)
+	cl.movesByFrame = !atoi( Info_ValueForKey( systemInfo, "pmove_fixed" ) );
 
 #ifdef USE_VOIP
 #ifdef LEGACY_PROTOCOL

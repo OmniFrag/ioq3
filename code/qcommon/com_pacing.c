@@ -69,17 +69,19 @@ com_maxfps's cap as an interval in nanoseconds, given the display's refresh
 period (0 if unknown): a number of frames a second (Com_CapInterval); the
 display's refresh rate (COM_MAXFPS_DISPLAY), exactly; 3% under it
 (COM_MAXFPS_BELOW_DISPLAY), for a display of variable refresh rate with
-vsync; 125 where the rate isn't known; or 0, no cap
+vsync; or 0, no cap. The display's two are 125 where the rate isn't known,
+or where the server moves players by the frame (movesByFrame: pmove_fixed
+0), whose jumps are the classic height at 8 ms frames
 =================
 */
-int64_t Com_MaxFpsInterval( int maxfps, int64_t refresh ) {
+int64_t Com_MaxFpsInterval( int maxfps, int64_t refresh, qboolean movesByFrame ) {
 	if ( maxfps > 0 ) {
 		return Com_CapInterval( maxfps );
 	}
 	if ( maxfps == 0 ) {
 		return 0;
 	}
-	if ( refresh <= 0 ) {
+	if ( refresh <= 0 || movesByFrame ) {
 		return Com_CapInterval( 125 );
 	}
 	if ( maxfps == COM_MAXFPS_BELOW_DISPLAY ) {
