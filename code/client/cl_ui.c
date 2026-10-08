@@ -1243,9 +1243,10 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return 0;
 
 	case COM_TRAP_TOGGLEFULLSCREEN:
-		// no more than the ui could do with r_fullscreen, and a refusal's
-		// next chance, as Alt+Enter gives it
-		Present_ToggleFullscreen();
+		// no more than the ui could do with r_fullscreen, and so the menus'
+		// as its other sets are, with a refusal's next chance, as Alt+Enter
+		// gives it
+		Present_ToggleFullscreen( CVAR_SOURCE_MENU );
 		return 0;
 
 	default:

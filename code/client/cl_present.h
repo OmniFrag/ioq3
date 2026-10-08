@@ -82,7 +82,7 @@ typedef struct {
 void		Present_Init( void );
 qboolean	Present_CreateFullscreen( void );
 void		Present_Frame( const presentFacts_t *facts, int time );
-void		Present_ToggleFullscreen( void );
+void		Present_ToggleFullscreen( cvarSource_t source );
 const char	*Present_Reason( void );
 presentPointer_t	Present_Pointer( const presentFacts_t *facts );
 void		Present_Captured( qboolean captured );
