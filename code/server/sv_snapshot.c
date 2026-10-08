@@ -210,21 +210,37 @@ static void SV_WriteSnapshotToClient( client_t *client, msg_t *msg ) {
 
 /*
 ==================
+SV_WriteServerCommands
+
+(re)send the server commands the client hasn't acknowledged yet, in order,
+stopping once the message holds budget bytes (0 for no limit), after at
+least one
+==================
+*/
+static void SV_WriteServerCommands( client_t *client, msg_t *msg, int budget ) {
+	int		i;
+
+	// write any unacknowledged serverCommands
+	for ( i = client->reliableAcknowledge + 1 ; i <= client->reliableSequence ; i++ ) {
+		if ( budget && msg->cursize >= budget && i > client->reliableAcknowledge + 1 ) {
+			break;
+		}
+		MSG_WriteByte( msg, svc_serverCommand );
+		MSG_WriteLong( msg, i );
+		MSG_WriteString( msg, client->reliableCommands[ i & (MAX_RELIABLE_COMMANDS-1) ] );
+	}
+	client->reliableSent = i - 1;
+}
+
+/*
+==================
 SV_UpdateServerCommandsToClient
 
 (re)send all server commands the client hasn't acknowledged yet
 ==================
 */
 void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg ) {
-	int		i;
-
-	// write any unacknowledged serverCommands
-	for ( i = client->reliableAcknowledge + 1 ; i <= client->reliableSequence ; i++ ) {
-		MSG_WriteByte( msg, svc_serverCommand );
-		MSG_WriteLong( msg, i );
-		MSG_WriteString( msg, client->reliableCommands[ i & (MAX_RELIABLE_COMMANDS-1) ] );
-	}
-	client->reliableSent = client->reliableSequence;
+	SV_WriteServerCommands( client, msg, 0 );
 }
 
 /*
@@ -648,10 +664,20 @@ void SV_SendClientSnapshot( client_t *client ) {
 	SV_WriteVoipToClient( client, &msg );
 #endif
 
-	// check for overflow
+	// check for overflow: a client that fell behind (a stall) has more
+	// commands than fit with its snapshot. Send it the commands alone, up
+	// to half the message, until they fit with one; an emptied message
+	// would drop it ("read past end of server message")
+	client->frames[ client->netchan.outgoingSequence & PACKET_MASK ].commandsOnly = msg.overflowed;
 	if ( msg.overflowed ) {
-		Com_Printf ("WARNING: msg overflowed for %s\n", client->name);
-		MSG_Clear (&msg);
+		if ( !client->overflowSequence ) {
+			Com_Printf( "WARNING: msg overflowed for %s: sending its commands without the snapshot\n",
+				client->name );
+			client->overflowSequence = client->netchan.outgoingSequence;
+		}
+		MSG_Clear( &msg );
+		MSG_WriteLong( &msg, client->lastClientCommand );
+		SV_WriteServerCommands( client, &msg, MAX_MSGLEN / 2 );
 	}
 
 	SV_SendMessageToClient( &msg, client );

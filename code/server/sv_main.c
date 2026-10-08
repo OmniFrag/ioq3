@@ -142,7 +142,7 @@ not have future snapshot_t executed before it is executed
 ======================
 */
 void SV_AddServerCommand( client_t *client, const char *cmd ) {
-	int		index, i;
+	int		index, i, oldest;
 
 	// this is very ugly but it's also a waste to for instance send multiple config string updates
 	// for the same config string index in one snapshot
@@ -156,10 +156,13 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 
 	client->reliableSequence++;
 	// if we would be losing an old command that hasn't been acknowledged,
+	// or that the client hasn't had a snapshot with (snapshotAcknowledge),
 	// we must drop the connection
 	// we check == instead of >= so a broadcast print added by SV_DropClient()
 	// doesn't cause a recursive drop client
-	if ( client->reliableSequence - client->reliableAcknowledge == MAX_RELIABLE_COMMANDS + 1 ) {
+	oldest = client->reliableAcknowledge - client->snapshotAcknowledge > 0 ?
+		client->snapshotAcknowledge : client->reliableAcknowledge;
+	if ( client->reliableSequence - oldest == MAX_RELIABLE_COMMANDS + 1 ) {
 		if ( client->gamestateMessageNum == -1 )  {
 			// invalid game state message 
 			// this can occur in SV_DropClient() to avoid calling it more than once
