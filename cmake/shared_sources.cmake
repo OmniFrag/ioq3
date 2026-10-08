@@ -17,6 +17,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cm_trace.c
     ${SOURCE_DIR}/qcommon/cmd.c
     ${SOURCE_DIR}/qcommon/common.c
+    ${SOURCE_DIR}/qcommon/com_pacing.c
     ${SOURCE_DIR}/qcommon/cvar.c
     ${CVAR_DECLARATIONS_SOURCE}
     ${SOURCE_DIR}/qcommon/files.c

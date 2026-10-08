@@ -3425,6 +3425,9 @@ void Com_Init( char *commandLine ) {
 	// Quake3e and CNQ3 default to
 	com_maxfps = Cvar_Get ("com_maxfps", "125", CVAR_ARCHIVE_ND);
 #endif
+	Cvar_CheckRange( com_maxfps, -2, 1000, qtrue );	// down to COM_MAXFPS_BELOW_DISPLAY
+	Cvar_SetDescription( com_maxfps, "Frames a second at most; 0 for no cap, -1 for the display's refresh rate, "
+		"-2 for 3% under it (a display of variable refresh rate, with vsync)" );
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
 	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP | CVAR_PROTECTED );
@@ -3984,26 +3987,6 @@ static qboolean Com_PacedFrames( void ) {
 
 /*
 =================
-Com_CapInterval
-
-The interval of a cap of fps frames a second, in nanoseconds. A classic
-cap, 1000/k rounded down (125, 250, 333, 90...), is exactly k milliseconds
-a frame, as every Quake III engine has given it: players choose those
-for how the game moves in frames of that many milliseconds. Any other
-rate is paced exactly.
-=================
-*/
-static int64_t Com_CapInterval( int fps ) {
-	int		k = 1000 / fps;
-
-	if(k > 0 && 1000 / k == fps)
-		return k * (int64_t)1000000;
-
-	return 1000000000 / fps;
-}
-
-/*
-=================
 Com_FrameInterval
 
 How long a client frame takes at least, in nanoseconds: at most 1000
@@ -4012,18 +3995,20 @@ frames a second, since game time is in whole milliseconds
 */
 static int64_t Com_FrameInterval( void ) {
 	int64_t	interval = 1000000;
-	int64_t	cap, refresh;
+	int64_t	cap, refresh, display;
 
-	if(com_maxfps->integer > 0)
+	// the display's refresh interval, read only where a cap follows it or
+	// vsync waits for it
+	display = com_maxfps->integer < 0 || com_swapIntervalActive->integer ? Sys_RefreshInterval() : 0;
+	cap = Com_MaxFpsInterval(com_maxfps->integer, display);
+	if(cap > 0)
 	{
-		cap = Com_CapInterval(com_maxfps->integer);
 #ifdef __EMSCRIPTEN__
 		refresh = 0;	// the cap is rounded to whole refreshes below
 #else
 		// a swap interval of n shows a frame every n refreshes (-1 is
 		// adaptive vsync, every refresh)
-		refresh = com_swapIntervalActive->integer ?
-			Sys_RefreshInterval() * abs(com_swapIntervalActive->integer) : 0;
+		refresh = display * abs(com_swapIntervalActive->integer);
 #endif
 
 		// With vsync, the swap waits for the display: a cap at or above its

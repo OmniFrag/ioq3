@@ -1432,6 +1432,16 @@ void	Sys_SleepPrecise( int64_t ns );
 int64_t	Sys_RefreshInterval( void );
 #endif
 
+// com_maxfps's values besides a number of frames a second and 0 (no cap):
+// the display's refresh rate, and 3% under it, for a display of variable
+// refresh rate with vsync (com_pacing.c)
+#define	COM_MAXFPS_DISPLAY			-1
+#define	COM_MAXFPS_BELOW_DISPLAY	-2
+
+int64_t	Com_RefreshNanoseconds( int numerator, int denominator );
+int64_t	Com_CapInterval( int fps );
+int64_t	Com_MaxFpsInterval( int maxfps, int64_t refresh );
+
 qboolean Sys_RandomBytes( byte *string, int len );
 
 // the system console is shown when a dedicated server is running
