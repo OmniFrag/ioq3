@@ -358,8 +358,9 @@ void Present_Captured( qboolean captured )
 ===============
 Present_ToggleFullscreen
 
-Alt+Enter: the other of what's on screen, saved, and asked for again even
-if it's already the want, as a refusal's next chance
+Alt+Enter, and a menu's toggle (trap_ToggleFullscreen_OF): the other of
+what's on screen, saved, and asked for again even if it's already the want,
+as a refusal's next chance
 ===============
 */
 void Present_ToggleFullscreen( void )
