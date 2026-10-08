@@ -358,14 +358,23 @@ void Present_Captured( qboolean captured )
 ===============
 Present_ToggleFullscreen
 
-Alt+Enter, and a menu's toggle (trap_ToggleFullscreen_OF): the other of
-what's on screen, saved, and asked for again even if it's already the want,
-as a refusal's next chance
+Alt+Enter, the player's, and a menu's toggle (trap_ToggleFullscreen_OF), the
+menus': the other of what's on screen, saved, and asked for again even if
+it's already the want, as a refusal's next chance. Not while that request is
+out and unanswered (macOS's animation into fullscreen takes up to a second):
+a second toggle then, a double click or a held key, waits for its answer
 ===============
 */
-void Present_ToggleFullscreen( void )
+void Present_ToggleFullscreen( cvarSource_t source )
 {
-	Cvar_SetFrom( "r_fullscreen", com_fullscreen->integer ? "0" : "1", CVAR_SOURCE_PLAYER, qtrue );
+	qboolean	want = !com_fullscreen->integer;
+
+	Cvar_SetFrom( "r_fullscreen", want ? "1" : "0", source, qtrue );
+
+	if( present.asking && present.askedFor == want && present.reason == PRESENT_OK )
+	{
+		return;
+	}
 
 	present.asking = qfalse;
 	Present_SetReason( PRESENT_OK, present.reasonFor );
