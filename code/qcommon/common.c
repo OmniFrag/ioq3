@@ -3972,7 +3972,7 @@ static int Com_FrameMinMsec( void ) {
 
 #ifndef DEDICATED
 static int64_t	com_frameDue;	// when the next client frame is due, in Sys_Nanoseconds
-static int64_t	com_frameLate = -1;	// how late the wait for it ended, if it slept (com_speeds)
+static qboolean	com_frameWaited;	// whether the wait for it slept (com_speeds' late)
 
 /*
 =================
@@ -4105,15 +4105,13 @@ static qboolean Com_WaitClientFrame( void ) {
 
 		if(left <= 0)
 		{
-			if(com_frameLate >= 0)
-				com_frameLate = -left;
 			NET_Sleep(0);
 			return qtrue;
 		}
 
 		// a millisecond sleep can overshoot, so one ends 2 ms before the
 		// frame at the latest, whenever a queued packet is due
-		com_frameLate = 0;
+		com_frameWaited = qtrue;
 		if(com_busyWait->integer || wait < 1000000)
 			NET_Sleep(0);
 		else if(left > 3000000)
@@ -4123,10 +4121,8 @@ static qboolean Com_WaitClientFrame( void ) {
 		else
 			Sys_SleepPrecise(left);
 
-		// a sleep that overshot the frame goes round once more, so
-		// com_speeds sees how late it ended
-		if(left > 3000000 && Sys_Nanoseconds() < com_frameDue)
-			return qfalse;
+		if(left > 3000000)
+			return Sys_Nanoseconds() >= com_frameDue;
 	}
 #endif
 }
@@ -4231,15 +4227,16 @@ void Com_Frame( void ) {
 	timeBeforeClient = 0;
 	timeAfter = 0;
 
-	// how late the wait for this frame ended (Com_WaitClientFrame), if it
-	// had to wait: a frame that was due already, behind a swap that
-	// waited for the display, say, has none, and nor has a browser's,
-	// which runs frames on its refreshes
+	// how long after it was due this frame started, if the wait for it
+	// (Com_WaitClientFrame) slept: a frame that was due already, behind a
+	// swap that waited for the display, say, has none, and nor has a
+	// browser's, which runs frames on its refreshes. Taken from the frame's
+	// own start, so a wait cut short by an error still gives its frame's
 	time_late = -1;
 #ifndef DEDICATED
-	if ( com_frameLate >= 0 ) {
-		time_late = (int)( com_frameLate / 1000 );
-		com_frameLate = -1;
+	if ( com_frameWaited ) {
+		time_late = (int)( ( frameStart - com_frameDue ) / 1000 );
+		com_frameWaited = qfalse;
 	}
 #endif
 	time_inputAge = -1;
