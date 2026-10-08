@@ -76,6 +76,7 @@ cvar_t	*cl_freezeDemo;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_showSend;
+static cvar_t	*cl_movesByFrame;
 cvar_t	*cl_timedemo;
 cvar_t	*cl_timedemoLog;
 cvar_t	*cl_autoRecordDemo;
@@ -3106,6 +3107,11 @@ void CL_Frame ( int msec ) {
 	}
 #endif
 
+	// for the menus, which show the cap com_maxfps -1 and -2 hold there
+	if ( cl_movesByFrame->integer != CL_MovesByFrame() ) {
+		Cvar_SetValue( "cl_movesByFrame", CL_MovesByFrame() );
+	}
+
 #ifdef USE_HTTP
 	if(clc.httpUsed) {
 		qboolean finished = CL_HTTP_PerformDownload();
@@ -3371,9 +3377,8 @@ qboolean CL_FrameReady( void ) {
 CL_MovesByFrame
 
 Whether the server moves the player in steps of the frame's length rather
-than in fixed steps: pmove_fixed 0 in its systeminfo, or none (stock's
-default, and mods'), where the frame rate sets jumps. Menus and demos
-don't
+than in fixed steps, where the frame rate sets jumps (Com_MovesByFrame).
+Menus and demos don't
 ============
 */
 qboolean CL_MovesByFrame( void ) {
@@ -3870,6 +3875,9 @@ void CL_Init( void ) {
 	Cvar_Get( "cl_downloadCount", "0", CVAR_ROM );
 	Cvar_Get( "cl_downloadTime", "0", CVAR_ROM );
 	Cvar_Get( "cl_currentServerAddress", "", CVAR_ROM );
+	cl_movesByFrame = Cvar_Get( "cl_movesByFrame", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_movesByFrame, "For the menus: 1 in a match on a server that moves the player "
+		"by the frame (pmove_fixed 0 or none, and not CPMA), where com_maxfps -1 and -2 hold 125" );
 	// the client's word to the renderer that the ui fills the screen
 	Cvar_Get( "r_uiFullScreen", "0", CVAR_ROM );
 
