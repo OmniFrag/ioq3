@@ -1289,7 +1289,7 @@ void CL_KeyDownEvent( int key, unsigned time )
 			return;
 		}
 
-		Present_ToggleFullscreen( );
+		Present_ToggleFullscreen( CVAR_SOURCE_PLAYER );
 		return;
 	}
 
