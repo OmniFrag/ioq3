@@ -219,17 +219,23 @@ static char *Sys_PIDFileName( const char *gamedir )
 	return NULL;
 }
 
+// the PID file this process wrote, "" for none
+static char pidFileWritten[ MAX_OSPATH ];
+
 /*
 =================
 Sys_RemovePIDFile
+
+Removes the PID file this process wrote, if it wrote one
 =================
 */
-void Sys_RemovePIDFile( const char *gamedir )
+void Sys_RemovePIDFile( void )
 {
-	char *pidFile = Sys_PIDFileName( gamedir );
-
-	if( pidFile != NULL )
-		remove( pidFile );
+	if( pidFileWritten[ 0 ] )
+	{
+		remove( pidFileWritten );
+		pidFileWritten[ 0 ] = '\0';
+	}
 }
 
 /*
@@ -275,6 +281,7 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 	{
 		fprintf( f, "%d", Sys_PID( ) );
 		fclose( f );
+		Q_strncpyz( pidFileWritten, pidFile, sizeof( pidFileWritten ) );
 	}
 	else
 		Com_Printf( S_COLOR_YELLOW "Couldn't write %s.\n", pidFile );
@@ -338,11 +345,10 @@ static Q_NO_RETURN void Sys_Exit( int exitCode )
 	SDL_Quit( );
 #endif
 
-	if( exitCode < 2 && com_fullyInitialized )
-	{
-		// Normal exit
-		Sys_RemovePIDFile( FS_GetCurrentGameDir() );
-	}
+	// A client's PID file left by a crash offers safe settings at its next
+	// start (Sys_InitPIDFile); nothing reads a dedicated server's
+	if( exitCode < 2 || !Com_IsClient( ) )
+		Sys_RemovePIDFile( );
 
 	NET_Shutdown( );
 
@@ -831,6 +837,11 @@ Sys_SigHandler
 void Sys_SigHandler( int signal )
 {
 	static qboolean signalcaught = qfalse;
+	static qboolean crashed = qfalse;
+
+	// a stop asked for while a crash shuts down is still a crash
+	if( signal != SIGTERM && signal != SIGINT )
+		crashed = qtrue;
 
 	if( signalcaught )
 	{
@@ -848,10 +859,9 @@ void Sys_SigHandler( int signal )
 		VM_Forced_Unload_Done();
 	}
 
-	if( signal == SIGTERM || signal == SIGINT )
-		Sys_Exit( 1 );
-	else
-		Sys_Exit( 2 );
+	// a stop that was asked for succeeds, so that service managers can tell
+	// it from a crash
+	Sys_Exit( crashed ? 2 : 0 );
 }
 
 /*

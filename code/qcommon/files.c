@@ -4507,7 +4507,7 @@ void FS_Restart( int checksumFeed ) {
 	lastGameDir = ( lastValidGame[0] ) ? lastValidGame : lastValidComBaseGame;
 
 	if ( Q_stricmp( FS_GetCurrentGameDir(), lastGameDir ) ) {
-		Sys_RemovePIDFile( lastGameDir );
+		Sys_RemovePIDFile( );
 		Sys_InitPIDFile( FS_GetCurrentGameDir() );
 
 		// the settings are read again as the game directory changes
