@@ -69,6 +69,9 @@ qboolean UI_GameCommand( void ) {
 }
 
 void CL_ForwardCommandToServer( const char *string ) {
+	// a dedicated server has no server to send it to: no command, cvar or
+	// game command took it
+	Com_Printf( "Unknown command \"%s" S_COLOR_WHITE "\"\n", Cmd_Argv( 0 ) );
 }
 
 void CL_ConsolePrint( char *txt ) {
