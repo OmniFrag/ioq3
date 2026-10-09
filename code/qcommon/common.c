@@ -506,7 +506,7 @@ before the filesystem is started, but all other sets should
 be after execing the config and default.
 ===============
 */
-void Com_StartupVariable( const char *match ) {
+static void Com_StartupVariables( const char *match, int skipFlags ) {
 	int		i;
 	char	*s;
 
@@ -518,11 +518,15 @@ void Com_StartupVariable( const char *match ) {
 
 		s = Cmd_Argv(1);
 		
-		if(!match || !strcmp(s, match))
+		if( ( !match || !strcmp(s, match) ) && !( Cvar_Flags( s ) & skipFlags ) )
 		{
 			Cvar_SetFrom(s, Cmd_ArgsFrom(2), CVAR_SOURCE_SESSION, qfalse);
 		}
 	}
+}
+
+void Com_StartupVariable( const char *match ) {
+	Com_StartupVariables( match, 0 );
 }
 
 
@@ -3049,6 +3053,10 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 		// Clean out any user and VM created cvars
 		Cvar_Restart(qtrue);
 		Com_ExecuteCfg();
+		// the command line's sets, which Cvar_Restart undid, after the
+		// configs as at startup; not those of the cvars it kept, such as
+		// fs_game, which the restart may have changed
+		Com_StartupVariables( NULL, CVAR_ROM | CVAR_INIT | CVAR_NORESTART );
 
 		if(disconnect)
 		{
