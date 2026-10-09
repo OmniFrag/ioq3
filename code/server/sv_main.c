@@ -725,6 +725,37 @@ static void SV_FlushRedirect( char *outputbuf ) {
 
 /*
 ===============
+SVC_RconRefused
+
+Logs an rcon refused for a wrong password or the rate limit at most once a
+second for each address, and ten times a second in all, with how many more
+were refused in between, so guessing shows in the log without flooding it
+===============
+*/
+static void SVC_RconRefused( leakyBucket_t *bucket, netadr_t from, const char *why ) {
+	static rateLimit_t	noticeRate;
+	static int			refusedUnlogged;	// with no bucket of their own
+	int		*refused = bucket ? &bucket->refused : &refusedUnlogged;
+
+	if ( bucket && SVC_RateLimit( &bucket->noticeRate, 1, 1000 ) ) {
+		( *refused )++;
+		return;
+	}
+	if ( SVC_RateLimit( &noticeRate, 10, 1000 ) ) {
+		// the address's notice wasn't logged, so it may log the next
+		if ( bucket && bucket->noticeRate.burst > 0 ) {
+			bucket->noticeRate.burst--;
+		}
+		( *refused )++;
+		return;
+	}
+	Com_Printf( "%s from %s: %s%s\n", why, NET_AdrToString( from ), Cmd_ArgsFrom( 2 ),
+		*refused ? va( " (and %i more refused since the last notice)", *refused ) : "" );
+	*refused = 0;
+}
+
+/*
+===============
 SVC_RemoteCommand
 
 An rcon packet arrived from the network.
@@ -744,8 +775,7 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 
 	// Prevent using rcon as an amplifier and make dictionary attacks impractical
 	if ( SVC_RateLimit( bucket ? &bucket->rate : NULL, 10, 1000 ) ) {
-		Com_DPrintf( "SVC_RemoteCommand: rate limit from %s exceeded, dropping request\n",
-			NET_AdrToString( from ) );
+		SVC_RconRefused( bucket, from, "Rcon over the rate limit, dropped" );
 		return;
 	}
 
@@ -755,12 +785,12 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 
 		// Make DoS via rcon impractical
 		if ( SVC_RateLimit( &badRate, 10, 1000 ) ) {
-			Com_DPrintf( "SVC_RemoteCommand: rate limit exceeded, dropping request\n" );
+			SVC_RconRefused( bucket, from, "Rcon over the rate limit, dropped" );
 			return;
 		}
 
 		valid = qfalse;
-		Com_Printf ("Bad rcon from %s: %s\n", NET_AdrToString (from), Cmd_ArgsFrom(2) );
+		SVC_RconRefused( bucket, from, "Bad rcon" );
 	} else {
 		valid = qtrue;
 		Com_Printf ("Rcon from %s: %s\n", NET_AdrToString (from), Cmd_ArgsFrom(2) );
