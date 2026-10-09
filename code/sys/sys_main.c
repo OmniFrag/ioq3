@@ -497,19 +497,28 @@ void Sys_AnsiColorPrint( const char *msg )
 
 /*
 =================
+Sys_PrintText
+=================
+*/
+static void Sys_PrintText( const char *text )
+{
+	CON_LogWrite( text );
+	CON_Print( text );
+}
+
+/*
+=================
 Sys_Print
+
+Each line starts with the date and time where com_timestamps asks for them
+on the console (2)
 =================
 */
 void Sys_Print( const char *msg )
 {
-	char	buffer[MAXPRINTMSG];
+	static qboolean	lineStart = qtrue;
 
-	// names and chat reach here too: no bytes that control the terminal
-	while ( *msg ) {
-		msg += Q_FilterTerminalText( buffer, sizeof( buffer ), msg );
-		CON_LogWrite( buffer );
-		CON_Print( buffer );
-	}
+	Com_PrintLines( msg, &lineStart, 2, Sys_PrintText );
 }
 
 /*
