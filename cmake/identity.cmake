@@ -57,6 +57,9 @@ set_identity(MACOS_BUNDLE_ID org.ioquake.${CLIENT_NAME})
 set_identity(MACOS_BUNDLE_NAME ${APP_NAME})
 # The .app's name in Finder and the Dock, and its executable's
 set_identity(MACOS_APP_NAME ${CLIENT_NAME})
+# Why the app asks for macOS's Local Network permission, which its server
+# list's scan of the local network needs
+set_identity(MACOS_LOCAL_NETWORK_USAGE "Finds game servers on your local network, and joins them.")
 # The client's reverse-DNS ID, which desktops match to its .desktop file and
 # metainfo to find its icon and name
 set_identity(APP_ID org.ioquake3.${CLIENT_NAME})
