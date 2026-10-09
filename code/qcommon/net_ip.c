@@ -51,12 +51,16 @@ typedef unsigned short sa_family_t;
 #	undef EAGAIN
 #	undef EADDRNOTAVAIL
 #	undef EAFNOSUPPORT
+#	undef EADDRINUSE
+#	undef EACCES
 #	undef ECONNRESET
 #	undef EHOSTUNREACH
 
 #	define EAGAIN					WSAEWOULDBLOCK
 #	define EADDRNOTAVAIL	WSAEADDRNOTAVAIL
 #	define EAFNOSUPPORT		WSAEAFNOSUPPORT
+#	define EADDRINUSE		WSAEADDRINUSE
+#	define EACCES			WSAEACCES
 #	define ECONNRESET			WSAECONNRESET
 #	define EHOSTUNREACH		WSAEHOSTUNREACH
 typedef u_long	ioctlarg_t;
@@ -1407,6 +1411,45 @@ static void NET_GetLocalAddress( void ) {
 
 /*
 ====================
+NET_PortTaken
+
+A socket that didn't open. When its first port was in use, or refused
+(Windows refuses a port it reserves, or one another program holds for
+itself), a dedicated server whose port was chosen (on the command line,
+in a config or at the console) stops rather than answer on another, where
+its players and its firewall don't expect it
+====================
+*/
+static void NET_PortTaken( const cvar_t *portVar, int err, int tries ) {
+	cvarSource_t source = Cvar_Source( portVar );
+
+	if( ( err == EADDRINUSE || err == EACCES ) && tries == 0 && !Com_IsClient() &&
+		source != CVAR_SOURCE_DEFAULT && source != CVAR_SOURCE_ENGINE ) {
+		Com_ErrorExit( EXIT_NO_NETWORK, "UDP port %s, which %s names, %s. Choose another "
+			"port, or stop what uses it.", portVar->string, portVar->name,
+			err == EADDRINUSE ? "is in use, by another server perhaps" :
+			"was refused: the system reserves it, or another program holds it" );
+	}
+}
+
+/*
+====================
+NET_PortOpened
+
+A socket that opened, after tries ports in use: the port it moved to is
+said, and noted in its cvar
+====================
+*/
+static void NET_PortOpened( cvar_t *portVar, int port, int tries ) {
+	if( tries ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: UDP port %d is in use, so %s is %d.\n",
+			port, portVar->name, port + tries );
+		Cvar_SetValue( portVar->name, port + tries );
+	}
+}
+
+/*
+====================
 NET_OpenIP
 ====================
 */
@@ -1432,13 +1475,14 @@ void NET_OpenIP( void ) {
 			ip6_socket = NET_IP6Socket(net_ip6->string, port6 + i, &boundto, &err);
 			if (ip6_socket != INVALID_SOCKET)
 			{
-				Cvar_SetValue( "net_port6", port6 + i );
+				NET_PortOpened( net_port6, port6, i );
 				break;
 			}
 			else
 			{
 				if(err == EAFNOSUPPORT)
 					break;
+				NET_PortTaken( net_port6, err, i );
 			}
 		}
 		if(ip6_socket == INVALID_SOCKET)
@@ -1450,7 +1494,7 @@ void NET_OpenIP( void ) {
 		for( i = 0 ; i < 10 ; i++ ) {
 			ip_socket = NET_IPSocket( net_ip->string, port + i, &err );
 			if (ip_socket != INVALID_SOCKET) {
-				Cvar_SetValue( "net_port", port + i );
+				NET_PortOpened( net_port, port, i );
 
 				if (net_socksEnabled->integer)
 					NET_OpenSocks( port + i );
@@ -1461,6 +1505,7 @@ void NET_OpenIP( void ) {
 			{
 				if(err == EAFNOSUPPORT)
 					break;
+				NET_PortTaken( net_port, err, i );
 			}
 		}
 		
