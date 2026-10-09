@@ -303,7 +303,9 @@ void CON_Init( void )
 	CONSOLE_SCREEN_BUFFER_INFO info;
 	int i;
 
-	// handle Ctrl-C or other console termination
+	// handle Ctrl-C or other console termination, Ctrl-C even where the
+	// program that started this one ignored it, which its children inherit
+	SetConsoleCtrlHandler( NULL, FALSE );
 	SetConsoleCtrlHandler( CON_CtrlHandler, TRUE );
 
 	qconsole_hin = GetStdHandle( STD_INPUT_HANDLE );
