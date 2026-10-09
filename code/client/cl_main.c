@@ -4454,6 +4454,7 @@ CL_LocalServers_f
 */
 void CL_LocalServers_f( void ) {
 	char		*message;
+	const char	*failure;
 	int			i, j;
 	netadr_t	to;
 
@@ -4475,6 +4476,9 @@ void CL_LocalServers_f( void ) {
 	// can use that to prevent spoofed server responses from invalid ip
 	message = "\377\377\377\377getinfo xxx";
 
+	// an earlier failure isn't this scan's
+	NET_TakeBroadcastFailure();
+
 	// send each message twice in case one is dropped
 	for ( i = 0 ; i < 2 ; i++ ) {
 		// send a broadcast packet on each server port
@@ -4488,6 +4492,11 @@ void CL_LocalServers_f( void ) {
 			to.type = NA_MULTICAST6;
 			NET_SendPacket( NS_CLIENT, strlen( message ), message, to );
 		}
+	}
+
+	failure = NET_TakeBroadcastFailure();
+	if ( failure ) {
+		Com_Printf( "Couldn't scan the local network: %s\n", failure );
 	}
 }
 

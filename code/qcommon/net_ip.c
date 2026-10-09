@@ -52,11 +52,13 @@ typedef unsigned short sa_family_t;
 #	undef EADDRNOTAVAIL
 #	undef EAFNOSUPPORT
 #	undef ECONNRESET
+#	undef EHOSTUNREACH
 
 #	define EAGAIN					WSAEWOULDBLOCK
 #	define EADDRNOTAVAIL	WSAEADDRNOTAVAIL
 #	define EAFNOSUPPORT		WSAEAFNOSUPPORT
 #	define ECONNRESET			WSAECONNRESET
+#	define EHOSTUNREACH		WSAEHOSTUNREACH
 typedef u_long	ioctlarg_t;
 #	define socketError		WSAGetLastError( )
 
@@ -649,6 +651,28 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 
 static char socksBuf[4096];
 
+// why the last broadcast failed, since NET_TakeBroadcastFailure took it
+static char net_broadcastFailure[256];
+
+/*
+==================
+NET_TakeBroadcastFailure
+
+Why a broadcast failed since the last call, or NULL: a local network scan
+sends many, and says once why they failed
+==================
+*/
+const char *NET_TakeBroadcastFailure( void ) {
+	static char	failure[sizeof( net_broadcastFailure )];
+
+	if( !net_broadcastFailure[0] )
+		return NULL;
+
+	Q_strncpyz( failure, net_broadcastFailure, sizeof( failure ) );
+	net_broadcastFailure[0] = '\0';
+	return failure;
+}
+
 /*
 ==================
 Sys_SendPacket
@@ -702,6 +726,30 @@ void Sys_SendPacket( int length, const void *data, netadr_t to ) {
 
 		// some PPP links do not allow broadcasts and return an error
 		if( ( err == EADDRNOTAVAIL ) && ( ( to.type == NA_BROADCAST ) ) ) {
+			return;
+		}
+
+		// a local network scan says once why its broadcasts failed
+		// (NET_TakeBroadcastFailure); macOS refuses them with "No route to
+		// host" when its Local Network privacy setting keeps the app off
+		if( to.type == NA_BROADCAST ) {
+#ifdef __APPLE__
+			if( err == EHOSTUNREACH ) {
+				Com_sprintf( net_broadcastFailure, sizeof( net_broadcastFailure ),
+					"%s; macOS may be blocking %s's access to the local network: "
+					"System Settings, Privacy & Security, Local Network",
+					NET_ErrorString(), PRODUCT_NAME );
+				return;
+			}
+#endif
+			Q_strncpyz( net_broadcastFailure, NET_ErrorString(), sizeof( net_broadcastFailure ) );
+			return;
+		}
+
+		// the scan's IPv6 multicast fails wherever IPv6 isn't routed, which
+		// is common, so it's only for developers
+		if( to.type == NA_MULTICAST6 ) {
+			Com_DPrintf( "Sys_SendPacket: %s\n", NET_ErrorString() );
 			return;
 		}
 
