@@ -386,6 +386,114 @@ static void SV_TouchFile( const char *filename ) {
 	}
 }
 
+// the default map: the full game's paks and the demo's both have it
+#define SV_DEFAULT_MAP	"q3dm17"
+
+qboolean	sv_mapAsked;
+
+/*
+================
+SV_GametypeName
+
+g_gametype's name: the base game's game types, in the order of the game
+modules' gametype_t (bg_public.h, which the engine doesn't include)
+================
+*/
+static const char *SV_GametypeName( int gametype ) {
+	static const char * const names[] = {
+		"free for all", "tournament", "single player", "team deathmatch", "capture the flag"
+	};
+
+	if ( gametype >= 0 && gametype < ARRAY_LEN( names ) ) {
+		return names[gametype];
+	}
+	return va( "game type %d", gametype );
+}
+
+/*
+================
+SV_NextGametype
+
+The game type the next map plays: g_gametype's latched value, which a map
+sets, and free for all for single player, which map (not spmap) turns into
+it
+================
+*/
+static int SV_NextGametype( void ) {
+	int	gametype = sv_gametype->latchedString ? atoi( sv_gametype->latchedString ) : sv_gametype->integer;
+
+	return gametype == GT_SINGLE_PLAYER ? GT_FFA : gametype;
+}
+
+/*
+================
+SV_PrintStartSummary
+
+What a dedicated server's admin needs once its first map is up: what it
+plays, from which data and home, and how players and admins reach it
+================
+*/
+static void SV_PrintStartSummary( void ) {
+	static qboolean	printed;
+	int				net = Cvar_VariableIntegerValue( "net_enabled" );
+
+	if ( printed || !com_dedicated->integer ) {
+		return;
+	}
+	printed = qtrue;
+
+	Com_Printf( "Server started:\n" );
+	Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
+	if ( !Q_stricmp( com_basegame->string, "demoq3" ) ) {
+		Com_Printf( "  data:     the demo's (%s)\n", com_basegame->string );
+	} else if ( !com_standalone->integer ) {
+		Com_Printf( "  data:     the full game's (%s)\n", com_basegame->string );
+	} else {
+		Com_Printf( "  data:     a standalone game's (%s)\n", com_basegame->string );
+	}
+	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homepath" ) );
+	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
+	if ( net & NET_ENABLEV4 ) {
+		Com_Printf( "  port:     UDP %d (IPv4)\n", Cvar_VariableIntegerValue( "net_port" ) );
+	}
+	if ( net & NET_ENABLEV6 ) {
+		Com_Printf( "  port:     UDP %d (IPv6)\n", Cvar_VariableIntegerValue( "net_port6" ) );
+	}
+	if ( com_dedicated->integer == 2 ) {
+		Com_Printf( "  listed:   on the master servers (dedicated 2)\n" );
+	} else {
+		Com_Printf( "  listed:   no, found on the local network only; dedicated 2 lists it\n" );
+	}
+	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
+	Com_Printf( "  rcon:     %s\n", sv_rconPassword->string[0] ? "on (rconpassword)" : "off: set rconpassword to use it" );
+}
+
+/*
+================
+SV_StartDefaultMap
+
+Whether a dedicated server with no map started the default one: once its
+startup commands have all run (a config's map or vstr among them), rather
+than wait with none, saying how to choose another
+================
+*/
+qboolean SV_StartDefaultMap( void ) {
+	static qboolean	checked;
+
+	if ( checked || sv_mapAsked || !com_dedicated->integer || !Cbuf_Empty() ) {
+		return qfalse;
+	}
+	checked = qtrue;
+	if ( FS_ReadFile( "maps/" SV_DEFAULT_MAP ".bsp", NULL ) <= 0 ) {
+		return qfalse;
+	}
+	Com_Printf( "No map was given, so the server starts " SV_DEFAULT_MAP " (%s). To start another, add "
+		"+map <name> to the command line, or a map line to server.cfg.\n",
+		SV_GametypeName( SV_NextGametype() ) );
+	Cbuf_ExecuteText( EXEC_NOW, "map " SV_DEFAULT_MAP );
+	return qtrue;
+}
+
 /*
 ================
 SV_SpawnServer
@@ -619,6 +727,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 #endif
 
 	Com_Printf ("-----------------------------------\n");
+
+	SV_PrintStartSummary();
 }
 
 /*

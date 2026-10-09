@@ -523,6 +523,25 @@ void Cbuf_ExecuteScripts( void )
 
 /*
 ============
+Cbuf_Empty
+
+Whether no buffer holds text, waiting or not
+============
+*/
+qboolean Cbuf_Empty( void )
+{
+	int	i;
+
+	for ( i = 0; i < CBUF_COUNT; i++ ) {
+		if ( cmd_buffers[i].cursize ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+/*
+============
 Cbuf_Execute
 ============
 */
