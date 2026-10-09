@@ -32,6 +32,8 @@
 	<string>@MACOS_APP_DEPLOYMENT_TARGET@</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.games</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>@MACOS_APP_LOCAL_NETWORK_USAGE@</string>
 
 	@MACOS_APP_PLIST_URL_TYPES@
 </dict>
