@@ -1390,6 +1390,7 @@ void SV_Shutdown( char *finalmsg );
 void SV_Frame( int msec );
 void SV_PacketEvent( netadr_t from, msg_t *msg );
 int SV_FrameMsec(void);
+int SV_FrameLength( void );
 qboolean SV_GameCommand( void );
 int SV_SendQueuedPackets(void);
 

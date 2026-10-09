@@ -4095,6 +4095,12 @@ static int64_t Com_FrameInterval( void ) {
 	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
 		interval = MAX(interval, Com_CapInterval(com_maxfpsUnfocused->integer));
 
+	// a listen server's frames are the client's: no cap, the player's or the
+	// background's, may keep them further apart than the server's, or its
+	// players miss snapshots while its host looks away
+	if(com_sv_running->integer)
+		interval = MIN(interval, SV_FrameLength() * (int64_t)1000000);
+
 #ifdef __EMSCRIPTEN__
 	// A browser runs frames on the display's refreshes, and always waits
 	// for them: a cap is the nearest whole number of refreshes, since one
@@ -4102,7 +4108,14 @@ static int64_t Com_FrameInterval( void ) {
 	// second, unevenly
 	refresh = Sys_RefreshInterval();
 	if(refresh > 0)
+	{
+		int64_t	server = SV_FrameLength() * (int64_t)1000000;
+
 		interval = MAX(1, (interval + refresh / 2) / refresh) * refresh;
+		// rounded up past a listen server's frame, it's rounded down
+		if(com_sv_running->integer && interval > server)
+			interval = MAX(1, server / refresh) * refresh;
+	}
 #endif
 
 	return interval;

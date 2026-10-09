@@ -1185,7 +1185,7 @@ int SV_FrameMsec(void)
 	{
 		int frameMsec;
 		
-		frameMsec = 1000.0f / sv_fps->value;
+		frameMsec = SV_FrameLength();
 		
 		if(frameMsec < sv.timeResidual)
 			return 0;
@@ -1194,6 +1194,17 @@ int SV_FrameMsec(void)
 	}
 	else
 		return 1;
+}
+
+/*
+==================
+SV_FrameLength
+
+How long a server frame lasts, in milliseconds
+==================
+*/
+int SV_FrameLength( void ) {
+	return sv_fps && sv_fps->integer > 0 ? 1000 / sv_fps->integer : 1;
 }
 
 /*
@@ -1270,7 +1281,7 @@ void SV_Frame( int msec ) {
 	}
 
 	// if it isn't time for the next frame, do nothing
-	frameMsec = 1000 / sv_fps->integer * com_timescale->value;
+	frameMsec = SV_FrameLength() * com_timescale->value;
 	// don't let it scale below 1ms
 	if(frameMsec < 1)
 	{
