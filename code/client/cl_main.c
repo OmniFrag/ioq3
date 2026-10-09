@@ -4253,7 +4253,7 @@ void CL_ServerInfoPacket( netadr_t from, msg_t *msg ) {
 	cls.numlocalservers = i+1;
 	CL_InitServerInfo( &cls.localServers[i], &from );
 
-	Q_strncpyz( info, MSG_ReadString( msg ), MAX_INFO_STRING );
+	Q_strncpyz( info, infoString, MAX_INFO_STRING );
 	if (strlen(info)) {
 		if (info[strlen(info)-1] != '\n') {
 			Q_strcat(info, sizeof(info), "\n");
