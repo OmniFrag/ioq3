@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 #include "sys_local.h"
 #include "windows.h"
+#include <signal.h>
 
 #define QCONSOLE_HISTORY 32
 
@@ -85,17 +86,27 @@ static WORD CON_ColorCharToAttrib( char color ) {
 ==================
 CON_CtrlHandler
 
-The Windows Console doesn't use signals for terminating the application
-with Ctrl-C, logging off, window closing, etc.  Instead it uses a special
-handler routine.  Fortunately, the values for Ctrl signals don't seem to
-overlap with true signal codes that Windows provides, so calling
-Sys_SigHandler() with those numbers should be safe for generating unique
-shutdown messages.
+The Windows Console doesn't use signals for Ctrl-C, closing the window,
+logging off or shutting down; it calls a handler routine instead. Ctrl-C
+and Ctrl-Break stop the program as SIGINT does, and closing the window or
+shutting down as SIGTERM does, so each exits as a requested stop. Only
+services see a log off, any user's, so a server run as one keeps running.
 ==================
 */
-static BOOL WINAPI CON_CtrlHandler( DWORD sig )
+static BOOL WINAPI CON_CtrlHandler( DWORD event )
 {
-	Sys_SigHandler( sig );
+	switch( event )
+	{
+		case CTRL_C_EVENT:
+		case CTRL_BREAK_EVENT:
+			Sys_SigHandler( SIGINT );
+			break;
+		case CTRL_LOGOFF_EVENT:
+			break;
+		default:
+			Sys_SigHandler( SIGTERM );
+			break;
+	}
 	return TRUE;
 }
 
