@@ -556,6 +556,9 @@ void Cbuf_AddScriptText( const char *text );
 // or use private and protected cvars
 void Cmd_EndRestricted( void );
 // an error ended the running command
+qboolean Cmd_IsStartupScript( const char *filename );
+// whether a startup script ran the config, so that writeconfig doesn't
+// replace it
 
 void Cbuf_Execute (void);
 // Pulls off \n terminated lines of text from the command buffer and sends
