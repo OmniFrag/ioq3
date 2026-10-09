@@ -48,6 +48,7 @@ extern qboolean stdinIsATTY;
 static qboolean stdin_active;
 // general flag to tell about tty console mode
 static qboolean ttycon_on = qfalse;
+static qboolean stderrIsATTY = qtrue;
 static int ttycon_hide = 0;
 static int ttycon_show_overdue = 0;
 
@@ -288,6 +289,9 @@ void CON_Init( void )
 	// Make stdin reads non-blocking
 	fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) | O_NONBLOCK );
 
+	// output to a file or a pipe gets no color codes (CON_Print)
+	stderrIsATTY = isatty( STDERR_FILENO );
+
 	if (!stdinIsATTY)
 	{
 		Com_Printf("tty console mode disabled\n");
@@ -498,6 +502,31 @@ char *CON_Input( void )
 
 /*
 ==================
+CON_PrintWithoutColors
+
+What goes to a file or a pipe, such as a service manager's log, has no
+color codes
+==================
+*/
+static void CON_PrintWithoutColors( const char *msg )
+{
+	char	buffer[ MAXPRINTMSG ];
+	int		length = 0;
+
+	while( *msg && length < sizeof( buffer ) - 1 )
+	{
+		if( Q_IsColorString( msg ) )
+			msg += 2;
+		else
+			buffer[ length++ ] = *msg++;
+	}
+	buffer[ length ] = '\0';
+
+	fputs( buffer, stderr );
+}
+
+/*
+==================
 CON_Print
 ==================
 */
@@ -508,7 +537,9 @@ void CON_Print( const char *msg )
 
 	CON_Hide( );
 
-	if( com_ansiColor && com_ansiColor->integer )
+	if( !stderrIsATTY )
+		CON_PrintWithoutColors( msg );
+	else if( com_ansiColor && com_ansiColor->integer )
 		Sys_AnsiColorPrint( msg );
 	else
 		fputs( msg, stderr );
