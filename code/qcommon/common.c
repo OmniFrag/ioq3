@@ -85,6 +85,7 @@ cvar_t  *cl_packetdelay;
 cvar_t  *sv_packetdelay;
 cvar_t	*com_cameraMode;
 cvar_t	*com_ansiColor;
+cvar_t	*com_timestamps;
 cvar_t	*com_unfocused;
 cvar_t	*com_maxfpsUnfocused;
 cvar_t	*com_minimized;
@@ -170,6 +171,79 @@ void Com_EndRedirect (void)
 
 /*
 =============
+Com_PrintLines
+
+Hands write the text without the bytes that control a terminal (names
+and chat reach here too). Where com_timestamps is level or more, a line at
+a time, each starting with the date and time. *lineStart keeps whether the
+output's next text starts a line.
+=============
+*/
+void Com_PrintLines( const char *msg, qboolean *lineStart, int level,
+	void (*write)( const char *text ) ) {
+	static time_t	stampTime = -1;
+	static char		stamp[32];
+	char		buffer[MAXPRINTMSG];
+	char		line[MAXPRINTMSG];
+	const char	*p;
+	int			length, stampLength;
+
+	if ( !*msg ) {
+		return;
+	}
+
+	if ( !com_timestamps || com_timestamps->integer < level ) {
+		while ( *msg ) {
+			msg += Q_FilterTerminalText( buffer, sizeof( buffer ), msg );
+			write( buffer );
+		}
+		*lineStart = msg[-1] == '\n';
+		return;
+	}
+
+	while ( *msg ) {
+		length = strcspn( msg, "\n" );
+		if ( msg[length] == '\n' ) {
+			length++;
+		}
+		if ( length > sizeof( line ) - 1 ) {
+			length = sizeof( line ) - 1;
+		}
+		Q_strncpyz( line, msg, length + 1 );
+		msg += length;
+
+		// the stamp and the line in one write
+		stampLength = 0;
+		if ( *lineStart ) {
+			time_t	now = time( NULL );
+
+			if ( now != stampTime ) {
+				stampTime = now;
+				strftime( stamp, sizeof( stamp ), "%Y-%m-%d %H:%M:%S ", localtime( &now ) );
+			}
+			Q_strncpyz( buffer, stamp, sizeof( buffer ) );
+			stampLength = strlen( buffer );
+		}
+		*lineStart = line[length - 1] == '\n';
+
+		for ( p = line; *p; stampLength = 0 ) {
+			p += Q_FilterTerminalText( buffer + stampLength, sizeof( buffer ) - stampLength, p );
+			write( buffer );
+		}
+	}
+}
+
+/*
+=============
+Com_LogWrite
+=============
+*/
+static void Com_LogWrite( const char *text ) {
+	FS_Write( text, strlen( text ), logfile );
+}
+
+/*
+=============
 Com_Printf
 
 Both client and server can use this, and it will output
@@ -242,14 +316,10 @@ void QDECL Com_Printf( const char *fmt, ... ) {
       opening_qconsole = qfalse;
 		}
 		if ( logfile && FS_Initialized()) {
-			// without the bytes that control a terminal, as Sys_Print
-			const char	*text = msg;
-			char		buffer[MAXPRINTMSG];
+			// as Sys_Print, with times unless com_timestamps is 0
+			static qboolean	lineStart = qtrue;
 
-			while ( *text ) {
-				text += Q_FilterTerminalText( buffer, sizeof( buffer ), text );
-				FS_Write( buffer, strlen( buffer ), logfile );
-			}
+			Com_PrintLines( msg, &lineStart, 1, Com_LogWrite );
 		}
 	}
 }
@@ -3420,6 +3490,13 @@ void Com_Init( char *commandLine ) {
 
 	// get the developer cvar set as early as possible
 	com_developer = Cvar_Get("developer", "0", CVAR_TEMP);
+
+	// as early, so the first lines have them too
+	com_timestamps = Cvar_Get( "com_timestamps", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( com_timestamps, 0, 2, qtrue );
+	Cvar_SetDescription( com_timestamps, "The date and time at the start of each line: "
+		"0 nowhere; 1 in qconsole.log, the default; 2 on the console too, where tools "
+		"reading the server's lines may not expect them." );
 
 	// done early so bind command exists
 	CL_InitKeyCommands();

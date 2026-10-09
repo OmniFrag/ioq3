@@ -1149,6 +1149,8 @@ void		Info_Print( const char *s );
 void		Com_BeginRedirect (char *buffer, int buffersize, void (*flush)(char *));
 void		Com_EndRedirect( void );
 void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
+void		Com_PrintLines( const char *msg, qboolean *lineStart, int level,
+	void (*write)( const char *text ) );
 void 		QDECL Com_DPrintf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void 		QDECL Com_Error( int code, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
 void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
@@ -1194,6 +1196,7 @@ extern	cvar_t	*com_buildScript;		// for building release pak files
 extern	cvar_t	*com_journal;
 extern	cvar_t	*com_cameraMode;
 extern	cvar_t	*com_ansiColor;
+extern	cvar_t	*com_timestamps;
 extern	cvar_t	*com_unfocused;
 extern	cvar_t	*com_maxfpsUnfocused;
 extern	cvar_t	*com_minimized;
