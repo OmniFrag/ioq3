@@ -725,6 +725,35 @@ static void SV_FlushRedirect( char *outputbuf ) {
 
 /*
 ===============
+SVC_RconText
+
+The command an rcon packet carries, for the log, with the value hidden
+when it sets a secret: a private cvar, or a password the game reads
+===============
+*/
+static const char *SVC_RconText( void ) {
+	static const char *setters[] = { "set", "seta", "sets", "setu", "toggle" };
+	static char	text[MAX_STRING_CHARS];
+	int			name = 2, i;
+
+	for ( i = 0; i < ARRAY_LEN( setters ); i++ ) {
+		if ( !Q_stricmp( Cmd_Argv( 2 ), setters[i] ) ) {
+			name = 3;
+		}
+	}
+	// g_password is the game's, and not private
+	if ( Cmd_Argc() > name + 1 &&
+		( ( Cvar_Flags( Cmd_Argv( name ) ) & ( CVAR_NONEXISTENT | CVAR_PRIVATE ) ) == CVAR_PRIVATE ||
+		!Q_stricmp( Cmd_Argv( name ), "g_password" ) ) ) {
+		Com_sprintf( text, sizeof( text ), "%s%s%s (value hidden)", name == 3 ? Cmd_Argv( 2 ) : "",
+			name == 3 ? " " : "", Cmd_Argv( name ) );
+		return text;
+	}
+	return Cmd_ArgsFrom( 2 );
+}
+
+/*
+===============
 SVC_RconRefused
 
 Logs an rcon refused for a wrong password or the rate limit at most once a
@@ -749,7 +778,7 @@ static void SVC_RconRefused( leakyBucket_t *bucket, netadr_t from, const char *w
 		( *refused )++;
 		return;
 	}
-	Com_Printf( "%s from %s: %s%s\n", why, NET_AdrToString( from ), Cmd_ArgsFrom( 2 ),
+	Com_Printf( "%s from %s: %s%s\n", why, NET_AdrToString( from ), SVC_RconText(),
 		*refused ? va( " (and %i more refused since the last notice)", *refused ) : "" );
 	*refused = 0;
 }
@@ -793,7 +822,7 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		SVC_RconRefused( bucket, from, "Bad rcon" );
 	} else {
 		valid = qtrue;
-		Com_Printf ("Rcon from %s: %s\n", NET_AdrToString (from), Cmd_ArgsFrom(2) );
+		Com_Printf ("Rcon from %s: %s\n", NET_AdrToString (from), SVC_RconText() );
 	}
 
 	// start redirecting all print outputs to the packet
