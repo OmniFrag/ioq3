@@ -729,14 +729,33 @@ void *Sys_LoadGameDll(const char *name,
 /*
 =================
 Sys_ParseArgs
+
+Answers --version and --help anywhere on the command line, and -v and -h
+alone, before the engine starts
 =================
 */
 void Sys_ParseArgs( int argc, char **argv )
 {
-	if( argc == 2 )
+	const char *name = argv[0];
+	const char *p;
+	int i;
+
+	// the program's name, after either separator: on Windows argv[0] can
+	// have both, and Sys_Basename splits on one and may change its argument
+	for( p = argv[0]; *p; p++ )
 	{
-		if( !strcmp( argv[1], "--version" ) ||
-				!strcmp( argv[1], "-v" ) )
+		if( *p == '/' || *p == '\\' )
+			name = p + 1;
+	}
+
+	for( i = 1; i < argc; i++ )
+	{
+		// what follows is a link, not an option
+		if( !strcmp( argv[i], "--uri" ) )
+			break;
+
+		if( !strcmp( argv[i], "--version" ) ||
+				( argc == 2 && !strcmp( argv[i], "-v" ) ) )
 		{
 			const char* date = PRODUCT_DATE;
 #ifdef DEDICATED
@@ -744,6 +763,33 @@ void Sys_ParseArgs( int argc, char **argv )
 #else
 			fprintf( stdout, Q3_VERSION " client (%s)\n", date );
 #endif
+			Sys_Exit( 0 );
+		}
+
+		if( !strcmp( argv[i], "--help" ) ||
+				( argc == 2 && !strcmp( argv[i], "-h" ) ) )
+		{
+			fprintf( stdout, "Usage: %s [--help] [--version] [+command [arguments]]...\n"
+				"\n"
+				"Each +command runs as if typed into the console, after the configs.\n"
+				"\n"
+				"  +set <cvar> <value>   set a cvar for this run\n"
+				"  +exec <file>          run a config, such as server.cfg\n"
+#ifdef DEDICATED
+				"  +map <map>            start the server on a map\n"
+#else
+				"  +connect <server>     join a server\n"
+				"  +map <map>            start a server on a map, and play on it\n"
+#endif
+				"\n"
+				"Cvars set at startup with +set include fs_homepath (where configs,\n"
+				"downloads and logs are kept), fs_basepath (where the game's data is),\n"
+				"fs_game (a mod), net_port (the UDP port, 27960)"
+#ifdef DEDICATED
+				" and dedicated (1 for\n"
+				"the LAN, 2 to be listed on the Internet's master servers)"
+#endif
+				".\n", name );
 			Sys_Exit( 0 );
 		}
 	}
