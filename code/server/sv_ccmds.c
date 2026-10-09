@@ -162,6 +162,9 @@ static void SV_Map_f( void ) {
 		return;
 	}
 
+	// one asked for, if not found, isn't replaced by the default
+	sv_mapAsked = qtrue;
+
 	// make sure the level exists before trying to change, so that
 	// a typo at the server console won't end the game
 	Com_sprintf (expanded, sizeof(expanded), "maps/%s.bsp", map);
