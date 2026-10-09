@@ -531,6 +531,24 @@ void Sys_Error( const char *error, ... )
 	Sys_Exit( 3 );
 }
 
+/*
+=================
+Sys_ErrorExit
+
+An error that isn't a crash, which Com_ErrorExit has printed: a client
+shows it in a dialog, and there's no crash log, nor the PID file that
+would offer safe settings at the next start
+=================
+*/
+void Sys_ErrorExit( int status, const char *message )
+{
+	Sys_Dialog( DT_ERROR, message, "Error" );
+
+	Sys_RemovePIDFile( );
+
+	Sys_Exit( status );
+}
+
 #if 0
 /*
 =================
