@@ -518,6 +518,24 @@ qboolean SV_StartDefaultMap( void ) {
 
 /*
 ================
+SV_CheckRconPassword
+
+rcon_password is other engines' name for rconPassword: set alone, it
+leaves rcon off without a word. Said once a run, as a map starts.
+================
+*/
+static void SV_CheckRconPassword( void ) {
+	static qboolean	warned;
+
+	if ( !warned && Cvar_VariableString( "rcon_password" )[0] && !sv_rconPassword->string[0] ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: rcon_password is set, but this server's rcon "
+			"password is rconPassword, which isn't, so rcon is off.\n" );
+		warned = qtrue;
+	}
+}
+
+/*
+================
 SV_SpawnServer
 
 Change the server to a new map, taking all connected
@@ -747,6 +765,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		CL_StartHunkUsers( qtrue );
 	}
 #endif
+
+	SV_CheckRconPassword();
 
 	Com_Printf ("-----------------------------------\n");
 
