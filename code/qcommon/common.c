@@ -558,6 +558,13 @@ qboolean Com_AddStartupCommands( void ) {
 		}
 
 		added = qtrue;
+		// a dedicated server's server.cfg runs every start, as autoexec.cfg
+		// does; a client's +exec stands for one the player typed
+		Cmd_TokenizeString( com_consoleLines[i] );
+		if ( !Com_IsClient() && Cmd_Argc() == 2 &&
+			( !Q_stricmp( Cmd_Argv( 0 ), "exec" ) || !Q_stricmp( Cmd_Argv( 0 ), "execq" ) ) ) {
+			Cmd_AddCommandLineExec( Cmd_Argv( 1 ) );
+		}
 		Cbuf_AddText( com_consoleLines[i] );
 		Cbuf_AddText( "\n" );
 	}

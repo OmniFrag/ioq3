@@ -556,6 +556,9 @@ void Cbuf_AddScriptText( const char *text );
 // or use private and protected cvars
 void Cmd_EndRestricted( void );
 // an error ended the running command
+void Cmd_AddCommandLineExec( const char *filename );
+// a config a dedicated server's command line execs, which runs as a
+// startup script
 qboolean Cmd_IsStartupScript( const char *filename );
 // whether a startup script ran the config, so that writeconfig doesn't
 // replace it

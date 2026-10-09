@@ -61,6 +61,11 @@ static char		cmd_startupScripts[MAX_STARTUP_SCRIPTS][MAX_QPATH];
 static int		cmd_numStartupScripts;
 static qboolean	cmd_startupScriptsFull;
 
+// the configs the command line execs, still to run, which run as startup
+// scripts when it does
+static char		cmd_commandLineExecs[MAX_STARTUP_SCRIPTS][MAX_QPATH];
+static int		cmd_numCommandLineExecs;
+
 static cmd_t *Cbuf_For( qboolean restricted, qboolean script ) {
 	return &cmd_buffers[ ( restricted ? CBUF_RESTRICTED : 0 ) | ( script ? CBUF_SCRIPT : 0 ) ];
 }
@@ -217,6 +222,46 @@ Cmd_IsScript
 */
 qboolean Cmd_IsScript( void ) {
 	return cmd_script;
+}
+
+/*
+============
+Cmd_AddCommandLineExec
+
+A config a dedicated server's command line execs: when that exec runs,
+the config is a startup script, as autoexec.cfg is
+============
+*/
+void Cmd_AddCommandLineExec( const char *filename ) {
+	if ( cmd_numCommandLineExecs < MAX_STARTUP_SCRIPTS ) {
+		Q_strncpyz( cmd_commandLineExecs[cmd_numCommandLineExecs], FS_SkipPathPrefix( filename ), MAX_QPATH );
+		COM_DefaultExtension( cmd_commandLineExecs[cmd_numCommandLineExecs], MAX_QPATH, ".cfg" );
+		cmd_numCommandLineExecs++;
+	}
+}
+
+/*
+============
+Cmd_TakeCommandLineExec
+
+Whether the command line's exec of the config is the one running, which
+it is only once
+============
+*/
+static qboolean Cmd_TakeCommandLineExec( const char *filename ) {
+	int		i;
+
+	filename = FS_SkipPathPrefix( filename );
+	for ( i = 0; i < cmd_numCommandLineExecs; i++ ) {
+		if ( !Q_stricmp( filename, cmd_commandLineExecs[i] ) ) {
+			// the last one in its place, unless it's the last
+			if ( i != --cmd_numCommandLineExecs ) {
+				Q_strncpyz( cmd_commandLineExecs[i], cmd_commandLineExecs[cmd_numCommandLineExecs], MAX_QPATH );
+			}
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -502,7 +547,7 @@ Cmd_Exec_f
 ===============
 */
 void Cmd_Exec_f( void ) {
-	qboolean quiet;
+	qboolean quiet, script, restricted;
 	union {
 		char	*c;
 		void	*v;
@@ -519,6 +564,12 @@ void Cmd_Exec_f( void ) {
 
 	Q_strncpyz( filename, Cmd_Argv(1), sizeof( filename ) );
 	COM_DefaultExtension( filename, sizeof( filename ), ".cfg" );
+	// the command line's exec runs as a startup script, where the command
+	// line puts it: before the rest of its buffer, as an exec's text runs.
+	// Taken even when the config is missing, so that a later exec of it,
+	// the admin's, isn't one
+	script = cmd_script || ( !cmd_restricted && Cmd_TakeCommandLineExec( filename ) );
+
 	FS_ReadFile( filename, &f.v);
 	if (!f.c) {
 		Com_Printf ("couldn't exec %s\n", filename);
@@ -527,7 +578,7 @@ void Cmd_Exec_f( void ) {
 	if (!quiet)
 		Com_Printf ("execing %s\n", filename);
 
-	if ( cmd_script && !Cmd_IsStartupScript( filename ) ) {
+	if ( script && !Cmd_IsStartupScript( filename ) ) {
 		if ( cmd_numStartupScripts < MAX_STARTUP_SCRIPTS ) {
 			Q_strncpyz( cmd_startupScripts[cmd_numStartupScripts++],
 				FS_SkipPathPrefix( filename ), MAX_QPATH );
@@ -541,12 +592,11 @@ void Cmd_Exec_f( void ) {
 	// a config from a pk3 or pk3dir, which a download can bring, runs
 	// restricted in the client; a dedicated server doesn't download.
 	// The first configs run before com_dedicated exists
-#ifdef DEDICATED
-	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() );
-#else
-	Cbuf_InsertTextRestricted( f.c, Cmd_IsRestricted() ||
-		( Com_IsClient() && FS_LastFileIsGameContent() ) );
+	restricted = cmd_restricted;
+#ifndef DEDICATED
+	restricted = restricted || ( Com_IsClient() && FS_LastFileIsGameContent() );
 #endif
+	Cbuf_Insert( Cbuf_For( restricted, script ), f.c );
 
 	FS_FreeFile (f.v);
 }
