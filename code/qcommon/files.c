@@ -258,6 +258,7 @@ static	cvar_t		*fs_apppath;
 static	cvar_t		*fs_steampath;
 static	cvar_t		*fs_gogpath;
 static	cvar_t		*fs_predecessorpath;
+static	char		fs_predecessorConfigPath[MAX_OSPATH];	// its config home, the data one's on XDG
 static	cvar_t		*fs_microsoftstorepath;
 
 static	cvar_t		*fs_basepath;
@@ -846,12 +847,15 @@ long FS_BaseDir_FOpenFileRead(const char *filename, fileHandle_t *fp)
 
 /*
 ===========
-FS_BaseDir_ReadFile_HomeConfig
+FS_ReadOSFile
+
+A file outside the search path, into memory from the main zone (free it
+with Z_Free)
 ===========
 */
-long FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer )
+static long FS_ReadOSFile( const char *ospath, void **buffer )
 {
-	FILE	*f = Sys_FOpen( FS_BaseDir_BuildOSPath( fs_homeconfigpath->string, filename ), "rb" );
+	FILE	*f = Sys_FOpen( ospath, "rb" );
 	long	length;
 	char	*text;
 
@@ -871,6 +875,60 @@ long FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer )
 	fclose( f );
 	text[length] = 0;
 	*buffer = text;
+	return length;
+}
+
+/*
+===========
+FS_BaseDir_ReadFile_HomeConfig
+===========
+*/
+long FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer )
+{
+	return FS_ReadOSFile( FS_BaseDir_BuildOSPath( fs_homeconfigpath->string, filename ), buffer );
+}
+
+/*
+===========
+FS_ReadPredecessorConfig
+
+A config in the game directories of the predecessor's homes, its config
+home's then its data home's, where a dedicated server that ran before this
+one kept its server.cfg: read only, and never the engine's own files.
+ospath gets where it was. Free the buffer with Z_Free
+===========
+*/
+long FS_ReadPredecessorConfig( const char *filename, void **buffer, char *ospath, int size )
+{
+	const char	*homes[2], *games[3];
+	long		length = -1;
+	int			i, j;
+
+	*buffer = NULL;
+	// none with fs_predecessorpath emptied, as for the paks
+	if ( !fs_predecessorpath || !fs_predecessorpath->string[0] || !COM_CompareExtension( filename, ".cfg" ) ||
+		FS_CheckDirTraversal( filename ) || FS_IsEngineFile( filename ) ) {
+		return -1;
+	}
+	homes[0] = fs_predecessorConfigPath;
+	homes[1] = fs_predecessorpath->string;
+	// the game directories the search reads, the mod's first
+	games[0] = fs_gamedir;
+	games[1] = fs_basegame->string;
+	games[2] = com_basegame->string;
+	for ( j = 0; j < ARRAY_LEN( games ) && length < 0; j++ ) {
+		if ( !games[j][0] || ( j > 0 && !Q_stricmp( games[j], games[0] ) ) ||
+			( j == 2 && !Q_stricmp( games[j], games[1] ) ) ) {
+			continue;
+		}
+		for ( i = 0; i < ARRAY_LEN( homes ) && length < 0; i++ ) {
+			// on ~/.q3a both are one directory
+			if ( homes[i][0] && ( i == 0 || Q_stricmp( homes[i], homes[0] ) ) ) {
+				Q_strncpyz( ospath, FS_BuildOSPath( homes[i], games[j], filename ), size );
+				length = FS_ReadOSFile( ospath, buffer );
+			}
+		}
+	}
 	return length;
 }
 
@@ -3620,6 +3678,7 @@ static void FS_Startup( const char *gameName )
 		Sys_PredecessorHomePaths( &predConfigPath, &predDataPath );
 	}
 	fs_predecessorpath = Cvar_Get ("fs_predecessorpath", predDataPath, CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
+	Q_strncpyz( fs_predecessorConfigPath, predConfigPath, sizeof( fs_predecessorConfigPath ) );
 
 #ifdef __APPLE__
 	fs_apppath = Cvar_Get ("fs_apppath", Sys_DefaultAppPath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );

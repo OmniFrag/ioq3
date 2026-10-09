@@ -547,12 +547,13 @@ Cmd_Exec_f
 ===============
 */
 void Cmd_Exec_f( void ) {
-	qboolean quiet, script, restricted;
+	qboolean quiet, script, predecessor, restricted;
 	union {
 		char	*c;
 		void	*v;
 	} f;
 	char	filename[MAX_QPATH];
+	char	ospath[MAX_OSPATH];
 
 	quiet = !Q_stricmp(Cmd_Argv(0), "execq");
 
@@ -571,11 +572,17 @@ void Cmd_Exec_f( void ) {
 	script = cmd_script || ( !cmd_restricted && Cmd_TakeCommandLineExec( filename ) );
 
 	FS_ReadFile( filename, &f.v);
+	// a dedicated server moved from the predecessor's home finds the configs
+	// it kept there, as it finds the paks, and says which it ran
+	predecessor = !f.c && !Com_IsClient() && !cmd_restricted &&
+		FS_ReadPredecessorConfig( filename, &f.v, ospath, sizeof( ospath ) ) >= 0;
 	if (!f.c) {
 		Com_Printf ("couldn't exec %s\n", filename);
 		return;
 	}
-	if (!quiet)
+	if ( predecessor )
+		Com_Printf( "execing %s from %s\n", filename, ospath );
+	else if (!quiet)
 		Com_Printf ("execing %s\n", filename);
 
 	if ( script && !Cmd_IsStartupScript( filename ) ) {
@@ -598,7 +605,10 @@ void Cmd_Exec_f( void ) {
 #endif
 	Cbuf_Insert( Cbuf_For( restricted, script ), f.c );
 
-	FS_FreeFile (f.v);
+	if ( predecessor )
+		Z_Free( f.v );
+	else
+		FS_FreeFile (f.v);
 }
 
 
