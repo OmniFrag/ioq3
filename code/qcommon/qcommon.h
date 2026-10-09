@@ -1152,6 +1152,7 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 // Exit statuses for service managers, besides 0 for a quit or a requested
 // stop, 2 for any other signal, and 3 for a fatal error (Sys_Error)
 #define EXIT_MISSING_DATA	4	// the game's data isn't installed
+#define EXIT_NO_NETWORK		5	// a dedicated server can't open its port
 void 		Com_Quit_f( void ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
 
