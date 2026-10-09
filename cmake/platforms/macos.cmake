@@ -94,6 +94,29 @@ set(CPACK_POST_BUILD_SCRIPTS ${PROJECT_SOURCE_DIR}/cmake/utils/macos_codesign.cm
 
 set(CPACK_GENERATOR "DragNDrop")
 
+# Files for the disk image, beside the app and the server, by absolute
+# path: a project's README template (MACOS_PACKAGE_README), installed as
+# README.txt with its @VERSION@ the build's, and others as they are
+# (MACOS_PACKAGE_FILES), its license and notices, say. Their names, as an
+# AppleScript list, are MACOS_PACKAGE_FILE_NAMES, for the image's layout
+function(add_macos_package_files)
+    set(NAMES)
+    if(MACOS_PACKAGE_README)
+        set(VERSION ${PRODUCT_VERSION})
+        configure_file(${MACOS_PACKAGE_README} ${CMAKE_BINARY_DIR}/README.txt @ONLY)
+        install(FILES ${CMAKE_BINARY_DIR}/README.txt DESTINATION .)
+        list(APPEND NAMES "\"README.txt\"")
+    endif()
+    foreach(FILE IN LISTS MACOS_PACKAGE_FILES)
+        install(FILES ${FILE} DESTINATION .)
+        get_filename_component(NAME ${FILE} NAME)
+        list(APPEND NAMES "\"${NAME}\"")
+    endforeach()
+    list(JOIN NAMES ", " NAMES)
+    set(MACOS_PACKAGE_FILE_NAMES "{${NAMES}}" PARENT_SCOPE)
+endfunction()
+add_macos_package_files()
+
 set(CPACK_DMG_VOLUME_NAME "${PACKAGE_NAME} Installer")
 set(CPACK_DMG_BACKGROUND_IMAGE "${PROJECT_SOURCE_DIR}/misc/macos/macos-dmg-background.png")
 set(CPACK_DMG_SUBDIRECTORY "${MACOS_APP_NAME}")
