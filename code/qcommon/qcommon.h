@@ -1142,6 +1142,11 @@ void		Com_EndRedirect( void );
 void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void 		QDECL Com_DPrintf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void 		QDECL Com_Error( int code, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
+void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
+
+// Exit statuses for service managers, besides 0 for a quit or a requested
+// stop, 2 for any other signal, and 3 for a fatal error (Sys_Error)
+#define EXIT_MISSING_DATA	4	// the game's data isn't installed
 void 		Com_Quit_f( void ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
 
@@ -1430,6 +1435,7 @@ qboolean Sys_DllExtension( const char *name );
 char	*Sys_GetCurrentUser( void );
 
 void	QDECL Sys_Error( const char *error, ...) Q_NO_RETURN Q_PRINTF_FUNC(1, 2);
+void	Sys_ErrorExit( int status, const char *message ) Q_NO_RETURN;
 void	Sys_Quit (void) Q_NO_RETURN;
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 
