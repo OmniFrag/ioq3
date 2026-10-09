@@ -368,8 +368,15 @@ CONNECTIONLESS COMMANDS
 #define MAX_BUCKETS			16384
 #define MAX_HASHES			1024
 
-static leakyBucket_t buckets[ MAX_BUCKETS ];
-static leakyBucket_t *bucketHashes[ MAX_HASHES ];
+typedef struct {
+	leakyBucket_t	buckets[ MAX_BUCKETS ];
+	leakyBucket_t	*hashes[ MAX_HASHES ];
+} bucketTable_t;
+
+// the queries' and connects' buckets, and rcon's own, so a flood of
+// getstatus from an address can't starve its admin's commands
+static bucketTable_t queryBuckets;
+static bucketTable_t rconBuckets;
 rateLimit_t outboundLeakyBucket;
 
 /*
@@ -406,13 +413,13 @@ SVC_BucketForAddress
 Find or allocate a bucket for an address
 ================
 */
-static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int period ) {
+static leakyBucket_t *SVC_BucketForAddress( bucketTable_t *table, netadr_t address, int burst, int period ) {
 	leakyBucket_t	*bucket = NULL;
 	int						i;
 	long					hash = SVC_HashForAddress( address );
 	int						now = Sys_Milliseconds();
 
-	for ( bucket = bucketHashes[ hash ]; bucket; bucket = bucket->next ) {
+	for ( bucket = table->hashes[ hash ]; bucket; bucket = bucket->next ) {
 		switch ( bucket->type ) {
 			case NA_IP:
 				if ( memcmp( bucket->ipv._4, address.ip, 4 ) == 0 ) {
@@ -434,7 +441,7 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 	for ( i = 0; i < MAX_BUCKETS; i++ ) {
 		int interval;
 
-		bucket = &buckets[ i ];
+		bucket = &table->buckets[ i ];
 		interval = now - bucket->rate.lastTime;
 
 		// Reclaim expired buckets
@@ -443,7 +450,7 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 			if ( bucket->prev != NULL ) {
 				bucket->prev->next = bucket->next;
 			} else {
-				bucketHashes[ bucket->hash ] = bucket->next;
+				table->hashes[ bucket->hash ] = bucket->next;
 			}
 			
 			if ( bucket->next != NULL ) {
@@ -466,13 +473,13 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 			bucket->hash = hash;
 
 			// Add to the head of the relevant hash chain
-			bucket->next = bucketHashes[ hash ];
-			if ( bucketHashes[ hash ] != NULL ) {
-				bucketHashes[ hash ]->prev = bucket;
+			bucket->next = table->hashes[ hash ];
+			if ( table->hashes[ hash ] != NULL ) {
+				table->hashes[ hash ]->prev = bucket;
 			}
 
 			bucket->prev = NULL;
-			bucketHashes[ hash ] = bucket;
+			table->hashes[ hash ] = bucket;
 
 			return bucket;
 		}
@@ -520,7 +527,7 @@ Rate limit for a particular address
 ================
 */
 qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period ) {
-	leakyBucket_t *bucket = SVC_BucketForAddress( from, burst, period );
+	leakyBucket_t *bucket = SVC_BucketForAddress( &queryBuckets, from, burst, period );
 
 	return SVC_RateLimit( bucket ? &bucket->rate : NULL, burst, period );
 }
@@ -533,7 +540,7 @@ Give back the request an address's last SVC_RateLimitAddress counted
 ================
 */
 void SVC_RateRestoreBurstAddress( netadr_t from, int burst, int period ) {
-	leakyBucket_t *bucket = SVC_BucketForAddress( from, burst, period );
+	leakyBucket_t *bucket = SVC_BucketForAddress( &queryBuckets, from, burst, period );
 
 	if ( bucket != NULL && bucket->rate.burst > 0 ) {
 		bucket->rate.burst--;
@@ -733,9 +740,10 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 #define SV_OUTPUTBUF_LENGTH (1024 - 16)
 	char		sv_outputbuf[SV_OUTPUTBUF_LENGTH];
 	char *cmd_aux;
+	leakyBucket_t	*bucket = SVC_BucketForAddress( &rconBuckets, from, 10, 1000 );
 
 	// Prevent using rcon as an amplifier and make dictionary attacks impractical
-	if ( SVC_RateLimitAddress( from, 10, 1000 ) ) {
+	if ( SVC_RateLimit( bucket ? &bucket->rate : NULL, 10, 1000 ) ) {
 		Com_DPrintf( "SVC_RemoteCommand: rate limit from %s exceeded, dropping request\n",
 			NET_AdrToString( from ) );
 		return;
@@ -743,10 +751,10 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 
 	if ( !strlen( sv_rconPassword->string ) ||
 		strcmp (Cmd_Argv(1), sv_rconPassword->string) ) {
-		static rateLimit_t bucket;
+		static rateLimit_t badRate;
 
 		// Make DoS via rcon impractical
-		if ( SVC_RateLimit( &bucket, 10, 1000 ) ) {
+		if ( SVC_RateLimit( &badRate, 10, 1000 ) ) {
 			Com_DPrintf( "SVC_RemoteCommand: rate limit exceeded, dropping request\n" );
 			return;
 		}
