@@ -20,6 +20,11 @@ tell application "Finder"
 
             move item "@MACOS_APP_NAME@.app" to folder "@CPACK_DMG_SUBDIRECTORY@"
             move item "@SERVER_NAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
+            repeat with packageFile in @MACOS_PACKAGE_FILE_NAMES@
+                if exists item (contents of packageFile) then
+                    move item (contents of packageFile) to folder "@CPACK_DMG_SUBDIRECTORY@"
+                end if
+            end repeat
             if exists item "@BASEGAME@" then
                 move item "@BASEGAME@" to folder "@CPACK_DMG_SUBDIRECTORY@"
             end if
