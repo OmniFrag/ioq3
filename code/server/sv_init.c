@@ -427,6 +427,27 @@ static int SV_NextGametype( void ) {
 
 /*
 ================
+SV_NoteFrameRate
+
+A frame rate other than the default that a config set, not the command
+line, as an old server's config often holds Quake III's 20: kept, and
+said so
+================
+*/
+static void SV_NoteFrameRate( void ) {
+	cvarSource_t	source = Cvar_Source( sv_fps );
+
+	if ( Cvar_SameValue( sv_fps->string, sv_fps->resetString ) ||
+		( source != CVAR_SOURCE_PLAYER && source != CVAR_SOURCE_SCRIPT ) ) {
+		return;
+	}
+	Com_Printf( "sv_fps %d (set by a config, not the command line); " PRODUCT_NAME "'s default is %s. "
+		"Remove the setting or set sv_fps %s to change it.\n",
+		sv_fps->integer, sv_fps->resetString, sv_fps->resetString );
+}
+
+/*
+================
 SV_PrintStartSummary
 
 What a dedicated server's admin needs once its first map is up: what it
@@ -466,6 +487,7 @@ static void SV_PrintStartSummary( void ) {
 	}
 	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
 	Com_Printf( "  rcon:     %s\n", sv_rconPassword->string[0] ? "on (rconpassword)" : "off: set rconpassword to use it" );
+	SV_NoteFrameRate();
 }
 
 /*
