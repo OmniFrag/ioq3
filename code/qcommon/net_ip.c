@@ -1556,6 +1556,7 @@ NET_Config
 ====================
 */
 void NET_Config( qboolean enableNetworking ) {
+	qboolean	networkRequested = enableNetworking;
 	qboolean	modified;
 	qboolean	stop;
 	qboolean	start;
@@ -1628,6 +1629,19 @@ void NET_Config( qboolean enableNetworking ) {
 			NET_SetMulticast6();
 		}
 	}
+
+	// a dedicated server with no socket would run and answer no one: at
+	// startup, a net_restart or a game restart
+	if( networkRequested && !Com_IsClient() &&
+		ip_socket == INVALID_SOCKET && ip6_socket == INVALID_SOCKET ) {
+		if( !( net_enabled->integer & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) ) {
+			Com_ErrorExit( EXIT_NO_NETWORK, "The server has no network: net_enabled is %s, "
+				"which opens no socket; set it to 1 for IPv4, 2 for IPv6 or 3 for both.",
+				net_enabled->string );
+		}
+		Com_ErrorExit( EXIT_NO_NETWORK, "The server has no network: no UDP socket opened "
+			"(the warnings above say why)." );
+	}
 }
 
 
@@ -1642,6 +1656,9 @@ void NET_Init( void ) {
 
 	r = WSAStartup( MAKEWORD( 1, 1 ), &winsockdata );
 	if( r ) {
+		if( !Com_IsClient() )
+			Com_ErrorExit( EXIT_NO_NETWORK, "The server has no network: Winsock "
+				"initialization failed, returned %d.", r );
 		Com_Printf( "WARNING: Winsock initialization failed, returned %d\n", r );
 		return;
 	}
@@ -1651,7 +1668,7 @@ void NET_Init( void ) {
 #endif
 
 	NET_Config( qtrue );
-	
+
 	Cmd_AddCommand ("net_restart", NET_Restart_f);
 }
 
