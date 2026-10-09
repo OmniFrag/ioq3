@@ -386,6 +386,8 @@ void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 
 void SV_ChangeMaxClients( void );
 void SV_SpawnServer( char *server, qboolean killBots );
+qboolean SV_StartDefaultMap( void );
+extern qboolean	sv_mapAsked;	// a map command ran, even one that failed: no default map
 
 
 

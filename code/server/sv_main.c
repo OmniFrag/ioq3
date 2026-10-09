@@ -1261,10 +1261,16 @@ void SV_Frame( int msec ) {
 
 	if (!com_sv_running->integer)
 	{
-		// Running as a server, but no map loaded
+		// Running as a server, but no map loaded: a dedicated server
+		// given none starts one
+		if ( SV_StartDefaultMap() )
+			return;
+
 #ifdef DEDICATED
-		// Block until something interesting happens
-		Sys_Sleep(-1);
+		// Block until something interesting happens, unless commands wait
+		// to run, a config's after a wait, say
+		if ( Cbuf_Empty() )
+			Sys_Sleep(-1);
 #endif
 
 		return;

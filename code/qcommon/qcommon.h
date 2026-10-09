@@ -575,6 +575,9 @@ void Cbuf_ExecuteScripts( void );
 // Runs only the startup scripts' text (Cbuf_AddScriptText), leaving the
 // rest for the frame
 
+qboolean Cbuf_Empty( void );
+// Whether no text waits in any buffer: everything queued has run
+
 //===========================================================================
 
 /*
