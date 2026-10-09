@@ -418,8 +418,10 @@ static qboolean Sys_ShouldUseLegacyHomePath(void)
 	Com_sprintf( migrationRefusedPath, sizeof( migrationRefusedPath ),
 		"%s/.xdgMigrationRefused", legacyHomePath );
 
-	// If the user hasn't already refused, ask if they want to migrate
-	if( access( migrationRefusedPath, F_OK ) != 0 )
+	// If the user hasn't already refused, ask if they want to migrate; a
+	// dedicated server can't ask, so it keeps the legacy home and leaves
+	// the question to the player
+	if( Com_IsClient( ) && access( migrationRefusedPath, F_OK ) != 0 )
 	{
 		dialogResult_t result = Sys_Dialog( DT_YES_NO, va(
 			"Modern games and applications store files in "
@@ -1046,9 +1048,7 @@ void Sys_ErrorDialog( const char *error )
 
 	Sys_Print( va( "%s\n", error ) );
 
-#ifndef DEDICATED
 	Sys_Dialog( DT_ERROR, va( "%s. See \"%s\" for details.", error, ospath ), "Error" );
-#endif
 
 	// Make sure the write path for the crashlog exists...
 	if( FS_CreatePath( homedatapath ) )
@@ -1160,12 +1160,12 @@ static void Sys_XmessageCommand( dialogType_t type, const char *message, const c
 
 /*
 ==============
-Sys_Dialog
+Sys_PlatformDialog
 
 Display a *nix dialog box
 ==============
 */
-dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *title )
+dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title )
 {
 	typedef enum
 	{

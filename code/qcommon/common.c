@@ -2486,7 +2486,13 @@ void Com_Setenv_f(void)
         }
 }
 
-static qboolean	com_isClient;	// Com_IsClient, decided at start
+// Com_IsClient, decided at start; the client's is a client until its
+// command line says otherwise, so its first errors still show a dialog
+#ifdef DEDICATED
+static qboolean	com_isClient = qfalse;
+#else
+static qboolean	com_isClient = qtrue;
+#endif
 
 /*
 =================

@@ -316,11 +316,39 @@ void Sys_InitPIDFile( const char *gamedir ) {
 
 /*
 =================
+Sys_Dialog
+
+A dedicated server shows no dialogs: it may run under a service manager,
+with nobody to answer them. It gets the answer of a dialog nobody saw: no,
+or cancel
+=================
+*/
+dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *title )
+{
+	if( !Com_IsClient( ) )
+	{
+		if( type == DT_YES_NO )
+			return DR_NO;
+		if( type == DT_OK_CANCEL )
+			return DR_CANCEL;
+		return DR_OK;
+	}
+
+	return Sys_PlatformDialog( type, message, title );
+}
+
+/*
+=================
 Sys_OpenFolderInFileManager
+
+Not on a dedicated server, which nobody may be watching
 =================
 */
 qboolean Sys_OpenFolderInFileManager( const char *path, qboolean create )
 {
+	if( !Com_IsClient( ) )
+		return qfalse;
+
 	if( create )
 	{
 		if( FS_CreatePath( path ) )
