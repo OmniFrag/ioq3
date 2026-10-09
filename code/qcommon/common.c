@@ -3699,12 +3699,6 @@ static qboolean Com_WriteConfigFile( const char *filename, int hideFlags, int sc
 	return written;
 }
 
-static void Com_WriteConfigToFile( const char *filename ) {
-	// private cvars, such as passwords, go only in the engine's own config
-	Com_WriteConfigFile( filename, Q_stricmp( FS_SkipPathPrefix( filename ), Q3CONFIG_CFG ) ? CVAR_PRIVATE : 0,
-		CVAR_SCOPES_SAVED );
-}
-
 /*
 ===============
 Com_WriteSettings
@@ -3784,8 +3778,8 @@ void Com_WriteConfiguration( void ) {
 Com_ConfigFileName
 
 The config a command names as its argument, with ".cfg" if it has no
-extension, or NULL with why: a config only, and not one the engine runs at
-startup, for restricted text or where protect says
+extension, or NULL with why: a config only, and where protect says, not
+one the engine keeps or runs at startup, or a startup script ran
 ===============
 */
 static const char *Com_ConfigFileName( qboolean protect ) {
@@ -3801,9 +3795,14 @@ static const char *Com_ConfigFileName( qboolean protect ) {
 		Com_Printf( "%s: only a \".cfg\" file\n", Cmd_Argv( 0 ) );
 		return NULL;
 	}
-	if ( ( protect || Cmd_IsRestricted() ) && ( FS_IsEngineFile( filename ) ||
-		!Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) ) ) {
-		Com_Printf( "%s can't be written by game code or game content.\n", filename );
+	if ( protect && ( FS_IsEngineFile( filename ) ||
+		!Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) || Cmd_IsStartupScript( filename ) ) ) {
+		if ( Cmd_IsRestricted() ) {
+			Com_Printf( "%s can't be written by game code or game content.\n", filename );
+		} else {
+			Com_Printf( "%s is a file the engine keeps or runs at startup, which %s doesn't replace.\n",
+				filename, Cmd_Argv( 0 ) );
+		}
 		return NULL;
 	}
 	return filename;
@@ -3872,15 +3871,18 @@ Write the config file to a specific name
 ===============
 */
 void Com_WriteConfig_f( void ) {
-	// restricted text can't replace the configs the engine runs at startup
-	const char	*filename = Com_ConfigFileName( qfalse );
+	// nor can anyone else, rcon included: a config run at startup runs
+	// with full rights, and the engine's own files are read as data
+	const char	*filename = Com_ConfigFileName( qtrue );
 
 	if ( !filename ) {
 		return;
 	}
 
+	// private cvars, such as passwords, go only in the engine's own config,
+	// which writeconfig doesn't replace
 	Com_Printf( "Writing %s.\n", filename );
-	Com_WriteConfigToFile( filename );
+	Com_WriteConfigFile( filename, CVAR_PRIVATE, CVAR_SCOPES_SAVED );
 }
 
 /*

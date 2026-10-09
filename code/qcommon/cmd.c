@@ -54,6 +54,13 @@ static qboolean	cmd_restricted;
 // the running command came from a startup script, or from text one ran
 static qboolean	cmd_script;
 
+// the configs startup scripts ran, as exec named them; past the most it
+// holds, every config counts as one
+#define MAX_STARTUP_SCRIPTS	64
+static char		cmd_startupScripts[MAX_STARTUP_SCRIPTS][MAX_QPATH];
+static int		cmd_numStartupScripts;
+static qboolean	cmd_startupScriptsFull;
+
 static cmd_t *Cbuf_For( qboolean restricted, qboolean script ) {
 	return &cmd_buffers[ ( restricted ? CBUF_RESTRICTED : 0 ) | ( script ? CBUF_SCRIPT : 0 ) ];
 }
@@ -210,6 +217,26 @@ Cmd_IsScript
 */
 qboolean Cmd_IsScript( void ) {
 	return cmd_script;
+}
+
+/*
+============
+Cmd_IsStartupScript
+============
+*/
+qboolean Cmd_IsStartupScript( const char *filename ) {
+	int		i;
+
+	if ( cmd_startupScriptsFull ) {
+		return qtrue;
+	}
+	filename = FS_SkipPathPrefix( filename );
+	for ( i = 0; i < cmd_numStartupScripts; i++ ) {
+		if ( !Q_stricmp( filename, cmd_startupScripts[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -499,6 +526,17 @@ void Cmd_Exec_f( void ) {
 	}
 	if (!quiet)
 		Com_Printf ("execing %s\n", filename);
+
+	if ( cmd_script && !Cmd_IsStartupScript( filename ) ) {
+		if ( cmd_numStartupScripts < MAX_STARTUP_SCRIPTS ) {
+			Q_strncpyz( cmd_startupScripts[cmd_numStartupScripts++],
+				FS_SkipPathPrefix( filename ), MAX_QPATH );
+		} else {
+			Com_Printf( S_COLOR_YELLOW "WARNING: more than %i configs ran at startup; "
+				"writeconfig now replaces none\n", MAX_STARTUP_SCRIPTS );
+			cmd_startupScriptsFull = qtrue;
+		}
+	}
 
 	// a config from a pk3 or pk3dir, which a download can bring, runs
 	// restricted in the client; a dedicated server doesn't download.
