@@ -596,7 +596,8 @@ void Cmd_Exec_f( void ) {
 	predecessor = !f.c && !Com_IsClient() && !cmd_restricted &&
 		FS_ReadPredecessorConfig( filename, &f.v, ospath, sizeof( ospath ) ) >= 0;
 	if (!f.c) {
-		Com_Printf ("couldn't exec %s\n", filename);
+		Com_Printf ("couldn't exec %s: it isn't in %s\n", filename,
+			FS_SearchDirs( !Com_IsClient() && !cmd_restricted ? filename : NULL ));
 		return;
 	}
 	if ( predecessor )

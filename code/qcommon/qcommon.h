@@ -949,6 +949,10 @@ long		FS_BaseDir_FOpenFileRead( const char *filename, fileHandle_t *fp );
 long		FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer );
 // reads a whole file from the home's config directory only, into a buffer
 // to Z_Free, ending with a 0; -1 if there's none
+const char	*FS_SearchDirs( const char *predecessorFile );
+// the search path's directories, quoted, as a list for a message, with the
+// predecessor's homes where FS_ReadPredecessorConfig looked for
+// predecessorFile too (NULL when it wasn't asked to)
 long		FS_ReadPredecessorConfig( const char *filename, void **buffer, char *ospath, int size );
 // the same for a config in the predecessor's game directory, read only,
 // where a dedicated server that ran before this one kept its server.cfg

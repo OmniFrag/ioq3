@@ -3026,6 +3026,11 @@ and not saved over the player's own choices
 =================
 */
 static void Com_ExecuteScript( const char *name ) {
+	// one that's run if it's there: no need to say where it isn't
+	if ( FS_ReadFile( name, NULL ) < 0 ) {
+		Com_Printf( "couldn't exec %s\n", name );
+		return;
+	}
 	Cbuf_AddScriptText( va( "exec %s\n", name ) );
 	Cbuf_ExecuteScripts();
 }

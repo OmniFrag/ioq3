@@ -890,6 +890,20 @@ long FS_BaseDir_ReadFile_HomeConfig( const char *filename, void **buffer )
 
 /*
 ===========
+FS_PredecessorReadsConfig
+
+Whether FS_ReadPredecessorConfig looks for this file: a config, never the
+engine's own, and none with fs_predecessorpath emptied, as for the paks
+===========
+*/
+static qboolean FS_PredecessorReadsConfig( const char *filename )
+{
+	return fs_predecessorpath && fs_predecessorpath->string[0] && COM_CompareExtension( filename, ".cfg" ) &&
+		!FS_CheckDirTraversal( filename ) && !FS_IsEngineFile( filename );
+}
+
+/*
+===========
 FS_ReadPredecessorConfig
 
 A config in the game directories of the predecessor's homes, its config
@@ -905,9 +919,7 @@ long FS_ReadPredecessorConfig( const char *filename, void **buffer, char *ospath
 	int			i, j;
 
 	*buffer = NULL;
-	// none with fs_predecessorpath emptied, as for the paks
-	if ( !fs_predecessorpath || !fs_predecessorpath->string[0] || !COM_CompareExtension( filename, ".cfg" ) ||
-		FS_CheckDirTraversal( filename ) || FS_IsEngineFile( filename ) ) {
+	if ( !FS_PredecessorReadsConfig( filename ) ) {
 		return -1;
 	}
 	homes[0] = fs_predecessorConfigPath;
@@ -2975,6 +2987,58 @@ void FS_NewDir_f( void ) {
 
 /*
 ============
+FS_AppendSearchDirs
+
+Appends the search path's directories, game's alone where it isn't NULL,
+each between before and after
+============
+*/
+static void FS_AppendSearchDirs( char *buf, int size, const char *game, const char *before, const char *after ) {
+	searchpath_t	*s;
+
+	for ( s = fs_searchpaths; s; s = s->next ) {
+		if ( s->dir && ( !game || !Q_stricmp( s->dir->gamedir, game ) ) ) {
+			Q_strcat( buf, size, before );
+			Q_strcat( buf, size, s->dir->fullpath );
+			Q_strcat( buf, size, after );
+		}
+	}
+}
+
+/*
+============
+FS_SearchDirs
+
+The search path's directories, quoted, for saying where a file wasn't
+found: "a", "b" or their paks; and the predecessor's homes where
+FS_ReadPredecessorConfig looked for predecessorFile too (NULL when it
+wasn't asked to)
+============
+*/
+const char *FS_SearchDirs( const char *predecessorFile ) {
+	static char	dirs[MAXPRINTMSG];
+	int			length;
+
+	dirs[0] = '\0';
+	FS_AppendSearchDirs( dirs, sizeof( dirs ), NULL, "\"", "\", " );
+	length = strlen( dirs );
+	if ( length >= 2 && !strcmp( dirs + length - 2, ", " ) ) {
+		dirs[length - 2] = '\0';
+	}
+	Q_strcat( dirs, sizeof( dirs ), dirs[0] ? " or their paks" : "the search path" );
+
+	if ( predecessorFile && FS_PredecessorReadsConfig( predecessorFile ) ) {
+		Q_strcat( dirs, sizeof( dirs ), va( ", nor in the predecessor's home \"%s\"",
+			fs_predecessorpath->string ) );
+		if ( fs_predecessorConfigPath[0] && Q_stricmp( fs_predecessorConfigPath, fs_predecessorpath->string ) ) {
+			Q_strcat( dirs, sizeof( dirs ), va( " or \"%s\"", fs_predecessorConfigPath ) );
+		}
+	}
+	return dirs;
+}
+
+/*
+============
 FS_Path_f
 
 ============
@@ -3833,7 +3897,6 @@ static Q_NO_RETURN void FS_MissingDataError( const char *game, const char *gameN
 {
 	char errorText[MAXPRINTMSG] = "";
 	char gamePath[MAX_OSPATH];
-	searchpath_t *path;
 
 	Com_sprintf(gamePath, sizeof(gamePath), "%s%c%s%c",
 		installPath, PATH_SEP, game, PATH_SEP);
@@ -3841,12 +3904,7 @@ static Q_NO_RETURN void FS_MissingDataError( const char *game, const char *gameN
 	Q_strcat(errorText, sizeof(errorText), va("%s's data is missing; not found:", gameName));
 	FS_AppendUserFriendlyPakList(errorText, sizeof(errorText), foundPaks, numPaks);
 	Q_strcat(errorText, sizeof(errorText), ".\n\nLooked in:\n");
-
-	for(path = fs_searchpaths; path; path = path->next)
-	{
-		if(path->dir && !Q_stricmp(path->dir->gamedir, game))
-			Q_strcat(errorText, sizeof(errorText), va("  %s\n", path->dir->fullpath));
-	}
+	FS_AppendSearchDirs(errorText, sizeof(errorText), game, "  ", "\n");
 
 #ifdef HOMEPATH_NAME_PREDECESSOR
 	// the predecessor's home where it was found; with none found, where
