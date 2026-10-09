@@ -970,6 +970,16 @@ static void Sys_Start( int argc, char **argv )
 	char *protocolCommand = NULL;
 #endif
 
+	// a service manager's log, a pipe or a file gets each line as it's
+	// printed, as a terminal does, and nothing is lost if the process is
+	// killed; Windows' C library has no line buffering, so none there
+#ifdef _WIN32
+	setvbuf( stdout, NULL, _IONBF, 0 );
+#else
+	setvbuf( stdout, NULL, _IOLBF, BUFSIZ );
+#endif
+	setvbuf( stderr, NULL, _IONBF, 0 );
+
 #ifdef USE_AUTOUPDATER
 	Sys_LaunchAutoupdater(argc, argv);
 #endif
