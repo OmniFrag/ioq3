@@ -3821,6 +3821,66 @@ static void FS_AppendUserFriendlyPakList( char *buf, size_t bufsize, int foundPa
 
 /*
 ===================
+FS_MissingDataError
+
+Ends the program, as an error that isn't a crash, saying which of game's
+paks weren't found, where they were looked for, where to put them and
+how to get them; a client also opens the folder for them
+===================
+*/
+static Q_NO_RETURN void FS_MissingDataError( const char *game, const char *gameName,
+	int foundPaks, int numPaks, const char *installPath )
+{
+	char errorText[MAXPRINTMSG] = "";
+	char gamePath[MAX_OSPATH];
+	searchpath_t *path;
+
+	Com_sprintf(gamePath, sizeof(gamePath), "%s%c%s%c",
+		installPath, PATH_SEP, game, PATH_SEP);
+
+	Q_strcat(errorText, sizeof(errorText), va("%s's data is missing; not found:", gameName));
+	FS_AppendUserFriendlyPakList(errorText, sizeof(errorText), foundPaks, numPaks);
+	Q_strcat(errorText, sizeof(errorText), ".\n\nLooked in:\n");
+
+	for(path = fs_searchpaths; path; path = path->next)
+	{
+		if(path->dir && !Q_stricmp(path->dir->gamedir, game))
+			Q_strcat(errorText, sizeof(errorText), va("  %s\n", path->dir->fullpath));
+	}
+
+#ifdef HOMEPATH_NAME_PREDECESSOR
+	// the predecessor's home where it was found; with none found, where
+	// it would be; none with the home set by hand, which leaves it out
+	if (fs_predecessorpath->string[0]) {
+		Q_strcat(errorText, sizeof(errorText),
+				va("Paks in \"%s%c%s\" are read too.\n",
+				fs_predecessorpath->string, PATH_SEP, game));
+	} else if (!Cvar_VariableString("fs_homepath")[0]) {
+		Q_strcat(errorText, sizeof(errorText),
+				"Paks in the \"" HOMEPATH_NAME_PREDECESSOR "\" folder next to the home are read too.\n");
+	}
+#endif
+
+	Q_strcat(errorText, sizeof(errorText),
+			va("\nCopy them to \"%s\". pak0.pk3 comes with %s: its CD, or the "
+			"\"%s\" folder of a Steam or GOG install. The others are its free "
+			"point release, from https://ioquake3.org/extras/patch-data/\n",
+			gamePath, gameName, game));
+
+	if(!Q_stricmp(game, BASEGAME))
+	{
+		Q_strcat(errorText, sizeof(errorText),
+				va("\nTo run on the free demo's data instead, put its pak0.pk3 in "
+				"\"%s%cdemoq3%c\" and add +set com_basegame demoq3 to the command line.\n",
+				installPath, PATH_SEP, PATH_SEP));
+	}
+
+	Sys_OpenFolderInFileManager(gamePath, qtrue);
+	Com_ErrorExit(EXIT_MISSING_DATA, "%s", errorText);
+}
+
+/*
+===================
 FS_CheckPak0
 
 Check whether any of the original id pak files is present,
@@ -3838,8 +3898,7 @@ static void FS_CheckPak0( void )
 	const char	*pakBasename;
 	qboolean founddemo = qfalse;
 	unsigned int foundPak = 0, foundTA = 0;
-	qboolean installHome = qfalse;
-	char *installPath;
+	const char *installPath;
 
 	for( path = fs_searchpaths; path; path = path->next )
 	{
@@ -3969,126 +4028,33 @@ static void FS_CheckPak0( void )
 		}
 	}
 
+	installPath = fs_basepath->string;
 #if defined(__linux__)
 	{
 		const char *p;
 
 		// Users can't write to the default Flatpak fs_basepath
 		if( ( p = getenv( "FLATPAK_ID" ) ) != NULL && *p != '\0' )
-			installHome = qtrue;
+			installPath = fs_homedatapath->string;
 	}
 #elif defined(__APPLE__)
 	// If we're running from an .app, it makes more sense to recommend
 	// using fs_homepath as fs_basepath is likely not suitable
 	if( strstr( fs_apppath->string, "Contents/MacOS" ) )
-		installHome = qtrue;
+		installPath = fs_homedatapath->string;
 #endif
 #ifdef HOMEPATH_NAME_PREDECESSOR
 	// a product that succeeds another keeps the data in the home, as its
 	// predecessor's players do
-	installHome = qtrue;
+	installPath = fs_homedatapath->string;
 #endif
-
-	if(installHome)
-		installPath = fs_homedatapath->string;
-	else
-		installPath = fs_basepath->string;
 
 	if(!com_standalone->integer && (foundPak & ((1<<NUM_ID_PAKS)-1)) != ((1<<NUM_ID_PAKS)-1))
-	{
-		char errorText[MAX_STRING_CHARS] = "";
-		char gamePath[MAX_OSPATH];
-
-		Com_sprintf(gamePath, sizeof(gamePath), "%s%c%s%c",
-			installPath, PATH_SEP, BASEGAME, PATH_SEP);
-
-		Q_strcat(errorText, sizeof(errorText),
-				"Quake 3 data files are missing. Please copy");
-
-		FS_AppendUserFriendlyPakList(errorText, sizeof(errorText), foundPak, NUM_ID_PAKS);
-
-		Q_strcat(errorText, sizeof(errorText),
-				va(" from the \"%s\" directory in your Quake 3 install or CD-ROM to:\n\n"
-				"%s\n\n", BASEGAME, gamePath));
-
-#ifdef HOMEPATH_NAME_PREDECESSOR
-		// the predecessor's home where it was found; with none found, where
-		// it would be; none with the home set by hand, which leaves it out
-		if (fs_predecessorpath->string[0]) {
-			Q_strcat(errorText, sizeof(errorText),
-					va("Paks in \"%s%c%s\" are read too.\n\n",
-					fs_predecessorpath->string, PATH_SEP, BASEGAME));
-		} else if (!Cvar_VariableString("fs_homepath")[0]) {
-			Q_strcat(errorText, sizeof(errorText),
-					"Paks in the \"" HOMEPATH_NAME_PREDECESSOR "\" folder next to it are read too.\n\n");
-		}
-#endif
-
-		Q_strcat(errorText, sizeof(errorText),
-				"Quake 3 must be purchased to legitimately obtain pak0. "
-				"Quake 3 1.32 point release files (pak1 through pak8) "
-				"are freely available. For details see:\n\n"
-				"https://buy.ioquake3.org\n\n");
-
-		if(installHome)
-		{
-			Q_strcat(errorText, sizeof(errorText),
-					va("Also check that every file "
-						"in the \"%s\" directory is present and readable", BASEGAME));
-		}
-		else
-		{
-			Q_strcat(errorText, sizeof(errorText),
-					va("Also check that your " PRODUCT_NAME " executable is in "
-						"the correct place and that every file "
-						"in the \"%s\" directory is present and readable", BASEGAME));
-		}
-
-		Sys_OpenFolderInFileManager(gamePath, qtrue);
-		Com_Error(ERR_FATAL, "%s", errorText);
-	}
+		FS_MissingDataError(BASEGAME, "Quake III Arena", foundPak, NUM_ID_PAKS, installPath);
 
 	if(!com_standalone->integer && (foundTA & ((1<<NUM_TA_PAKS)-1)) != ((1<<NUM_TA_PAKS)-1)
 			&& (!Q_stricmp(fs_gamedirvar->string, BASETA) || !Q_stricmp(fs_basegame->string, BASETA)))
-	{
-		char errorText[MAX_STRING_CHARS] = "";
-		char gamePath[MAX_OSPATH];
-
-		Com_sprintf(gamePath, sizeof(gamePath), "%s%c%s%c",
-			installPath, PATH_SEP, BASETA, PATH_SEP);
-
-		Q_strcat(errorText, sizeof(errorText),
-				"Quake 3 Team Arena data files are missing. Please copy");
-
-		FS_AppendUserFriendlyPakList(errorText, sizeof(errorText), foundTA, NUM_TA_PAKS);
-
-		Q_strcat(errorText, sizeof(errorText),
-				va(" from the \"%s\" directory in your Quake 3 Team Arena install or CD-ROM to:\n\n"
-				"%s\n\n", BASETA, gamePath));
-
-		Q_strcat(errorText, sizeof(errorText),
-				"Quake 3 Team Arena must be purchased to legitimately obtain pak0. "
-				"Quake 3 Team Arena point release files (pak1 through pak3) "
-				"are freely available. For details see:\n\n"
-				"https://buy.ioquake3.org\n\n");
-
-		if(installHome)
-		{
-			Q_strcat(errorText, sizeof(errorText),
-					va("Also check that every file "
-						"in the \"%s\" directory is present and readable", BASETA));
-		}
-		else
-		{
-			Q_strcat(errorText, sizeof(errorText),
-					va("Also check that your " PRODUCT_NAME " executable is in "
-						"the correct place and that every file "
-						"in the \"%s\" directory is present and readable", BASETA));
-		}
-
-		Sys_OpenFolderInFileManager(gamePath, qtrue);
-		Com_Error(ERR_FATAL, "%s", errorText);
-	}
+		FS_MissingDataError(BASETA, "Team Arena", foundTA, NUM_TA_PAKS, installPath);
 }
 #endif
 

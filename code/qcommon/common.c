@@ -279,6 +279,23 @@ void QDECL Com_DPrintf( const char *fmt, ...) {
 
 /*
 =============
+Com_FatalShutdown
+
+Shuts everything down before the program exits on an error, the client
+and server saying how ("fatal crashed")
+=============
+*/
+static void Com_FatalShutdown( const char *how ) {
+	VM_Forced_Unload_Start();
+	CL_Shutdown(va("Client %s: %s", how, com_errorMessage), qtrue, qtrue);
+	SV_Shutdown(va("Server %s: %s", how, com_errorMessage));
+	VM_Forced_Unload_Done();
+
+	Com_Shutdown ();
+}
+
+/*
+=============
 Com_Error
 
 Both client and server can use this, and it will
@@ -376,16 +393,39 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 
 		com_errorEntered = qfalse;
 		longjmp (abortframe, -1);
-	} else {
-		VM_Forced_Unload_Start();
-		CL_Shutdown(va("Client fatal crashed: %s", com_errorMessage), qtrue, qtrue);
-		SV_Shutdown(va("Server fatal crashed: %s", com_errorMessage));
-		VM_Forced_Unload_Done();
 	}
 
-	Com_Shutdown ();
+	Com_FatalShutdown( "fatal crashed" );
 
 	Sys_Error ("%s", com_errorMessage);
+}
+
+/*
+=============
+Com_ErrorExit
+
+A fatal error that isn't a crash, such as missing game data, which the
+player or admin can put right: prints it while the log is still open,
+shuts down as ERR_FATAL does, then exits with status, without a crash log
+=============
+*/
+void QDECL Com_ErrorExit( int status, const char *fmt, ... ) {
+	va_list		argptr;
+
+	if(com_errorEntered)
+		Sys_Error("recursive error after: %s", com_errorMessage);
+
+	com_errorEntered = qtrue;
+
+	va_start (argptr,fmt);
+	Q_vsnprintf (com_errorMessage, sizeof(com_errorMessage),fmt,argptr);
+	va_end (argptr);
+
+	Com_Printf( "%s\n", com_errorMessage );
+
+	Com_FatalShutdown( "exited" );
+
+	Sys_ErrorExit (status, com_errorMessage);
 }
 
 
