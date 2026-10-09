@@ -36,12 +36,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 /*
 ==============
-Sys_Dialog
+Sys_PlatformDialog
 
 Display an OS X dialog box
 ==============
 */
-dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *title )
+dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title )
 {
 	dialogResult_t result = DR_OK;
 	NSAlert *alert = [NSAlert new];

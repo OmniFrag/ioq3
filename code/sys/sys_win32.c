@@ -822,12 +822,12 @@ void Sys_ErrorDialog( const char *error )
 
 /*
 ==============
-Sys_Dialog
+Sys_PlatformDialog
 
 Display a win32 dialog box
 ==============
 */
-dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *title )
+dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title )
 {
 	UINT uType;
 
