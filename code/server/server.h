@@ -346,6 +346,10 @@ struct leakyBucket_s {
 
 	rateLimit_t		rate;
 
+	// rcon's: when it may log a refusal again, and those refused since
+	rateLimit_t		noticeRate;
+	int				refused;
+
 	long					hash;
 
 	leakyBucket_t *prev, *next;
