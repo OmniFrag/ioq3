@@ -914,6 +914,11 @@ void SV_Init (void)
 
 	sv_allowDownload = Cvar_Get ("sv_allowDownload", "0", CVAR_SERVERINFO);
 	sv_maxDownloads = Cvar_Get ("sv_maxDownloads", "8", CVAR_ARCHIVE);
+	sv_refuseRetailPaks = Cvar_Get( "sv_refuseRetailPaks", "1", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_refuseRetailPaks, "1: don't send the game's own paks (Quake III Arena 1.32's and "
+		"Team Arena's, known by checksum, whatever their name) through this server's downloads; a player "
+		"who lacks them is told which to add from their own copy. Downloads from sv_dlURL come from your "
+		"own web host and aren't affected." );
 	Cvar_Get ("sv_dlURL", "", CVAR_SERVERINFO | CVAR_ARCHIVE);
 	
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
