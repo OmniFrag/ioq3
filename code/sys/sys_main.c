@@ -288,7 +288,8 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 	qboolean  stale;
 	int       pid;
 
-	if( pidFile == NULL )
+	// --check writes nothing, at its start or a game_restart's (FS_Restart)
+	if( pidFile == NULL || com_check )
 		return qfalse;
 
 	// a PID file already there names a process that's gone, or none
@@ -1151,8 +1152,9 @@ static void Sys_Start( int argc, char **argv )
 	NET_Init( );
 
 	// its PID file carries the port it opened (Sys_PIDFileName), and its
-	// pipe is in that port's directory (Com_OpenPipeFile)
-	if( !Com_IsClient( ) )
+	// pipe is in that port's directory (Com_OpenPipeFile); --check, which
+	// opens no port, writes neither
+	if( !Com_IsClient( ) && !com_check )
 	{
 		Sys_InitPIDFile( FS_GetCurrentGameDir( ) );
 		Com_OpenPipeFile( );
