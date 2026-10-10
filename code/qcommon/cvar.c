@@ -34,6 +34,13 @@ int			cvar_modifiedFlags;
 cvar_t		cvar_indexes[MAX_CVARS];
 int			cvar_numIndexes;
 
+// where an int's range ends (Cvar_SetRangeByName), which help and cvar_dump
+// read as no bound: INT_MAX as a float is 2^31, one past it, which a value
+// held at the bound would overflow as it's written back as an int, so the
+// largest float under 2^31
+#define CVAR_INT_MIN	( (float)INT_MIN )
+#define CVAR_INT_MAX	2147483520.0f
+
 #define FILE_HASH_SIZE		256
 static	cvar_t	*hashTable[FILE_HASH_SIZE];
 
@@ -41,8 +48,9 @@ static const cvarDefault_t	*cvar_profile;	// this platform's defaults (Cvar_SetP
 
 static void Cvar_MarkSaved( const cvar_t *var );
 cvar_t *Cvar_Unset( cvar_t *cv );
-static const cvarDeclaration_t	*cvar_declared;	// each cvar's scope (Cvar_SetDeclarations)
+static const cvarDeclaration_t	*cvar_declared;	// the game's declarations (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
+static const cvarDeclaration_t *Cvar_Declaration( const char *var_name );
 
 /*
 ================
@@ -256,6 +264,12 @@ smaller one its leading zeros too, as many as fit ("-0." and the end)
 static void Cvar_FormatValue( char *buf, int size, float value ) {
 	int	decimals;
 
+	// past an int (an open end of a float's range, FLT_MAX), where the
+	// cast Q_isintegral makes is undefined: 9 significant digits
+	if ( !( value > -2147483648.0f && value < 2147483648.0f ) ) {
+		Com_sprintf( buf, size, "%.9g", value );
+		return;
+	}
 	if ( Q_isintegral( value ) ) {
 		Com_sprintf( buf, size, "%i", (int)value );
 		return;
@@ -731,17 +745,124 @@ cvarSource_t Cvar_Source( const cvar_t *var ) {
 	return CVAR_SOURCE_DEFAULT;
 }
 
-static const char * const cvar_sourceNames[] = {
-	[CVAR_SOURCE_DEFAULT] = NULL,
-	[CVAR_SOURCE_ENGINE] = "the engine's",
-	[CVAR_SOURCE_GAME] = "game code's",
-	[CVAR_SOURCE_PLAYER] = "yours",
-	[CVAR_SOURCE_MENU] = "the menus'",
-	[CVAR_SOURCE_SCRIPT] = "a script's",
-	[CVAR_SOURCE_SESSION] = "the command line's",
-	[CVAR_SOURCE_SERVER] = "the server's",
-	[CVAR_SOURCE_SYSTEM] = "the system's"
+// whose value it is, as printing a cvar says it, and as cvar_dump does
+static const struct {
+	const char	*whose;
+	const char	*name;
+} cvar_sources[] = {
+	[CVAR_SOURCE_DEFAULT] = { NULL, "default" },
+	[CVAR_SOURCE_ENGINE] = { "the engine's", "engine" },
+	[CVAR_SOURCE_GAME] = { "game code's", "game" },
+	[CVAR_SOURCE_PLAYER] = { "yours", "player" },
+	[CVAR_SOURCE_MENU] = { "the menus'", "menu" },
+	[CVAR_SOURCE_SCRIPT] = { "a script's", "script" },
+	[CVAR_SOURCE_SESSION] = { "the command line's", "command line" },
+	[CVAR_SOURCE_SERVER] = { "the server's", "server" },
+	[CVAR_SOURCE_SYSTEM] = { "the system's", "system" }
 };
+
+/*
+============
+Cvar_StripColors
+
+Drops the color codes from a text in place, keeping its line breaks,
+which Q_CleanStr would drop too
+============
+*/
+static void Cvar_StripColors( char *text ) {
+	char	*from, *to;
+
+	for ( from = to = text; *from; from++ ) {
+		if ( Q_IsColorString( from ) ) {
+			from++;
+		} else {
+			*to++ = *from;
+		}
+	}
+	*to = '\0';
+}
+
+/*
+============
+Cvar_ValueLine
+
+Whether a line of a cvar's description, from its third on, names a value:
+"<value> = <label>", with ": <meaning>" after it or not, the way CNQ3's
+help writes them, spaces before it allowed. Splits the line into its
+parts, meaning NULL if it has none
+============
+*/
+static qboolean Cvar_ValueLine( char *line, char **value, char **label, char **meaning ) {
+	char	*s = line, *valueEnd;
+
+	while ( *s == ' ' ) {
+		s++;
+	}
+	*value = s;
+	while ( *s && *s != ' ' && *s != '=' ) {
+		s++;
+	}
+	valueEnd = s;
+	while ( *s == ' ' ) {
+		s++;
+	}
+	if ( valueEnd == *value || *s != '=' ) {
+		return qfalse;
+	}
+	for ( s++; *s == ' '; s++ ) {
+	}
+	if ( !*s ) {
+		return qfalse;
+	}
+	*valueEnd = '\0';
+	*label = s;
+	*meaning = strstr( s, ": " );
+	if ( *meaning ) {
+		**meaning = '\0';
+		*meaning += 2;
+	}
+	return qtrue;
+}
+
+// a cvar's description, read a line at a time (Cvar_NextLine)
+typedef struct {
+	const char	*text;		// what's left
+	int			number;		// the line's, from 1
+	char		line[MAX_STRING_CHARS];
+	char		*value, *label, *meaning;	// a value line's parts; value NULL on any other
+} cvarTextReader_t;
+
+static void Cvar_StartReading( cvarTextReader_t *reader, const char *description ) {
+	reader->text = description ? description : "";
+	reader->number = 0;
+}
+
+/*
+============
+Cvar_NextLine
+
+A cvar's description's next line, without its line break; qfalse at the
+end. The first line is the summary, the second the explanation, and each
+after it a value (Cvar_ValueLine) or more explanation
+============
+*/
+static qboolean Cvar_NextLine( cvarTextReader_t *reader ) {
+	const char	*end;
+	int			length;
+
+	if ( !*reader->text ) {
+		return qfalse;
+	}
+	end = strchr( reader->text, '\n' );
+	length = end ? end - reader->text : strlen( reader->text );
+	Q_strncpyz( reader->line, reader->text, MIN( length + 1, sizeof( reader->line ) ) );
+	reader->text += end ? length + 1 : length;
+	reader->number++;
+	if ( reader->number < 3 || !Cvar_ValueLine( reader->line, &reader->value, &reader->label, &reader->meaning ) ) {
+		reader->value = NULL;
+	}
+	return qtrue;
+}
 
 /*
 ============
@@ -751,7 +872,7 @@ Whose value a cvar has, after it, unless it's the default
 ============
 */
 static void Cvar_PrintSource( const cvar_t *var, void (QDECL *print)( const char *fmt, ... ) ) {
-	const char *name = cvar_sourceNames[ Cvar_Source( var ) ];
+	const char *name = cvar_sources[ Cvar_Source( var ) ].whose;
 
 	if ( name ) {
 		print( " (%s)", name );
@@ -785,8 +906,15 @@ static void Cvar_PrintWith( cvar_t *v, void (QDECL *print)( const char *fmt, ...
 		print( "latched: \"%s\"\n", v->latchedString );
 	}
 
+	// the summary, its description's first line (Cvar_NextLine); help
+	// prints the rest
 	if ( v->description ) {
-		print( "%s\n", v->description );
+		const char	*rest = strchr( v->description, '\n' );
+
+		print( "%.*s\n", (int)strcspn( v->description, "\n" ), v->description );
+		if ( rest && rest[1] ) {
+			print( "help %s for more\n", v->name );
+		}
 	}
 }
 
@@ -1313,15 +1441,20 @@ qboolean Cvar_SetByPak( const char *var_name ) {
 
 /*
 ============
-Cvar_AllowedFromText
+Cvar_KeptFromText, Cvar_AllowedFromText
 
 Restricted text (Cmd_IsRestricted) can't use a private or protected
-cvar, whether to set, reset, toggle, unset, print or vstr it
+cvar, whether to set, reset, toggle, unset, print or vstr it; the first
+says so quietly, help's list, the second aloud
 ============
 */
+static qboolean Cvar_KeptFromText( int flags ) {
+	return Cmd_IsRestricted() && ( flags & ( CVAR_PRIVATE | CVAR_PROTECTED ) );
+}
+
 qboolean Cvar_AllowedFromText( const char *var_name ) {
 	// CVAR_NONEXISTENT has neither flag
-	if ( Cmd_IsRestricted() && ( Cvar_Flags( var_name ) & ( CVAR_PRIVATE | CVAR_PROTECTED ) ) ) {
+	if ( Cvar_KeptFromText( Cvar_Flags( var_name ) ) ) {
 		Com_Printf( "%s can't be used by game code or game content.\n", var_name );
 		return qfalse;
 	}
@@ -1585,31 +1718,21 @@ void Cvar_Print_f(void)
 
 /*
 ============
-Cvar_WhyPrintf
+Cvar_PlainPrintf
 
-cvar_why's text, with no color codes when it goes back to rcon's sender,
-whose tools show them as text
+cvar_why's and help's text, with no color codes when it goes back to
+rcon's sender, whose tools show them as text
 ============
 */
-static void QDECL Cvar_WhyPrintf( const char *fmt, ... ) {
+static void QDECL Cvar_PlainPrintf( const char *fmt, ... ) {
 	char	text[MAX_STRING_CHARS];
 	va_list	argptr;
 
 	va_start( argptr, fmt );
 	Q_vsnprintf( text, sizeof( text ), fmt, argptr );
 	va_end( argptr );
-	// only the color codes: Q_CleanStr would drop the line breaks too
 	if ( Com_IsRedirecting() ) {
-		char	*from, *to;
-
-		for ( from = to = text; *from; from++ ) {
-			if ( Q_IsColorString( from ) ) {
-				from++;
-			} else {
-				*to++ = *from;
-			}
-		}
-		*to = '\0';
+		Cvar_StripColors( text );
 	}
 	Com_Printf( "%s", text );
 }
@@ -1628,39 +1751,39 @@ void Cvar_Why_f( void ) {
 	if ( !var ) {
 		return;
 	}
-	Cvar_PrintWith( var, Cvar_WhyPrintf );
+	Cvar_PrintWith( var, Cvar_PlainPrintf );
 	if ( var->serverString ) {
-		Cvar_WhyPrintf( "  the server requires \"%s" S_COLOR_WHITE "\" while you're on it\n", var->serverString );
+		Cvar_PlainPrintf( "  the server requires \"%s" S_COLOR_WHITE "\" while you're on it\n", var->serverString );
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SESSION ) {
-		Cvar_WhyPrintf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
+		Cvar_PlainPrintf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
 	} else if ( var->userString && var->userOrigin ) {
-		Cvar_WhyPrintf( "  %s set \"%s" S_COLOR_WHITE "\"\n", var->userOrigin, var->userString );
+		Cvar_PlainPrintf( "  %s set \"%s" S_COLOR_WHITE "\"\n", var->userOrigin, var->userString );
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
-		Cvar_WhyPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
+		Cvar_PlainPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
 	}
 	if ( var->reason ) {
-		Cvar_WhyPrintf( "  %s\n", var->reason );
+		Cvar_PlainPrintf( "  %s\n", var->reason );
 	}
 	if ( var->savedString ) {
-		Cvar_WhyPrintf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
+		Cvar_PlainPrintf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
 			!( var->flags & CVAR_ARCHIVE ) ? ", which isn't archived, so it's kept for this run" :
 			Cvar_SavedValue( var ) ? "" : ", the default, so the config leaves it out" );
 	}
 	if ( var->flags & CVAR_USER_CREATED ) {
 		if ( var->userOrigin ) {
-			Cvar_WhyPrintf( "  no code has registered it: a config created it (%s), and only what reads it "
+			Cvar_PlainPrintf( "  no code has registered it: a config created it (%s), and only what reads it "
 				"(a vstr, or a mod that isn't loaded) gives it a use\n", var->userOrigin );
 		} else {
-			Cvar_WhyPrintf( "  no code has registered it, so it has no default\n" );
+			Cvar_PlainPrintf( "  no code has registered it, so it has no default\n" );
 		}
 	} else {
 		// a server created one has the server's value as its default
 		const char *profile = Cvar_ProfileDefault( var->name, NULL );
 
 		if ( profile && !strcmp( profile, var->resetString ) ) {
-			Cvar_WhyPrintf( "  its default is this device's\n" );
+			Cvar_PlainPrintf( "  its default is this device's\n" );
 		}
 	}
 }
@@ -1783,6 +1906,29 @@ void Cvar_Reset_f( void ) {
 
 static int QDECL Cvar_CompareNames( const void *a, const void *b ) {
 	return Q_stricmp( ( *(const cvar_t * const *)a )->name, ( *(const cvar_t * const *)b )->name );
+}
+
+/*
+============
+Cvar_Sorted
+
+The cvars whose names match a pattern (Com_Filter), or all of them for
+NULL, sorted by name into cvar_sorted; how many
+============
+*/
+static cvar_t	*cvar_sorted[MAX_CVARS];
+
+static int Cvar_Sorted( const char *match ) {
+	cvar_t	*var;
+	int		count = 0;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->name && ( !match || Com_Filter( (char *)match, var->name, qfalse ) ) ) {
+			cvar_sorted[count++] = var;
+		}
+	}
+	qsort( cvar_sorted, count, sizeof( cvar_sorted[0] ), Cvar_CompareNames );
+	return count;
 }
 
 /*
@@ -2004,6 +2150,583 @@ void Cvar_ListModified_f( void ) {
 	}
 
 	Com_Printf ("\n%i total modified cvars\n", totalModified);
+}
+
+/*
+============
+Cvar_HasMin, Cvar_HasMax
+
+Whether a cvar's range has that bound: one at the end of an int
+(CVAR_INT_MIN, CVAR_INT_MAX) or a float, as an open end of CNQ3's ranges
+is, is none
+============
+*/
+static qboolean Cvar_HasMin( const cvar_t *var ) {
+	return var->validate && var->min > ( var->integral ? CVAR_INT_MIN : -FLT_MAX );
+}
+
+static qboolean Cvar_HasMax( const cvar_t *var ) {
+	return var->validate && var->max < ( var->integral ? CVAR_INT_MAX : FLT_MAX );
+}
+
+/*
+============
+Cvar_Applies
+
+When a change to a cvar takes effect, in the declarations' words, by its
+declaration or else its flags ("at startup" for CVAR_INIT); NULL for a
+read only one
+============
+*/
+static const char *Cvar_Applies( const cvar_t *var, const cvarDeclaration_t *declaration ) {
+	if ( var->flags & CVAR_ROM ) {
+		return NULL;
+	}
+	if ( declaration && declaration->applies ) {
+		return declaration->applies;
+	}
+	return ( var->flags & CVAR_INIT ) ? "at startup" : ( var->flags & CVAR_LATCH ) ? "next map" : "at once";
+}
+
+// what help says of when a change takes effect (Cvar_Applies)
+static const struct {
+	const char	*applies;
+	const char	*sentence;
+} cvar_appliesSentences[] = {
+	{ "at once", "Takes effect at once." },
+	{ "next map", "Takes effect at the next map." },
+	{ "restart", "Takes effect at the next restart." },
+	{ "at startup", "Takes effect only at startup: set it on the command line." }
+};
+
+// the flags, by the names cvar_dump lists, and what help says of the ones
+// that change what a player or admin sees
+static const struct {
+	int			flag;
+	const char	*name;
+	const char	*note;
+} cvar_flags[] = {
+	{ CVAR_ARCHIVE, "archive", NULL },
+	{ CVAR_USERINFO, "userinfo", "Sent to the server." },
+	{ CVAR_SERVERINFO, "serverinfo", "Shown in server lists." },
+	{ CVAR_SYSTEMINFO, "systeminfo", "Sent to every player." },
+	{ CVAR_INIT, "init", NULL },
+	{ CVAR_LATCH, "latch", NULL },
+	{ CVAR_ROM, "rom", NULL },
+	{ CVAR_USER_CREATED, "user created", "No code has registered it." },
+	{ CVAR_TEMP, "temp", NULL },
+	{ CVAR_CHEAT, "cheat", "Changes only while sv_cheats is 1." },
+	{ CVAR_NORESTART, "norestart", NULL },
+	{ CVAR_SERVER_CREATED, "server created", NULL },
+	{ CVAR_VM_CREATED, "vm created", NULL },
+	{ CVAR_PROTECTED, "protected", "Game code and servers can't change it." },
+	{ CVAR_NODEFAULT, "nodefault", NULL },
+	{ CVAR_PRIVATE, "private", "Game code can't read it." }
+};
+
+/*
+============
+Cvar_RangeWords
+
+The values a cvar takes, in words, from its range: "whole numbers 10 to
+125", "0 or 1", "numbers 0 or more"; empty with no range
+============
+*/
+static void Cvar_RangeWords( const cvar_t *var, char *words, int size ) {
+	const char	*numbers = var->integral ? "whole numbers" : "numbers";
+	qboolean	hasMin = Cvar_HasMin( var ), hasMax = Cvar_HasMax( var );
+	char		min[32], max[32];
+
+	words[0] = '\0';
+	if ( !var->validate ) {
+		return;
+	}
+	Cvar_FormatValue( min, sizeof( min ), var->min );
+	Cvar_FormatValue( max, sizeof( max ), var->max );
+	if ( var->integral && var->max - var->min == 1 ) {
+		Com_sprintf( words, size, "%s or %s", min, max );
+	} else if ( hasMin && hasMax ) {
+		Com_sprintf( words, size, "%s %s to %s", numbers, min, max );
+	} else if ( hasMin ) {
+		Com_sprintf( words, size, "%s %s or more", numbers, min );
+	} else if ( hasMax ) {
+		Com_sprintf( words, size, "%s up to %s", numbers, max );
+	} else {
+		Q_strncpyz( words, numbers, size );
+	}
+}
+
+/*
+============
+Cvar_PrintWrapped
+
+A paragraph, indented, its lines broken between words to fit 78 columns
+============
+*/
+#define HELP_COLUMNS	78
+
+static void Cvar_PrintWrapped( const char *indent, const char *text ) {
+	int	width = HELP_COLUMNS - strlen( indent );
+
+	while ( *text ) {
+		int	cut = strlen( text );
+
+		if ( cut > width ) {
+			for ( cut = width; cut > 0 && text[cut] != ' '; cut-- ) {
+			}
+			// a word longer than a line
+			if ( !cut ) {
+				cut = width;
+			}
+		}
+		Cvar_PlainPrintf( "%s%.*s\n", indent, cut, text );
+		for ( text += cut; *text == ' '; text++ ) {
+		}
+	}
+}
+
+/*
+============
+Cvar_HelpNotes
+
+What a cvar's flags and declaration say, in words, so its description
+needn't: when a change takes effect, whether it's saved, and where else
+its value goes
+============
+*/
+static void Cvar_HelpNotes( const cvar_t *var, const cvarDeclaration_t *declaration, char *notes, int size ) {
+	const char	*applies = Cvar_Applies( var, declaration );
+	int			i;
+
+	notes[0] = '\0';
+	if ( !applies ) {
+		Q_strcat( notes, size, "Read only." );
+	} else {
+		for ( i = 0; i < ARRAY_LEN( cvar_appliesSentences ) && strcmp( cvar_appliesSentences[i].applies, applies ); i++ ) {
+		}
+		Q_strcat( notes, size, i < ARRAY_LEN( cvar_appliesSentences ) ?
+			cvar_appliesSentences[i].sentence : va( "Takes effect %s.", applies ) );
+		if ( ( var->flags & CVAR_ARCHIVE ) && Cvar_Scope( var ) != CVAR_SCOPE_NONE ) {
+			Q_strcat( notes, size, " Saved." );
+		} else if ( !( var->flags & CVAR_INIT ) ) {
+			Q_strcat( notes, size, va( " Not saved: set it in a config %s, or on the command line.",
+				Com_IsClient() ? "such as autoexec.cfg" : "the server runs" ) );
+		}
+	}
+	for ( i = 0; i < ARRAY_LEN( cvar_flags ); i++ ) {
+		if ( ( var->flags & cvar_flags[i].flag ) && cvar_flags[i].note ) {
+			Q_strcat( notes, size, va( " %s", cvar_flags[i].note ) );
+		}
+	}
+}
+
+/*
+============
+Cvar_PrintHelp
+
+All a cvar says about itself: its value and the values it takes, its
+whole description, its values one a line, and what its flags say
+============
+*/
+static void Cvar_PrintHelp( const cvar_t *var ) {
+	const cvarDeclaration_t	*declaration = Cvar_Declaration( var->name );
+	cvarTextReader_t		reader;
+	char					line[MAX_STRING_CHARS], words[64];
+
+	Com_sprintf( line, sizeof( line ), "%s \"%s\"", var->name, var->string );
+	if ( !( var->flags & CVAR_ROM ) ) {
+		Q_strcat( line, sizeof( line ), !Q_stricmp( var->string, var->resetString ) ?
+			", the default" : va( ", default \"%s\"", var->resetString ) );
+	}
+	Cvar_RangeWords( var, words, sizeof( words ) );
+	if ( words[0] ) {
+		Q_strcat( line, sizeof( line ), va( "; %s", words ) );
+	}
+	if ( declaration && declaration->unit ) {
+		Q_strcat( line, sizeof( line ), va( "; %s", declaration->unit ) );
+	}
+	Cvar_PlainPrintf( "%s\n", line );
+	if ( var->latchedString ) {
+		Cvar_PlainPrintf( "\"%s\" from the next map\n", var->latchedString );
+	}
+
+	// the summary, then the explanation and the values
+	for ( Cvar_StartReading( &reader, var->description ); Cvar_NextLine( &reader ); ) {
+		if ( reader.number == 1 ) {
+			Cvar_PrintWrapped( "", reader.line );
+		} else if ( reader.value ) {
+			Cvar_PlainPrintf( "  %s = %s%s%s\n", reader.value, reader.label,
+				reader.meaning ? ": " : "", reader.meaning ? reader.meaning : "" );
+		} else if ( reader.line[0] ) {
+			Cvar_PrintWrapped( "  ", reader.line );
+		}
+	}
+	if ( var->description && declaration && declaration->type && !strcmp( declaration->type, "bits" ) ) {
+		Cvar_PlainPrintf( "  Add the numbers to combine them.\n" );
+	}
+
+	Cvar_HelpNotes( var, declaration, line, sizeof( line ) );
+	Cvar_PrintWrapped( "", line );
+}
+
+/*
+============
+Cvar_Help_f
+
+help <name>: all a cvar says about itself. help <pattern> (sv_*): one
+line for each that matches, its name, value and summary
+============
+*/
+static void Cvar_Help_f( void ) {
+	const char	*match = Cmd_Argv( 1 );
+	int			count, i;
+
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: help <setting>, or help <pattern> for a list, such as help sv_*\n" );
+		return;
+	}
+	if ( !strpbrk( match, "*?" ) ) {
+		const cvar_t	*var = Cvar_FromArgs();
+
+		if ( var ) {
+			Cvar_PrintHelp( var );
+		}
+		return;
+	}
+
+	count = Cvar_Sorted( match );
+	for ( i = 0; i < count; i++ ) {
+		const cvar_t	*var = cvar_sorted[i];
+		const char		*summary = var->description ? var->description : "";
+
+		if ( !Cvar_KeptFromText( var->flags ) ) {
+			Cvar_PlainPrintf( "%s \"%s\"%s%.*s\n", var->name, var->string, summary[0] ? "  " : "",
+				(int)strcspn( summary, "\n" ), summary );
+		}
+	}
+	if ( !count ) {
+		Com_Printf( "No setting matches %s.\n", match );
+	}
+}
+
+// cvar_dump's line for a cvar, built and then written in one go, and where
+// it goes: a file, or with none the terminal (Sys_Print)
+static char			cvar_dumpLine[MAX_STRING_CHARS * 16];
+static int			cvar_dumpLength;
+static fileHandle_t	cvar_dumpFile;
+
+static void Cvar_DumpFlush( void ) {
+	if ( cvar_dumpFile ) {
+		FS_Write( cvar_dumpLine, cvar_dumpLength, cvar_dumpFile );
+	} else {
+		Sys_Print( cvar_dumpLine );
+	}
+	cvar_dumpLength = 0;
+	cvar_dumpLine[0] = '\0';
+}
+
+// to the line, which is written early if it's full
+static void Cvar_DumpAppend( const char *text ) {
+	int	length = strlen( text );
+
+	if ( cvar_dumpLength + length >= (int)sizeof( cvar_dumpLine ) ) {
+		Cvar_DumpFlush();
+	}
+	Q_strncpyz( cvar_dumpLine + cvar_dumpLength, text, sizeof( cvar_dumpLine ) - cvar_dumpLength );
+	cvar_dumpLength += strlen( cvar_dumpLine + cvar_dumpLength );
+}
+
+/*
+============
+Cvar_UTF8Length
+
+How many bytes the UTF-8 character at text takes, or 0 if it isn't one
+============
+*/
+static int Cvar_UTF8Length( const char *text ) {
+	const unsigned char	*s = (const unsigned char *)text;
+	int					length, i;
+
+	length = s[0] < 0x80 ? 1 : ( s[0] & 0xe0 ) == 0xc0 && s[0] >= 0xc2 ? 2 :
+		( s[0] & 0xf0 ) == 0xe0 ? 3 : ( s[0] & 0xf8 ) == 0xf0 && s[0] <= 0xf4 ? 4 : 0;
+	for ( i = 1; i < length; i++ ) {
+		if ( ( s[i] & 0xc0 ) != 0x80 ) {
+			return 0;
+		}
+	}
+	return length;
+}
+
+/*
+============
+Cvar_DumpEscaped
+
+A text as it goes inside a JSON string: quotes, backslashes and control
+characters escaped; UTF-8 as it is, and any other byte past ASCII, as a
+config or a mod's text may hold, escaped as the character of its value
+============
+*/
+static void Cvar_DumpEscaped( const char *text ) {
+	char	chunk[256];
+	int		length = 0;
+
+	for ( ; *text; text++ ) {
+		unsigned char	c = *text;
+		int				utf8 = c > '~' ? Cvar_UTF8Length( text ) : 0;
+
+		if ( length > (int)sizeof( chunk ) - 8 ) {
+			chunk[length] = '\0';
+			Cvar_DumpAppend( chunk );
+			length = 0;
+		}
+		if ( c == '"' || c == '\\' ) {
+			chunk[length++] = '\\';
+			chunk[length++] = c;
+		} else if ( c == '\n' ) {
+			chunk[length++] = '\\';
+			chunk[length++] = 'n';
+		} else if ( utf8 > 1 ) {
+			memcpy( chunk + length, text, utf8 );
+			length += utf8;
+			text += utf8 - 1;
+		} else if ( c < ' ' || c > '~' ) {
+			length += Com_sprintf( chunk + length, sizeof( chunk ) - length, "\\u%04x", c );
+		} else {
+			chunk[length++] = c;
+		}
+	}
+	chunk[length] = '\0';
+	Cvar_DumpAppend( chunk );
+}
+
+// a JSON string, or null
+static void Cvar_DumpString( const char *text ) {
+	if ( !text ) {
+		Cvar_DumpAppend( "null" );
+		return;
+	}
+	Cvar_DumpAppend( "\"" );
+	Cvar_DumpEscaped( text );
+	Cvar_DumpAppend( "\"" );
+}
+
+// ,"key": and a string or null
+static void Cvar_DumpField( const char *key, const char *text ) {
+	Cvar_DumpAppend( va( ",\"%s\":", key ) );
+	Cvar_DumpString( text );
+}
+
+// ,"key": and a range's bound as a JSON number, or null for none
+static void Cvar_DumpBound( const char *key, float bound, qboolean set ) {
+	char	number[32] = "null";
+
+	if ( set ) {
+		Cvar_FormatValue( number, sizeof( number ), bound );
+	}
+	Cvar_DumpAppend( va( ",\"%s\":%s", key, number ) );
+}
+
+static const char * const cvar_scopeNames[] = {
+	[CVAR_SCOPE_NONE] = "none",
+	[CVAR_SCOPE_PLAYER] = "player",
+	[CVAR_SCOPE_PLAYER_MOD] = "player per mod",
+	[CVAR_SCOPE_DEVICE] = "device",
+	[CVAR_SCOPE_DEVICE_MOD] = "device per mod",
+	[CVAR_SCOPE_SERVER] = "server"
+};
+
+#define MAX_DUMP_MENTIONS	32
+
+/*
+============
+Cvar_DumpMentions
+
+The cvars a cvar's description names: its words that name one that
+exists or is declared, each once
+============
+*/
+static void Cvar_DumpMentions( const cvar_t *var ) {
+	const char	*mentions[MAX_DUMP_MENTIONS];
+	const char	*text = var->description ? var->description : "";
+	int			count = 0, i;
+
+	Cvar_DumpAppend( ",\"mentions\":[" );
+	while ( *text && count < MAX_DUMP_MENTIONS ) {
+		const cvar_t			*named;
+		const cvarDeclaration_t	*declared;
+		const char				*name;
+		char					word[MAX_CVAR_VALUE_STRING];
+		int						length = 0;
+
+		if ( !isalpha( (unsigned char)*text ) && *text != '_' ) {
+			text++;
+			continue;
+		}
+		for ( ; isalnum( (unsigned char)*text ) || *text == '_'; text++ ) {
+			if ( length < (int)sizeof( word ) - 1 ) {
+				word[length++] = *text;
+			}
+		}
+		word[length] = '\0';
+		named = Cvar_FindVar( word );
+		declared = named ? NULL : Cvar_Declaration( word );
+		name = named ? named->name : declared ? declared->name : NULL;
+		if ( !name || !Q_stricmp( name, var->name ) ) {
+			continue;
+		}
+		for ( i = 0; i < count && Q_stricmp( mentions[i], name ); i++ ) {
+		}
+		if ( i == count ) {
+			Cvar_DumpAppend( count ? "," : "" );
+			Cvar_DumpString( name );
+			mentions[count++] = name;
+		}
+	}
+	Cvar_DumpAppend( "]" );
+}
+
+/*
+============
+Cvar_DumpText
+
+A cvar's description as help reads it (Cvar_NextLine): its values, its
+summary, its explanation's lines joined by line breaks, and the cvars it
+names
+============
+*/
+static void Cvar_DumpText( const cvar_t *var ) {
+	cvarTextReader_t	reader;
+	char				summary[MAX_STRING_CHARS] = "", explanation[MAX_STRING_CHARS] = "";
+	qboolean			first = qtrue;
+
+	Cvar_DumpAppend( ",\"values\":[" );
+	for ( Cvar_StartReading( &reader, var->description ); Cvar_NextLine( &reader ); ) {
+		if ( reader.number == 1 ) {
+			Q_strncpyz( summary, reader.line, sizeof( summary ) );
+		} else if ( reader.value ) {
+			Cvar_DumpAppend( first ? "{\"value\":" : ",{\"value\":" );
+			Cvar_DumpString( reader.value );
+			Cvar_DumpField( "label", reader.label );
+			Cvar_DumpField( "meaning", reader.meaning );
+			Cvar_DumpAppend( "}" );
+			first = qfalse;
+		} else if ( reader.line[0] ) {
+			if ( explanation[0] ) {
+				Q_strcat( explanation, sizeof( explanation ), "\n" );
+			}
+			Q_strcat( explanation, sizeof( explanation ), reader.line );
+		}
+	}
+	Cvar_DumpAppend( "]" );
+	Cvar_DumpField( "summary", var->description ? summary : NULL );
+	Cvar_DumpField( "explanation", explanation[0] ? explanation : NULL );
+	Cvar_DumpMentions( var );
+}
+
+/*
+============
+Cvar_IsSecret
+
+Whether a cvar's value is one cvar_dump leaves out: a private one's (a
+path, a password), a declared password, or one named as one, such as a
+mod's referee password
+============
+*/
+static qboolean Cvar_IsSecret( const cvar_t *var, const cvarDeclaration_t *declaration ) {
+	return ( var->flags & CVAR_PRIVATE ) || Q_stristr( var->name, "password" ) ||
+		( declaration && declaration->type && !strcmp( declaration->type, "password" ) );
+}
+
+/*
+============
+Cvar_DumpVar
+
+One cvar as a line of JSON: its value, where it comes from, its flags,
+its declaration, its range, and its text. A secret's value and default
+are left out (null): a path's default is the path
+============
+*/
+static void Cvar_DumpVar( const cvar_t *var ) {
+	const cvarDeclaration_t	*declaration = Cvar_Declaration( var->name );
+	qboolean	secret = Cvar_IsSecret( var, declaration );
+	qboolean	first = qtrue;
+	int			i;
+
+	Cvar_DumpAppend( "{\"name\":" );
+	Cvar_DumpString( var->name );
+	Cvar_DumpField( "value", secret ? NULL : var->string );
+	Cvar_DumpField( "latched", secret ? NULL : var->latchedString );
+	Cvar_DumpField( "default", secret ? NULL : var->resetString );
+	Cvar_DumpField( "source", cvar_sources[ Cvar_Source( var ) ].name );
+	Cvar_DumpAppend( ",\"flags\":[" );
+	for ( i = 0; i < ARRAY_LEN( cvar_flags ); i++ ) {
+		if ( var->flags & cvar_flags[i].flag ) {
+			Cvar_DumpAppend( va( "%s\"%s\"", first ? "" : ",", cvar_flags[i].name ) );
+			first = qfalse;
+		}
+	}
+	Cvar_DumpAppend( "]" );
+	Cvar_DumpField( "scope", cvar_scopeNames[ Cvar_Scope( var ) ] );
+	Cvar_DumpField( "role", declaration ? declaration->role : NULL );
+	Cvar_DumpField( "owner", declaration ? declaration->owner : NULL );
+	Cvar_DumpField( "tier", declaration ? declaration->tier : NULL );
+	Cvar_DumpField( "type", declaration ? declaration->type : NULL );
+	Cvar_DumpField( "unit", declaration ? declaration->unit : NULL );
+	Cvar_DumpBound( "min", var->min, Cvar_HasMin( var ) );
+	Cvar_DumpBound( "max", var->max, Cvar_HasMax( var ) );
+	Cvar_DumpAppend( va( ",\"integral\":%s", var->validate && var->integral ? "true" : "false" ) );
+	Cvar_DumpField( "applies", Cvar_Applies( var, declaration ) );
+	Cvar_DumpText( var );
+	Cvar_DumpAppend( "}\n" );
+	Cvar_DumpFlush();
+}
+
+/*
+============
+Cvar_Dump_f
+
+cvar_dump [<file>.json]: every cvar, a JSON object a line (Cvar_DumpVar),
+for a front end, to the file in the home's game directory, or with none
+to the terminal, which rcon's sender doesn't see. Game code and a pak's
+config can't run it (Cmd_ExecuteString)
+============
+*/
+static void Cvar_Dump_f( void ) {
+	char	filename[MAX_QPATH];
+	int		count, i;
+
+	if ( Cmd_Argc() > 2 ) {
+		Com_Printf( "usage: cvar_dump [<file>.json]\n" );
+		return;
+	}
+	if ( Cmd_Argc() == 1 && Com_IsRedirecting() ) {
+		Com_Printf( "cvar_dump with no file writes to the server's terminal, which rcon doesn't see: name a .json file.\n" );
+		return;
+	}
+	if ( Cmd_Argc() == 2 ) {
+		Q_strncpyz( filename, Cmd_Argv( 1 ), sizeof( filename ) );
+		COM_DefaultExtension( filename, sizeof( filename ), ".json" );
+		if ( !COM_CompareExtension( filename, ".json" ) ) {
+			Com_Printf( "cvar_dump writes only a .json file.\n" );
+			return;
+		}
+		cvar_dumpFile = FS_FOpenFileWrite_HomeData( filename );
+		if ( !cvar_dumpFile ) {
+			Com_Printf( "Couldn't write %s.\n", filename );
+			return;
+		}
+	}
+
+	count = Cvar_Sorted( NULL );
+	for ( i = 0; i < count; i++ ) {
+		Cvar_DumpVar( cvar_sorted[i] );
+	}
+
+	if ( cvar_dumpFile ) {
+		FS_FCloseFile( cvar_dumpFile );
+		cvar_dumpFile = 0;
+		Com_Printf( "Wrote %d settings to %s.\n", count, filename );
+	}
 }
 
 /*
@@ -2263,6 +2986,9 @@ void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
 /*
 =====================
 Cvar_SetDescription
+
+Without color codes, which a mod's text may have, so what prints it and
+reads its lines (Cvar_NextLine) see none
 =====================
 */
 void Cvar_SetDescription( cvar_t *var, const char *var_description )
@@ -2274,6 +3000,7 @@ void Cvar_SetDescription( cvar_t *var, const char *var_description )
 			Z_Free( var->description );
 		}
 		var->description = CopyString( var_description );
+		Cvar_StripColors( var->description );
 	}
 }
 
@@ -2370,12 +3097,11 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 	if( maxString )
 		max = atof( maxString );
 	// an integer's bounds are whole numbers, inside the ones given and
-	// inside an int: INT_MAX as a float is 2^31, one past it, which a value
-	// held at the bound would overflow as it's written back as an int
+	// inside an int
 	if( type != CVAR_RANGE_FLOAT )
 	{
-		min = MAX( ceilf( min ), (float)INT_MIN );
-		max = MIN( floorf( max ), 2147483520.0f );	// the largest float under 2^31
+		min = MAX( ceilf( min ), CVAR_INT_MIN );
+		max = MIN( floorf( max ), CVAR_INT_MAX );
 	}
 	// also refuses NaN
 	if( !( min <= max ) )
@@ -2539,6 +3265,9 @@ void Cvar_Init (void)
 
 	Cmd_AddCommand ("cvar_why", Cvar_Why_f);
 	Cmd_SetCommandCompletionFunc( "cvar_why", Cvar_CompleteCvarName );
+	Cmd_AddCommand ("help", Cvar_Help_f);
+	Cmd_SetCommandCompletionFunc( "help", Cvar_CompleteCvarName );
+	Cmd_AddCommand ("cvar_dump", Cvar_Dump_f);
 	Cmd_AddCommand ("cvarlist", Cvar_List_f);
 	Cmd_AddCommand ("cvar_modified", Cvar_ListModified_f);
 	Cmd_AddCommand ("cvar_restart", Cvar_Restart_f);

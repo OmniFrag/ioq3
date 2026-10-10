@@ -1491,7 +1491,7 @@ void	Cmd_ExecuteString( const char *text ) {
 	// or stop the process; nor can a pak's config on a dedicated server,
 	// which sets what it likes but writes no file either
 	{
-		static const char *denied[] = { "rcon", "condump", "setenv", "error", "crash", "freeze" };
+		static const char *denied[] = { "rcon", "condump", "cvar_dump", "setenv", "error", "crash", "freeze" };
 		// and the ban list's, which writes the file sv_banFile names
 		static const char *writers[] = { "writeconfig", "settings_export", "settings_import",
 			"banaddr", "bandel", "exceptaddr", "exceptdel", "flushbans" };
