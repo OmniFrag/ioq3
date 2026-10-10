@@ -803,6 +803,12 @@ extern const cvarDefault_t cvar_q3eDefaults[];
 // hold their saved cvars at, which the importer leaves out as not chosen:
 // a name once per default, ending with a NULL name; given by the build
 // with the declarations (CVAR_DECLARATIONS_SOURCE), empty by default
+extern const cvarDefault_t cvar_q3ServerDefaults[];
+extern const cvarDefault_t cvar_ioq3ServerDefaults[];
+extern const cvarDefault_t cvar_cnq3ServerDefaults[];
+extern const cvarDefault_t cvar_q3eServerDefaults[];
+// and those only their dedicated servers have, which a dedicated server's
+// saved config holds too (ioquake3's net_enabled 1), as the above
 extern const char * const cvar_ioq3Marks[];
 extern const char * const cvar_cnq3Marks[];
 extern const char * const cvar_q3eMarks[];
