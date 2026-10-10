@@ -310,7 +310,9 @@ static qboolean SV_IsBanned(netadr_t *from, qboolean isexception)
 ==================
 SV_RefuseConnect
 
-Tell a client why its connect was refused. A connect's source address
+Tell a client why its connect was refused; OmniFrag's client asks again
+for the refusals that waiting can change, by their words (CL_RefusalEnds),
+so keep those as they are. A connect's source address
 can be forged, so the replies to all connects together are limited, and
 can't be used to flood another address.
 ==================
