@@ -51,6 +51,7 @@ cvar_t *Cvar_Unset( cvar_t *cv );
 static const cvarDeclaration_t	*cvar_declared;	// the game's declarations (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
 static const cvarDeclaration_t *Cvar_Declaration( const char *var_name );
+static void Cvar_ForgetModules( cvar_t *var );
 
 /*
 ================
@@ -567,9 +568,11 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 
 		// engine code taking over a cvar game code created drops the range
 		// the module gave it (Cvar_SetRangeByName), before that range could
-		// bend the engine's default
-		if ( ( var->flags & CVAR_VM_CREATED ) && !( flags & CVAR_VM_CREATED ) )
+		// bend the engine's default, and keeps its description as its own
+		if ( ( var->flags & CVAR_VM_CREATED ) && !( flags & CVAR_VM_CREATED ) ) {
 			var->validate = qfalse;
+			Cvar_ForgetModules( var );
+		}
 
 		var_value = Cvar_Validate(var, var_value, qfalse);
 
@@ -2754,6 +2757,7 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 		Z_Free(cv->resetString);
 	if(cv->description)
 		Z_Free(cv->description);
+	Cvar_ForgetModules( cv );
 	Cvar_SetLayer( &cv->serverString, NULL );
 	Cvar_ClearUser( cv );
 	Cvar_SetLayer( &cv->savedString, NULL );
@@ -2960,12 +2964,26 @@ void Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize ) {
 	Q_strncpyz( buff, Cvar_InfoStringHiding( bit, VM_PrivateCvarFlag() ), buffsize );
 }
 
+// a cvar's own description and range, while game modules' are in place
+// (cvar_t's own)
+typedef struct cvarOwn_s {
+	char		*description;
+	qboolean	validate;
+	qboolean	integral;
+	float		min;
+	float		max;
+} cvarOwn_t;
+
 /*
 =====================
-Cvar_CheckRange
+Cvar_SetRange
+
+Cvar_CheckRange's, and a game module's (Cvar_SetRangeByName), which holds
+the value but not the choice saved: a mod's narrower range mustn't
+rewrite an admin's saved fraglimit for good
 =====================
 */
-void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
+static void Cvar_SetRange( cvar_t *var, float min, float max, qboolean integral, qboolean keepSaved )
 {
 	var->validate = qtrue;
 	var->min = min;
@@ -2978,30 +2996,63 @@ void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
 		Cvar_SetLayer( &var->serverString, Cvar_Validate( var, var->serverString, qtrue ) );
 	if ( var->userString )
 		Cvar_SetLayer( &var->userString, Cvar_Validate( var, var->userString, qtrue ) );
-	if ( var->savedString )
+	if ( var->savedString && !keepSaved )
 		Cvar_SetLayer( &var->savedString, Cvar_Validate( var, var->savedString, qfalse ) );
 	Cvar_Apply( var, qtrue );
 }
 
 /*
 =====================
+Cvar_CheckRange
+
+The cvar's own range: kept for later while a game module's is in place
+=====================
+*/
+void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
+{
+	if( var->own )
+	{
+		var->own->validate = qtrue;
+		var->own->min = min;
+		var->own->max = max;
+		var->own->integral = integral;
+		return;
+	}
+	Cvar_SetRange( var, min, max, integral, qfalse );
+}
+
+/*
+=====================
+Cvar_CopyDescription
+
+A description into its place, without color codes, which a mod's text may
+have, so what prints it and reads its lines (Cvar_NextLine) see none
+=====================
+*/
+static void Cvar_CopyDescription( char **description, const char *text )
+{
+	if( text && text[0] != '\0' )
+	{
+		if( *description != NULL )
+		{
+			Z_Free( *description );
+		}
+		*description = CopyString( text );
+		Cvar_StripColors( *description );
+	}
+}
+
+/*
+=====================
 Cvar_SetDescription
 
-Without color codes, which a mod's text may have, so what prints it and
-reads its lines (Cvar_NextLine) see none
+The cvar's own description: kept for later while a game module's is in
+place
 =====================
 */
 void Cvar_SetDescription( cvar_t *var, const char *var_description )
 {
-	if( var_description && var_description[0] != '\0' )
-	{
-		if( var->description != NULL )
-		{
-			Z_Free( var->description );
-		}
-		var->description = CopyString( var_description );
-		Cvar_StripColors( var->description );
-	}
+	Cvar_CopyDescription( var->own ? &var->own->description : &var->description, var_description );
 }
 
 /*
@@ -3012,6 +3063,84 @@ Cvar_SetReason
 void Cvar_SetReason( cvar_t *var, const char *reason )
 {
 	Cvar_SetLayer( &var->reason, reason && reason[0] ? reason : NULL );
+}
+
+/*
+=====================
+Cvar_KeepOwn
+
+Before a game module first gives a cvar a description or a range, keeps
+the cvar's own, which come back as the module unloads
+(Cvar_ModuleUnloaded), so a mod loaded after ours never shows our text
+=====================
+*/
+static void Cvar_KeepOwn( cvar_t *var, cvarModule_t module )
+{
+	if( !var->own )
+	{
+		var->own = Z_Malloc( sizeof( *var->own ) );
+		var->own->description = var->description ? CopyString( var->description ) : NULL;
+		var->own->validate = var->validate;
+		var->own->integral = var->integral;
+		var->own->min = var->min;
+		var->own->max = var->max;
+	}
+	var->moduleGave |= module;
+}
+
+/*
+=====================
+Cvar_ForgetModules
+
+What game modules gave a cvar is its own now, as engine code takes over
+one they created, or it's unset
+=====================
+*/
+static void Cvar_ForgetModules( cvar_t *var )
+{
+	var->moduleGave = 0;
+	if( var->own )
+	{
+		if( var->own->description )
+			Z_Free( var->own->description );
+		Z_Free( var->own );
+		var->own = NULL;
+	}
+}
+
+/*
+=====================
+Cvar_ModuleUnloaded
+=====================
+*/
+void Cvar_ModuleUnloaded( int module )
+{
+	cvar_t		*var;
+	cvarOwn_t	*own;
+
+	for( var = cvar_vars; var; var = var->next )
+	{
+		if( !( var->moduleGave & module ) )
+			continue;
+		// another module gave it too, and it keeps what they gave
+		var->moduleGave &= ~module;
+		if( var->moduleGave )
+			continue;
+
+		own = var->own;
+		var->own = NULL;
+		if( var->description )
+			Z_Free( var->description );
+		var->description = own->description;
+		// the range only if a module changed it: setting it again would
+		// apply a latched value now
+		if( own->validate && ( !var->validate || var->min != own->min ||
+			var->max != own->max || var->integral != own->integral ) )
+			Cvar_SetRange( var, own->min, own->max, own->integral, qfalse );
+		else if( !own->validate )
+			var->validate = qfalse;
+		Z_Free( own );
+	}
 }
 
 /*
@@ -3037,7 +3166,7 @@ Describes an existing cvar, for game modules, which name cvars rather
 than hold them
 =====================
 */
-void Cvar_SetDescriptionByName( const char *var_name, const char *var_description )
+void Cvar_SetDescriptionByName( cvarModule_t module, const char *var_name, const char *var_description )
 {
 	cvar_t *var;
 
@@ -3046,7 +3175,10 @@ void Cvar_SetDescriptionByName( const char *var_name, const char *var_descriptio
 
 	var = Cvar_FindVMVar( var_name );
 	if( var )
-		Cvar_SetDescription( var, var_description );
+	{
+		Cvar_KeepOwn( var, module );
+		Cvar_CopyDescription( &var->description, var_description );
+	}
 }
 
 /*
@@ -3058,7 +3190,7 @@ created the range of a type (CVAR_RANGE_*, CNQ3's), which Cvar_CheckRange
 then keeps it in. A NULL min or max is no bound.
 =====================
 */
-void Cvar_SetRangeByName( const char *var_name, int type, const char *minString, const char *maxString )
+void Cvar_SetRangeByName( cvarModule_t module, const char *var_name, int type, const char *minString, const char *maxString )
 {
 	cvar_t	*var;
 	float	min, max;
@@ -3066,6 +3198,7 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 	var = Cvar_FindVMVar( var_name );
 	if( !var )
 		return;
+	Cvar_KeepOwn( var, module );
 
 	switch( type )
 	{
@@ -3083,7 +3216,7 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 		max = INT_MAX;
 		break;
 	case CVAR_RANGE_BOOL:
-		Cvar_CheckRange( var, 0, 1, qtrue );
+		Cvar_SetRange( var, 0, 1, qtrue, qtrue );
 		return;
 	}
 
@@ -3109,7 +3242,7 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 		Com_Printf( "WARNING: cvar '%s' given a range whose min is over its max\n", var->name );
 		return;
 	}
-	Cvar_CheckRange( var, min, max, type != CVAR_RANGE_FLOAT );
+	Cvar_SetRange( var, min, max, type != CVAR_RANGE_FLOAT, qtrue );
 }
 
 /*
