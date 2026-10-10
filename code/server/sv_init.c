@@ -1005,25 +1005,80 @@ void SV_Init (void)
 	Cvar_Get ("fraglimit", "20", CVAR_SERVERINFO);
 	Cvar_Get ("timelimit", "0", CVAR_SERVERINFO);
 	sv_gametype = Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_LATCH );
-	Cvar_Get ("sv_keywords", "", CVAR_SERVERINFO);
+	Cvar_SetDescription( Cvar_Get ("sv_keywords", "", CVAR_SERVERINFO),
+		"Words about the server, for other tools' server lists\n"
+		"It's sent only in the full status reply that third-party server tools read. The game's own "
+		"browser and the master servers don't use it, and nothing in the game reads it." );
 	sv_mapname = Cvar_Get ("mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM);
 	sv_privateClients = Cvar_Get ("sv_privateClients", "0", CVAR_SERVERINFO);
+	Cvar_SetDescription( sv_privateClients,
+		"Player slots kept for those who know sv_privatePassword\n"
+		"The slots come out of sv_maxclients, and server lists don't count them: 16 slots with 2 kept "
+		"show as 14. A player whose /password matches sv_privatePassword may take any free slot, everyone "
+		"else only the rest. While g_password is set, both must be the same word, since a player sends "
+		"only one." );
 	// a name players can tell from "noname", the default every server had
 	sv_hostname = Cvar_Get ("sv_hostname", PRODUCT_NAME " server", CVAR_SERVERINFO | CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_hostname,
+		"The server's name in server browsers and on the loading screen\n"
+		"Players choose a server by its name, so say where it is and what it plays; the default, OmniFrag "
+		"server, says neither. The game's own list shows its first 20 characters and leaves out Quake "
+		"III's color codes, which other browsers show." );
 	sv_maxclients = Cvar_Get ("sv_maxclients", "8", CVAR_SERVERINFO | CVAR_LATCH);
 	// as SV_BoundMaxClients holds it as a map starts, so help and
 	// cvar_dump can say so, and a set outside is warned of at once
 	Cvar_CheckRange( sv_maxclients, 1, MAX_CLIENTS, qtrue );
+	Cvar_SetDescription( sv_maxclients,
+		"Most players at once, bots and spectators included\n"
+		"Every bot and spectator takes a slot, so with 4 bots and 8 slots there's room for 4 people. "
+		"Slots kept by sv_privateClients come out of this number. Each player costs the server upload: "
+		"about 7 KB/s at sv_fps 40 in a busy match." );
 
 	sv_minRate = Cvar_Get ("sv_minRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_minRate,
+		"Least each player is sent, in bytes a second; 0 for no floor\n"
+		"A player whose own rate setting is lower is sent this much anyway, which can be more than the "
+		"player's connection takes. It wins over sv_maxRate where they cross. OmniFrag players' rate is "
+		"90000 by default, so it matters only for players who lowered it or play with another engine." );
 	sv_maxRate = Cvar_Get ("sv_maxRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_maxRate,
+		"Most each player is sent, in bytes a second; 0 for no limit\n"
+		"A player's own rate setting, 90000 by default in OmniFrag and 3000 in Quake III, is lowered to "
+		"this; the server holds rate to 90000 anyway, so more changes nothing. A player uses about 7 KB/s "
+		"at sv_fps 40 in a busy match, so lower it only for a thin uplink. Players on the local network "
+		"are exempt (sv_lanForceRate)." );
 	sv_dlRate = Cvar_Get("sv_dlRate", "100", CVAR_ARCHIVE | CVAR_SERVERINFO);
+	Cvar_SetDescription( sv_dlRate,
+		"Upload for all direct downloads together, in KB/s; 0 for no limit\n"
+		"Players downloading pak files (.pk3) from the server share it, so at 100 a 20 MB map takes over "
+		"3 minutes with one player downloading, and longer with more. Downloads from sv_dlURL's web "
+		"server don't count, and the game's own updates to players aren't slowed by it." );
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_minPing,
+		"Lowest ping a player may join with, in ms; 0 for no limit\n"
+		"Players nearer than this are refused with \"Server is for high pings only\", so a server can be "
+		"kept for players far away. The ping is measured once, as the player connects, in whole server "
+		"frames (25 ms at sv_fps 40). Players on the local network are never refused." );
 	sv_maxPing = Cvar_Get ("sv_maxPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_maxPing,
+		"Highest ping a player may join with, in ms; 0 for no limit\n"
+		"The ping is measured once, as the player connects, in whole server frames (25 ms at sv_fps 40), "
+		"and never again during play. Players on the local network, or coming through a relay with a "
+		"local address, are never refused. A refused player's game tries again every 3 seconds." );
 	sv_floodProtect = Cvar_Get ("sv_floodProtect", "1", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_floodProtect,
+		"Whether players' chat and game commands are limited, against spam\n"
+		"With 1, a player can send 8 commands in a burst, such as say, team or callvote, then 2 a second; "
+		"the rest are ignored, and the player is told. The listen server's host is exempt. Quake III "
+		"allowed one a second and dropped the rest without a word." );
 
 	// systeminfo
-	Cvar_Get ("sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM );
+	Cvar_SetDescription( Cvar_Get ("sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM ),
+		"Whether cheat commands and cheat settings work; devmap turns it on\n"
+		"The map command turns it off and devmap on, and nobody can set it directly. With 1, players can "
+		"use give, god, noclip and notarget, settings marked as cheats can change, and the loading screen "
+		"says so. It's 1 until the first map, so cheat settings a config sets before its map command "
+		"stay set." );
 	sv_serverid = Cvar_Get ("sv_serverid", "0", CVAR_SYSTEMINFO | CVAR_ROM );
 #ifdef __EMSCRIPTEN__
 	// the web page's own server, which ioquake3's page always ran unpure
@@ -1031,9 +1086,23 @@ void SV_Init (void)
 #else
 	sv_pure = Cvar_Get ("sv_pure", "1", CVAR_SYSTEMINFO );
 #endif
+	Cvar_CheckRange( sv_pure, 0, 1, qtrue );
+	Cvar_SetDescription( sv_pure,
+		"Whether players must use the server's pak files and nothing else\n"
+		"When on, a player's game loads only the pak files (.pk3) the server has loaded and ignores loose "
+		"files and other paks, so nobody plays with altered models or textures, such as bright player "
+		"skins. A player missing one of the server's paks must download it (sv_allowDownload, sv_dlURL) "
+		"or can't join. The web version's own server runs with it off.\n"
+		"0 = off: players' own files load too\n"
+		"1 = on: only the server's paks" );
 #ifdef USE_VOIP
 	sv_voip = Cvar_Get("sv_voip", "1", CVAR_LATCH);
 	Cvar_CheckRange(sv_voip, 0, 1, qtrue);
+	Cvar_SetDescription( sv_voip,
+		"Whether players can talk to each other by voice\n"
+		"Players need cl_voip 1, which is the default, and a key bound to +voiprecord; the menus have no "
+		"voice option or bind, and the web version can't record. Players connected with Quake III's "
+		"protocol get no voice. It takes effect only as the server starts, so set it on the command line." );
 	sv_voipProtocol = Cvar_Get("sv_voipProtocol", sv_voip->integer ? "opus" : "", CVAR_SYSTEMINFO | CVAR_ROM );
 #endif
 	Cvar_Get ("sv_paks", "", CVAR_SYSTEMINFO | CVAR_ROM );
@@ -1043,47 +1112,151 @@ void SV_Init (void)
 
 	// server vars
 	sv_rconPassword = Cvar_Get ("rconPassword", "", CVAR_TEMP | CVAR_PRIVATE );
+	Cvar_SetDescription( sv_rconPassword,
+		"Password for remote admin commands (rcon); empty turns rcon off\n"
+		"Anyone who has it controls the server: every setting, kicks and bans, any command. It's sent "
+		"unencrypted with each rcon command, so make it long, 8 characters or more, and use it nowhere "
+		"else; wrong guesses are logged and slowed to about one a second. Some guides call it "
+		"rcon_password, which does nothing here, and the server warns when only that is set." );
 	sv_privatePassword = Cvar_Get ("sv_privatePassword", "", CVAR_TEMP | CVAR_PRIVATE );
+	Cvar_SetDescription( sv_privatePassword,
+		"Password for the player slots sv_privateClients keeps\n"
+		"A player whose /password matches it may take a kept slot when the others are full; while it's "
+		"empty, nobody can. It's sent unencrypted each time a player connects, and rcon's dumpuser shows "
+		"it. While g_password is set, both must be the same word, since a player sends only one." );
 	sv_fps = Cvar_Get ("sv_fps", "40", CVAR_TEMP );
 	// as Quake3e keeps it
 	Cvar_CheckRange( sv_fps, 10, 125, qtrue );
+	Cvar_SetDescription( sv_fps,
+		"Server frames a second: how often players get an update\n"
+		"Each frame the server moves missiles and bots and sends every player an update, so other players "
+		"are seen about a frame late: 25 ms at 40, 50 ms at Quake III's 20. Upload grows with it, about "
+		"7 KB/s a player at 40 in a busy match, while movement and jumps stay the same. Use a number that "
+		"divides 1000 (20, 25, 40, 50, 100, 125): others run whole-millisecond frames, so 30 runs 30.3 a "
+		"second, and the server warns." );
 	sv_timeout = Cvar_Get ("sv_timeout", "200", CVAR_TEMP );
+	Cvar_SetDescription( sv_timeout,
+		"Seconds of silence before a player is dropped as timed out\n"
+		"A player whose game stops sending, from a lost connection, a frozen game or a hidden browser "
+		"tab, stays in the match standing still until then, and then everyone sees \"timed out\". It also "
+		"covers players loading a map, so a slow load needs it long. 0 doesn't mean never: it drops "
+		"every player within 6 server frames." );
 	sv_zombietime = Cvar_Get ("sv_zombietime", "2", CVAR_TEMP );
-	Cvar_Get ("nextmap", "", CVAR_TEMP );
+	Cvar_SetDescription( sv_zombietime,
+		"Seconds a slot stays held after its player leaves or is kicked\n"
+		"While it's held, the server resends the reason for the drop and the same player can reconnect "
+		"into it; nobody else can take it. With 0 the slot frees at the next server frame, and the player "
+		"may never see why the connection ended." );
+	Cvar_SetDescription( Cvar_Get ("nextmap", "", CVAR_TEMP ),
+		"Command run when a match ends, usually the next map\n"
+		"Each map load resets it to map_restart 0, which plays the same map again, so a rotation entry "
+		"sets it after its map command: d1 \"map q3dm7; set nextmap vstr d2\". A server started with a "
+		"plain map command joins such a rotation at d1 after its first match. Tournament ignores it and "
+		"restarts the map, the loser out." );
 
 	sv_allowDownload = Cvar_Get ("sv_allowDownload", "0", CVAR_SERVERINFO);
+	// DLF_*'s four bits, as a number help and cvar_dump can show
+	Cvar_CheckRange( sv_allowDownload, 0, 15, qtrue );
+	Cvar_SetDescription( sv_allowDownload,
+		"Whether players may download missing pak files from the server\n"
+		"A player missing a map's or mod's pak files (.pk3) can fetch them from the server, if the player "
+		"has downloads on (cl_allowDownload, off by default). It's slow: all downloads together get 100 "
+		"KB/s by default (sv_dlRate), so a 20 MB map takes over 3 minutes. Players use a web server set "
+		"in sv_dlURL instead even when this is 0, and that's much faster; 2 stops them.\n"
+		"1 = direct: the server sends files itself\n"
+		"2 = no web: players ignore sv_dlURL\n"
+		"4 = no direct: refuse to send files, even with 1\n"
+		"8 = stay connected: players don't disconnect for web downloads" );
 	sv_maxDownloads = Cvar_Get ("sv_maxDownloads", "8", CVAR_ARCHIVE);
+	Cvar_SetDescription( sv_maxDownloads,
+		"Most players downloading from the server at once; 0 for no limit\n"
+		"A player who starts a download over the limit is disconnected, with a message to try again in a "
+		"moment. Each download holds one of the server's 64 open files, which logs and game files share. "
+		"Quake III has no such limit, and downloads from sv_dlURL don't count." );
 	sv_refuseRetailPaks = Cvar_Get( "sv_refuseRetailPaks", "1", CVAR_ARCHIVE );
-	Cvar_SetDescription( sv_refuseRetailPaks, "1: don't send the game's own paks (Quake III Arena 1.32's and "
-		"Team Arena's, known by checksum, whatever their name) through this server's downloads; a player "
-		"who lacks them is told which to add from their own copy. Downloads from sv_dlURL come from your "
-		"own web host and aren't affected." );
-	Cvar_Get ("sv_dlURL", "", CVAR_SERVERINFO | CVAR_ARCHIVE);
+	Cvar_SetDescription( sv_refuseRetailPaks,
+		"Whether the server refuses to send Quake III's own pak files\n"
+		"With 1, a player missing Quake III Arena's or Team Arena's pak files (.pk3), known by their "
+		"contents whatever their name, is told to add them from a copy of the game. Downloads from "
+		"sv_dlURL come from your own web server and aren't affected. With 0 they're sent like any other "
+		"pak." );
+	Cvar_SetDescription( Cvar_Get ("sv_dlURL", "", CVAR_SERVERINFO | CVAR_ARCHIVE),
+		"Web address players download missing pak files from\n"
+		"Point it at a web folder laid out like the game's: a player missing baseq3/mymap.pk3 fetches "
+		"<sv_dlURL>/baseq3/mymap.pk3. Write it without a trailing slash, such as http://example.com/q3. "
+		"It's much faster than downloads from the game server, and players reconnect when they're done "
+		"unless sv_allowDownload includes 8." );
 	
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
+	Cvar_SetDescription( sv_master[0],
+		"First master server the server lists itself on, and players ask\n"
+		"With dedicated 2, the server tells each master it's running every 5 minutes, and as maps start "
+		"and players come and go, so players find it in the browser's Internet list. A player's own "
+		"browser asks the same masters for servers. The first is id's, which Quake III always used." );
 	sv_master[1] = Cvar_Get("sv_master2", "directory.ioquake3.org", 0);
-	for(index = 2; index < MAX_MASTER_SERVERS; index++)
+	Cvar_SetDescription( sv_master[1],
+		"Second master server the server lists itself on, and players ask\n"
+		"It works as sv_master1 does: with dedicated 2 the server tells it it's running, and players' "
+		"browsers ask it for servers. The second is ioquake3's, which servers of ioquake3 and the games "
+		"built on it list on." );
+	for(index = 2; index < MAX_MASTER_SERVERS; index++) {
 		sv_master[index] = Cvar_Get(va("sv_master%d", index + 1), "", CVAR_ARCHIVE);
+		Cvar_SetDescription( sv_master[index],
+			"More master servers, sv_master3 to sv_master5; empty for none\n"
+			"They work as sv_master1 does: with dedicated 2 the server tells each it's running, and players' "
+			"browsers ask them for servers. Unlike the first two they're saved, and there's no sixth." );
+	}
 
 	sv_reconnectlimit = Cvar_Get ("sv_reconnectlimit", "3", 0);
+	Cvar_SetDescription( sv_reconnectlimit,
+		"Seconds before the same player can connect again; 0 for no wait\n"
+		"It counts from the last connect from the same address and port, and a connect that comes sooner "
+		"is ignored without a message. A player's game tries every 3 seconds, so at 3 a quick reconnect "
+		"waits one try at most." );
 	// Quake3e's, which configs set; 0, no limit, is the default here
 	sv_maxclientsPerIP = Cvar_Get( "sv_maxclientsPerIP", "0", CVAR_ARCHIVE );
 	Cvar_CheckRange( sv_maxclientsPerIP, 0, MAX_CLIENTS, qtrue );
-	Cvar_SetDescription( sv_maxclientsPerIP, "The most players from one address at a time, "
-		"0 for no limit. Players behind one router, at a LAN party, say, share one." );
+	Cvar_SetDescription( sv_maxclientsPerIP,
+		"Most players from one address at once; 0 for no limit\n"
+		"Players behind one router, such as at a LAN party, share an address, and so today do all players "
+		"coming from the web version through its gateway. A player over the limit is refused with \"Too "
+		"many connections\". Quake3e has it too, and starts it at 3." );
 	sv_showloss = Cvar_Get ("sv_showloss", "0", 0);
 	sv_padPackets = Cvar_Get ("sv_padPackets", "0", 0);
 	// a request: the client's, or the ui's (uiSetCvars)
 	sv_killserver = Cvar_Get ("sv_killserver", "0", CVAR_ROM);
 	sv_mapChecksum = Cvar_Get ("sv_mapChecksum", "", CVAR_ROM);
 	sv_lanForceRate = Cvar_Get ("sv_lanForceRate", "1", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_lanForceRate,
+		"Whether players on the local network get unlimited bandwidth\n"
+		"With 1, a player from a local address, such as 192.168.1.20 or 10.0.0.5, is sent updates with no "
+		"rate limit, sv_maxRate included, unless dedicated is 2. Players coming through a relay, a "
+		"gateway or a Docker network have local addresses too, so on a dedicated 1 server they count. The "
+		"server's own player is always unlimited." );
 #ifndef STANDALONE
 	sv_strictAuth = Cvar_Get ("sv_strictAuth", "1", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_strictAuth,
+		"Whether id's CD key server may refuse players it can't check\n"
+		"The server passes it to id's authorize server, which decided what it meant; the server itself "
+		"never reads it. The server asks it about every player from the internet while it runs Quake III "
+		"Arena's own game, and a player waits about 6 seconds when it doesn't answer." );
 #endif
 	// protected: banaddr writes the file it names, in the server's own
 	// directory beside its saved settings, which game code may not write
 	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE | CVAR_PROTECTED);
+	Cvar_SetDescription( sv_banFile,
+		"File the engine's ban list is kept in; empty keeps it in memory only\n"
+		"banaddr, exceptaddr, bandel and exceptdel change the list, which takes IPv4 and IPv6 addresses "
+		"and ranges, and each change rewrites the file, in a dedicated server's own folder, "
+		"servers/<port>/. It's read as the server starts and by rehashbans, and a ban stops new connects "
+		"without kicking anyone already in. The game's own list, g_banIPs, is separate." );
 	sv_rconAllow = Cvar_Get("sv_rconAllow", "", 0);
+	Cvar_SetDescription( sv_rconAllow,
+		"Addresses rcon is taken from; empty for any\n"
+		"List up to 32 addresses, ranges such as 192.168.1.0/24, or host names, separated by spaces or "
+		"commas; localhost is this machine. Rcon from anywhere else gets no answer, before the password "
+		"is checked. An IPv4 entry never matches an admin on IPv6, which the server also listens on, so "
+		"add an IPv6 address too if you have one." );
 
 	// initialize bot cvars so they are listed and can be set before loading the botlib
 	SV_BotInitCvars();

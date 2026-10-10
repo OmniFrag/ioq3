@@ -493,7 +493,11 @@ SV_BotInitCvars
 */
 void SV_BotInitCvars(void) {
 
-	Cvar_Get("bot_enable", "1", 0);						//enable the bot
+	Cvar_SetDescription( Cvar_Get( "bot_enable", "1", 0 ),
+		"Whether the server runs bots at all\n"
+		"With 0, no bot joins or thinks: addbot does nothing, bot_minplayers adds none, the menus can't "
+		"add bots, and no map's bot file (.aas) is loaded. A change waits for the next map to load; "
+		"map_restart keeps the old value." );
 	Cvar_Get("bot_developer", "0", CVAR_CHEAT);			//bot developer mode
 	Cvar_Get("bot_debug", "0", CVAR_CHEAT);				//enable bot debugging
 	Cvar_Get("bot_maxdebugpolys", "2", 0);				//maximum number of debug polys
