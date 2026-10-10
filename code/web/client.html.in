@@ -562,6 +562,14 @@ addEventListener('pointermove', (event) => {
     Object.defineProperties(event, { movementX: { value: sum('movementX') }, movementY: { value: sum('movementY') } });
 }, { capture: true });
 
+// The browser's find (Cmd+F, Ctrl+F) isn't the game's: during play SDL
+// cancels every key it takes, but with text input on, as in the console,
+// it lets keys by to type with, and the find bar would open over the game
+// and take the keys from it (ENG-168). The game still gets the key.
+addEventListener('keydown', (event) => {
+    if (event.target === canvas && event.code === 'KeyF' && (event.metaKey || event.ctrlKey)) event.preventDefault();
+}, { capture: true });
+
 // Alt+Enter (Option+Return on a Mac) is the page's too: Firefox grants
 // fullscreen only while the key is handled, and the engine reads its keys a
 // frame later. The page asks for the other of what's on screen at the key,
