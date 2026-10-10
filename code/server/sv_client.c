@@ -529,6 +529,24 @@ void SV_DirectConnect( netadr_t from ) {
 		}
 	}
 
+	// a new player from an address with sv_maxclientsPerIP players already
+	// is refused (bots aside; a reconnect took its slot above)
+	if ( sv_maxclientsPerIP->integer ) {
+		count = 0;
+		for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+			if ( cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
+				NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
+				count++;
+			}
+		}
+		if ( count >= sv_maxclientsPerIP->integer ) {
+			Com_Printf( "%s refused: %d players connect from its address already (sv_maxclientsPerIP)\n",
+				NET_AdrToString( from ), count );
+			SV_RefuseConnect( from, "Too many connections.\n" );
+			return;
+		}
+	}
+
 	// find a client slot
 	// if "sv_privateClients" is set > 0, then that number
 	// of client slots will be reserved for connections that

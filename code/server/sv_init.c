@@ -1047,6 +1047,11 @@ void SV_Init (void)
 		sv_master[index] = Cvar_Get(va("sv_master%d", index + 1), "", CVAR_ARCHIVE);
 
 	sv_reconnectlimit = Cvar_Get ("sv_reconnectlimit", "3", 0);
+	// Quake3e's, which configs set; 0, no limit, is the default here
+	sv_maxclientsPerIP = Cvar_Get( "sv_maxclientsPerIP", "0", CVAR_ARCHIVE );
+	Cvar_CheckRange( sv_maxclientsPerIP, 0, MAX_CLIENTS, qtrue );
+	Cvar_SetDescription( sv_maxclientsPerIP, "The most players from one address at a time, "
+		"0 for no limit. Players behind one router, at a LAN party, say, share one." );
 	sv_showloss = Cvar_Get ("sv_showloss", "0", 0);
 	sv_padPackets = Cvar_Get ("sv_padPackets", "0", 0);
 	// a request: the client's, or the ui's (uiSetCvars)
