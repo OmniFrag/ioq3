@@ -3147,15 +3147,30 @@ void Cvar_ModuleUnloaded( int module )
 =====================
 Cvar_FindVMVar
 
-The cvar a game module names, if the game code created it itself: what a
-module may describe or bound, unlike the engine's
+The cvar a game module names, if it may describe or bound it: one game
+code created itself, unlike the engine's. OmniFrag: and for the server's
+game module, one the game's declarations give to the game or the bots,
+such as fraglimit or g_gametype, which the engine creates for the server
+info before any module loads (docs/design/settings-descriptions.md,
+decision 2)
 =====================
 */
-static cvar_t *Cvar_FindVMVar( const char *var_name )
+static cvar_t *Cvar_FindVMVar( cvarModule_t module, const char *var_name )
 {
-	cvar_t *var = var_name ? Cvar_FindVar( var_name ) : NULL;
+	cvar_t					*var = var_name ? Cvar_FindVar( var_name ) : NULL;
+	const cvarDeclaration_t	*declaration;
 
-	return var && ( var->flags & CVAR_VM_CREATED ) ? var : NULL;
+	if( !var )
+		return NULL;
+	if( var->flags & CVAR_VM_CREATED )
+		return var;
+	if( module != CVAR_MODULE_GAME || ( var->flags & ( CVAR_PRIVATE | CVAR_PROTECTED ) ) )
+		return NULL;
+	declaration = Cvar_Declaration( var->name );
+	if( declaration && declaration->owner &&
+		( !strcmp( declaration->owner, "game" ) || !strcmp( declaration->owner, "bots" ) ) )
+		return var;
+	return NULL;
 }
 
 /*
@@ -3173,7 +3188,7 @@ void Cvar_SetDescriptionByName( cvarModule_t module, const char *var_name, const
 	if( !var_description || strlen( var_description ) >= MAX_STRING_CHARS )
 		return;
 
-	var = Cvar_FindVMVar( var_name );
+	var = Cvar_FindVMVar( module, var_name );
 	if( var )
 	{
 		Cvar_KeepOwn( var, module );
@@ -3195,7 +3210,7 @@ void Cvar_SetRangeByName( cvarModule_t module, const char *var_name, int type, c
 	cvar_t	*var;
 	float	min, max;
 
-	var = Cvar_FindVMVar( var_name );
+	var = Cvar_FindVMVar( module, var_name );
 	if( !var )
 		return;
 	Cvar_KeepOwn( var, module );
