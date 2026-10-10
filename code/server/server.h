@@ -379,6 +379,14 @@ void SV_RemoveOperatorCommands (void);
 
 
 void SV_MasterShutdown (void);
+
+// drain's reason, while the server drains (SV_Drain_f): new players are
+// refused with it, the masters drop the server, and it stops once its
+// players have left or the map ends (SV_DrainDone)
+// (short, so getinfo's and getstatus's info strings still hold it)
+#define MAX_DRAIN_REASON	128
+extern	char	sv_drainReason[MAX_DRAIN_REASON];
+void SV_DrainDone( void ) Q_NO_RETURN;
 int SV_RateMsec(client_t *client);
 
 

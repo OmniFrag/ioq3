@@ -1237,6 +1237,7 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 #define EXIT_MISSING_DATA	4	// the game's data isn't installed
 #define EXIT_NO_NETWORK		5	// a dedicated server can't open its port
 void 		Com_Quit_f( void ) Q_NO_RETURN;
+void		Com_Quit( char *reason ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
 void		Com_QueueReload( void );
 // SIGHUP's: the next frame runs the command line's configs again (reload),

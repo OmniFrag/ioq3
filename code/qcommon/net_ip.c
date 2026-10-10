@@ -1887,6 +1887,11 @@ int NET_QueryServer( const char *address, char *summary, int size ) {
 	Com_sprintf( summary, size, "%s at %s: %s, %d of %s players, answered in %d ms", name, address,
 		Info_ValueForKey( info, "mapname" ), players, Info_ValueForKey( info, "sv_maxclients" ),
 		Sys_Milliseconds() - start );
+	// a draining server's reason (drain)
+	line = Info_ValueForKey( info, "draining" );
+	if ( *line ) {
+		Q_strcat( summary, size, va( "; draining: \"%s\"", line ) );
+	}
 	return QUERY_ANSWERED;
 }
 
