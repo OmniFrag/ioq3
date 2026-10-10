@@ -2004,6 +2004,7 @@ void CL_Rcon_f( void ) {
 	
 	NET_SendPacket (NS_CLIENT, strlen(message)+1, message, to);
 	cls.rconAddress = to;
+	cls.rconTime = cls.realtime;
 }
 
 /*
@@ -2741,6 +2742,47 @@ void CL_ServersResponsePacket( const netadr_t* from, msg_t *msg, qboolean extend
 
 /*
 =================
+CL_RefusalEnds
+
+Whether a print ends the connect: one from the server it's to, while it's
+being made, is a refusal, and ends it unless waiting can change it, as
+"Server is full" or a challenge that went astray can, which the connect is
+retried for. A password, a ban, a mod's own reason, a server that's
+closing can't (LAN-4). A reply to an rcon just sent there isn't a
+refusal. The passing ones are the servers' own words: OmniFrag's are in
+sv_client.c (SV_RefuseConnect)
+=================
+*/
+static qboolean CL_RefusalEnds( netadr_t from, const char *message ) {
+	static const char *const passing[] = {
+		"Server is full",				// ioquake3's and its forks'
+		"No or bad challenge",			// ioquake3's and CNQ3's
+		"Incorrect challenge",			// Quake3e's
+		"Reconnecting, please wait",	// Quake3e's, too soon after the last
+		"Too many connections",			// Quake3e's, from one address
+		"Server is for high pings",		// a ping that can change
+		"Server is for low pings",
+		"Awaiting CD key authorization",
+	};
+	size_t	i;
+
+	if ( ( clc.state != CA_CONNECTING && clc.state != CA_CHALLENGING ) ||
+		!NET_CompareAdr( from, clc.serverAddress ) ) {
+		return qfalse;
+	}
+	if ( NET_CompareAdr( from, cls.rconAddress ) && cls.realtime - cls.rconTime < RCON_REPLY_TIMEOUT ) {
+		return qfalse;
+	}
+	for ( i = 0; i < ARRAY_LEN( passing ); i++ ) {
+		if ( !Q_stricmpn( message, passing[i], strlen( passing[i] ) ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+/*
+=================
 CL_ConnectionlessPacket
 
 Responses to broadcasts, etc
@@ -2932,9 +2974,20 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	if ( !Q_stricmp(c, "print") ) {
 		// NOTE: we may have to add exceptions for auth and update servers
 		if ( NET_CompareAdr( from, clc.serverAddress ) || NET_CompareAdr( from, cls.rconAddress ) ) {
+			size_t	length;
+
 			s = MSG_ReadString( msg );
 
 			Q_strncpyz( clc.serverMessage, s, sizeof( clc.serverMessage ) );
+			length = strlen( clc.serverMessage );
+			while ( length && isspace( (unsigned char)clc.serverMessage[length - 1] ) ) {
+				clc.serverMessage[--length] = '\0';
+			}
+
+			if ( CL_RefusalEnds( from, clc.serverMessage ) ) {
+				Com_Error( ERR_DROP, "Refused by the server: %s",
+					clc.serverMessage[0] ? clc.serverMessage : "no reason given" );
+			}
 			Com_Printf( "%s", s );
 		}
 		return;
