@@ -481,6 +481,10 @@ static void SV_PrintStartSummary( void ) {
 	}
 	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
 	Com_Printf( "  rcon:     %s\n", sv_rconPassword->string[0] ? "on (rconpassword)" : "off: set rconpassword to use it" );
+	// asks with the state it should be in, which leaves it as it is
+	if ( Sys_KeepAwake( SV_HumanCount() > 0 ) ) {
+		Com_Printf( "  sleep:    this computer stays awake while people play here\n" );
+	}
 	SV_NoteFrameRate();
 }
 
@@ -980,6 +984,7 @@ void SV_Shutdown( char *finalmsg ) {
 	SV_RemoveOperatorCommands();
 	SV_MasterShutdown();
 	SV_ShutdownGameProgs();
+	Sys_KeepAwake( qfalse );
 
 	// free current level
 	SV_ClearServer();

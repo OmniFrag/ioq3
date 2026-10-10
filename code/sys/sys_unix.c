@@ -672,6 +672,18 @@ qboolean Sys_LowPhysicalMemory( void )
 	return qfalse;
 }
 
+#ifndef __APPLE__
+/*
+==================
+Sys_KeepAwake
+==================
+*/
+qboolean Sys_KeepAwake( qboolean awake )
+{
+	return qfalse;
+}
+#endif
+
 /*
 ==================
 Sys_Basename

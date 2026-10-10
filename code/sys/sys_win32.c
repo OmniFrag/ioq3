@@ -392,6 +392,16 @@ qboolean Sys_LowPhysicalMemory( void )
 }
 
 /*
+==================
+Sys_KeepAwake
+==================
+*/
+qboolean Sys_KeepAwake( qboolean awake )
+{
+	return qfalse;
+}
+
+/*
 ==============
 Sys_Basename
 ==============
