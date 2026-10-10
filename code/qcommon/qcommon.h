@@ -1561,6 +1561,9 @@ void	Sys_FreeFileList( char **list );
 void	Sys_Sleep(int msec);
 
 qboolean Sys_LowPhysicalMemory( void );
+// keeps the system from sleeping when idle, or lets it again; returns
+// whether the system can be kept awake (macOS)
+qboolean Sys_KeepAwake( qboolean awake );
 
 void Sys_SetEnv(const char *name, const char *value);
 

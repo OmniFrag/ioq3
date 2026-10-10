@@ -1145,23 +1145,12 @@ SV_CheckPaused
 ==================
 */
 static qboolean SV_CheckPaused( void ) {
-	int		count;
-	client_t	*cl;
-	int		i;
-
 	if ( !cl_paused->integer ) {
 		return qfalse;
 	}
 
 	// only pause if there is just a single client connected
-	count = 0;
-	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
-		if ( cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT ) {
-			count++;
-		}
-	}
-
-	if ( count > 1 ) {
+	if ( SV_HumanCount() > 1 ) {
 		// don't pause
 		if (sv_paused->integer)
 			Cvar_Set("sv_paused", "0");
@@ -1194,6 +1183,39 @@ int SV_FrameMsec(void)
 	}
 	else
 		return 1;
+}
+
+/*
+==================
+SV_HumanCount
+
+The players connected, bots aside
+==================
+*/
+int SV_HumanCount( void ) {
+	int	count = 0, i;
+
+	for ( i = 0; i < sv_maxclients->integer; i++ ) {
+		count += svs.clients[i].state >= CS_CONNECTED && svs.clients[i].netchan.remoteAddress.type != NA_BOT;
+	}
+	return count;
+}
+
+/*
+==================
+SV_KeepAwake
+
+A dedicated server keeps its system from sleeping while people play on
+it, bots aside, and lets it sleep again when they've gone, checked once
+a second (Sys_KeepAwake, macOS's power assertion)
+==================
+*/
+void SV_KeepAwake( void ) {
+	if ( !com_dedicated->integer || svs.time < svs.nextKeepAwakeTime ) {
+		return;
+	}
+	svs.nextKeepAwakeTime = svs.time + 1000;
+	Sys_KeepAwake( SV_HumanCount() > 0 );
 }
 
 /*
@@ -1277,6 +1299,7 @@ void SV_Frame( int msec ) {
 	}
 
 	SV_FinishStartup();
+	SV_KeepAwake();
 
 	// allow pause if only the local client is connected
 	if ( SV_CheckPaused() ) {

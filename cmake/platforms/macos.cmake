@@ -12,6 +12,9 @@ list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx.m)
 
 list(APPEND COMMON_LIBRARIES "-framework Cocoa")
 list(APPEND CLIENT_LIBRARIES "-framework IOKit")
+# the dedicated server's power assertion, which keeps the Mac awake for
+# its players (Sys_KeepAwake)
+list(APPEND SERVER_LIBRARIES "-framework IOKit")
 list(APPEND RENDERER_LIBRARIES "-framework OpenGL")
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)

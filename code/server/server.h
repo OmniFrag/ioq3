@@ -257,6 +257,7 @@ typedef struct {
 	int			nextSnapshotEntities;		// next snapshotEntities to use
 	entityState_t	*snapshotEntities;		// [numSnapshotEntities]
 	int			nextHeartbeatTime;
+	int			nextKeepAwakeTime;	// SV_KeepAwake's next check
 	challenge_t	challenges[MAX_CHALLENGES];	// to prevent invalid IPs from connecting
 	netadr_t	redirectAddress;			// for rcon return messages
 #ifndef STANDALONE
@@ -389,6 +390,8 @@ void SV_SpawnServer( char *server, qboolean killBots );
 qboolean SV_StartDefaultMap( void );
 void SV_NoteStartupMap( const char *map );
 void SV_FinishStartup( void );
+void SV_KeepAwake( void );
+int SV_HumanCount( void );
 extern qboolean	sv_mapAsked;	// a map command ran, even one that failed: no default map
 
 
