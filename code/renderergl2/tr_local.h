@@ -2405,7 +2405,9 @@ RENDERER BACK END COMMAND QUEUE
 =============================================================
 */
 
-#define	MAX_RENDER_COMMANDS	0x80000
+// a console of small text fills it a command (48 bytes) a character: one
+// at 4K with con_scale 1 is some 32,000 of them, 1.5 MB
+#define	MAX_RENDER_COMMANDS	0x200000
 
 typedef struct {
 	byte	cmds[MAX_RENDER_COMMANDS];
