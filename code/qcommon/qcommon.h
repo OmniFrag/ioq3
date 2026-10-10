@@ -923,8 +923,18 @@ void	Cvar_InfoStringBufferSafe( int bit, char *buff, int buffsize );
 // game code, leaves out the cvars it may not read (VM_PrivateCvarFlag)
 void Cvar_CheckRange( cvar_t *cv, float minVal, float maxVal, qboolean shouldBeIntegral );
 void Cvar_SetDescription( cvar_t *var, const char *var_description );
-void Cvar_SetDescriptionByName( const char *var_name, const char *var_description );
-void Cvar_SetRangeByName( const char *var_name, int type, const char *min, const char *max );
+// the game modules, as the cvars they describe and bound tell them apart
+typedef enum {
+	CVAR_MODULE_GAME = 1,
+	CVAR_MODULE_CGAME = 2,
+	CVAR_MODULE_UI = 4
+} cvarModule_t;
+
+void Cvar_SetDescriptionByName( cvarModule_t module, const char *var_name, const char *var_description );
+void Cvar_SetRangeByName( cvarModule_t module, const char *var_name, int type, const char *min, const char *max );
+// what the module gave cvars goes, and each has its own description and
+// range again; VM_Free's, for every module that unloads
+void Cvar_ModuleUnloaded( int module );
 
 void	Cvar_Restart(qboolean unsetVM);
 void	Cvar_Restart_f( void );

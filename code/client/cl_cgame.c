@@ -863,11 +863,11 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_CVAR_SETDESCRIPTION:
 		// NULL for either is ignored
-		Cvar_SetDescriptionByName( VMA_STR_OPT( 1 ), VMA_STR_OPT( 2 ) );
+		Cvar_SetDescriptionByName( CVAR_MODULE_CGAME, VMA_STR_OPT( 1 ), VMA_STR_OPT( 2 ) );
 		return 0;
 
 	case COM_TRAP_CVAR_SETRANGE:
-		Cvar_SetRangeByName( VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
+		Cvar_SetRangeByName( CVAR_MODULE_CGAME, VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
 		return 0;
 
 	case COM_TRAP_ISRECORDINGDEMO:
