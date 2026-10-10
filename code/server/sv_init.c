@@ -530,8 +530,17 @@ which data and home, and how players and admins reach it, under the heading
 ================
 */
 static void SV_PrintStartSummary( const char *heading ) {
-	int	net = Cvar_VariableIntegerValue( "net_enabled" );
+	int	port = NET_OpenPort( NA_IP );
+	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
+
+	// --check opens no socket: the ports a server would open
+	if ( com_check ) {
+		int	net = Cvar_VariableIntegerValue( "net_enabled" );
+
+		port = ( net & NET_ENABLEV4 ) ? Cvar_VariableIntegerValue( "net_port" ) : 0;
+		port6 = ( net & NET_ENABLEV6 ) ? Cvar_VariableIntegerValue( "net_port6" ) : 0;
+	}
 
 	Com_Printf( "%s\n", heading );
 	// --check loads no map, and reports the maps itself
@@ -547,11 +556,11 @@ static void SV_PrintStartSummary( const char *heading ) {
 	}
 	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homepath" ) );
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
-	if ( net & NET_ENABLEV4 ) {
-		Com_Printf( "  port:     UDP %d (IPv4)\n", Cvar_VariableIntegerValue( "net_port" ) );
+	if ( port ) {
+		Com_Printf( "  port:     UDP %d (IPv4%s)\n", port, port == port6 ? " and IPv6" : "" );
 	}
-	if ( net & NET_ENABLEV6 ) {
-		Com_Printf( "  port:     UDP %d (IPv6)\n", Cvar_VariableIntegerValue( "net_port6" ) );
+	if ( port6 && port6 != port ) {
+		Com_Printf( "  port:     UDP %d (IPv6)\n", port6 );
 	}
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
 		if ( sv_master[i]->string[0] ) {
