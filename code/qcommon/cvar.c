@@ -382,6 +382,18 @@ static void Cvar_SetLayer( char **layer, const char *value ) {
 
 /*
 ============
+Cvar_ClearUser
+
+Drops the player's value, and where it came from
+============
+*/
+static void Cvar_ClearUser( cvar_t *var ) {
+	Cvar_SetLayer( &var->userString, NULL );
+	Cvar_SetLayer( &var->userOrigin, NULL );
+}
+
+/*
+============
 Cvar_SameString
 
 Whether two of a cvar's strings, either of which may be NULL, are the same
@@ -557,7 +569,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 			}
 			Cvar_SetLayer( &var->resetString, var_value );
 			Cvar_SetLayer( &var->serverString, NULL );
-			Cvar_SetLayer( &var->userString, NULL );
+			Cvar_ClearUser( var );
 			Cvar_SetLayer( &var->savedString, NULL );
 			var->untrusted = qfalse;
 		}
@@ -585,7 +597,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 			{
 				// this variable was set by the user,
 				// so force it to value given by the engine.
-				Cvar_SetLayer( &var->userString, NULL );
+				Cvar_ClearUser( var );
 				Cvar_SetLayer( &var->savedString, NULL );
 			}
 		}
@@ -669,7 +681,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->value = atof (var->string);
 	var->integer = atoi(var->string);
 	var->resetString = CopyString( var_value );
-	var->serverString = var->userString = var->savedString = NULL;
+	var->serverString = var->userString = var->userOrigin = var->savedString = NULL;
 	var->userSource = CVAR_SOURCE_DEFAULT;
 	var->declaredScope = Cvar_DeclaredScope( var_name );
 	var->serverStale = qfalse;
@@ -738,11 +750,11 @@ Cvar_PrintSource
 Whose value a cvar has, after it, unless it's the default
 ============
 */
-static void Cvar_PrintSource( const cvar_t *var ) {
+static void Cvar_PrintSource( const cvar_t *var, void (QDECL *print)( const char *fmt, ... ) ) {
 	const char *name = cvar_sourceNames[ Cvar_Source( var ) ];
 
 	if ( name ) {
-		Com_Printf( " (%s)", name );
+		print( " (%s)", name );
 	}
 }
 
@@ -753,29 +765,33 @@ Cvar_Print
 Prints the value, whose it is, the default, and latched string of the given variable
 ============
 */
-void Cvar_Print( cvar_t *v ) {
-	Com_Printf ("\"%s\" is:\"%s" S_COLOR_WHITE "\"",
+static void Cvar_PrintWith( cvar_t *v, void (QDECL *print)( const char *fmt, ... ) ) {
+	print ("\"%s\" is:\"%s" S_COLOR_WHITE "\"",
 			v->name, v->string );
-	Cvar_PrintSource( v );
+	Cvar_PrintSource( v, print );
 
 	if ( !( v->flags & CVAR_ROM ) ) {
 		if ( !Q_stricmp( v->string, v->resetString ) ) {
-			Com_Printf (", the default" );
+			print (", the default" );
 		} else {
-			Com_Printf (" default:\"%s" S_COLOR_WHITE "\"",
+			print (" default:\"%s" S_COLOR_WHITE "\"",
 					v->resetString );
 		}
 	}
 
-	Com_Printf ("\n");
+	print ("\n");
 
 	if ( v->latchedString ) {
-		Com_Printf( "latched: \"%s\"\n", v->latchedString );
+		print( "latched: \"%s\"\n", v->latchedString );
 	}
 
 	if ( v->description ) {
-		Com_Printf( "%s\n", v->description );
+		print( "%s\n", v->description );
 	}
+}
+
+void Cvar_Print( cvar_t *v ) {
+	Cvar_PrintWith( v, Com_Printf );
 }
 
 /*
@@ -903,6 +919,8 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	Cvar_SetLayer( layer, value );
 	if ( layer == &var->userString ) {
 		var->userSource = source;
+		// a text set gives it its origin after (Cvar_SetFromText)
+		Cvar_SetLayer( &var->userOrigin, NULL );
 	}
 	if ( saves ) {
 		Cvar_SetLayer( &var->savedString, value );
@@ -1251,6 +1269,22 @@ qboolean Cvar_AllowedFromText( const char *var_name ) {
 
 /*
 ============
+Cvar_NoteOrigin
+
+Where a text set of the cvar came from (Cmd_Origin), if it set the
+player's value: cvar_why says it, and a config's line that does nothing
+is warned of (Cvar_WarnConfigs)
+============
+*/
+void Cvar_NoteOrigin( cvar_t *var, const char *origin ) {
+	static int	order;
+
+	Cvar_SetLayer( &var->userOrigin, origin );
+	var->originOrder = ++order;
+}
+
+/*
+============
 Cvar_SetFromText
 
 A set by a command, the player's, or game code's if the command is
@@ -1267,6 +1301,10 @@ static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
 
 	if ( var ) {
+		// a set that took: a refused one leaves the earlier origin
+		if ( value && var->userString && !strcmp( var->userString, value ) ) {
+			Cvar_NoteOrigin( var, Cmd_Origin() );
+		}
 		if ( Cmd_IsRestricted() ) {
 			var->untrusted = qtrue;
 		} else if ( !strcmp( var->string, value ? value : var->resetString ) ) {
@@ -1384,6 +1422,37 @@ void Cvar_Print_f(void)
 
 /*
 ============
+Cvar_WhyPrintf
+
+cvar_why's text, with no colour codes when it goes back to rcon's sender,
+whose tools show them as text
+============
+*/
+static void QDECL Cvar_WhyPrintf( const char *fmt, ... ) {
+	char	text[MAX_STRING_CHARS];
+	va_list	argptr;
+
+	va_start( argptr, fmt );
+	Q_vsnprintf( text, sizeof( text ), fmt, argptr );
+	va_end( argptr );
+	// only the colour codes: Q_CleanStr would drop the line breaks too
+	if ( Com_IsRedirecting() ) {
+		char	*from, *to;
+
+		for ( from = to = text; *from; from++ ) {
+			if ( Q_IsColorString( from ) ) {
+				from++;
+			} else {
+				*to++ = *from;
+			}
+		}
+		*to = '\0';
+	}
+	Com_Printf( "%s", text );
+}
+
+/*
+============
 Cvar_Why_f
 
 Prints where a cvar's value comes from: each of its layers (cvar_t) that
@@ -1396,32 +1465,39 @@ void Cvar_Why_f( void ) {
 	if ( !var ) {
 		return;
 	}
-	Cvar_Print( var );
+	Cvar_PrintWith( var, Cvar_WhyPrintf );
 	if ( var->serverString ) {
-		Com_Printf( "  the server requires \"%s" S_COLOR_WHITE "\" while you're on it\n", var->serverString );
+		Cvar_WhyPrintf( "  the server requires \"%s" S_COLOR_WHITE "\" while you're on it\n", var->serverString );
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SESSION ) {
-		Com_Printf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
+		Cvar_WhyPrintf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
+	} else if ( var->userString && var->userOrigin ) {
+		Cvar_WhyPrintf( "  %s set \"%s" S_COLOR_WHITE "\"\n", var->userOrigin, var->userString );
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
-		Com_Printf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
+		Cvar_WhyPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
 	}
 	if ( var->reason ) {
-		Com_Printf( "  %s\n", var->reason );
+		Cvar_WhyPrintf( "  %s\n", var->reason );
 	}
 	if ( var->savedString ) {
-		Com_Printf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
+		Cvar_WhyPrintf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
 			!( var->flags & CVAR_ARCHIVE ) ? ", which isn't archived, so it's kept for this run" :
 			Cvar_SavedValue( var ) ? "" : ", the default, so the config leaves it out" );
 	}
 	if ( var->flags & CVAR_USER_CREATED ) {
-		Com_Printf( "  no code has registered it, so it has no default\n" );
+		if ( var->userOrigin ) {
+			Cvar_WhyPrintf( "  no code has registered it: a config created it (%s), and only what reads it "
+				"(a vstr, or a mod that isn't loaded) gives it a use\n", var->userOrigin );
+		} else {
+			Cvar_WhyPrintf( "  no code has registered it, so it has no default\n" );
+		}
 	} else {
 		// a server created one has the server's value as its default
 		const char *profile = Cvar_ProfileDefault( var->name, NULL );
 
 		if ( profile && !strcmp( profile, var->resetString ) ) {
-			Com_Printf( "  its default is this device's\n" );
+			Cvar_WhyPrintf( "  its default is this device's\n" );
 		}
 	}
 }
@@ -1673,7 +1749,7 @@ void Cvar_List_f( void ) {
 		}
 
 		Com_Printf (" %s \"%s\"", var->name, var->string);
-		Cvar_PrintSource( var );
+		Cvar_PrintSource( var, Com_Printf );
 		Com_Printf( "\n" );
 	}
 
@@ -1760,7 +1836,7 @@ void Cvar_ListModified_f( void ) {
 		}
 
 		Com_Printf (" %s \"%s\"", var->name, value);
-		Cvar_PrintSource( var );
+		Cvar_PrintSource( var, Com_Printf );
 		Com_Printf (", default \"%s\"\n", var->resetString);
 	}
 
@@ -1793,7 +1869,7 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	if(cv->description)
 		Z_Free(cv->description);
 	Cvar_SetLayer( &cv->serverString, NULL );
-	Cvar_SetLayer( &cv->userString, NULL );
+	Cvar_ClearUser( cv );
 	Cvar_SetLayer( &cv->savedString, NULL );
 	Cvar_SetLayer( &cv->reason, NULL );
 
@@ -1886,7 +1962,7 @@ static void Cvar_RestartKeeping(qboolean unsetVM, int keepFlags)
 			// Just reset the rest to their default values: the player's
 			// and the command line's go, even under a server's rule that
 			// refuses a set (cheats), which still holds
-			Cvar_SetLayer( &curvar->userString, NULL );
+			Cvar_ClearUser( curvar );
 			if ( curvar->savedString ) {
 				Cvar_SetLayer( &curvar->savedString, NULL );
 				Cvar_MarkSaved( curvar );

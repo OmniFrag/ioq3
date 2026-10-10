@@ -27,6 +27,22 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define	MAX_CMD_BUFFER  128*1024
 #define	MAX_CMD_LINE	1024
 
+// Where a buffer's text comes from, for cvar_why and the warnings about
+// configs: an exec frames the config's text with marker lines, which begin
+// with CBUF_MARKER, a byte no text queued can hold (Cbuf_Copy turns it into
+// a space, as the tokenizer takes it), and no command sees. "+name" opens a
+// frame whose lines are counted from 1; "=line name" one whose lines all
+// have the origin of the line that queued them (vstr's text, say, or the
+// command line's, line 0); and "-" closes the latest.
+#define	CBUF_MARKER			'\x01'
+#define	MAX_ORIGIN_DEPTH	16
+
+typedef struct {
+	char		name[MAX_QPATH];	// "" for text from no config
+	int			line;				// the line's number, 0 for none
+	qboolean	counted;			// a frame's: line is the next line's, and counts on
+} cmdOrigin_t;
+
 typedef struct {
 	byte	*data;
 	int		maxsize;
@@ -34,7 +50,16 @@ typedef struct {
 	int		wait;				// frames to wait before running more of it
 	qboolean	inStarComment;	// within one Cbuf_Execute: see Cbuf_ExecuteLine
 	qboolean	inSlashComment;
+	cmdOrigin_t	origins[MAX_ORIGIN_DEPTH];	// the frames open where its text starts
+	int			depth;			// may pass MAX_ORIGIN_DEPTH, when the deepest aren't kept
 } cmd_t;
+
+// the running command's origin (Cmd_Origin), and those of the text run at
+// once that Cmd_PushOrigin set, the latest last
+#define	MAX_PUSHED_ORIGINS	4
+static cmdOrigin_t	cmd_origin;
+static cmdOrigin_t	cmd_pushedOrigins[MAX_PUSHED_ORIGINS];
+static int			cmd_numPushedOrigins;
 
 // The command buffers, by whose text they hold: the player's (and the
 // configs' and the engine's), or game code's, which runs restricted; each
@@ -125,6 +150,15 @@ void Cbuf_Init (void)
 	}
 }
 
+// copies text into a buffer, with no marker byte in it
+static void Cbuf_Copy( byte *to, const char *text, int length ) {
+	int	i;
+
+	for ( i = 0; i < length; i++ ) {
+		to[i] = text[i] == CBUF_MARKER ? ' ' : text[i];
+	}
+}
+
 static void Cbuf_Add( cmd_t *buf, const char *text ) {
 	int		l;
 
@@ -135,32 +169,110 @@ static void Cbuf_Add( cmd_t *buf, const char *text ) {
 		Com_Printf ("Cbuf_AddText: overflow\n");
 		return;
 	}
-	Com_Memcpy(&buf->data[buf->cursize], text, l);
+	Cbuf_Copy(&buf->data[buf->cursize], text, l);
 	buf->cursize += l;
 }
 
-static void Cbuf_Insert( cmd_t *buf, const char *text ) {
-	int		len;
-	int		i;
+/*
+============
+Cbuf_WriteFrame
 
-	len = strlen( text ) + 1;
+Writes the frame a marker opens around text (Cbuf_ExecuteMarker), each
+followed by a \n, then the frame's end; with no marker, the text and a \n.
+Returns the length written, or with to NULL, to be written
+============
+*/
+static int Cbuf_WriteFrame( byte *to, const char *marker, const char *text ) {
+	static const char	close[] = { CBUF_MARKER, '-', '\n' };
+	int		markerLength = marker ? strlen( marker ) + 1 : 0, textLength = strlen( text ) + 1;
+
+	if ( to ) {
+		if ( marker ) {
+			Com_Memcpy( to, marker, markerLength - 1 );
+			to[ markerLength - 1 ] = '\n';
+		}
+		Cbuf_Copy( to + markerLength, text, textLength - 1 );
+		to[ markerLength + textLength - 1 ] = '\n';
+		if ( marker ) {
+			Com_Memcpy( to + markerLength + textLength, close, sizeof( close ) );
+		}
+	}
+	return markerLength + textLength + ( marker ? sizeof( close ) : 0 );
+}
+
+/*
+============
+Cbuf_InsertFrame
+
+Inserts text at the buffer's start in the marker's frame (Cbuf_WriteFrame):
+all of it, or nothing if it doesn't fit
+============
+*/
+static void Cbuf_InsertFrame( cmd_t *buf, const char *marker, const char *text ) {
+	int	len = Cbuf_WriteFrame( NULL, marker, text );
+
 	if ( len + buf->cursize > buf->maxsize ) {
 		Com_Printf( "Cbuf_InsertText overflowed\n" );
 		return;
 	}
 
 	// move the existing command text
-	for ( i = buf->cursize - 1 ; i >= 0 ; i-- ) {
-		buf->data[ i + len ] = buf->data[ i ];
+	memmove( buf->data + len, buf->data, buf->cursize );
+	Cbuf_WriteFrame( buf->data, marker, text );
+	buf->cursize += len;
+}
+
+/*
+============
+Cbuf_OriginMarker
+
+The marker of a frame whose lines all have an origin, line 0 for none
+============
+*/
+static const char *Cbuf_OriginMarker( const char *name, int line ) {
+	return va( "%c=%i %s", CBUF_MARKER, line, name );
+}
+
+// inserts text a command queues, in a frame keeping the command's origin;
+// with none, and no frame to keep it out of, as it is
+static void Cbuf_Insert( cmd_t *buf, const char *text ) {
+	Cbuf_InsertFrame( buf, cmd_origin.name[0] || buf->depth ?
+		Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line ) : NULL, text );
+}
+
+/*
+============
+Cbuf_ExecuteMarker
+
+Opens or closes the frame of the marker line at the position given, and
+takes the line out
+============
+*/
+static void Cbuf_ExecuteMarker( cmd_t *buf, int at ) {
+	char		*text = (char *)buf->data + at;
+	char		*end = memchr( text, '\n', buf->cursize - at );
+	int			length = end ? end - text + 1 : buf->cursize - at;
+	cmdOrigin_t	*origin;
+
+	if ( text[1] == '-' ) {
+		if ( buf->depth > 0 ) {
+			buf->depth--;
+		}
+	} else if ( buf->depth++ < MAX_ORIGIN_DEPTH ) {
+		const char	*name = text + 2;
+
+		origin = &buf->origins[ buf->depth - 1 ];
+		origin->counted = text[1] == '+';
+		origin->line = 1;
+		if ( !origin->counted ) {
+			origin->line = atoi( name );
+			name = strchr( name, ' ' ) ? strchr( name, ' ' ) + 1 : name;
+		}
+		Q_strncpyz( origin->name, name, MIN( (int)sizeof( origin->name ), (int)( text + length - name ) ) );
 	}
 
-	// copy the new text in
-	Com_Memcpy( buf->data, text, len - 1 );
-
-	// add a \n
-	buf->data[ len - 1 ] = '\n';
-
-	buf->cursize += len;
+	buf->cursize -= length;
+	memmove( text, text + length, buf->cursize - at );
 }
 
 /*
@@ -308,6 +420,10 @@ An error ended the running command
 void Cmd_EndRestricted( void ) {
 	cmd_restricted = qfalse;
 	cmd_script = qfalse;
+	// nor does its origin outlive it (Cbuf_ExecuteLine, Cmd_PushOrigin)
+	cmd_origin.name[0] = '\0';
+	cmd_origin.line = 0;
+	cmd_numPushedOrigins = 0;
 }
 
 
@@ -375,6 +491,20 @@ void Cbuf_ExecuteTextRestricted( int exec_when, const char *text )
 	Cbuf_ExecuteTextWithRights( exec_when, text, qtrue );
 }
 
+// no origin
+static const cmdOrigin_t	cmd_noOrigin;
+
+/*
+============
+Cbuf_Frame
+
+The frame open where the buffer's text now starts, or NULL
+============
+*/
+static cmdOrigin_t *Cbuf_Frame( cmd_t *buf ) {
+	return buf->depth > 0 && buf->depth <= MAX_ORIGIN_DEPTH ? &buf->origins[ buf->depth - 1 ] : NULL;
+}
+
 /*
 ============
 Cbuf_ExecuteLine
@@ -387,8 +517,10 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	int		i;
 	char	*text;
 	char	line[MAX_CMD_LINE];
-	int		quotes;
-	qboolean	restricted, script;
+	cmdOrigin_t	origin, lineOrigin;
+	int		quotes, consumed;
+	qboolean	restricted, script, started;
+	cmdOrigin_t	*frame;
 
 	// find a \n or ; line break or comment: // or /* */
 	// This will keep // style comments all on one line by not breaking on
@@ -397,8 +529,22 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	text = (char *)buf->data;
 
 	quotes = 0;
+	started = qfalse;
 	for (i=0 ; i< buf->cursize ; i++)
 	{
+		// a frame's marker: its frame opens or closes there, and the line
+		// goes on as if it weren't there, a comment too
+		if ( text[i] == CBUF_MARKER ) {
+			Cbuf_ExecuteMarker( buf, i-- );
+			continue;
+		}
+		// the line's origin is that of its frame where it starts
+		if ( !started ) {
+			started = qtrue;
+			frame = Cbuf_Frame( buf );
+			lineOrigin = frame ? *frame : cmd_noOrigin;
+		}
+
 		if (text[i] == '"')
 			quotes++;
 
@@ -425,6 +571,10 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 			break;
 		}
 	}
+	if ( !started ) {
+		frame = Cbuf_Frame( buf );
+		lineOrigin = frame ? *frame : cmd_noOrigin;
+	}
 
 	if( i >= (MAX_CMD_LINE - 1)) {
 		i = MAX_CMD_LINE - 1;
@@ -437,25 +587,116 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 // this is necessary because commands (exec) can insert data at the
 // beginning of the text buffer
 
-	if (i == buf->cursize)
-		buf->cursize = 0;
-	else
-	{
-		i++;
-		buf->cursize -= i;
-		memmove (text, text+i, buf->cursize);
+	consumed = i == buf->cursize ? i : i + 1;
+
+	// the frame's next line, after the lines consumed
+	frame = Cbuf_Frame( buf );
+	if ( frame && frame->counted ) {
+		for ( i = 0; i < consumed; i++ ) {
+			frame->line += text[i] == '\n';
+		}
 	}
+
+	buf->cursize -= consumed;
+	memmove (text, text+consumed, buf->cursize);
 
 // execute the command line, restricted if it's game code's, and a
 // script's if it's a startup script's
 
 	restricted = cmd_restricted;
 	script = cmd_script;
+	origin = cmd_origin;
 	cmd_restricted = ( ( buf - cmd_buffers ) & CBUF_RESTRICTED ) != 0;
 	cmd_script = ( ( buf - cmd_buffers ) & CBUF_SCRIPT ) != 0;
+	cmd_origin = lineOrigin;
 	Cmd_ExecuteString (line);
 	cmd_restricted = restricted;
 	cmd_script = script;
+	cmd_origin = origin;
+
+	// the frames the line ends close at once, so that text a wait ends
+	// leaves the buffer empty, as it did before frames: the wait then
+	// holds for the next text queued (Cbuf_ExecuteFirst), and Cbuf_Empty
+	// says so
+	while ( buf->cursize > 1 && buf->data[0] == CBUF_MARKER && buf->data[1] == '-' ) {
+		Cbuf_ExecuteMarker( buf, 0 );
+	}
+}
+
+/*
+============
+Cmd_Origin
+============
+*/
+const char *Cmd_Origin( void ) {
+	static char	text[MAX_QPATH + 16];
+
+	if ( !cmd_origin.name[0] ) {
+		return NULL;
+	}
+	if ( !cmd_origin.line ) {
+		return cmd_origin.name;
+	}
+	Com_sprintf( text, sizeof( text ), "%s:%i", cmd_origin.name, cmd_origin.line );
+	return text;
+}
+
+/*
+============
+Cmd_OriginIsCommandLine
+============
+*/
+qboolean Cmd_OriginIsCommandLine( void ) {
+	return !strcmp( cmd_origin.name, CMD_ORIGIN_COMMAND_LINE );
+}
+
+/*
+============
+Cmd_PushOrigin
+
+The origin of text run at once rather than queued, a settings file's
+lines, say, until Cmd_PopOrigin
+============
+*/
+void Cmd_PushOrigin( const char *name, int line ) {
+	if ( cmd_numPushedOrigins < MAX_PUSHED_ORIGINS ) {
+		cmd_pushedOrigins[cmd_numPushedOrigins] = cmd_origin;
+	}
+	cmd_numPushedOrigins++;
+	Q_strncpyz( cmd_origin.name, name, sizeof( cmd_origin.name ) );
+	cmd_origin.line = line;
+	cmd_origin.counted = qfalse;
+}
+
+/*
+============
+Cmd_PopOrigin
+============
+*/
+void Cmd_PopOrigin( void ) {
+	if ( cmd_numPushedOrigins > 0 && --cmd_numPushedOrigins < MAX_PUSHED_ORIGINS ) {
+		cmd_origin = cmd_pushedOrigins[cmd_numPushedOrigins];
+	}
+}
+
+/*
+============
+Cbuf_AddTextFrom
+
+Text added to the player's buffer whose lines all have one origin
+============
+*/
+void Cbuf_AddTextFrom( const char *origin, const char *text ) {
+	cmd_t		*buf = Cbuf_Current();
+	const char	*marker = Cbuf_OriginMarker( origin, 0 );
+	int			len = Cbuf_WriteFrame( NULL, marker, text );
+
+	if ( buf->cursize + len >= buf->maxsize ) {
+		Com_Printf( "Cbuf_AddText: overflow\n" );
+		return;
+	}
+	Cbuf_WriteFrame( buf->data + buf->cursize, marker, text );
+	buf->cursize += len;
 }
 
 // the order the buffers run in: the startup scripts' first, as one buffer
@@ -623,7 +864,7 @@ void Cmd_Exec_f( void ) {
 #ifndef DEDICATED
 	restricted = restricted || ( Com_IsClient() && FS_LastFileIsGameContent() );
 #endif
-	Cbuf_Insert( Cbuf_For( restricted, script ), f.c );
+	Cbuf_InsertFrame( Cbuf_For( restricted, script ), va( "%c+%s", CBUF_MARKER, filename ), f.c );
 
 	if ( predecessor )
 		Z_Free( f.v );
