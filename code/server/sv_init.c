@@ -1010,6 +1010,9 @@ void SV_Init (void)
 	// a name players can tell from "noname", the default every server had
 	sv_hostname = Cvar_Get ("sv_hostname", PRODUCT_NAME " server", CVAR_SERVERINFO | CVAR_ARCHIVE );
 	sv_maxclients = Cvar_Get ("sv_maxclients", "8", CVAR_SERVERINFO | CVAR_LATCH);
+	// as SV_BoundMaxClients holds it as a map starts, so help and
+	// cvar_dump can say so, and a set outside is warned of at once
+	Cvar_CheckRange( sv_maxclients, 1, MAX_CLIENTS, qtrue );
 
 	sv_minRate = Cvar_Get ("sv_minRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	sv_maxRate = Cvar_Get ("sv_maxRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
