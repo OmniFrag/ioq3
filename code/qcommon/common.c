@@ -417,8 +417,8 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 	// echo to dedicated console and early console
 	Sys_Print( msg );
 
-	// logfile
-	if ( com_logfile && com_logfile->integer ) {
+	// logfile; --check writes none
+	if ( com_logfile && com_logfile->integer && !com_check ) {
     // TTimo: only open the qconsole.log if the filesystem is in an initialized state
     //   also, avoid recursing in the qconsole.log opening (i.e. if fs_debug is on)
 		if ( !logfile && FS_Initialized() && !opening_qconsole) {
@@ -2331,6 +2331,11 @@ void Com_InitJournaling( void ) {
 		return;
 	}
 
+	if ( com_journal->integer == 1 && com_check ) {
+		Com_Printf( "--check writes no file: not journal.dat.\n" );
+		Cvar_Set( "journal", "0" );
+		return;
+	}
 	if ( com_journal->integer == 1 ) {
 		Com_Printf( "Journaling events\n");
 		com_journalFile = FS_FOpenFileWrite_HomeState( "journal.dat" );

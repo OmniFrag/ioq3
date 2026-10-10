@@ -2713,6 +2713,10 @@ static void Cvar_Dump_f( void ) {
 			Com_Printf( "cvar_dump writes only a .json file.\n" );
 			return;
 		}
+		if ( com_check ) {
+			Com_Printf( "--check writes no file: not %s.\n", filename );
+			return;
+		}
 		cvar_dumpFile = FS_FOpenFileWrite_HomeData( filename );
 		if ( !cvar_dumpFile ) {
 			Com_Printf( "Couldn't write %s.\n", filename );
