@@ -172,6 +172,7 @@ static void SV_Map_f( void ) {
 		Com_Printf ("Can't find map %s\n", expanded);
 		return;
 	}
+	SV_NoteStartupMap( map );
 
 	// force latched values to get set
 	Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );

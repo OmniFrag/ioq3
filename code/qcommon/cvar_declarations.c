@@ -27,7 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 
 const cvarDeclaration_t cvar_declarations[] = {
-	{ NULL, CVAR_SCOPE_NONE }
+	{ NULL, CVAR_SCOPE_NONE, qfalse }
 };
 
 // and no other program's defaults, so an imported config's values are all
@@ -39,3 +39,5 @@ const cvarDefault_t cvar_q3eDefaults[] = { { NULL, NULL } };
 const char * const cvar_ioq3Marks[] = { NULL };
 const char * const cvar_cnq3Marks[] = { NULL };
 const char * const cvar_q3eMarks[] = { NULL };
+// and no other engine's cvars
+const cvarForeign_t cvar_foreignNames[] = { { NULL, NULL } };
