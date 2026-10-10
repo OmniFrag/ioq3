@@ -1001,6 +1001,13 @@ struct cvar_s {
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1
 
 	char		*reason;	// its owner's word on why what's so isn't what it wants (Cvar_SetReason), or NULL
+
+	// which game modules gave it a description or range
+	// (Cvar_SetDescriptionByName, Cvar_SetRangeByName), a cvarModule_t
+	// bit (qcommon.h) each, and while they have, its own, which come back
+	// as the last of them unloads (Cvar_ModuleUnloaded)
+	int		moduleGave;
+	struct cvarOwn_s	*own;
 };
 
 #define	MAX_CVAR_VALUE_STRING	256

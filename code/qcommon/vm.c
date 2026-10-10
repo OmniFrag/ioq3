@@ -966,10 +966,15 @@ VM_Free
 ==============
 */
 void VM_Free( vm_t *vm ) {
+	int	cvarModule;
 
 	if(!vm) {
 		return;
 	}
+	// before the name goes
+	cvarModule = !Q_stricmp( vm->name, "qagame" ) ? CVAR_MODULE_GAME :
+		!Q_stricmp( vm->name, "cgame" ) ? CVAR_MODULE_CGAME :
+		!Q_stricmp( vm->name, "ui" ) ? CVAR_MODULE_UI : 0;
 
 	if(vm->callLevel) {
 		if(!forced_unload) {
@@ -1001,6 +1006,8 @@ void VM_Free( vm_t *vm ) {
 	}
 #endif
 	Com_Memset( vm, 0, sizeof( *vm ) );
+	// what it gave cvars goes with it
+	Cvar_ModuleUnloaded( cvarModule );
 
 	// another module's call can free this one (ui running "disconnect"
 	// frees cgame); that module still makes syscalls, which need currentVM
