@@ -1076,6 +1076,49 @@ fileHandle_t FS_FOpenFileWrite_HomeState( const char *filename ) {
 
 /*
 ===========
+FS_RotateFile_HomeData
+
+Where the home's file is larger than maxBytes, it becomes <filename>.1,
+replacing an older one there, so the next to open it starts afresh.
+Returns whether it did
+===========
+*/
+qboolean FS_RotateFile_HomeData( const char *filename, long maxBytes ) {
+	char	ospath[MAX_OSPATH];
+	char	rotated[MAX_OSPATH];
+	FILE	*f;
+	long	length;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+
+	Q_strncpyz( ospath, FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename ), sizeof( ospath ) );
+	if ( ( f = Sys_FOpen( ospath, "rb" ) ) == NULL ) {
+		return qfalse;
+	}
+	length = FS_fplength( f );
+	fclose( f );
+	// a length long can't hold, past 2 GB on Windows, is -1
+	if ( length >= 0 && length <= maxBytes ) {
+		return qfalse;
+	}
+
+	// cut short, the name could be the file's own (Windows drops a final .)
+	if ( strlen( ospath ) + 2 >= sizeof( rotated ) ) {
+		return qfalse;
+	}
+	Com_sprintf( rotated, sizeof( rotated ), "%s.1", ospath );
+	if ( rename( ospath, rotated ) == 0 ) {
+		return qtrue;
+	}
+	// Windows' rename won't replace a file
+	FS_Remove( rotated );
+	return rename( ospath, rotated ) == 0;
+}
+
+/*
+===========
 FS_FOpenFileAppend_HomeData
 
 ===========
