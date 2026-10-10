@@ -79,6 +79,11 @@ static qboolean	cmd_restricted;
 // the running command came from a startup script, or from text one ran
 static qboolean	cmd_script;
 
+// the command line's configs are running again (Cmd_HoldMapCommands): the
+// startup scripts' commands that would change the map are held back until
+// their buffers are empty
+static qboolean	cmd_holdMapCommands;
+
 // the configs startup scripts ran, as exec named them; past the most it
 // holds, every config counts as one
 #define MAX_STARTUP_SCRIPTS	64
@@ -334,6 +339,19 @@ Cmd_IsScript
 */
 qboolean Cmd_IsScript( void ) {
 	return cmd_script;
+}
+
+/*
+============
+Cmd_HoldMapCommands
+
+Holds back the map commands of the startup scripts' text queued from now
+until it has all run, so that configs run again change settings, not the
+map
+============
+*/
+void Cmd_HoldMapCommands( void ) {
+	cmd_holdMapCommands = qtrue;
 }
 
 /*
@@ -745,6 +763,11 @@ static void Cbuf_ExecuteFirst( int count )
 			buf->wait--;
 		}
 	}
+
+	// a reload ends when the scripts' text it queued has all run
+	if ( Cbuf_ScriptsEmpty() ) {
+		cmd_holdMapCommands = qfalse;
+	}
 }
 
 /*
@@ -760,6 +783,18 @@ first
 void Cbuf_ExecuteScripts( void )
 {
 	Cbuf_ExecuteFirst( 2 );	// cbuf_order's two script buffers
+}
+
+/*
+============
+Cbuf_ScriptsEmpty
+
+Whether the startup scripts' buffers are empty: no script waits to run
+============
+*/
+qboolean Cbuf_ScriptsEmpty( void )
+{
+	return !cmd_buffers[CBUF_SCRIPT].cursize && !cmd_buffers[CBUF_SCRIPT | CBUF_RESTRICTED].cursize;
 }
 
 /*
@@ -1382,6 +1417,21 @@ void	Cmd_ExecuteString( const char *text ) {
 		for ( i = 0; i < ARRAY_LEN( denied ); i++ ) {
 			if ( !Q_stricmp( cmd_argv[0], denied[i] ) ) {
 				Com_Printf( "%s can't be run by game code or game content.\n", cmd_argv[0] );
+				return;
+			}
+		}
+	}
+
+	// configs run again keep the map: their map, map_restart and vstr
+	// (most rotations start with one) wait for the admin
+	if ( cmd_holdMapCommands && cmd_script ) {
+		static const char *held[] = { "map", "devmap", "spmap", "spdevmap", "map_restart", "vstr",
+			"game_restart", "reload" };
+		int		i;
+
+		for ( i = 0; i < ARRAY_LEN( held ); i++ ) {
+			if ( !Q_stricmp( cmd_argv[0], held[i] ) ) {
+				Com_Printf( "Held back, as configs run again keep the map: %s\n", Cmd_Cmd() );
 				return;
 			}
 		}
