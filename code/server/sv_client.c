@@ -335,6 +335,34 @@ static Q_PRINTF_FUNC(2, 3) void QDECL SV_RefuseConnect( netadr_t to, const char 
 
 /*
 ==================
+SV_OldestFreeClient
+
+The free slot in [startIndex, endIndex) let go longest ago, a never used
+one first, or NULL: a client number isn't handed on at once, to a player or a
+bot, whose scoreboard line and state would be taken for the last one's
+(as Quake3e, ec-'s 64430ef9, does for players)
+==================
+*/
+client_t *SV_OldestFreeClient( int startIndex, int endIndex ) {
+	client_t	*cl, *oldest = NULL;
+	int			i;
+
+	if ( startIndex < 0 ) {
+		startIndex = 0;
+	}
+	if ( endIndex > sv_maxclients->integer ) {
+		endIndex = sv_maxclients->integer;
+	}
+	for ( i = startIndex, cl = svs.clients + startIndex; i < endIndex; i++, cl++ ) {
+		if ( cl->state == CS_FREE && ( !oldest || cl->lastDisconnectTime < oldest->lastDisconnectTime ) ) {
+			oldest = cl;
+		}
+	}
+	return oldest;
+}
+
+/*
+==================
 SV_DirectConnect
 
 A "connect" OOB command has been received
@@ -520,13 +548,11 @@ void SV_DirectConnect( netadr_t from ) {
 		startIndex = sv_privateClients->integer;
 	}
 
-	newcl = NULL;
-	for ( i = startIndex; i < sv_maxclients->integer ; i++ ) {
-		cl = &svs.clients[i];
-		if (cl->state == CS_FREE) {
-			newcl = cl;
-			break;
-		}
+	// one with the password takes a reserved slot while there is one,
+	// leaving the public ones to everyone else
+	newcl = startIndex == 0 ? SV_OldestFreeClient( 0, sv_privateClients->integer ) : NULL;
+	if ( !newcl ) {
+		newcl = SV_OldestFreeClient( sv_privateClients->integer, sv_maxclients->integer );
 	}
 
 	if ( !newcl ) {
@@ -554,10 +580,6 @@ void SV_DirectConnect( netadr_t from ) {
 			return;
 		}
 	}
-
-	// we got a newcl, so reset the reliableSequence and reliableAcknowledge
-	cl->reliableAcknowledge = 0;
-	cl->reliableSequence = 0;
 
 gotnewcl:	
 	// build a new connection
@@ -710,6 +732,8 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	if ( reason ) {
 		SV_SendServerCommand( drop, "disconnect \"%s\"", reason);
 	}
+
+	drop->lastDisconnectTime = svs.time;
 
 	if ( isBot ) {
 		SV_BotFreeClient( drop - svs.clients );

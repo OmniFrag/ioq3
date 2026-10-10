@@ -46,18 +46,12 @@ SV_BotAllocateClient
 */
 int SV_BotAllocateClient(void) {
 	int			i;
-	client_t	*cl;
+	client_t	*cl = SV_OldestFreeClient( 0, sv_maxclients->integer );
 
-	// find a client slot
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
-		if ( cl->state == CS_FREE ) {
-			break;
-		}
-	}
-
-	if ( i == sv_maxclients->integer ) {
+	if ( !cl ) {
 		return -1;
 	}
+	i = cl - svs.clients;
 
 	cl->gentity = SV_GentityNum( i );
 	cl->gentity->s.number = i;
@@ -82,6 +76,8 @@ void SV_BotFreeClient( int clientNum ) {
 	}
 	cl = &svs.clients[clientNum];
 	cl->state = CS_FREE;
+	// also when the game refuses a bot it allocated, not only from SV_DropClient
+	cl->lastDisconnectTime = svs.time;
 	cl->name[0] = 0;
 	if ( cl->gentity ) {
 		cl->gentity->r.svFlags &= ~SVF_BOT;
