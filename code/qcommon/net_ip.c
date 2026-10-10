@@ -1709,6 +1709,133 @@ void NET_Config( qboolean enableNetworking ) {
 
 /*
 ====================
+NET_QueryServer
+
+For --status, before the engine starts: asks the server at address
+(host:port, [IPv6 address]:port, or a host, on port 27960) for its
+status, as a monitor does, and describes its answer in summary.
+QUERY_ANSWERED if it answered within two seconds, QUERY_NO_ANSWER if
+not, QUERY_BAD_ADDRESS if the address isn't one
+====================
+*/
+int NET_QueryServer( const char *address, char *summary, int size ) {
+	static const char	request[] = "\xff\xff\xff\xffgetstatus";
+	static const char	response[] = "\xff\xff\xff\xffstatusResponse\n";
+	char			host[256];
+	char			port[16];
+	char			reply[MAX_MSGLEN];
+	char			name[MAX_INFO_VALUE];
+	const char		*colon, *end, *line;
+	char			*info, *infoEnd;
+	struct addrinfo	hints, *res, *ask;
+	struct timeval	timeout;
+	fd_set			fds;
+	SOCKET			s;
+	int				length, players, start, tries;
+
+	Com_sprintf( port, sizeof( port ), "%d", PORT_SERVER );
+	if ( address[0] == '[' ) {
+		end = strchr( address, ']' );
+		if ( !end || ( end[1] && end[1] != ':' ) ) {
+			Com_sprintf( summary, size, "%s isn't an address", address );
+			return QUERY_BAD_ADDRESS;
+		}
+		Q_strncpyz( host, address + 1, MIN( end - address, sizeof( host ) ) );
+		if ( end[1] ) {
+			Q_strncpyz( port, end + 2, sizeof( port ) );
+		}
+	} else if ( ( colon = strchr( address, ':' ) ) != NULL && !strchr( colon + 1, ':' ) ) {
+		Q_strncpyz( host, address, MIN( colon - address + 1, sizeof( host ) ) );
+		Q_strncpyz( port, colon + 1, sizeof( port ) );
+	} else {
+		Q_strncpyz( host, address, sizeof( host ) );
+	}
+
+#ifdef _WIN32
+	// before NET_Init, in a process that exits after
+	if ( WSAStartup( MAKEWORD( 1, 1 ), &winsockdata ) ) {
+		Com_sprintf( summary, size, "Winsock didn't start" );
+		return QUERY_NO_ANSWER;
+	}
+#endif
+
+	memset( &hints, 0, sizeof( hints ) );
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM;
+	if ( getaddrinfo( host, port, &hints, &res ) || !res ) {
+		Com_sprintf( summary, size, "%s isn't an address", address );
+		return QUERY_BAD_ADDRESS;
+	}
+	// IPv4 where the host has it, as the engine prefers (localhost is
+	// often ::1 first, which a server on IPv4 alone refuses)
+	for ( ask = res; ask && ask->ai_family != AF_INET; ask = ask->ai_next ) {
+	}
+	if ( !ask ) {
+		ask = res;
+	}
+	// connected, so that a port nothing listens on is refused at once
+	s = socket( ask->ai_family, SOCK_DGRAM, IPPROTO_UDP );
+	if ( s == INVALID_SOCKET || connect( s, ask->ai_addr, ask->ai_addrlen ) == SOCKET_ERROR ) {
+		if ( s != INVALID_SOCKET ) {
+			closesocket( s );
+		}
+		freeaddrinfo( res );
+		Com_sprintf( summary, size, "no socket to ask %s with", address );
+		return QUERY_NO_ANSWER;
+	}
+	freeaddrinfo( res );
+
+	// asked again every half second, in case a packet is lost on the way
+	start = Sys_Milliseconds();
+	for ( tries = 0; tries < 4; tries++ ) {
+		send( s, request, sizeof( request ) - 1, 0 );
+		FD_ZERO( &fds );
+		FD_SET( s, &fds );
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 500000;
+		if ( select( (int)s + 1, &fds, NULL, NULL, &timeout ) > 0 ) {
+			break;
+		}
+	}
+	if ( tries == 4 ) {
+		closesocket( s );
+		Com_sprintf( summary, size, "%s didn't answer within 2 seconds", address );
+		return QUERY_NO_ANSWER;
+	}
+	length = recv( s, reply, sizeof( reply ) - 1, 0 );
+	closesocket( s );
+	if ( length < (int)sizeof( response ) - 1 || memcmp( reply, response, sizeof( response ) - 1 ) ) {
+		Com_sprintf( summary, size, "%s didn't answer: no server is there", address );
+		return QUERY_NO_ANSWER;
+	}
+	reply[length] = '\0';
+
+	// the server's info, then a line for each player
+	info = reply + sizeof( response ) - 1;
+	players = 0;
+	infoEnd = strchr( info, '\n' );
+	if ( infoEnd ) {
+		*infoEnd = '\0';
+		for ( line = infoEnd + 1; ( line = strchr( line, '\n' ) ) != NULL; line++ ) {
+			players++;
+		}
+	}
+	// Info_ValueForKey refuses a longer one with Com_Error, which can't be
+	// caught before the engine starts
+	if ( strlen( info ) >= BIG_INFO_STRING ) {
+		info[BIG_INFO_STRING - 1] = '\0';
+	}
+	Q_strncpyz( name, Info_ValueForKey( info, "sv_hostname" ), sizeof( name ) );
+	Q_CleanStr( name );
+	Com_sprintf( summary, size, "%s at %s: %s, %d of %s players, answered in %d ms", name, address,
+		Info_ValueForKey( info, "mapname" ), players, Info_ValueForKey( info, "sv_maxclients" ),
+		Sys_Milliseconds() - start );
+	return QUERY_ANSWERED;
+}
+
+
+/*
+====================
 NET_Init
 ====================
 */
