@@ -623,7 +623,8 @@ qboolean SV_StartDefaultMap( void ) {
 SV_CheckRconPassword
 
 rcon_password is other engines' name for rconPassword: set alone, it
-leaves rcon off without a word. Said once a run, as a map starts.
+leaves rcon off without a word. Said once a run, as a map starts; a short
+rconPassword is said once for each password.
 ================
 */
 static void SV_CheckRconPassword( void ) {
@@ -632,14 +633,23 @@ static void SV_CheckRconPassword( void ) {
 	if ( !warned && Cvar_VariableString( "rcon_password" )[0] && !sv_rconPassword->string[0] ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: rcon_password is set, but this server's rcon "
 			"password is rconPassword, which isn't, so rcon is off.\n" );
+#define SV_RCON_PASSWORD_MIN	8
 		warned = qtrue;
 	}
+	static int		warnedShort = -1;
 }
 
 /*
 ================
 SV_SpawnServer
 
+	if ( sv_rconPassword->string[0] && strlen( sv_rconPassword->string ) < SV_RCON_PASSWORD_MIN &&
+		sv_rconPassword->modificationCount != warnedShort ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: rconPassword is shorter than %i characters. rcon's "
+			"rate limit slows guessing, but a short password can still be guessed.\n",
+			SV_RCON_PASSWORD_MIN );
+		warnedShort = sv_rconPassword->modificationCount;
+	}
 Change the server to a new map, taking all connected
 clients along with it.
 This is NOT called for map_restart
