@@ -567,7 +567,13 @@ static void SV_PrintStartSummary( const char *heading ) {
 	}
 	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
 	Sys_PrintFirewall( NET_Port() );
-	Com_Printf( "  rcon:     %s\n", sv_rconPassword->string[0] ? "on (rconpassword)" : "off: set rconpassword to use it" );
+	if ( !sv_rconPassword->string[0] ) {
+		Com_Printf( "  rcon:     off: set rconpassword to use it\n" );
+	} else if ( sv_rconAllow->string[0] ) {
+		Com_Printf( "  rcon:     on (rconpassword), from sv_rconAllow's addresses only\n" );
+	} else {
+		Com_Printf( "  rcon:     on (rconpassword)\n" );
+	}
 	// asks with the state it should be in, which leaves it as it is
 	if ( Sys_KeepAwake( SV_HumanCount() > 0 ) ) {
 		Com_Printf( "  sleep:    this computer stays awake while people play here\n" );
@@ -627,22 +633,16 @@ leaves rcon off without a word. Said once a run, as a map starts; a short
 rconPassword is said once for each password.
 ================
 */
+#define SV_RCON_PASSWORD_MIN	8
 static void SV_CheckRconPassword( void ) {
 	static qboolean	warned;
+	static int		warnedShort = -1;
 
 	if ( !warned && Cvar_VariableString( "rcon_password" )[0] && !sv_rconPassword->string[0] ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: rcon_password is set, but this server's rcon "
 			"password is rconPassword, which isn't, so rcon is off.\n" );
-#define SV_RCON_PASSWORD_MIN	8
 		warned = qtrue;
 	}
-	static int		warnedShort = -1;
-}
-
-/*
-================
-SV_SpawnServer
-
 	if ( sv_rconPassword->string[0] && strlen( sv_rconPassword->string ) < SV_RCON_PASSWORD_MIN &&
 		sv_rconPassword->modificationCount != warnedShort ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: rconPassword is shorter than %i characters. rcon's "
@@ -650,6 +650,12 @@ SV_SpawnServer
 			SV_RCON_PASSWORD_MIN );
 		warnedShort = sv_rconPassword->modificationCount;
 	}
+}
+
+/*
+================
+SV_SpawnServer
+
 Change the server to a new map, taking all connected
 clients along with it.
 This is NOT called for map_restart
@@ -1051,6 +1057,7 @@ void SV_Init (void)
 	sv_strictAuth = Cvar_Get ("sv_strictAuth", "1", CVAR_ARCHIVE );
 #endif
 	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE);
+	sv_rconAllow = Cvar_Get("sv_rconAllow", "", 0);
 
 	// initialize bot cvars so they are listed and can be set before loading the botlib
 	SV_BotInitCvars();
