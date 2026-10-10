@@ -3894,11 +3894,14 @@ static void FS_Startup( const char *gameName )
 		Com_Error( ERR_DROP, "Invalid fs_game '%s'", fs_gamedirvar->string );
 	}
 
-	FS_CreatePath(fs_homeconfigpath->string);
-	FS_CreatePath(fs_homedatapath->string);
-	FS_CreatePath(fs_homestatepath->string);
+	// --check writes nothing: no home made, no config copied
+	if ( !com_check ) {
+		FS_CreatePath(fs_homeconfigpath->string);
+		FS_CreatePath(fs_homedatapath->string);
+		FS_CreatePath(fs_homestatepath->string);
 
-	FS_ImportPredecessorConfig(predConfigPath, gameName);
+		FS_ImportPredecessorConfig(predConfigPath, gameName);
+	}
 
 	FS_AddGameDirectories(gameName);
 

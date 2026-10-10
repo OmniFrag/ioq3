@@ -1135,6 +1135,10 @@ void Sys_ErrorDialog( const char *error )
 
 	Sys_Print( va( "%s\n", error ) );
 
+	// --check writes nothing, a crash log included
+	if( com_check )
+		return;
+
 	Sys_Dialog( DT_ERROR, va( "%s. See \"%s\" for details.", error, ospath ), "Error" );
 
 	// Make sure the write path for the crashlog exists...
