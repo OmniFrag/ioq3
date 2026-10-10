@@ -1379,11 +1379,61 @@ static void SV_ConSayto_f(void) {
 ==================
 SV_Heartbeat_f
 
-Also called by SV_DropClient, SV_DirectConnect, and SV_SpawnServer
+Also called by SV_DropClient, SV_DirectConnect, SV_SpawnServer, and SV_Undrain_f
 ==================
 */
 void SV_Heartbeat_f( void ) {
 	svs.nextHeartbeatTime = -9999999;
+}
+
+/*
+==================
+SV_Drain_f
+
+drain [reason]: a dedicated server takes no new player, refusing them with
+the reason, leaves the master servers' lists, and stops (exit 0) once its
+players have left or its map ends (SV_DrainDone), its players told why;
+undrain cancels it before then. Its players can reconnect meanwhile
+==================
+*/
+static void SV_Drain_f( void ) {
+	const char	*reason = Cmd_ArgsFrom( 1 );
+	char		*s;
+
+	if ( !com_dedicated->integer || !com_sv_running->integer ) {
+		Com_Printf( "drain is for a dedicated server with a map up.\n" );
+		return;
+	}
+	// the masters' last heartbeat, before the server stops answering their
+	// polls, so they drop it
+	if ( !sv_drainReason[0] ) {
+		SV_MasterShutdown();
+	}
+	Q_strncpyz( sv_drainReason, *reason ? reason : "This server is closing.", sizeof( sv_drainReason ) );
+	// what an info string's value can't hold
+	for ( s = sv_drainReason; *s; s++ ) {
+		if ( *s == '\\' || *s == ';' || *s == '"' ) {
+			*s = ' ';
+		}
+	}
+	Com_Printf( "Draining: new players are refused (\"%s\"), the server leaves the master lists, and it "
+		"stops once its players have left or the map ends; undrain cancels it.\n", sv_drainReason );
+}
+
+/*
+==================
+SV_Undrain_f
+==================
+*/
+static void SV_Undrain_f( void ) {
+	if ( !sv_drainReason[0] ) {
+		Com_Printf( "The server isn't draining.\n" );
+		return;
+	}
+	sv_drainReason[0] = '\0';
+	// back on the masters' lists
+	SV_Heartbeat_f();
+	Com_Printf( "Undrained: new players are let in, and the server is listed again.\n" );
 }
 
 
@@ -1530,6 +1580,8 @@ void SV_AddOperatorCommands( void ) {
 	initialized = qtrue;
 
 	Cmd_AddCommand ("heartbeat", SV_Heartbeat_f);
+	Cmd_AddCommand ("drain", SV_Drain_f);
+	Cmd_AddCommand ("undrain", SV_Undrain_f);
 	Cmd_AddCommand ("kick", SV_Kick_f);
 #ifndef STANDALONE
 	if(!com_standalone->integer)

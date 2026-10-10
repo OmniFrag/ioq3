@@ -645,15 +645,18 @@ void QDECL Com_ErrorExit( int status, const char *fmt, ... ) {
 
 /*
 =============
-Com_Quit_f
+Com_Quit
 
 Both client and server can use this, and it will
-do the appropriate things.
+do the appropriate things. The reason, if any, is what the server tells
+its players
 =============
 */
-void Com_Quit_f( void ) {
+void Com_Quit( char *p ) {
+	// what the shutdown says goes to the log, though an rcon command
+	// (quit, or a map that ends a drain) is redirecting it
+	Com_EndRedirect();
 	// don't try to shutdown if we are in a recursive error
-	char *p = Cmd_Args( );
 	if ( !com_errorEntered ) {
 		// what changed since the last frame, such as a "seta x 1; quit"
 		Com_WriteConfiguration();
@@ -670,6 +673,15 @@ void Com_Quit_f( void ) {
 		FS_Shutdown(qtrue);
 	}
 	Sys_Quit ();
+}
+
+/*
+=============
+Com_Quit_f
+=============
+*/
+void Com_Quit_f( void ) {
+	Com_Quit( Cmd_Args() );
 }
 
 

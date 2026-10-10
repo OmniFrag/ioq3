@@ -677,6 +677,11 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	char		systemInfo[16384];
 	const char	*p;
 
+	// a draining server stops as its map ends, rather than start another
+	if ( sv_drainReason[0] ) {
+		SV_DrainDone();
+	}
+
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
 
@@ -1157,6 +1162,8 @@ void SV_Shutdown( char *finalmsg ) {
 		Z_Free(svs.clients);
 	}
 	Com_Memset( &svs, 0, sizeof( svs ) );
+	// a drain is the running server's
+	sv_drainReason[0] = '\0';
 
 	Cvar_Set( "sv_running", "0" );
 	Cvar_Set("ui_singlePlayerActive", "0");

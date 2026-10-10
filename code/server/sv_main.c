@@ -67,6 +67,13 @@ cvar_t	*sv_strictAuth;
 cvar_t	*sv_banFile;
 cvar_t	*sv_rconAllow;		// the addresses rcon is taken from, empty for any
 
+// drain's reason (SV_Drain_f), while the server drains
+char		sv_drainReason[MAX_DRAIN_REASON];
+
+// the masters' addresses, as SV_MasterHeartbeat resolved them: [2] for v4
+// and v6 addresses of the same name
+static netadr_t	sv_masterAdr[MAX_MASTER_SERVERS][2];
+
 serverBan_t serverBans[SERVER_MAXBANS];
 int serverBansCount = 0;
 
@@ -252,7 +259,7 @@ but not on every player enter or exit.
 #define	MASTERDNS_MSEC	24*60*60*1000
 void SV_MasterHeartbeat(const char *message)
 {
-	static netadr_t	adr[MAX_MASTER_SERVERS][2]; // [2] for v4 and v6 address for the same address string.
+	netadr_t	(*adr)[2] = sv_masterAdr;
 	int			i;
 	int			res;
 	int			netenabled;
@@ -262,6 +269,11 @@ void SV_MasterHeartbeat(const char *message)
 	// "dedicated 1" is for lan play, "dedicated 2" is for inet public play
 	if (!com_dedicated || com_dedicated->integer != 2 || !(netenabled & (NET_ENABLEV4 | NET_ENABLEV6)))
 		return;		// only dedicated servers send heartbeats
+
+	// a draining server leaves the masters' lists: it doesn't answer their
+	// polls (SV_IsMasterAddress), nor send them heartbeats
+	if ( sv_drainReason[0] )
+		return;
 
 	// if not time yet, don't send anything
 	if ( svs.time < svs.nextHeartbeatTime )
@@ -336,6 +348,50 @@ void SV_MasterHeartbeat(const char *message)
 		if(adr[i][1].type != NA_BAD)
 			NET_OutOfBandPrint( NS_SERVER, adr[i][1], "heartbeat %s\n", message);
 	}
+}
+
+/*
+=================
+SV_IsMasterAddress
+
+Whether a packet came from a master server: a heartbeat's resolved
+address and port, which a master polls the server from
+=================
+*/
+static qboolean SV_IsMasterAddress( netadr_t from ) {
+	int	i, j;
+
+	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
+		// one emptied since its heartbeat is a master no longer
+		if ( !sv_master[i]->string[0] ) {
+			continue;
+		}
+		for ( j = 0; j < 2; j++ ) {
+			if ( sv_masterAdr[i][j].type != NA_BAD && NET_CompareAdr( from, sv_masterAdr[i][j] ) ) {
+				return qtrue;
+			}
+		}
+	}
+	return qfalse;
+}
+
+/*
+=================
+SV_DrainDone
+
+A draining server's end, once its players have left or its map ends:
+said, its players told why, and it exits 0
+=================
+*/
+void SV_DrainDone( void ) {
+	// a copy: SV_Shutdown clears sv_drainReason while Com_Quit uses it
+	char	reason[MAX_DRAIN_REASON];
+
+	Q_strncpyz( reason, sv_drainReason, sizeof( reason ) );
+	// in the log, before Com_Quit's own, though an rcon map ended the drain
+	Com_EndRedirect();
+	Com_Printf( "Drained: %s\n", reason );
+	Com_Quit( reason );
 }
 
 /*
@@ -597,6 +653,9 @@ static void SVC_Status( netadr_t from ) {
 	// echo back the parameter to status. so master servers can use it as a challenge
 	// to prevent timed spoofed reply packets that add ghost servers
 	Info_SetValueForKey( infostring, "challenge", Cmd_Argv(1) );
+	// a draining server's reason (none when it isn't), after the challenge,
+	// which mustn't be crowded out
+	Info_SetValueForKey( infostring, "draining", sv_drainReason );
 
 	status[0] = 0;
 	statusLength = 0;
@@ -713,6 +772,7 @@ void SVC_Info( netadr_t from ) {
 		Info_SetValueForKey( infostring, "game", gamedir );
 	}
 
+	Info_SetValueForKey( infostring, "draining", sv_drainReason );
 	NET_OutOfBandPrint( NS_SERVER, from, "infoResponse\n%s", infostring );
 }
 
@@ -997,6 +1057,12 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 	c = Cmd_Argv(0);
 	Com_DPrintf ("SV packet %s : %s\n", NET_AdrToString(from), c);
+
+	// a draining server doesn't answer the masters' polls, so they drop it
+	if ( sv_drainReason[0] && ( !Q_stricmp( c, "getstatus" ) || !Q_stricmp( c, "getinfo" ) ) &&
+		SV_IsMasterAddress( from ) ) {
+		return;
+	}
 
 	if (!Q_stricmp(c, "getstatus")) {
 		SVC_Status( from );
@@ -1408,6 +1474,11 @@ void SV_Frame( int msec ) {
 	SV_KeepAwake();
 	// before the pause, as rcon is taken while paused
 	SV_ParseRconAllow();
+
+	// a draining server stops once its players have left, bots aside
+	if ( sv_drainReason[0] && !SV_HumanCount() ) {
+		SV_DrainDone();
+	}
 
 	// allow pause if only the local client is connected
 	if ( SV_CheckPaused() ) {
