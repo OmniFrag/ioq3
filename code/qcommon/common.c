@@ -4014,12 +4014,28 @@ void Com_Init( char *commandLine ) {
 #endif
 
 	com_pipefile = Cvar_Get( "com_pipefile", "", CVAR_ARCHIVE|CVAR_LATCH|CVAR_PROTECTED );
-	if( com_pipefile->string[0] )
-	{
-		pipefile = FS_FCreateOpenPipeFile( com_pipefile->string );
+	// a dedicated server's once its socket is open (Sys_Start)
+	if ( com_isClient ) {
+		Com_OpenPipeFile();
 	}
 
 	Com_Printf ("--- Common Initialization Complete ---\n");
+}
+
+/*
+===============
+Com_OpenPipeFile
+
+Opens com_pipefile, if it's set. A dedicated server's is in its own
+directory (FS_ServerFile), which is its own only once its port is: one
+refused a port in use (NET_PortTaken) would otherwise replace, and then
+remove, the pipe of the server there
+===============
+*/
+void Com_OpenPipeFile( void )
+{
+	if( com_pipefile->string[0] && !pipefile )
+		pipefile = FS_FCreateOpenPipeFile( FS_ServerFile( com_pipefile->string ) );
 }
 
 /*
@@ -4908,7 +4924,7 @@ void Com_Shutdown (void) {
 
 	if( pipefile ) {
 		FS_FCloseFile( pipefile );
-		FS_Remove_HomeData( com_pipefile->string );
+		FS_Remove_HomeData( FS_ServerFile( com_pipefile->string ) );
 	}
 
 }

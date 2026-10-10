@@ -1150,9 +1150,13 @@ static void Sys_Start( int argc, char **argv )
 	Com_Init( commandLine );
 	NET_Init( );
 
-	// its PID file carries the port it opened (Sys_PIDFileName)
+	// its PID file carries the port it opened (Sys_PIDFileName), and its
+	// pipe is in that port's directory (Com_OpenPipeFile)
 	if( !Com_IsClient( ) )
+	{
 		Sys_InitPIDFile( FS_GetCurrentGameDir( ) );
+		Com_OpenPipeFile( );
+	}
 
 #ifdef USE_PROTOCOL_REGISTRATION
 	{

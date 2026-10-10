@@ -1190,6 +1190,8 @@ fileHandle_t FS_FCreateOpenPipeFile( const char *filename ) {
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
 
+	// a dedicated server's is in its own directory, which may be new
+	FS_CreatePath( ospath );
 	fifo = Sys_Mkfifo( ospath );
 	if( fifo ) {
 		fsh[f].handleFiles.file.o = fifo;
