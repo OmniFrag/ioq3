@@ -995,6 +995,8 @@ fileHandle_t	FS_FOpenFileWrite_HomeConfig( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeData( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeState( const char *filename );
 fileHandle_t	FS_FOpenFileAppend_HomeData( const char *filename );
+qboolean	FS_RotateFile_HomeData( const char *filename, long maxBytes );
+// the file becomes <filename>.1 where it's larger than maxBytes
 fileHandle_t	FS_FCreateOpenPipeFile( const char *filename );
 // will properly create any needed paths and deal with seperater character issues
 
