@@ -62,7 +62,7 @@ SCR_SetPlacement
 Sets how SCR_AdjustFrom640 maps 640x480 to the window on each axis:
 stretched over it, the default, as the console and cinematics want; or at
 one scale on both axes, so text and pictures keep their shape, against an
-edge of the window's safe area or centred in it
+edge of the window's safe area or centered in it
 ================
 */
 void SCR_SetPlacement( screenPlacement_t horizontal, screenPlacement_t vertical ) {

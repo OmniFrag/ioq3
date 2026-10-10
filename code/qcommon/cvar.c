@@ -1587,7 +1587,7 @@ void Cvar_Print_f(void)
 ============
 Cvar_WhyPrintf
 
-cvar_why's text, with no colour codes when it goes back to rcon's sender,
+cvar_why's text, with no color codes when it goes back to rcon's sender,
 whose tools show them as text
 ============
 */
@@ -1598,7 +1598,7 @@ static void QDECL Cvar_WhyPrintf( const char *fmt, ... ) {
 	va_start( argptr, fmt );
 	Q_vsnprintf( text, sizeof( text ), fmt, argptr );
 	va_end( argptr );
-	// only the colour codes: Q_CleanStr would drop the line breaks too
+	// only the color codes: Q_CleanStr would drop the line breaks too
 	if ( Com_IsRedirecting() ) {
 		char	*from, *to;
 
@@ -2343,7 +2343,7 @@ void Cvar_SetRangeByName( const char *var_name, int type, const char *minString,
 	switch( type )
 	{
 	case CVAR_RANGE_STRING:
-	default:	// CPMA's colours, unchecked
+	default:	// CPMA's colors, unchecked
 		var->validate = qfalse;
 		return;
 	case CVAR_RANGE_FLOAT:

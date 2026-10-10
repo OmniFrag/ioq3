@@ -271,7 +271,7 @@ void FBO_Bind(FBO_t * fbo)
 	GL_BindFramebuffer(GL_FRAMEBUFFER, fbo ? fbo->frameBuffer : 0);
 	glState.currentFBO = fbo;
 
-	// the frame's first draw into it: r_clear's colour shows what nothing
+	// the frame's first draw into it: r_clear's color shows what nothing
 	// drew over
 	if (fbo && fbo->clearOnBind)
 	{
@@ -516,7 +516,7 @@ void FBO_Init(void)
 	tr.multisample = multisample;
 	
 	// render into an FBO, which the present pass draws to the screen with
-	// greyscale and brightness (RB_PresentToScreen); with multisampling,
+	// grayscale and brightness (RB_PresentToScreen); with multisampling,
 	// into renderbuffers resolved into the render image
 	tr.renderTargetFbo = FBO_CreateRenderTarget("_render", "_msaaResolve", tr.renderImage, tr.renderDepthImage,
 		R_RenderFormat(), &tr.renderTargetResolveFbo);
@@ -855,7 +855,7 @@ void FBO_FastBlit(const FBO_t *src, ivec4_t srcBox, FBO_t *dst, ivec4_t dstBox, 
 	}
 
 	// a blit writes like a draw, so the frame's clear of its target comes
-	// first (FBO_Bind), unless the blit covers all of it, colour and depth
+	// first (FBO_Bind), unless the blit covers all of it, color and depth
 	if (dst && dst->clearOnBind)
 	{
 		if (dstBox || buffers != (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))

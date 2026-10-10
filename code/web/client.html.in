@@ -20,7 +20,7 @@ canvas:focus { outline: none; }
 #status progress[hidden] { display: none; }
 /* an error stays, and its words can be copied */
 #status.error { pointer-events: auto; user-select: text; }
-/* The page's hints near the top centre, where a browser says how to leave
+/* The page's hints near the top center, where a browser says how to leave
    fullscreen: how to leave it and come back, and "Click to play"; #status
    is the download's and errors'. Clicks go through them. A hint fades in
    from nothing and, faded out and emptied, takes no room */
@@ -30,7 +30,7 @@ canvas:focus { outline: none; }
 .hint.shown { opacity: 1; }
 @starting-style { .hint.shown { opacity: 0; } }
 /* The ring that fills while Esc is held to leave fullscreen, low in the
-   centre: it shows after --ring-after, so a tap never shows it, and is full
+   center: it shows after --ring-after, so a tap never shows it, and is full
    after --ring-fill more (the page's script sets both) */
 #leaving { left: 50%; bottom: 15%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; opacity: 0; transition: opacity 0.15s; }
 #leaving.holding { opacity: 1; transition-delay: var(--ring-after); }

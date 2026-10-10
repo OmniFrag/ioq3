@@ -413,7 +413,7 @@ static const char *VM_ValidateHeader( vmHeader_t *header, long fileLength )
 		// the 1.32b header ends before jtrgLength
 		headerLength = sizeof( vmHeader_t ) - sizeof( int );
 	} else {
-		return "no recognisable magic number in its header";
+		return "no recognizable magic number in its header";
 	}
 
 	if ( fileLength < headerLength ) {

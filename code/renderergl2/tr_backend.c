@@ -1314,7 +1314,7 @@ void RB_ShowImages( void ) {
 		image = tr.images[i];
 
 		// OpenGL ES and WebGL refuse to draw a depth image compared for
-		// shadows as a colour texture, or an image the framebuffer drawn
+		// shadows as a color texture, or an image the framebuffer drawn
 		// into holds
 		if ( qglesMajorVersion && ( image->dataFormat == GL_DEPTH_COMPONENT
 			|| ( glState.currentFBO && glState.currentFBO->colorImage[0] == image ) ) )
@@ -1420,7 +1420,7 @@ const void *RB_ClearDepth(const void *data)
 =============
 RB_DrawGreyscale
 
-Draws the frame to the window with greyscale and gamma: the present
+Draws the frame to the window with grayscale and gamma: the present
 pass's shader
 =============
 */
@@ -1467,7 +1467,7 @@ static void RB_DrawGreyscale(const FBO_t *src, float gamma)
 RB_PresentToScreen
 
 Copies the frame from the render FBO to the window, through a shader for
-greyscale and for brightness, which SDL3's missing gamma ramps leave to it
+grayscale and for brightness, which SDL3's missing gamma ramps leave to it
 =============
 */
 static void RB_PresentToScreen(void)
@@ -1594,7 +1594,7 @@ const void *RB_CapShadowMap(const void *data)
 =============
 RB_CopyFboRect
 
-Copies a rectangle of a framebuffer's colour to another place in it, which
+Copies a rectangle of a framebuffer's color to another place in it, which
 mustn't overlap it
 =============
 */
@@ -1756,7 +1756,7 @@ const void *RB_PostProcess(const void *data)
 				else
 					FBO_FastBlit(tr.screenScratchFbo, srcBox, srcFbo, srcBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 			}
-			// Without the tone map, the view keeps the colours it was drawn with,
+			// Without the tone map, the view keeps the colors it was drawn with,
 			// as without framebuffers: r_cameraExposure is the tone map's, and its
 			// default alone would double the view on a float target
 		}

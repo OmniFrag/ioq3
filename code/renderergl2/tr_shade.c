@@ -580,8 +580,8 @@ static void ComputeShaderColors( shaderStage_t *pStage, vec4_t baseColor, vec4_t
 
 	// Quake III draws at tr.identityLight and brightens the finished
 	// frame, 2D included, by 1 << overbrightBits, as opengl1 does, and so
-	// does this with r_stockBlending: the colours are opengl1's. In
-	// display units, a colour it doesn't dim comes out that much brighter
+	// does this with r_stockBlending: the colors are opengl1's. In
+	// display units, a color it doesn't dim comes out that much brighter
 	// there, and is scaled up here to match; a blend that multiplies the
 	// frame matches without it. light dims what opengl1 dims.
 	float overbright = isBlend ? 1.0f : tr.frameLight / tr.identityLight;
