@@ -162,6 +162,12 @@ typedef struct {
 void		NET_Init( void );
 void		NET_Shutdown( void );
 void		NET_Restart_f( void );
+
+// NET_QueryServer's answers, which are --status's exit statuses
+#define QUERY_ANSWERED		0	// the server answered
+#define QUERY_NO_ANSWER		1	// it didn't, within two seconds
+#define QUERY_BAD_ADDRESS	2	// the address isn't one
+int			NET_QueryServer( const char *address, char *summary, int size );
 void		NET_Config( qboolean enableNetworking );
 void		NET_ExitIfDisabled( const char *lead );
 void		NET_FlushPacketQueue(void);
