@@ -130,6 +130,7 @@ int			com_frameNumber;
 
 qboolean	com_errorEntered = qfalse;
 qboolean	com_fullyInitialized = qfalse;
+qboolean	com_check;	// --check: run the startup, report what it did and exit (sv_check.c)
 qboolean	com_gameRestarting = qfalse;
 qboolean	com_gameClientRestarting = qfalse;
 
@@ -2826,6 +2827,43 @@ static const cvarRename_t *Com_Rename( const cvarRename_t *renames, const char *
 	return NULL;
 }
 
+// the configs a --check's startup ran, and from where (Com_NoteConfigRun)
+#define	MAX_CONFIGS_RUN	64
+static struct {
+	char	name[MAX_QPATH];
+	char	from[MAX_OSPATH];
+} com_configsRun[MAX_CONFIGS_RUN];
+static int	com_numConfigsRun;
+
+/*
+=================
+Com_NoteConfigRun
+
+A config --check's startup ran, and where it was found, which it lists
+=================
+*/
+void Com_NoteConfigRun( const char *name, const char *from ) {
+	if ( com_numConfigsRun == MAX_CONFIGS_RUN ) {
+		return;
+	}
+	Q_strncpyz( com_configsRun[com_numConfigsRun].name, name, sizeof( com_configsRun[0].name ) );
+	Q_strncpyz( com_configsRun[com_numConfigsRun].from, from, sizeof( com_configsRun[0].from ) );
+	com_numConfigsRun++;
+}
+
+/*
+=================
+Com_PrintConfigsRun
+=================
+*/
+void Com_PrintConfigsRun( void ) {
+	int	i;
+
+	for ( i = 0; i < com_numConfigsRun; i++ ) {
+		Com_Printf( "  %-24s %s\n", com_configsRun[i].name, com_configsRun[i].from );
+	}
+}
+
 /*
 =================
 Com_ExecuteConfigLine
@@ -3015,11 +3053,15 @@ Applies a config (Com_ApplyConfig) as its writer saved it
 (Com_ConfigWriter); returns who wrote it
 =================
 */
-static const char *Com_ImportConfig( char *text, const char *path, qboolean modOnly ) {
+static const char *Com_ImportConfig( char *text, const char *path, qboolean homeConfig, qboolean modOnly ) {
 	const cvarDefault_t	*defaults;
 	const cvarRename_t	*renames;
 	const char		*writer = Com_ConfigWriter( text, &defaults, &renames );
 
+	if ( com_check ) {
+		Com_NoteConfigRun( path, va( "%s, saved settings written by %s", homeConfig ?
+			FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), path ) : FS_LastFilePath( path ), writer ) );
+	}
 	Com_ApplyConfig( text, path, defaults, renames, modOnly );
 	return writer;
 }
@@ -3041,7 +3083,7 @@ static qboolean Com_ImportOldConfig( const char *game, qboolean modOnly ) {
 	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&text ) < 0 ) {
 		return qfalse;
 	}
-	Com_Printf( "Imported %s, written by %s.\n", path, Com_ImportConfig( text, path, modOnly ) );
+	Com_Printf( "Imported %s, written by %s.\n", path, Com_ImportConfig( text, path, qtrue, modOnly ) );
 	Z_Free( text );
 	return qtrue;
 }
@@ -3072,7 +3114,7 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 	// a config can outgrow the small one CopyString uses
 	text = Z_Malloc( strlen( file->text ) + 1 );
 	strcpy( text, file->text );
-	Com_ImportConfig( text, path, qfalse );
+	Com_ImportConfig( text, path, qtrue, qfalse );
 	Z_Free( text );
 	return qtrue;
 }
@@ -3860,6 +3902,11 @@ static qboolean Com_WriteConfigFile( const char *filename, int hideFlags, int sc
 	configText_t	config = { NULL, 0, 0 };
 	qboolean	written;
 
+	// --check saves nothing, a config's writeconfig included
+	if ( com_check ) {
+		Com_Printf( "--check writes no file: not %s.\n", filename );
+		return qfalse;
+	}
 	Com_WriteConfigLines( &config, qtrue, hideFlags, scopes );
 	written = Com_WriteConfigText( FS_FOpenFileWrite_HomeConfig( filename ), filename, &config );
 	Z_Free( config.text );
@@ -3916,8 +3963,8 @@ any was modified
 */
 void Com_WriteConfiguration( void ) {
 	// if we are quiting without fully initializing, make sure
-	// we don't write out anything
-	if ( !com_fullyInitialized ) {
+	// we don't write out anything; nor does --check, which only reports
+	if ( !com_fullyInitialized || com_check ) {
 		return;
 	}
 
@@ -4028,7 +4075,7 @@ static void Com_SettingsImport_f( void ) {
 	if ( FS_LastFileIsGameContent() ) {
 		Com_Printf( "%s is game content, which isn't imported.\n", filename );
 	} else {
-		Com_Printf( "Imported %s, written by %s.\n", filename, Com_ImportConfig( text, filename, qfalse ) );
+		Com_Printf( "Imported %s, written by %s.\n", filename, Com_ImportConfig( text, filename, qfalse, qfalse ) );
 	}
 	FS_FreeFile( text );
 }

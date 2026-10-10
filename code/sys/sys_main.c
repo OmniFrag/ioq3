@@ -775,12 +775,25 @@ void Sys_ParseArgs( int argc, char **argv )
 			Sys_Exit( 0 );
 		}
 
+#ifdef DEDICATED
+		if( !strcmp( argv[i], "--check" ) )
+			com_check = qtrue;
+#endif
+
 		if( !strcmp( argv[i], "--help" ) ||
 				( argc == 2 && !strcmp( argv[i], "-h" ) ) )
 		{
-			fprintf( stdout, "Usage: %s [--help] [--version] [+command [arguments]]...\n"
+			fprintf( stdout, "Usage: %s [--help] [--version]"
+#ifdef DEDICATED
+				" [--check]"
+#endif
+				" [+command [arguments]]...\n"
 				"\n"
 				"Each +command runs as if typed into the console, after the configs.\n"
+#ifdef DEDICATED
+				"--check runs the startup and its configs, opening no port and loading no\n"
+				"map, and reports what they did; it exits 0 if the server would start.\n"
+#endif
 				"\n"
 				"  +set <cvar> <value>   set a cvar for this run\n"
 				"  +exec <file>          run a config, such as server.cfg\n"
@@ -1056,6 +1069,10 @@ static void Sys_Start( int argc, char **argv )
 #endif
 			break;
 		}
+
+		// an option Sys_ParseArgs took, not a command
+		if ( !strcmp( argv[i], "--check" ) )
+			continue;
 
 		containsSpaces = strchr(argv[i], ' ') != NULL;
 		if (containsSpaces)

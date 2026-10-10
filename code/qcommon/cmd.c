@@ -783,6 +783,25 @@ qboolean Cbuf_Empty( void )
 
 /*
 ============
+Cbuf_Clear
+
+Drops every buffer's text and waits: --check's, once its startup's
+reported, before it follows the rotation
+============
+*/
+void Cbuf_Clear( void )
+{
+	int	i;
+
+	for ( i = 0; i < CBUF_COUNT; i++ ) {
+		cmd_buffers[i].cursize = 0;
+		cmd_buffers[i].wait = 0;
+		cmd_buffers[i].depth = 0;
+	}
+}
+
+/*
+============
 Cbuf_Execute
 ============
 */
@@ -845,6 +864,9 @@ void Cmd_Exec_f( void ) {
 		Com_Printf( "execing %s from %s\n", filename, ospath );
 	else if (!quiet)
 		Com_Printf ("execing %s\n", filename);
+	if ( com_check ) {
+		Com_NoteConfigRun( filename, predecessor ? ospath : FS_LastFilePath( filename ) );
+	}
 
 	if ( script && !Cmd_IsStartupScript( filename ) ) {
 		if ( cmd_numStartupScripts < MAX_STARTUP_SCRIPTS ) {
