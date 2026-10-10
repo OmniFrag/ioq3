@@ -454,6 +454,70 @@ static qboolean Sys_ShouldUseLegacyHomePath(void)
 
 /*
 ==================
+Sys_HoldsServerFiles
+
+Whether a game directory in home holds a dedicated server's files: its
+saved config, its own directory (servers/), its bans, the server.cfg an
+admin put there, or a PID file
+==================
+*/
+static qboolean Sys_HoldsServerFiles( const char *home )
+{
+	char		path[ MAX_OSPATH ];
+	char		**games, **pids;
+	int			numGames, numPids, i, j;
+	qboolean	found = qfalse;
+
+	if( !*home )
+		return qfalse;
+
+	games = Sys_ListFiles( home, "/", NULL, &numGames, qfalse );
+	for( i = 0; i < numGames && !found; i++ )
+	{
+		if( games[ i ][ 0 ] == '.' )
+			continue;
+
+		Com_sprintf( path, sizeof( path ), "%s/%s", home, games[ i ] );
+		found = access( va( "%s/" CONFIG_PREFIX "_server.cfg", path ), F_OK ) == 0 ||
+			access( va( "%s/servers", path ), F_OK ) == 0 ||
+			access( va( "%s/serverbans.dat", path ), F_OK ) == 0 ||
+			access( va( "%s/server.cfg", path ), F_OK ) == 0;
+
+		pids = Sys_ListFiles( path, ".pid", NULL, &numPids, qfalse );
+		for( j = 0; j < numPids && !found; j++ )
+			found = Sys_IsServerPIDFile( pids[ j ] );
+		Sys_FreeFileList( pids );
+	}
+	Sys_FreeFileList( games );
+
+	return found;
+}
+
+/*
+==================
+Sys_OneServerHome
+
+Whether a dedicated server keeps all its files in the data home
+(~/.local/share/<name>), so its admin finds server.cfg, the saved settings
+and the logs in one folder: unless the config or state home already holds
+a server's files, which stay where they are. fs_homepath, which replaces
+every home, needs no search
+==================
+*/
+static qboolean Sys_OneServerHome( void )
+{
+	static int	one = -1;
+
+	if( one < 0 )
+		one = !Com_IsClient( ) && !Cvar_VariableString( "fs_homepath" )[0] &&
+			!Sys_HoldsServerFiles( Sys_HomeConfigPath( ) ) &&
+			!Sys_HoldsServerFiles( Sys_HomeStatePath( ) );
+
+	return one;
+}
+
+/*
+==================
 Sys_DefaultHomeConfigPath
 ==================
 */
@@ -461,6 +525,9 @@ char *Sys_DefaultHomeConfigPath(void)
 {
 	if( Sys_ShouldUseLegacyHomePath( ) )
 		return Sys_LegacyHomePath( );
+
+	if( Sys_OneServerHome( ) )
+		return Sys_HomeDataPath( );
 
 	return Sys_HomeConfigPath( );
 }
@@ -487,6 +554,9 @@ char *Sys_DefaultHomeStatePath(void)
 {
 	if( Sys_ShouldUseLegacyHomePath( ) )
 		return Sys_LegacyHomePath( );
+
+	if( Sys_OneServerHome( ) )
+		return Sys_HomeDataPath( );
 
 	return Sys_HomeStatePath( );
 }
