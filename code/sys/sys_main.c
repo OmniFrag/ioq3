@@ -202,10 +202,22 @@ char *Sys_GetClipboardData(void)
 
 /*
 =================
+Sys_IsServerPIDFile
+=================
+*/
+qboolean Sys_IsServerPIDFile( const char *name )
+{
+	return !Q_stricmpn( name, PID_SERVER_PREFIX, strlen( PID_SERVER_PREFIX ) ) &&
+		COM_CompareExtension( name, ".pid" );
+}
+
+/*
+=================
 Sys_PIDFileName
 
-A dedicated server's carries its port, so that servers on other ports in
-the same home keep their own
+A dedicated server's is in its own directory (FS_ServerDir), named by the
+port it answers on, which differs from the directory's when two servers
+were started on one port
 =================
 */
 static char *Sys_PIDFileName( const char *gamedir )
@@ -216,7 +228,7 @@ static char *Sys_PIDFileName( const char *gamedir )
 		return NULL;
 
 	if( !Com_IsClient( ) )
-		return va( "%s/%s/" PID_SERVER_PREFIX "_%d.pid", homeStatePath, gamedir, NET_Port( ) );
+		return va( "%s/%s/%s/" PID_SERVER_PREFIX "_%d.pid", homeStatePath, gamedir, FS_ServerDir( ), NET_Port( ) );
 
 	return va( "%s/%s/" PRODUCT_NAME ".pid", homeStatePath, gamedir );
 }
@@ -302,9 +314,10 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 =================
 Sys_WarnSharedHome
 
-Another dedicated server running in the same home and game directory
-shares its saved settings and logs: a dedicated server says so as it
-starts, naming the other by its PID file
+Another dedicated server running with the same own directory, started on
+the same port (one that moved to the next free port, or one on another
+address), shares its saved settings and logs: a dedicated server says so
+as it starts, naming the other by its PID file
 =================
 */
 static void Sys_WarnSharedHome( void )
@@ -322,17 +335,17 @@ static void Sys_WarnSharedHome( void )
 	files = Sys_ListFiles( directory, ".pid", NULL, &numFiles, qfalse );
 	for( i = 0; i < numFiles; i++ )
 	{
-		if( Q_stricmpn( files[ i ], PID_SERVER_PREFIX, strlen( PID_SERVER_PREFIX ) ) )
+		if( !Sys_IsServerPIDFile( files[ i ] ) )
 			continue;
 
 		pid = Sys_ReadPIDFile( va( "%s/%s", directory, files[ i ] ) );
 		if( pid > 0 && pid != Sys_PID( ) && Sys_PIDIsRunning( pid ) )
 		{
-			Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d (%s), runs in this "
-				"home, %s: the two share its saved settings (" Q3CONFIG_CFG "), qconsole.log "
-				"and games.log. Give each server a home of its own (+set fs_homepath <folder>), or "
-				"keep each from writing the settings the other saved (+set com_writeConfig 0).\n",
-				pid, files[ i ], Cvar_VariableString( "fs_homestatepath" ) );
+			Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d (%s), keeps its files "
+				"in this server's folder, %s: the two were started on one port, and share their "
+				"saved settings (" Q3CONFIG_CFG "), qconsole.log and games.log. Start each server "
+				"on a port of its own (+set net_port <port>).\n",
+				pid, files[ i ], directory );
 		}
 	}
 	Sys_FreeFileList( files );

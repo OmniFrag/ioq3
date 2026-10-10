@@ -1155,6 +1155,11 @@ void	FS_FilenameCompletion( const char *dir, const char *ext, char *filter,
 		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk );
 
 const char *FS_GetCurrentGameDir(void);
+const char *FS_ServerDir( void );
+// a dedicated server's own directory in the game directory, "servers/<port>",
+// "" on a client
+const char *FS_ServerFile( const char *filename );
+// filename in it, through va(); the name alone on a client
 qboolean FS_Which(const char *filename, void *searchPath);
 
 /*
