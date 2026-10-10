@@ -3030,15 +3030,16 @@ A config's settings and binds, as the player's own, with full rights, as
 they're read. A config is data, so anything else in it is left out, with a
 warning: Quake III's aliases are cvars (vstr), which apply as settings. An
 imported config's values that are its writer's defaults are left out too
-(Com_ConfigWriter), as it saved them unchosen, and so is a stock menu's top
-choice (com_menuTops), but for those the player feels at once
+(Com_ConfigWriter), as it saved them unchosen, its dedicated server's too
+(serverDefaults) on a dedicated server, and so is a stock
+menu's top choice (com_menuTops), but for those the player feels at once
 (com_feltSettings), and those its writer names otherwise set ours
 (renames); and with modOnly, all but the cvars saved for the game
 directory, a mod's config read on the mod's first visit
 =================
 */
 static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *defaults,
-	const cvarRename_t *renames, qboolean modOnly ) {
+	const cvarDefault_t *serverDefaults, const cvarRename_t *renames, qboolean modOnly ) {
 	char		*line, *next;
 	int		number = 0;
 	qboolean	inMod = Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) != 0;
@@ -3072,6 +3073,7 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 			// names, not a mod's own
 			const char	*value = Cmd_ArgsFrom( 2 );
 			qboolean	unchosen = Com_IsDefault( defaults, Cmd_Argv( 1 ), value ) ||
+				Com_IsDefault( serverDefaults, Cmd_Argv( 1 ), value ) ||
 				( defaults && Com_IsDefault( com_menuTops, Cmd_Argv( 1 ), value ) );
 
 			if ( ( inMod && Com_IsPerModScope( name ) ) || Com_IsFelt( name ) || !unchosen ) {
@@ -3118,6 +3120,7 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 typedef struct {
 	const char		*name;
 	const cvarDefault_t	*defaults;	// its saved cvars' defaults
+	const cvarDefault_t	*serverDefaults;	// and its dedicated server's
 	const char * const	*marks;		// cvars it saves that no other has
 	const cvarRename_t	*renames;	// its names for cvars of ours, or NULL
 } configWriter_t;
@@ -3126,11 +3129,13 @@ typedef struct {
 // registers, so the player can't have set it with seta; stock, with no
 // marks, last
 static const configWriter_t com_quakeWriters[] = {
-	{ "CNQ3", cvar_cnq3Defaults, cvar_cnq3Marks, com_cnq3Renames },
-	{ "Quake3e", cvar_q3eDefaults, cvar_q3eMarks, NULL },
-	{ "ioquake3", cvar_ioq3Defaults, cvar_ioq3Marks, NULL },	// before 2025-10-17
-	{ "Quake III", cvar_q3Defaults, NULL, NULL }
+	{ "CNQ3", cvar_cnq3Defaults, cvar_cnq3ServerDefaults, cvar_cnq3Marks, com_cnq3Renames },
+	{ "Quake3e", cvar_q3eDefaults, cvar_q3eServerDefaults, cvar_q3eMarks, NULL },
+	{ "ioquake3", cvar_ioq3Defaults, cvar_ioq3ServerDefaults, cvar_ioq3Marks, NULL },	// before 2025-10-17
+	{ "Quake III", cvar_q3Defaults, cvar_q3ServerDefaults, NULL, NULL }
 };
+// ioquake3's row, for its own first line too
+static const configWriter_t * const com_ioq3Writer = &com_quakeWriters[2];
 
 /*
 =================
@@ -3153,23 +3158,22 @@ static qboolean Com_SavesAny( const char *text, const char * const *names ) {
 Com_ConfigWriter
 
 The program that wrote a config, by its first line (COM_CONFIG_HEADER),
-the defaults it saved unchosen cvars at, and its names for cvars of ours
-(cvarRename_t): stock Quake III's, or that of another program writing
-its first line, by its marks (com_quakeWriters); ioquake3's; or this
-engine's, whose values are all chosen once it states its version, and
-which before that held ioquake3's defaults. A config anyone else wrote,
-by hand among them, is all chosen
+and in *saved, the defaults it saved unchosen cvars at and its names for
+cvars of ours (configWriter_t): stock Quake III's, or that of another
+program writing its first line, by its marks (com_quakeWriters);
+ioquake3's; or this engine's, whose values are all chosen once it states
+its version, and which before that held ioquake3's defaults. A config
+anyone else wrote, by hand among them, is all chosen (NULL)
 =================
 */
-static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **defaults, const cvarRename_t **renames ) {
+static const char *Com_ConfigWriter( const char *text, const configWriter_t **saved ) {
 	int	writer;
 
-	*defaults = NULL;
-	*renames = NULL;
+	*saved = NULL;
 	// first, as it can be ioquake3's own first line (PRODUCT_NAME "ioq3")
 	if ( !Q_strncmp( text, COM_CONFIG_HEADER, strlen( COM_CONFIG_HEADER ) ) ) {
 		if ( !strstr( text, "\nseta com_configVersion " ) ) {
-			*defaults = cvar_ioq3Defaults;
+			*saved = com_ioq3Writer;
 		}
 		return PRODUCT_NAME;
 	}
@@ -3179,12 +3183,11 @@ static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **def
 				break;
 			}
 		}
-		*defaults = com_quakeWriters[writer].defaults;
-		*renames = com_quakeWriters[writer].renames;
+		*saved = &com_quakeWriters[writer];
 		return com_quakeWriters[writer].name;
 	}
 	if ( !Q_strncmp( text, "// generated by ioq3,", strlen( "// generated by ioq3," ) ) ) {
-		*defaults = cvar_ioq3Defaults;
+		*saved = com_ioq3Writer;
 		return "ioquake3";
 	}
 	return "someone else";
@@ -3195,19 +3198,20 @@ static const char *Com_ConfigWriter( const char *text, const cvarDefault_t **def
 Com_ImportConfig
 
 Applies a config (Com_ApplyConfig) as its writer saved it
-(Com_ConfigWriter); returns who wrote it
+(Com_ConfigWriter), on a dedicated server at its writer's dedicated
+server's defaults too; returns who wrote it
 =================
 */
 static const char *Com_ImportConfig( char *text, const char *path, qboolean homeConfig, qboolean modOnly ) {
-	const cvarDefault_t	*defaults;
-	const cvarRename_t	*renames;
-	const char		*writer = Com_ConfigWriter( text, &defaults, &renames );
+	const configWriter_t	*saved;
+	const char		*writer = Com_ConfigWriter( text, &saved );
 
 	if ( com_check ) {
 		Com_NoteConfigRun( path, va( "%s, saved settings written by %s", homeConfig ?
 			FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), path ) : FS_LastFilePath( path ), writer ) );
 	}
-	Com_ApplyConfig( text, path, defaults, renames, modOnly );
+	Com_ApplyConfig( text, path, saved ? saved->defaults : NULL,
+		saved && !Com_IsClient() ? saved->serverDefaults : NULL, saved ? saved->renames : NULL, modOnly );
 	return writer;
 }
 
