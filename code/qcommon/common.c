@@ -158,6 +158,18 @@ void Com_BeginRedirect (char *buffer, int buffersize, void (*flush)( char *) )
 	*rd_buffer = 0;
 }
 
+/*
+=============
+Com_IsRedirecting
+
+Whether what's printed goes back to rcon's sender, say
+=============
+*/
+qboolean Com_IsRedirecting( void )
+{
+	return rd_buffer != NULL;
+}
+
 void Com_EndRedirect (void)
 {
 	if ( rd_flush ) {
@@ -630,7 +642,11 @@ static void Com_StartupVariables( const char *match, int skipFlags ) {
 		
 		if( ( !match || !strcmp(s, match) ) && !( Cvar_Flags( s ) & skipFlags ) )
 		{
-			Cvar_SetFrom(s, Cmd_ArgsFrom(2), CVAR_SOURCE_SESSION, qfalse);
+			cvar_t	*var = Cvar_SetFrom(s, Cmd_ArgsFrom(2), CVAR_SOURCE_SESSION, qfalse);
+
+			if ( var ) {
+				Cvar_NoteOrigin( var, CMD_ORIGIN_COMMAND_LINE );
+			}
 		}
 	}
 }
@@ -675,8 +691,7 @@ qboolean Com_AddStartupCommands( void ) {
 			( !Q_stricmp( Cmd_Argv( 0 ), "exec" ) || !Q_stricmp( Cmd_Argv( 0 ), "execq" ) ) ) {
 			Cmd_AddCommandLineExec( Cmd_Argv( 1 ) );
 		}
-		Cbuf_AddText( com_consoleLines[i] );
-		Cbuf_AddText( "\n" );
+		Cbuf_AddTextFrom( CMD_ORIGIN_COMMAND_LINE, com_consoleLines[i] );
 	}
 
 	return added;
@@ -2813,6 +2828,19 @@ static const cvarRename_t *Com_Rename( const cvarRename_t *renames, const char *
 
 /*
 =================
+Com_ExecuteConfigLine
+
+Runs a settings file's line at once, as from that file and line
+=================
+*/
+static void Com_ExecuteConfigLine( const char *path, int number, const char *line ) {
+	Cmd_PushOrigin( path, number );
+	Cbuf_ExecuteText( EXEC_NOW, line );
+	Cmd_PopOrigin();
+}
+
+/*
+=================
 Com_ApplyConfig
 
 A config's settings and binds, as the player's own, with full rights, as
@@ -2832,7 +2860,6 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 	int		number = 0;
 	qboolean	inMod = Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) != 0;
 	qboolean	paired = qfalse;	// a half of the writer's one pair is set
-
 	for ( line = text; line; line = next ) {
 		const char		*command, *name;
 		const cvarRename_t	*rename;
@@ -2882,20 +2909,20 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 					if ( rename->pair ) {
 						paired = qtrue;
 					}
-					Cbuf_ExecuteText( EXEC_NOW, setting );
+					Com_ExecuteConfigLine( path, number, setting );
 					if ( partner[0] ) {
-						Cbuf_ExecuteText( EXEC_NOW, partner );
+						Com_ExecuteConfigLine( path, number, partner );
 					}
 					if ( rename->also ) {
-						Cbuf_ExecuteText( EXEC_NOW, rename->also );
+						Com_ExecuteConfigLine( path, number, rename->also );
 					}
 				} else {
-					Cbuf_ExecuteText( EXEC_NOW, line );
+					Com_ExecuteConfigLine( path, number, line );
 				}
 			}
 		} else if ( !Q_stricmp( command, "bind" ) || !Q_stricmp( command, "unbind" ) ||
 			!Q_stricmp( command, "unbindall" ) ) {
-			Cbuf_ExecuteText( EXEC_NOW, line );
+			Com_ExecuteConfigLine( path, number, line );
 		} else {
 			Com_Printf( S_COLOR_YELLOW "WARNING: %s, line %d: %s isn't a setting or a binding, and was left out\n",
 				path, number, command );

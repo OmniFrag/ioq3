@@ -578,6 +578,10 @@ void Cbuf_ExecuteScripts( void );
 qboolean Cbuf_Empty( void );
 // Whether no text waits in any buffer: everything queued has run
 
+void Cbuf_AddTextFrom( const char *origin, const char *text );
+// Cbuf_AddText for text whose lines all have the origin given, the
+// command line's, say (Cmd_Origin)
+
 //===========================================================================
 
 /*
@@ -632,6 +636,16 @@ void	Cmd_TokenizeStringIgnoreQuotes( const char *text_in );
 void	Cmd_ExecuteString( const char *text );
 // Parses a single line of text into arguments and tries to execute it
 // as if it was typed at the console
+
+#define	CMD_ORIGIN_COMMAND_LINE	"the command line"
+const char *Cmd_Origin( void );
+// the config and line the running command came from, "server.cfg:12" or
+// "the command line", or NULL: typed at a console, sent by rcon or game
+// code, or queued by the engine
+qboolean Cmd_OriginIsCommandLine( void );
+void Cmd_PushOrigin( const char *name, int line );
+void Cmd_PopOrigin( void );
+// the origin of text run at once (EXEC_NOW), a settings file's line, say
 
 
 /*
@@ -739,6 +753,9 @@ void	Cvar_SetDeclarations( const cvarDeclaration_t *declarations );
 // before any cvar is registered
 int	Cvar_DeclaredScope( const char *var_name );
 // a name's declared scope, whether or not the cvar exists, or -1
+
+void	Cvar_NoteOrigin( cvar_t *var, const char *origin );
+// where a text set of a cvar came from, "server.cfg:12", for cvar_why
 
 extern const cvarDefault_t cvar_q3Defaults[];
 extern const cvarDefault_t cvar_ioq3Defaults[];
@@ -1148,6 +1165,7 @@ void		Info_Print( const char *s );
 
 void		Com_BeginRedirect (char *buffer, int buffersize, void (*flush)(char *));
 void		Com_EndRedirect( void );
+qboolean	Com_IsRedirecting( void );
 void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void		Com_PrintLines( const char *msg, qboolean *lineStart, int level,
 	void (*write)( const char *text ) );
