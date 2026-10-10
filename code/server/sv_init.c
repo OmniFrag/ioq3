@@ -340,6 +340,7 @@ static void SV_RebaseTime( void ) {
 	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
 		cl->lastPacketTime = SV_RebasedTime( cl->lastPacketTime, delta );
 		cl->lastConnectTime = SV_RebasedTime( cl->lastConnectTime, delta );
+		cl->lastDisconnectTime = SV_RebasedTime( cl->lastDisconnectTime, delta );
 		cl->lastSnapshotTime = SV_RebasedTime( cl->lastSnapshotTime, delta );
 		cl->downloadSendTime = SV_RebasedTime( cl->downloadSendTime, delta );
 		for ( j = 0; j < PACKET_BACKUP; j++ ) {
@@ -360,6 +361,8 @@ void SV_ChangeMaxClients( void ) {
 	int		i;
 	client_t	*oldClients;
 	int		count;
+	int		lastDisconnectTimes[MAX_CLIENTS];
+	int		kept;
 
 	// get the highest client number in use
 	count = 0;
@@ -377,6 +380,12 @@ void SV_ChangeMaxClients( void ) {
 	// if still the same
 	if ( sv_maxclients->integer == oldMaxClients ) {
 		return;
+	}
+
+	// free slots keep when they were let go (SV_OldestFreeClient)
+	kept = MIN( oldMaxClients, sv_maxclients->integer );
+	for ( i = 0 ; i < kept ; i++ ) {
+		lastDisconnectTimes[i] = svs.clients[i].lastDisconnectTime;
 	}
 
 	oldClients = Hunk_AllocateTempMemory( count * sizeof(client_t) );
@@ -401,6 +410,12 @@ void SV_ChangeMaxClients( void ) {
 	for ( i = 0 ; i < count ; i++ ) {
 		if ( oldClients[i].state >= CS_CONNECTED ) {
 			svs.clients[i] = oldClients[i];
+		}
+	}
+
+	for ( i = 0 ; i < kept ; i++ ) {
+		if ( svs.clients[i].state == CS_FREE ) {
+			svs.clients[i].lastDisconnectTime = lastDisconnectTimes[i];
 		}
 	}
 
