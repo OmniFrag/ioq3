@@ -186,6 +186,7 @@ typedef struct client_s {
 	int				lastPacketTime;		// svs.time when packet was last received
 	int				lastConnectTime;	// svs.time when connection started
 	int				lastDisconnectTime;	// svs.time it was last let go (SV_OldestFreeClient)
+	qboolean		loadingSaySkipped;	// said in the log that its load is skipping what's said (SV_AddServerCommand)
 	int				lastSnapshotTime;	// svs.time of last sent snapshot
 	qboolean		rateDelayed;		// true if nextSnapshotTime was set based on rate instead of snapshotMsec
 	int				timeoutCount;		// must timeout a few frames in a row so debugging doesn't break

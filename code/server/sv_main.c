@@ -143,6 +143,33 @@ static int SV_ReplacePendingServerCommands( client_t *client, const char *cmd ) 
 }
 #endif
 
+// half a client's pending server commands: past it, what's said isn't
+// queued for a loading client (SV_AddServerCommand)
+#define LOADING_SAID_LIMIT	( MAX_RELIABLE_COMMANDS / 2 )
+
+/*
+======================
+SV_IsSaidCommand
+
+Whether a server command only says something, carrying no state: a
+print, a chat, a team chat or a centre print
+======================
+*/
+static qboolean SV_IsSaidCommand( const char *cmd ) {
+	static const char *const said[] = { "print", "chat", "tchat", "cp" };
+	size_t	i, len;
+
+	// the name ends where the client's tokenizer ends it: at a space,
+	// control character or quote
+	for ( i = 0; i < ARRAY_LEN( said ); i++ ) {
+		len = strlen( said[i] );
+		if ( !Q_strncmp( cmd, said[i], len ) && ( (unsigned char)cmd[len] <= ' ' || cmd[len] == '"' ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 /*
 ======================
 SV_AddServerCommand
@@ -164,14 +191,30 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	if( client->state < CS_PRIMED )
 		return;
 
+	oldest = client->reliableAcknowledge - client->snapshotAcknowledge > 0 ?
+		client->snapshotAcknowledge : client->reliableAcknowledge;
+
+	// a loading client is sent what's said, to show once it's in, until
+	// LOADING_SAID_LIMIT commands are waiting; from then until it's in,
+	// those are skipped, said once, so a slow load on a busy server doesn't
+	// fill them and drop it (GAM-018). Our game already keeps chat from connecting clients;
+	// this is the engine's say and tell, and the game's broadcasts
+	if ( client->state == CS_PRIMED && client->reliableSequence - oldest >= LOADING_SAID_LIMIT &&
+		SV_IsSaidCommand( cmd ) ) {
+		if ( !client->loadingSaySkipped ) {
+			client->loadingSaySkipped = qtrue;
+			Com_Printf( "%s is still loading with %d server commands waiting: what's said is skipped for "
+				"them until they're in\n", client->name, client->reliableSequence - oldest );
+		}
+		return;
+	}
+
 	client->reliableSequence++;
 	// if we would be losing an old command that hasn't been acknowledged,
 	// or that the client hasn't had a snapshot with (snapshotAcknowledge),
 	// we must drop the connection
 	// we check == instead of >= so a broadcast print added by SV_DropClient()
 	// doesn't cause a recursive drop client
-	oldest = client->reliableAcknowledge - client->snapshotAcknowledge > 0 ?
-		client->snapshotAcknowledge : client->reliableAcknowledge;
 	if ( client->reliableSequence - oldest == MAX_RELIABLE_COMMANDS + 1 ) {
 		if ( client->gamestateMessageNum == -1 )  {
 			// invalid game state message 
