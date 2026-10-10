@@ -42,6 +42,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <time.h>
 #include <sys/resource.h>
 #include <spawn.h>
+#if defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
+#include <stddef.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#endif
 
 qboolean stdinIsATTY;
 
@@ -1570,4 +1575,43 @@ qboolean Sys_SetMaxFileLimit( void )
 #endif // RLIMIT_NOFILE
 
 	return qfalse;
+}
+
+/*
+=================
+Sys_Notify
+
+Tells the service manager that started the program its state, as systemd's
+sd_notify does ("READY=1", "STOPPING=1"), where NOTIFY_SOCKET names its
+socket; nothing otherwise. A datagram to that socket, without libsystemd
+=================
+*/
+void Sys_Notify( const char *state )
+{
+#if defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
+	const char			*path = getenv( "NOTIFY_SOCKET" );
+	struct sockaddr_un	address;
+	size_t				length;
+	int					fd;
+
+	if( !path || ( path[0] != '/' && path[0] != '@' ) )
+		return;
+	length = strlen( path );
+	if( length >= sizeof( address.sun_path ) )
+		return;
+
+	memset( &address, 0, sizeof( address ) );
+	address.sun_family = AF_UNIX;
+	memcpy( address.sun_path, path, length );
+	// an abstract socket's name starts with a 0 byte
+	if( address.sun_path[0] == '@' )
+		address.sun_path[0] = '\0';
+
+	fd = socket( AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0 );
+	if( fd < 0 )
+		return;
+	sendto( fd, state, strlen( state ), MSG_NOSIGNAL, (struct sockaddr *)&address,
+		offsetof( struct sockaddr_un, sun_path ) + length );
+	close( fd );
+#endif
 }

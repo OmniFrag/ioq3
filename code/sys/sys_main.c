@@ -367,6 +367,10 @@ Single exit point (regular exit or in case of error)
 */
 static Q_NO_RETURN void Sys_Exit( int exitCode )
 {
+	// the server, not --status or --help before it starts, nor a client
+	if( com_fullyInitialized && !Com_IsClient( ) )
+		Sys_Notify( "STOPPING=1" );
+
 	CON_Shutdown( );
 
 #ifndef DEDICATED
