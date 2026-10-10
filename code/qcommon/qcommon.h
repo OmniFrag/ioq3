@@ -169,6 +169,7 @@ void		NET_Restart_f( void );
 #define QUERY_BAD_ADDRESS	2	// the address isn't one
 int			NET_QueryServer( const char *address, char *summary, int size );
 int			NET_Port( void );
+int			NET_OpenPort( netadrtype_t type );
 void		NET_Config( qboolean enableNetworking );
 void		NET_ExitIfDisabled( const char *lead );
 void		NET_FlushPacketQueue(void);
