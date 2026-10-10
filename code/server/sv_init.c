@@ -451,14 +451,17 @@ static void SV_NoteFrameRate( void ) {
 SV_PrintStartSummary
 
 What a dedicated server's admin needs once it's up: what it plays, from
-which data and home, and how players and admins reach it
+which data and home, and how players and admins reach it, under the heading
 ================
 */
-static void SV_PrintStartSummary( void ) {
+static void SV_PrintStartSummary( const char *heading ) {
 	int	net = Cvar_VariableIntegerValue( "net_enabled" );
 
-	Com_Printf( "Server started:\n" );
-	Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
+	Com_Printf( "%s\n", heading );
+	// --check loads no map, and reports the maps itself
+	if ( com_sv_running->integer ) {
+		Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
+	}
 	if ( !Q_stricmp( com_basegame->string, "demoq3" ) ) {
 		Com_Printf( "  data:     the demo's (%s)\n", com_basegame->string );
 	} else if ( !com_standalone->integer ) {
@@ -786,13 +789,16 @@ SV_NoteStartupMap
 
 A map a dedicated server's startup starts: one the command line's +map
 starts over one a config started, its rotation's, say, is said when the
-startup is done
+startup is done. --check notes every one, found or not, the rotation's too
 ================
 */
-void SV_NoteStartupMap( const char *map ) {
+void SV_NoteStartupMap( const char *map, qboolean found ) {
 	const char	*origin = Cmd_Origin();
 
-	if ( sv_startupFinished || !com_dedicated->integer ) {
+	if ( com_check ) {
+		SV_CheckMap( map, found );
+	}
+	if ( !found || sv_startupFinished || !com_dedicated->integer ) {
 		return;
 	}
 	if ( Cmd_OriginIsCommandLine() && sv_startupMap.origin[0] &&
@@ -810,7 +816,8 @@ SV_FinishStartup
 Once a dedicated server's startup commands have all run with a map up:
 its summary, then its configs' lines that did nothing. A config that
 never empties the buffers, a message looping on a wait, say, gets them
-a few seconds after the first map is up
+a few seconds after the first map is up. --check's, with no map, is its
+report, and its exit
 ================
 */
 #define SV_STARTUP_GRACE_MSEC	5000
@@ -828,11 +835,20 @@ void SV_FinishStartup( void ) {
 		return;
 	}
 	sv_startupFinished = qtrue;
-	SV_PrintStartSummary();
+	if ( com_check ) {
+		SV_CheckReport();
+	}
+	SV_PrintStartSummary( com_check ? "The server would start with:" : "Server started:" );
 	Cvar_WarnConfigs();
+	if ( com_check ) {
+		SV_CheckRconPassword();	// which a map's start says
+	}
 	if ( sv_replacedMap.map[0] ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: the command line's +map %s replaced %s, which %s started; "
 			"leave +map out to keep that config's maps\n", sv_startupMap.map, sv_replacedMap.map, sv_replacedMap.origin );
+	}
+	if ( com_check ) {
+		SV_CheckExit();
 	}
 }
 

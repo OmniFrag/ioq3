@@ -1525,8 +1525,9 @@ static qboolean FS_IsGameContent( const searchpath_t *search ) {
 	return search->pack || FS_IsExt( search->dir->gamedir, ".pk3dir", strlen( search->dir->gamedir ) );
 }
 
-// whether the last file FS_FOpenFileRead found is in a pk3 or pk3dir
-static qboolean fs_lastFileIsGameContent;
+// where the last file FS_FOpenFileRead found was: whether in a pk3 or
+// pk3dir, and which (FS_LastFilePath)
+static const searchpath_t	*fs_lastFileSearch;
 
 /*
 ===========
@@ -1537,7 +1538,25 @@ a pk3 or a pk3dir
 ===========
 */
 qboolean FS_LastFileIsGameContent( void ) {
-	return fs_lastFileIsGameContent;
+	return fs_lastFileSearch && FS_IsGameContent( fs_lastFileSearch );
+}
+
+/*
+===========
+FS_LastFilePath
+
+Where the last file FS_FOpenFileRead found, qpath, is: its path, or a
+pak's and the file's name in it; "" if it found none
+===========
+*/
+const char *FS_LastFilePath( const char *qpath ) {
+	if ( !fs_lastFileSearch ) {
+		return "";
+	}
+	if ( fs_lastFileSearch->pack ) {
+		return va( "%s/%s", fs_lastFileSearch->pack->pakFilename, qpath );
+	}
+	return FS_BuildOSPath( fs_lastFileSearch->dir->path, fs_lastFileSearch->dir->gamedir, qpath );
 }
 
 /*
@@ -1559,7 +1578,7 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 	if(!fs_searchpaths)
 		Com_Error(ERR_FATAL, "Filesystem call made without initialization");
 
-	fs_lastFileIsGameContent = qfalse;
+	fs_lastFileSearch = NULL;
 	isLocalConfig = FS_IsLocalConfig( filename );
 	for(search = fs_searchpaths; search; search = search->next)
 	{
@@ -1572,7 +1591,7 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 
 		if(file == NULL ? len > 0 : len >= 0 && *file)
 		{
-			fs_lastFileIsGameContent = FS_IsGameContent(search);
+			fs_lastFileSearch = search;
 			return len;
 		}
 
@@ -2016,7 +2035,7 @@ long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void *
 	}
 
 	// until FS_FOpenFileRead finds it: a journal's file wasn't searched for
-	fs_lastFileIsGameContent = qfalse;
+	fs_lastFileSearch = NULL;
 
 	buf = NULL;	// quiet compiler warning
 
@@ -3498,6 +3517,8 @@ Frees all resources.
 void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
+
+	fs_lastFileSearch = NULL;	// its search paths go
 
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {

@@ -153,7 +153,7 @@ Restart the server on a different map
 static void SV_Map_f( void ) {
 	char		*cmd;
 	char		*map;
-	qboolean	killBots, cheat;
+	qboolean	killBots, cheat, found;
 	char		expanded[MAX_QPATH];
 	char		mapname[MAX_QPATH];
 
@@ -168,11 +168,16 @@ static void SV_Map_f( void ) {
 	// make sure the level exists before trying to change, so that
 	// a typo at the server console won't end the game
 	Com_sprintf (expanded, sizeof(expanded), "maps/%s.bsp", map);
-	if ( FS_ReadFile (expanded, NULL) == -1 ) {
+	found = FS_ReadFile (expanded, NULL) != -1;
+	SV_NoteStartupMap( map, found );
+	// --check loads no map: it noted which, for its report
+	if ( com_check ) {
+		return;
+	}
+	if ( !found ) {
 		Com_Printf ("Can't find map %s\n", expanded);
 		return;
 	}
-	SV_NoteStartupMap( map );
 
 	// force latched values to get set
 	Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );

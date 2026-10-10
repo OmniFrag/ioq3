@@ -1307,6 +1307,103 @@ qboolean Cvar_AllowedFromText( const char *var_name ) {
 	return qtrue;
 }
 
+// the sets a config's lines made, in order, which --check reports
+// (Cvar_PrintSetLog)
+typedef struct {
+	char	*origin, *name, *value;
+} cvarSet_t;
+
+#define MAX_LOGGED_SETS	1024
+static cvarSet_t	cvar_setLog[MAX_LOGGED_SETS];
+static int			cvar_numSets, cvar_setsDropped;
+
+// the engine's defaults, which the report leaves out
+#define DEFAULT_CFG_ORIGIN	"default.cfg:"
+
+/*
+============
+Cvar_LogCopy
+
+A copy for the set log, which --check keeps until it exits: from the
+heap, as a config that loops could fill the small zone
+============
+*/
+static char *Cvar_LogCopy( const char *text ) {
+	size_t	size = strlen( text ) + 1;
+	char	*copy = malloc( size );
+
+	if ( !copy ) {
+		Com_Error( ERR_FATAL, "Cvar_LogCopy: out of memory" );
+	}
+	return memcpy( copy, text, size );
+}
+
+/*
+============
+Cvar_LogSet
+
+A set by a config's line, for --check. The startup sets the command
+line's settings more than once: a set the log has is moved to the end,
+where it's now the latest
+============
+*/
+static void Cvar_LogSet( const cvar_t *var, const char *origin ) {
+	const char	*value = var->userString ? var->userString : "";
+	cvarSet_t	set;
+	int			i;
+
+	if ( !com_check || !origin || !Q_stricmpn( origin, DEFAULT_CFG_ORIGIN, strlen( DEFAULT_CFG_ORIGIN ) ) ) {
+		return;
+	}
+	for ( i = 0; i < cvar_numSets; i++ ) {
+		set = cvar_setLog[i];
+		if ( !Q_stricmp( set.name, var->name ) && !strcmp( set.origin, origin ) && !strcmp( set.value, value ) ) {
+			memmove( &cvar_setLog[i], &cvar_setLog[i + 1], ( cvar_numSets - i - 1 ) * sizeof( set ) );
+			cvar_setLog[cvar_numSets - 1] = set;
+			return;
+		}
+	}
+	if ( cvar_numSets == MAX_LOGGED_SETS ) {
+		cvar_setsDropped++;
+		return;
+	}
+	set.origin = Cvar_LogCopy( origin );
+	set.name = Cvar_LogCopy( var->name );	// an unset cvar is freed
+	set.value = Cvar_LogCopy( value );
+	cvar_setLog[cvar_numSets++] = set;
+}
+
+/*
+============
+Cvar_PrintSetLog
+
+Each set a config's line made, in order, and the last set, which the
+cvar keeps, when another's
+============
+*/
+void Cvar_PrintSetLog( void ) {
+	int	i, j;
+
+	for ( i = 0; i < cvar_numSets; i++ ) {
+		const cvarSet_t	*set = &cvar_setLog[i], *later = NULL;
+
+		for ( j = i + 1; j < cvar_numSets; j++ ) {
+			if ( !Q_stricmp( cvar_setLog[j].name, set->name ) ) {
+				later = &cvar_setLog[j];
+			}
+		}
+		if ( later ) {
+			Com_Printf( "  %-24s %s \"%s\", then %s set \"%s\"\n", set->origin, set->name, set->value,
+				later->origin, later->value );
+		} else {
+			Com_Printf( "  %-24s %s \"%s\"\n", set->origin, set->name, set->value );
+		}
+	}
+	if ( cvar_setsDropped ) {
+		Com_Printf( "  and %i more sets\n", cvar_setsDropped );
+	}
+}
+
 /*
 ============
 Cvar_NoteOrigin
@@ -1321,6 +1418,7 @@ void Cvar_NoteOrigin( cvar_t *var, const char *origin ) {
 
 	Cvar_SetLayer( &var->userOrigin, origin );
 	var->originOrder = ++order;
+	Cvar_LogSet( var, origin );
 }
 
 /*
