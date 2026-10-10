@@ -3867,6 +3867,15 @@ void Com_Init( char *commandLine ) {
 	com_dedicated = Cvar_Get ("dedicated", "0", CVAR_LATCH);
 	Cvar_CheckRange( com_dedicated, 0, 2, qtrue );
 #endif
+	Cvar_SetDescription( com_dedicated,
+		"Whether the program is a server alone, and whether it's listed\n"
+		"A dedicated server takes it from the command line only, 1 unless set, and 1 isn't listed: "
+		"players on the local network find it, and others connect by address. With 2 it tells the master "
+		"servers (sv_master1 and on), and players on the local network lose their unlimited rate "
+		"(sv_lanForceRate). In the game, the Start Server menu sets it.\n"
+		"0 = no: the game's own player plays on its server\n"
+		"1 = local network: not listed on master servers\n"
+		"2 = internet: listed on master servers" );
 	// allocate the stack based hunk allocator
 	Com_InitHunkMemory();
 
@@ -3922,9 +3931,12 @@ void Com_Init( char *commandLine ) {
 	com_abnormalExit = Cvar_Get( "com_abnormalExit", "0", CVAR_ROM );
 	com_busyWait = Cvar_Get("com_busyWait", "0", CVAR_ARCHIVE);
 	com_writeConfig = Cvar_Get( "com_writeConfig", "1", 0 );
-	Cvar_SetDescription( com_writeConfig, "0 leaves the saved settings as they are, never writing "
-		"changes back: for several servers sharing a home, which would otherwise overwrite each "
-		"other's (writeconfig still writes)." );
+	Cvar_SetDescription( com_writeConfig,
+		"Whether changed settings are written back to the saved settings\n"
+		"With 0, the saved settings stay as they are; writeconfig still writes. A dedicated server keeps "
+		"its own in its folder, servers/<port>/, so only two servers on one port at different addresses "
+		"share them. Set it on the command line: turned back on, it writes nothing until another saved "
+		"setting changes." );
 #ifndef DEDICATED
 	// the renderer's, set when it makes the window
 	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
@@ -4014,6 +4026,12 @@ void Com_Init( char *commandLine ) {
 #endif
 
 	com_pipefile = Cvar_Get( "com_pipefile", "", CVAR_ARCHIVE|CVAR_LATCH|CVAR_PROTECTED );
+	Cvar_SetDescription( com_pipefile,
+		"Named pipe the server reads console commands from; empty for none\n"
+		"Each line written to it runs as a console command with full rights, and only the server's own "
+		"user can write it. A dedicated server's is in its own folder, servers/<port>/, and it works on "
+		"Linux and macOS, not Windows. It takes effect only as the program starts, so set it on the "
+		"command line; a server.cfg sets it too late." );
 	// a dedicated server's once its socket is open (Sys_Start)
 	if ( com_isClient ) {
 		Com_OpenPipeFile();
