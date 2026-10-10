@@ -440,7 +440,7 @@ typedef struct {
 // nothing
 #define	COM_TRAP_TOGGLEFULLSCREEN	806
 
-// trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colours,
+// trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colors,
 // are left unchecked
 #define	CVAR_RANGE_STRING	0	// no range
 #define	CVAR_RANGE_FLOAT	1

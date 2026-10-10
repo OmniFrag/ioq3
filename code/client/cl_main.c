@@ -3549,7 +3549,7 @@ void CL_InitRef( void ) {
 
 	Com_Printf( "----- Initializing Renderer ----\n" );
 
-	// after a crash, this run starts in a small window, not centred; the
+	// after a crash, this run starts in a small window, not centered; the
 	// player's own settings aren't touched, and come back at the next start
 	if ( Cvar_VariableIntegerValue( "com_abnormalExit" ) ) {
 		Cvar_SetFrom( "r_mode", va( "%d", R_MODE_FALLBACK ), CVAR_SOURCE_SESSION, qtrue );

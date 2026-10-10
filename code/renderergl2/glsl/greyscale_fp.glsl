@@ -15,9 +15,9 @@ void main() {
         color.rgb = mix(color.rgb, vec3(y), clamp(u_Greyscale, 0.0, 1.0));
     }
     // brightness, as a gamma ramp would apply it (R_SetColorMappings'
-    // table): to the colour at Quake III's own scale, clamped as its
+    // table): to the color at Quake III's own scale, clamped as its
     // framebuffer would clamp it, then shifted up by overbright. The frame
-    // holds that colour (r_stockBlending), or in display units that colour
+    // holds that color (r_stockBlending), or in display units that color
     // already brightened by overbright, which u_FrameScale takes back
     color.rgb = clamp(color.rgb * u_FrameScale, 0.0, 1.0);
     if (u_Gamma != 1.0) {

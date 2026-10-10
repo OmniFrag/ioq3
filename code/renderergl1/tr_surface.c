@@ -1090,7 +1090,7 @@ static void RB_SurfaceSkip( void *surf ) {
 
 
 // wrappers of the table's type: calling a function through a pointer
-// to another function type is undefined behaviour
+// to another function type is undefined behavior
 #define SURFACE_FUNCTION( name, type ) \
 	static void name##_Table( void *surface ) { name( (type *)surface ); }
 SURFACE_FUNCTION( RB_SurfaceBad, surfaceType_t )

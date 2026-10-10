@@ -152,7 +152,7 @@ static int SV_ReplacePendingServerCommands( client_t *client, const char *cmd ) 
 SV_IsSaidCommand
 
 Whether a server command only says something, carrying no state: a
-print, a chat, a team chat or a centre print
+print, a chat, a team chat or a center print
 ======================
 */
 static qboolean SV_IsSaidCommand( const char *cmd ) {

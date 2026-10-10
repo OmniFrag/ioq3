@@ -208,7 +208,7 @@ void GLimp_InitExtraExtensions(void)
 			ri.Printf(PRINT_ALL, result[2], extension);
 		}
 
-		// float colour buffers on OpenGL ES 3.0, to render HDR into
+		// float color buffers on OpenGL ES 3.0, to render HDR into
 		// (tr_image.c gives them the formats OpenGL ES needs). 16-bit
 		// floats are enough for HDR, and many phones render only those;
 		// 32-bit ones also need linear filtering to stand in for desktop's.
@@ -406,7 +406,7 @@ void GLimp_InitExtraExtensions(void)
 
 done:
 
-	// 16-bit normalized colour buffers, which clamp, for r_stockBlending:
+	// 16-bit normalized color buffers, which clamp, for r_stockBlending:
 	// core since OpenGL 3.0; OpenGL ES and WebGL 2 with GL_EXT_texture_norm16
 	glRefConfig.renderNorm16 = qglesMajorVersion ? SDL_GL_ExtensionSupported("GL_EXT_texture_norm16")
 		: q_gl_version_at_least_3_0;
