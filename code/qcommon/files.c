@@ -3774,7 +3774,7 @@ reset it doesn't get the old one back.
 ================
 */
 static void FS_ImportPredecessorConfig( const char *predHome, const char *gameName ) {
-	char	from[MAX_OSPATH], to[MAX_OSPATH], tmp[MAX_OSPATH + 4], mark[MAX_OSPATH + 9];
+	char	from[MAX_OSPATH], to[MAX_OSPATH], old[MAX_OSPATH], tmp[MAX_OSPATH + 4], mark[MAX_OSPATH + 9];
 	byte	buffer[4096];
 	size_t	len;
 	FILE	*in, *out;
@@ -3784,12 +3784,16 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 		return;
 	}
 
-	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, gameName, Q3CONFIG_CFG ), sizeof( to ) );
+	// a dedicated server's goes in its own directory (FS_ServerFile), and
+	// one in the game directory, where servers kept it and its mark before,
+	// is ours too
+	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, gameName, FS_ServerFile( Q3CONFIG_CFG ) ), sizeof( to ) );
+	Q_strncpyz( old, FS_BuildOSPath( fs_homeconfigpath->string, gameName, Q3CONFIG_CFG ), sizeof( old ) );
 	Com_sprintf( mark, sizeof( mark ), "%s.imported", to );
-	if ( FS_FileInPathExists( mark ) ) {
+	if ( FS_FileInPathExists( mark ) || FS_FileInPathExists( va( "%s.imported", old ) ) ) {
 		return;
 	}
-	if ( FS_FileInPathExists( to ) ) {
+	if ( FS_FileInPathExists( to ) || FS_FileInPathExists( old ) ) {
 		// ours was made without a copy, or by a build before the mark
 		FS_MarkPredecessorConfig( mark, "" );
 		return;
@@ -4854,8 +4858,9 @@ FS_IsEngineFile
 
 Whether a game directory's file is one the engine keeps for itself: the
 player's settings and CD key, the console log, the crash log and the
-command pipe. Named as the search would find it: ignoring case, leading
-slashes and "./"
+command pipe, and anything in the dedicated servers' own directories
+(servers/, FS_ServerDir). Named as the search would find it: ignoring
+case, leading slashes and "./"
 ===========
 */
 qboolean FS_IsEngineFile( const char *qpath ) {
@@ -4863,9 +4868,23 @@ qboolean FS_IsEngineFile( const char *qpath ) {
 	static const char *names[] = { CONFIG_PREFIX ".cfg", CONFIG_PREFIX "_server.cfg",
 		"autoexec.cfg", "qconsole.log", "crashlog.txt", "q3key" };
 	const char *pipe = Cvar_VariableString( "com_pipefile" );
+	size_t		length;
 	int		i;
 
 	qpath = FS_SkipPathPrefix( qpath );
+
+	// servers/ as a directory, as Windows finds it too: without the final
+	// dots and spaces it drops
+	length = strcspn( qpath, "/\\" );
+	if ( qpath[length] ) {
+		while ( length && ( qpath[length - 1] == '.' || qpath[length - 1] == ' ' ) ) {
+			length--;
+		}
+		if ( length == strlen( "servers" ) && !Q_stricmpn( qpath, "servers", length ) ) {
+			return qtrue;
+		}
+	}
+
 	for ( i = 0; i < ARRAY_LEN( names ); i++ ) {
 		if ( !Q_stricmp( qpath, names[i] ) ) {
 			return qtrue;
@@ -4893,7 +4912,9 @@ qboolean FS_IsEngineFile( const char *qpath ) {
 FS_VM_FOpenFile
 
 A module's trap_FS_FOpenFile: the handle it gets is its own, and only it may
-use it (FS_HandleOwnedBy)
+use it (FS_HandleOwnedBy). A dedicated server's game log (g_log, which
+every Quake III game module writes) goes in the server's own directory
+(FS_ServerFile), so servers sharing a home keep their logs apart
 ===========
 */
 int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode ) {
@@ -4914,6 +4935,12 @@ int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_
 		return -1;
 	}
 
+	// only a .log: the module sets g_log, so it could otherwise name one of
+	// the engine's files there (the bans, the PID file, qconsole.log.1)
+	if ( mode != FS_READ && *FS_ServerDir() && COM_CompareExtension( qpath, ".log" ) &&
+		!Q_stricmp( FS_SkipPathPrefix( qpath ), FS_SkipPathPrefix( Cvar_VariableString( "g_log" ) ) ) ) {
+		qpath = FS_ServerFile( FS_SkipPathPrefix( qpath ) );
+	}
 	r = FS_FOpenFileByMode( qpath, f, mode );
 	if ( f && *f ) {
 		fsh[*f].owner = vm;
@@ -4994,4 +5021,44 @@ const char *FS_GetCurrentGameDir(void)
 		return fs_gamedirvar->string;
 
 	return com_basegame->string;
+}
+
+/*
+================
+FS_ServerDir
+
+A dedicated server's own directory in each home's game directory, for
+what's its alone: its saved settings, qconsole.log, games.log, PID file
+and bans, while servers sharing a home share paks and scripts.
+"servers/<port>", by the port the command line gave (or the default), so
+it's known before the config is read and stays for the run. "" on a
+client
+================
+*/
+const char *FS_ServerDir( void )
+{
+	static char	dir[MAX_QPATH];
+	int		port;
+
+	if ( Com_IsClient() ) {
+		return "";
+	}
+	if ( !dir[0] ) {
+		port = Cvar_VariableIntegerValue( "net_port" );
+		Com_sprintf( dir, sizeof( dir ), "servers/%d", port > 0 ? port : PORT_SERVER );
+	}
+	return dir;
+}
+
+/*
+================
+FS_ServerFile
+
+A file in the server's own directory (FS_ServerDir), relative to the
+game directory: the name alone on a client
+================
+*/
+const char *FS_ServerFile( const char *filename )
+{
+	return Com_IsClient() ? filename : va( "%s/%s", FS_ServerDir(), filename );
 }

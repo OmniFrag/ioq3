@@ -425,15 +425,18 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			struct tm *newtime;
 			time_t aclock;
 			qboolean rotated;
+			char name[MAX_OSPATH];
 
       opening_qconsole = qtrue;
 
 			time( &aclock );
 			newtime = localtime( &aclock );
 
-			// grown past its bound, it starts afresh, the lines before kept
-			rotated = FS_RotateFile_HomeData( "qconsole.log", QCONSOLE_MAX_BYTES );
-			logfile = FS_FOpenFileAppend_HomeData( "qconsole.log" );
+			// grown past its bound, it starts afresh, the lines before kept;
+			// a dedicated server's in its own directory
+			Q_strncpyz( name, FS_ServerFile( "qconsole.log" ), sizeof( name ) );
+			rotated = FS_RotateFile_HomeData( name, QCONSOLE_MAX_BYTES );
+			logfile = FS_FOpenFileAppend_HomeData( name );
 
 			if(logfile)
 			{
@@ -2799,14 +2802,16 @@ static void Com_ConfigWritten( void ) {
 }
 
 // The files settings are saved in, in the order they're read: where each is
-// in the home's config directory, with %s for the game directory's own; the
+// in the home's config directory, with %s for the game directory's own and a
+// second %s for the server's own directory in it (FS_ServerDir); the
 // scopes it holds; whether it holds the binds; and its text as it was read
 // or last written, NULL where there's no file, so a file is written only
 // when what it would hold changed; and the file read in its place while it
-// doesn't exist, the one an older version wrote. A client keeps settings/,
-// where the base game has its own as a mod does, so switching between them
-// moves nothing; a dedicated server keeps one config in its game
-// directory, of the server's settings
+// doesn't exist, the one an older version wrote, with the same %s's. A
+// client keeps settings/, where the base game has its own as a mod does, so
+// switching between them moves nothing; a dedicated server keeps one config
+// of the server's settings in its own directory, and reads the one the
+// game directory kept before, which servers on every port shared
 typedef struct {
 	const char	*path;
 	int		scopes;
@@ -2824,7 +2829,8 @@ static settingsFile_t com_settingsFiles[] = {
 	{ "settings/mods/%s.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ), qfalse }
 };
 
-static settingsFile_t com_serverConfig = { "%s/" Q3CONFIG_CFG, CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse };
+static settingsFile_t com_serverConfig = { "%s/%s/" Q3CONFIG_CFG, CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse,
+	NULL, "%s/" Q3CONFIG_CFG };
 
 static char	com_settingsMod[MAX_QPATH];	// the game directory whose settings were read
 
@@ -2848,11 +2854,12 @@ static settingsFile_t *Com_SettingsFiles( int *count ) {
 =================
 Com_SettingsPath
 
-Where one of the files is, for the game directory whose settings were read
+A file's path or oldPath filled in: the game directory whose settings
+were read, and the server's own directory in it
 =================
 */
-static void Com_SettingsPath( const settingsFile_t *file, char *path, int size ) {
-	Com_sprintf( path, size, file->path, com_settingsMod );
+static void Com_SettingsPath( const char *format, char *path, int size ) {
+	Com_sprintf( path, size, format, com_settingsMod, FS_ServerDir() );
 }
 
 /*
@@ -3261,21 +3268,25 @@ a write compares with
 =================
 */
 static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
-	char	path[MAX_QPATH];
+	char	path[MAX_OSPATH], oldPath[MAX_OSPATH];
 	char	*text;
 
 	if ( file->text ) {
 		Z_Free( file->text );
 	}
-	Com_SettingsPath( file, path, sizeof( path ) );
+	Com_SettingsPath( file->path, path, sizeof( path ) );
 	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&file->text ) < 0 ) {
 		// an older version's file, read until this one is written in its
 		// place, as it is at the next write: what it holds differs from none
-		if ( !file->oldPath || FS_BaseDir_ReadFile_HomeConfig( file->oldPath, (void **)&text ) < 0 ) {
+		if ( !file->oldPath ) {
 			return qfalse;
 		}
-		Com_Printf( "Reading %s, to be saved as %s\n", file->oldPath, path );
-		Com_ImportConfig( text, file->oldPath, qtrue, qfalse );
+		Com_SettingsPath( file->oldPath, oldPath, sizeof( oldPath ) );
+		if ( FS_BaseDir_ReadFile_HomeConfig( oldPath, (void **)&text ) < 0 ) {
+			return qfalse;
+		}
+		Com_Printf( "Reading %s, to be saved as %s\n", oldPath, path );
+		Com_ImportConfig( text, oldPath, qtrue, qfalse );
 		Z_Free( text );
 		return qtrue;
 	}
@@ -4177,9 +4188,9 @@ static void Com_WriteSettings( void ) {
 	for ( i = 0; i < count; i++ ) {
 		settingsFile_t	*file = &files[i];
 		configText_t	config = { NULL, 0, 0 };
-		char		path[MAX_QPATH];
+		char		path[MAX_OSPATH];
 
-		Com_SettingsPath( file, path, sizeof( path ) );
+		Com_SettingsPath( file->path, path, sizeof( path ) );
 		Com_WriteConfigLines( &config, file->binds, 0, file->scopes );
 		if ( ( file->text && !strcmp( file->text, config.text ) ) ||
 			!Com_WriteConfigText( FS_BaseDir_FOpenFileWrite_HomeConfig( path ), path, &config ) ) {
