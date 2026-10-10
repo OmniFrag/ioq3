@@ -1067,26 +1067,66 @@ void Cvar_SetDeclarations( const cvarDeclaration_t *declarations ) {
 
 /*
 ============
+Cvar_CompareName
+
+bsearch's comparison of a name with a table's entry, whose first member
+is its name
+============
+*/
+static int Cvar_CompareName( const void *name, const void *entry ) {
+	return Q_stricmp( name, *(const char * const *)entry );
+}
+
+/*
+============
+Cvar_Declaration
+
+A name's declaration, or NULL
+============
+*/
+static const cvarDeclaration_t *Cvar_Declaration( const char *var_name ) {
+	return bsearch( var_name, cvar_declared, cvar_numDeclared, sizeof( cvar_declared[0] ), Cvar_CompareName );
+}
+
+/*
+============
 Cvar_DeclaredScope
 ============
 */
 int Cvar_DeclaredScope( const char *var_name ) {
-	int	low = 0, high = cvar_numDeclared - 1;
+	const cvarDeclaration_t	*declaration = Cvar_Declaration( var_name );
 
-	while ( low <= high ) {
-		int mid = ( low + high ) / 2;
-		int order = Q_stricmp( var_name, cvar_declared[mid].name );
+	return declaration ? (int)declaration->scope : -1;
+}
 
-		if ( !order ) {
-			return cvar_declared[mid].scope;
-		}
-		if ( order < 0 ) {
-			high = mid - 1;
-		} else {
-			low = mid + 1;
+/*
+============
+Cvar_DeclaredClientOnly
+
+Whether a name is declared as meaning nothing to a dedicated server
+============
+*/
+static qboolean Cvar_DeclaredClientOnly( const char *var_name ) {
+	const cvarDeclaration_t	*declaration = Cvar_Declaration( var_name );
+
+	return declaration && declaration->clientOnly;
+}
+
+/*
+============
+Cvar_ForeignPrograms
+============
+*/
+const char *Cvar_ForeignPrograms( const char *var_name ) {
+	static int				count = -1;
+	const cvarForeign_t		*foreign;
+
+	if ( count < 0 ) {
+		for ( count = 0; cvar_foreignNames[count].name; count++ ) {
 		}
 	}
-	return -1;
+	foreign = bsearch( var_name, cvar_foreignNames, count, sizeof( cvar_foreignNames[0] ), Cvar_CompareName );
+	return foreign ? foreign->programs : NULL;
 }
 
 /*
@@ -2379,4 +2419,197 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("cvarlist", Cvar_List_f);
 	Cmd_AddCommand ("cvar_modified", Cvar_ListModified_f);
 	Cmd_AddCommand ("cvar_restart", Cvar_Restart_f);
+}
+
+/*
+============
+Cvar_EditDistance
+
+The edits (a letter added, dropped or changed) that make one name the
+other, case aside, or limit + 1 if it takes more
+============
+*/
+static int Cvar_EditDistance( const char *a, const char *b, int limit ) {
+	int	lengthA = strlen( a ), lengthB = strlen( b );
+	int	row[MAX_CVAR_VALUE_STRING + 1];
+	int	i, j;
+
+	if ( abs( lengthA - lengthB ) > limit || lengthB > MAX_CVAR_VALUE_STRING ) {
+		return limit + 1;
+	}
+	for ( j = 0; j <= lengthB; j++ ) {
+		row[j] = j;
+	}
+	for ( i = 1; i <= lengthA; i++ ) {
+		int	diagonal = row[0], best;
+
+		row[0] = best = i;
+		for ( j = 1; j <= lengthB; j++ ) {
+			int	above = row[j];
+
+			row[j] = MIN( MIN( row[j] + 1, row[j - 1] + 1 ),
+				diagonal + ( tolower( a[i - 1] ) != tolower( b[j - 1] ) ) );
+			diagonal = above;
+			best = MIN( best, row[j] );
+		}
+		if ( best > limit ) {
+			return limit + 1;
+		}
+	}
+	return row[lengthB];
+}
+
+// the best match Cvar_KnownNameLike has found
+typedef struct {
+	const char	*name;
+	int			distance, count;
+} cvarNameMatch_t;
+
+/*
+============
+Cvar_ConsiderName
+============
+*/
+static void Cvar_ConsiderName( const char *var_name, const char *known, cvarNameMatch_t *match ) {
+	int	distance = Cvar_EditDistance( var_name, known, 2 );
+
+	if ( distance < match->distance ) {
+		match->name = known, match->distance = distance, match->count = 1;
+	} else if ( distance == match->distance && Q_stricmp( match->name, known ) ) {
+		match->count++;
+	}
+}
+
+/*
+============
+Cvar_KnownNameLike
+
+The name of a cvar the code registered or the build declares that is a
+typo or two from a name nothing knows, or NULL: none, or more than one
+============
+*/
+static const char *Cvar_KnownNameLike( const char *var_name ) {
+	cvarNameMatch_t	match = { NULL, 3, 0 };
+	cvar_t			*var;
+	int				i;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( !( var->flags & CVAR_USER_CREATED ) ) {
+			Cvar_ConsiderName( var_name, var->name, &match );
+		}
+	}
+	for ( i = 0; i < cvar_numDeclared; i++ ) {
+		Cvar_ConsiderName( var_name, cvar_declared[i].name, &match );
+	}
+	return match.count == 1 ? match.name : NULL;
+}
+
+// master servers that are gone, by the end of their host names
+static const char * const cvar_deadMasters[] = { ".idsoftware.com", ".gamespy.com", NULL };
+
+/*
+============
+Cvar_IsDeadMaster
+============
+*/
+static qboolean Cvar_IsDeadMaster( const char *address ) {
+	char		host[MAX_CVAR_VALUE_STRING];
+	char		*port;
+	const char	* const *dead;
+	int			length;
+
+	// the host, without a port
+	Q_strncpyz( host, address, sizeof( host ) );
+	if ( ( port = strchr( host, ':' ) ) != NULL ) {
+		*port = '\0';
+	}
+	length = strlen( host );
+	for ( dead = cvar_deadMasters; *dead; dead++ ) {
+		int	tail = strlen( *dead );
+
+		if ( length >= tail && !Q_stricmp( host + length - tail, *dead ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+============
+Cvar_ConfigWarning
+
+What's wrong with a config's line that set the cvar, or NULL: it sets a
+client's cvar on a dedicated server, another engine's, a typo of a known
+name, or a master server that's gone
+============
+*/
+static const char *Cvar_ConfigWarning( const cvar_t *var ) {
+	const char	*programs, *like;
+
+	// a client's that this program doesn't register either
+	if ( !Com_IsClient() && ( var->flags & CVAR_USER_CREATED ) && Cvar_DeclaredClientOnly( var->name ) ) {
+		return va( "%s is a client's setting; a dedicated server doesn't use it", var->name );
+	}
+	if ( !( var->flags & CVAR_USER_CREATED ) || var->declaredScope >= 0 ) {
+		if ( !Q_stricmpn( var->name, "sv_master", 9 ) && Cvar_IsDeadMaster( var->string ) ) {
+			return va( "%s's %s is gone; remove the line", var->name, var->string );
+		}
+		return NULL;
+	}
+	if ( ( programs = Cvar_ForeignPrograms( var->name ) ) != NULL ) {
+		return va( "%s is known from %s, and isn't supported here, so the line does nothing",
+			var->name, programs );
+	}
+	if ( strlen( var->name ) >= 5 && ( like = Cvar_KnownNameLike( var->name ) ) != NULL ) {
+		return va( "there's no %s, so the line does nothing; %s?", var->name, like );
+	}
+	return NULL;
+}
+
+/*
+============
+Cvar_CompareOrigins
+
+Orders cvars by when a config's line last set them (Cvar_NoteOrigin)
+============
+*/
+static int Cvar_CompareOrigins( const void *a, const void *b ) {
+	return ( *(const cvar_t * const *)a )->originOrder - ( *(const cvar_t * const *)b )->originOrder;
+}
+
+/*
+============
+Cvar_WarnConfigs
+
+Warns, once each and in the order they ran, of a config's lines that set
+a cvar and do nothing (Cvar_ConfigWarning). Run once the game and a mod
+have registered theirs, so a cvar of either isn't taken for unknown; a
+cvar no code knows that isn't like a known name, a vstr's text or an
+absent mod's, says nothing
+============
+*/
+void Cvar_WarnConfigs( void ) {
+	cvar_t		**set, *var;
+	const char	*warning;
+	int			count = 0, i;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		count += var->userOrigin != NULL;
+	}
+	if ( !count ) {
+		return;
+	}
+	set = Z_Malloc( count * sizeof( *set ) );
+	for ( count = 0, var = cvar_vars; var; var = var->next ) {
+		if ( var->userOrigin ) {
+			set[count++] = var;
+		}
+	}
+	qsort( set, count, sizeof( *set ), Cvar_CompareOrigins );
+	for ( i = 0; i < count; i++ ) {
+		if ( ( warning = Cvar_ConfigWarning( set[i] ) ) != NULL ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s\n", set[i]->userOrigin, warning );
+		}
+	}
+	Z_Free( set );
 }

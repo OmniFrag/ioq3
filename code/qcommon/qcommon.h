@@ -743,6 +743,7 @@ typedef enum {
 typedef struct {
 	const char	*name;
 	cvarScope_t	scope;
+	qboolean	clientOnly;	// it means nothing to a dedicated server
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
@@ -756,6 +757,21 @@ int	Cvar_DeclaredScope( const char *var_name );
 
 void	Cvar_NoteOrigin( cvar_t *var, const char *origin );
 // where a text set of a cvar came from, "server.cfg:12", for cvar_why
+
+void	Cvar_WarnConfigs( void );
+// warns of config lines that set a cvar to no effect, once the game is up
+
+typedef struct {
+	const char	*name;
+	const char	*programs;	// "Quake3e", "CNQ3", "CNQ3 and Quake3e"
+} cvarForeign_t;
+
+extern const cvarForeign_t cvar_foreignNames[];
+// the cvars other engines register that this one doesn't, by the programs
+// that do, sorted as Q_stricmp compares, ending with a NULL name: given by
+// the build with the declarations (CVAR_DECLARATIONS_SOURCE), empty by default
+const char	*Cvar_ForeignPrograms( const char *var_name );
+// the programs a cvar this engine doesn't have is from, or NULL
 
 extern const cvarDefault_t cvar_q3Defaults[];
 extern const cvarDefault_t cvar_ioq3Defaults[];

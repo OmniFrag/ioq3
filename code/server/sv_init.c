@@ -450,18 +450,12 @@ static void SV_NoteFrameRate( void ) {
 ================
 SV_PrintStartSummary
 
-What a dedicated server's admin needs once its first map is up: what it
-plays, from which data and home, and how players and admins reach it
+What a dedicated server's admin needs once it's up: what it plays, from
+which data and home, and how players and admins reach it
 ================
 */
 static void SV_PrintStartSummary( void ) {
-	static qboolean	printed;
-	int				net = Cvar_VariableIntegerValue( "net_enabled" );
-
-	if ( printed || !com_dedicated->integer ) {
-		return;
-	}
-	printed = qtrue;
+	int	net = Cvar_VariableIntegerValue( "net_enabled" );
 
 	Com_Printf( "Server started:\n" );
 	Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
@@ -769,8 +763,73 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	SV_CheckRconPassword();
 
 	Com_Printf ("-----------------------------------\n");
+}
 
+// the maps a dedicated server's startup started, until it's done: the
+// latest, where from (Cmd_Origin), and one a config started that the
+// command line's +map replaced
+typedef struct {
+	char	map[MAX_QPATH];
+	char	origin[MAX_OSPATH];
+} svStartupMap_t;
+
+static svStartupMap_t	sv_startupMap, sv_replacedMap;
+static qboolean		sv_startupFinished;
+
+/*
+================
+SV_NoteStartupMap
+
+A map a dedicated server's startup starts: one the command line's +map
+starts over one a config started, its rotation's, say, is said when the
+startup is done
+================
+*/
+void SV_NoteStartupMap( const char *map ) {
+	const char	*origin = Cmd_Origin();
+
+	if ( sv_startupFinished || !com_dedicated->integer ) {
+		return;
+	}
+	if ( Cmd_OriginIsCommandLine() && sv_startupMap.origin[0] &&
+		strcmp( sv_startupMap.origin, CMD_ORIGIN_COMMAND_LINE ) ) {
+		sv_replacedMap = sv_startupMap;
+	}
+	Q_strncpyz( sv_startupMap.map, map, sizeof( sv_startupMap.map ) );
+	Q_strncpyz( sv_startupMap.origin, origin ? origin : "", sizeof( sv_startupMap.origin ) );
+}
+
+/*
+================
+SV_FinishStartup
+
+Once a dedicated server's startup commands have all run with a map up:
+its summary, then its configs' lines that did nothing. A config that
+never empties the buffers, a message looping on a wait, say, gets them
+a few seconds after the first map is up
+================
+*/
+#define SV_STARTUP_GRACE_MSEC	5000
+
+void SV_FinishStartup( void ) {
+	static int	firstFrame = -1;
+
+	if ( sv_startupFinished || !com_dedicated->integer ) {
+		return;
+	}
+	if ( firstFrame < 0 ) {
+		firstFrame = Sys_Milliseconds();
+	}
+	if ( !Cbuf_Empty() && Sys_Milliseconds() - firstFrame < SV_STARTUP_GRACE_MSEC ) {
+		return;
+	}
+	sv_startupFinished = qtrue;
 	SV_PrintStartSummary();
+	Cvar_WarnConfigs();
+	if ( sv_replacedMap.map[0] ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the command line's +map %s replaced %s, which %s started; "
+			"leave +map out to keep that config's maps\n", sv_startupMap.map, sv_replacedMap.map, sv_replacedMap.origin );
+	}
 }
 
 /*
