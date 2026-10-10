@@ -502,8 +502,7 @@ asked (NOTIFY_SOCKET) is told too
 ================
 */
 static void SV_PrintReady( void ) {
-	int	net = Cvar_VariableIntegerValue( "net_enabled" );
-	int	port = Cvar_VariableIntegerValue( ( net & NET_ENABLEV4 ) ? "net_port" : "net_port6" );
+	int	port = NET_Port();
 
 	Com_Printf( "server ready: %s %d\n", sv_mapname->string, port );
 	Sys_Notify( va( "READY=1\nSTATUS=%s on UDP port %d", sv_mapname->string, port ) );

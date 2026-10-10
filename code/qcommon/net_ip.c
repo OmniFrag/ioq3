@@ -1709,6 +1709,21 @@ void NET_Config( qboolean enableNetworking ) {
 
 /*
 ====================
+NET_Port
+
+The UDP port a server answers on: its IPv4 socket's, or its IPv6 one's
+where it has only that
+====================
+*/
+int NET_Port( void ) {
+	if ( ip_socket == INVALID_SOCKET && ip6_socket != INVALID_SOCKET ) {
+		return net_port6->integer;
+	}
+	return net_port ? net_port->integer : PORT_SERVER;
+}
+
+/*
+====================
 NET_QueryServer
 
 For --status, before the engine starts: asks the server at address
