@@ -2661,26 +2661,29 @@ static void Com_ConfigWritten( void ) {
 // in the home's config directory, with %s for the game directory's own; the
 // scopes it holds; whether it holds the binds; and its text as it was read
 // or last written, NULL where there's no file, so a file is written only
-// when what it would hold changed. A client keeps settings/, where the base
-// game has its own as a mod does, so switching between them moves nothing;
-// a dedicated server keeps one config in its game directory, of every scope
-// that's saved
+// when what it would hold changed; and the file read in its place while it
+// doesn't exist, the one an older version wrote. A client keeps settings/,
+// where the base game has its own as a mod does, so switching between them
+// moves nothing; a dedicated server keeps one config in its game
+// directory, of the server's settings
 typedef struct {
 	const char	*path;
 	int		scopes;
 	qboolean	binds;
 	char		*text;
+	const char	*oldPath;
 } settingsFile_t;
 
 static settingsFile_t com_settingsFiles[] = {
 	{ "settings/device.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE ), qfalse },
 	{ "settings/player.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER ), qtrue },
-	{ "settings/server.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse },
+	// a listen server's: server.cfg is the name of an admin's script
+	{ "settings/host.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse, NULL, "settings/server.cfg" },
 	{ "settings/devices/%s.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_DEVICE_MOD ), qfalse },
 	{ "settings/mods/%s.cfg", CVAR_SCOPE_BIT( CVAR_SCOPE_PLAYER_MOD ), qfalse }
 };
 
-static settingsFile_t com_serverConfig = { "%s/" Q3CONFIG_CFG, CVAR_SCOPES_SAVED, qfalse };
+static settingsFile_t com_serverConfig = { "%s/" Q3CONFIG_CFG, CVAR_SCOPE_BIT( CVAR_SCOPE_SERVER ), qfalse };
 
 static char	com_settingsMod[MAX_QPATH];	// the game directory whose settings were read
 
@@ -3121,7 +3124,15 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 	}
 	Com_SettingsPath( file, path, sizeof( path ) );
 	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&file->text ) < 0 ) {
-		return qfalse;
+		// an older version's file, read until this one is written in its
+		// place, as it is at the next write: what it holds differs from none
+		if ( !file->oldPath || FS_BaseDir_ReadFile_HomeConfig( file->oldPath, (void **)&text ) < 0 ) {
+			return qfalse;
+		}
+		Com_Printf( "Reading %s, to be saved as %s\n", file->oldPath, path );
+		Com_ImportConfig( text, file->oldPath, qtrue, qfalse );
+		Z_Free( text );
+		return qtrue;
 	}
 	// applying it cuts its text into lines; a copy from the main zone, as
 	// a config can outgrow the small one CopyString uses
