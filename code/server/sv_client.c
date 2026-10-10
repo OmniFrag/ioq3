@@ -810,6 +810,8 @@ static void SV_SendClientGameState( client_t *client ) {
 	client->state = CS_PRIMED;
 	client->pureAuthentic = 0;
 	client->gotCP = qfalse;
+	// each load says if it skips what's said (SV_AddServerCommand)
+	client->loadingSaySkipped = qfalse;
 
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
