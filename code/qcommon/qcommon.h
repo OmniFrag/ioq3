@@ -163,6 +163,7 @@ void		NET_Init( void );
 void		NET_Shutdown( void );
 void		NET_Restart_f( void );
 void		NET_Config( qboolean enableNetworking );
+void		NET_ExitIfDisabled( const char *lead );
 void		NET_FlushPacketQueue(void);
 void		NET_SendPacket (netsrc_t sock, int length, const void *data, netadr_t to);
 void		QDECL NET_OutOfBandPrint( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
@@ -578,6 +579,9 @@ void Cbuf_ExecuteScripts( void );
 qboolean Cbuf_Empty( void );
 // Whether no text waits in any buffer: everything queued has run
 
+void Cbuf_Clear( void );
+// Drops every buffer's text and waits, unrun: --check's, before it exits
+
 void Cbuf_AddTextFrom( const char *origin, const char *text );
 // Cbuf_AddText for text whose lines all have the origin given, the
 // command line's, say (Cmd_Origin)
@@ -760,6 +764,8 @@ void	Cvar_NoteOrigin( cvar_t *var, const char *origin );
 
 void	Cvar_WarnConfigs( void );
 // warns of config lines that set a cvar to no effect, once the game is up
+void	Cvar_PrintSetLog( void );
+// the sets a config's lines make, kept and printed for --check
 
 typedef struct {
 	const char	*name;
@@ -1010,6 +1016,8 @@ qboolean	FS_IsEngineFile( const char *qpath );
 qboolean	FS_LastFileIsGameContent( void );
 // whether the last file FS_FOpenFileRead, and so FS_ReadFile, found is in a
 // pk3 or a pk3dir, not a game directory
+const char	*FS_LastFilePath( const char *qpath );
+// where the last file found was, its path or its pak's
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
@@ -1182,6 +1190,9 @@ void		Info_Print( const char *s );
 void		Com_BeginRedirect (char *buffer, int buffersize, void (*flush)(char *));
 void		Com_EndRedirect( void );
 qboolean	Com_IsRedirecting( void );
+void		Com_NoteConfigRun( const char *name, const char *from );
+void		Com_PrintConfigsRun( void );
+// the configs --check's startup ran, and from where
 void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void		Com_PrintLines( const char *msg, qboolean *lineStart, int level,
 	void (*write)( const char *text ) );
@@ -1270,6 +1281,7 @@ extern	int		com_frameTime;
 
 extern	qboolean	com_errorEntered;
 extern	qboolean	com_fullyInitialized;
+extern	qboolean	com_check;	// --check: report the startup, start nothing (sv_check.c)
 
 extern	fileHandle_t	com_journalFile;
 extern	fileHandle_t	com_journalDataFile;

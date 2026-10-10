@@ -1195,6 +1195,9 @@ The players connected, bots aside
 int SV_HumanCount( void ) {
 	int	count = 0, i;
 
+	if ( !svs.clients ) {
+		return 0;	// no map yet: --check's
+	}
 	for ( i = 0; i < sv_maxclients->integer; i++ ) {
 		count += svs.clients[i].state >= CS_CONNECTED && svs.clients[i].netchan.remoteAddress.type != NA_BOT;
 	}
@@ -1287,6 +1290,12 @@ void SV_Frame( int msec ) {
 		// given none starts one
 		if ( SV_StartDefaultMap() )
 			return;
+
+		// --check loads none: its report, once its startup's done
+		if ( com_check ) {
+			SV_FinishStartup();
+			return;
+		}
 
 #ifdef DEDICATED
 		// Block until something interesting happens, unless commands wait

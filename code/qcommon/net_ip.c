@@ -1597,14 +1597,35 @@ static qboolean NET_GetCvars( void ) {
 
 /*
 ====================
+NET_ExitIfDisabled
+
+A dedicated server's exit when net_enabled opens no socket, the lead
+saying which server's
+====================
+*/
+void NET_ExitIfDisabled( const char *lead ) {
+	if( !( net_enabled->integer & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) ) {
+		Com_ErrorExit( EXIT_NO_NETWORK, "%s: net_enabled is %s, which opens no socket; set it "
+			"to 1 for IPv4, 2 for IPv6 or 3 for both.", lead, net_enabled->string );
+	}
+}
+
+/*
+====================
 NET_Config
 ====================
 */
 void NET_Config( qboolean enableNetworking ) {
-	qboolean	networkRequested = enableNetworking;
+	qboolean	networkRequested;
 	qboolean	modified;
 	qboolean	stop;
 	qboolean	start;
+
+	// --check opens no socket, and says what would have
+	if ( com_check ) {
+		enableNetworking = qfalse;
+	}
+	networkRequested = enableNetworking;
 
 	// get any latched changes to cvars
 	modified = NET_GetCvars();
@@ -1679,11 +1700,7 @@ void NET_Config( qboolean enableNetworking ) {
 	// startup, a net_restart or a game restart
 	if( networkRequested && !Com_IsClient() &&
 		ip_socket == INVALID_SOCKET && ip6_socket == INVALID_SOCKET ) {
-		if( !( net_enabled->integer & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) ) {
-			Com_ErrorExit( EXIT_NO_NETWORK, "The server has no network: net_enabled is %s, "
-				"which opens no socket; set it to 1 for IPv4, 2 for IPv6 or 3 for both.",
-				net_enabled->string );
-		}
+		NET_ExitIfDisabled( "The server has no network" );
 		Com_ErrorExit( EXIT_NO_NETWORK, "The server has no network: no UDP socket opened "
 			"(the warnings above say why)." );
 	}
