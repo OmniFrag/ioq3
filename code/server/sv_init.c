@@ -493,6 +493,24 @@ static void SV_PrintStartSummary( const char *heading ) {
 
 /*
 ================
+SV_PrintReady
+
+Once a dedicated server is up, its map loaded and players able to join,
+the last line of its startup, which tools wait for, the same from
+version to version: "server ready: <map> <port>". A service manager that
+asked (NOTIFY_SOCKET) is told too
+================
+*/
+static void SV_PrintReady( void ) {
+	int	net = Cvar_VariableIntegerValue( "net_enabled" );
+	int	port = Cvar_VariableIntegerValue( ( net & NET_ENABLEV4 ) ? "net_port" : "net_port6" );
+
+	Com_Printf( "server ready: %s %d\n", sv_mapname->string, port );
+	Sys_Notify( va( "READY=1\nSTATUS=%s on UDP port %d", sv_mapname->string, port ) );
+}
+
+/*
+================
 SV_StartDefaultMap
 
 Whether a dedicated server with no map started the default one: once its
@@ -814,10 +832,10 @@ void SV_NoteStartupMap( const char *map, qboolean found ) {
 SV_FinishStartup
 
 Once a dedicated server's startup commands have all run with a map up:
-its summary, then its configs' lines that did nothing. A config that
-never empties the buffers, a message looping on a wait, say, gets them
-a few seconds after the first map is up. --check's, with no map, is its
-report, and its exit
+its summary, its configs' lines that did nothing, then that it's ready
+(SV_PrintReady). A config that never empties the buffers, a message
+looping on a wait, say, gets them a few seconds after the first map is
+up. --check's, with no map, is its report, and its exit
 ================
 */
 #define SV_STARTUP_GRACE_MSEC	5000
@@ -849,7 +867,9 @@ void SV_FinishStartup( void ) {
 	}
 	if ( com_check ) {
 		SV_CheckExit();
+		return;
 	}
+	SV_PrintReady();
 }
 
 /*

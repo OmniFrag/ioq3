@@ -1197,3 +1197,14 @@ qboolean Sys_InModalLoop( void )
 	return GetGUIThreadInfo( GetCurrentThreadId( ), &info ) &&
 		( info.flags & ( GUI_INMOVESIZE | GUI_INMENUMODE ) );
 }
+
+/*
+=================
+Sys_Notify
+
+No service manager on Windows reads a program's state this way
+=================
+*/
+void Sys_Notify( const char *state )
+{
+}

@@ -1504,6 +1504,7 @@ void	Sys_Quit (void) Q_NO_RETURN;
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 
 void	Sys_Print( const char *msg );
+void	Sys_Notify( const char *state );	// to the service manager, as sd_notify
 
 // Sys_Milliseconds should only be used for profiling purposes,
 // any game related timing information should come from event timestamps.
