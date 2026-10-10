@@ -80,7 +80,17 @@ void CL_ConsolePrint( char *txt ) {
 void CL_JoystickEvent( int axis, int value, int time ) {
 }
 
+static void CL_NoKeys_f( void ) {
+}
+
 void CL_InitKeyCommands( void ) {
+	// a server has no keys, but configs written for a client bind them
+	// (default.cfg does): take those commands quietly rather than call
+	// each one unknown
+	Cmd_AddCommand( "bind", CL_NoKeys_f );
+	Cmd_AddCommand( "unbind", CL_NoKeys_f );
+	Cmd_AddCommand( "unbindall", CL_NoKeys_f );
+	Cmd_AddCommand( "bindlist", CL_NoKeys_f );
 }
 
 void CL_CDDialog( void ) {
