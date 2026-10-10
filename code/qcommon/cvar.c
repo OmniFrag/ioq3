@@ -1299,6 +1299,20 @@ qboolean Cvar_RunsRestricted( const char *var_name ) {
 
 /*
 ============
+Cvar_SetByPak
+
+Whether a pak's config on a dedicated server set the cvar last, so that
+what it holds runs with that config's limits
+============
+*/
+qboolean Cvar_SetByPak( const char *var_name ) {
+	cvar_t	*var = Cvar_FindVar( var_name );
+
+	return var && var->pakSet;
+}
+
+/*
+============
 Cvar_AllowedFromText
 
 Restricted text (Cmd_IsRestricted) can't use a private or protected
@@ -1441,16 +1455,20 @@ latched set leaves the old value, and its mark, in place
 static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 {
 	// a startup script's sets aren't saved, its game content's too
-	// (default.cfg from a pak), which runs restricted
-	cvar_t	*var = Cvar_SetFrom( var_name, value, Cmd_IsScript() ? CVAR_SOURCE_SCRIPT :
+	// (default.cfg from a pak), which runs restricted, nor a pak's config's
+	// on a dedicated server, a script of the pak's
+	qboolean	pak = Cmd_IsPakConfig();
+	cvar_t	*var = Cvar_SetFrom( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
 		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
 
 	if ( var ) {
 		// a set that took: a refused one leaves the earlier origin
 		if ( value && var->userString && !strcmp( var->userString, value ) ) {
 			Cvar_NoteOrigin( var, Cmd_Origin() );
+			var->pakSet = pak;
 		}
-		if ( Cmd_IsRestricted() ) {
+		// what a pak's config set runs restricted when it's run (vstr)
+		if ( Cmd_IsRestricted() || pak ) {
 			var->untrusted = qtrue;
 		} else if ( !strcmp( var->string, value ? value : var->resetString ) ) {
 			var->untrusted = qfalse;
