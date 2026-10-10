@@ -86,7 +86,7 @@ foreach(ARCH IN LISTS ARCHS)
     # each module's ranges, between its data markers and its bss markers:
     # the data markers in __data, and the bss markers in zero fill, which
     # the reset clears (a bss range in __data would clear the module's
-    # initialised data)
+    # initialized data)
     foreach(MODULE IN LISTS MODULES)
         set(KINDS_${MODULE} "")
         foreach(KIND Data Bss)

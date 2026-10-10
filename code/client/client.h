@@ -594,7 +594,7 @@ void	SCR_DebugGraph (float value);
 int		SCR_GetBigStringWidth( const char *str );	// returns in virtual 640x480 coordinates
 
 // where SCR_AdjustFrom640 puts the 640x480 screen on an axis: stretched over
-// the window, or at one scale on both axes against an edge or centred
+// the window, or at one scale on both axes against an edge or centered
 typedef enum {
 	PLACE_STRETCH,
 	PLACE_LEFT,

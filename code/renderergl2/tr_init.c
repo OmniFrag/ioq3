@@ -1383,7 +1383,7 @@ void R_Register( void )
 	r_cameraExposure = ri.Cvar_Get( "r_cameraExposure", "1", CVAR_CHEAT );
 
 	r_depthPrepass = ri.Cvar_Get( "r_depthPrepass", "1", CVAR_ARCHIVE );
-	ri.Cvar_SetDescription( r_depthPrepass, "Draw a world view's depth before its colour: 1 where something reads it (sun shadows, "
+	ri.Cvar_SetDescription( r_depthPrepass, "Draw a world view's depth before its color: 1 where something reads it (sun shadows, "
 		"SSAO, the shadow blur, flares and sun rays), 2 always, 0 never, which turns sun shadows off" );
 	r_ssao = ri.Cvar_Get( "r_ssao", "0", CVAR_LATCH | CVAR_ARCHIVE );
 

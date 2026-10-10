@@ -1430,9 +1430,9 @@ typedef struct {
 	int maxColorAttachments;
 
 	qboolean textureFloat;
-	qboolean textureFloat32; // OpenGL ES: 32-bit float colour buffers, filtered linearly
-	qboolean packedFloat; // R11F_G11F_B10F colour buffers, for r_hdr 2
-	qboolean renderNorm16; // RGBA16 colour buffers, for r_stockBlending
+	qboolean textureFloat32; // OpenGL ES: 32-bit float color buffers, filtered linearly
+	qboolean packedFloat; // R11F_G11F_B10F color buffers, for r_hdr 2
+	qboolean renderNorm16; // RGBA16 color buffers, for r_stockBlending
 	int maxSamples;
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
@@ -1656,7 +1656,7 @@ typedef struct {
 	int						overbrightBits;		// r_overbrightBits->integer, which the shaders apply
 	qboolean				stockBlending;		// r_stockBlending, where the present pass brightens the frame
 	int						viewFormat;			// R_ViewFormat's, once picked
-	float					frameLight;			// what opengl1's colours are drawn at: tr.identityLight with
+	float					frameLight;			// what opengl1's colors are drawn at: tr.identityLight with
 												// stockBlending, else 1, in display units
 	int						multisample;		// the render FBO's samples: r_ext_framebuffer_multisample, as far as the GPU allows
 
