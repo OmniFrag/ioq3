@@ -68,6 +68,8 @@ void Sys_AnsiColorPrint( const char *msg );
 
 int Sys_PID( void );
 qboolean Sys_PIDIsRunning( int pid );
+qboolean Sys_IsServerPIDFile( const char *name );
+// whether a file name is a dedicated server's PID file's
 
 qboolean Sys_OpenFolderInPlatformFileManager( const char *path );
 

@@ -554,8 +554,9 @@ static void SV_PrintStartSummary( const char *heading ) {
 	} else {
 		Com_Printf( "  data:     a standalone game's (%s)\n", com_basegame->string );
 	}
-	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homepath" ) );
+	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homedatapath" ) );
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
+	Com_Printf( "  own dir:  %s/%s: this server's saved settings, logs and bans\n", FS_GetCurrentGameDir(), FS_ServerDir() );
 	if ( port ) {
 		Com_Printf( "  port:     UDP %d (IPv4%s)\n", port, port == port6 ? " and IPv6" : "" );
 	}
@@ -1079,7 +1080,9 @@ void SV_Init (void)
 #ifndef STANDALONE
 	sv_strictAuth = Cvar_Get ("sv_strictAuth", "1", CVAR_ARCHIVE );
 #endif
-	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE);
+	// protected: banaddr writes the file it names, in the server's own
+	// directory beside its saved settings, which game code may not write
+	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE | CVAR_PROTECTED);
 	sv_rconAllow = Cvar_Get("sv_rconAllow", "", 0);
 
 	// initialize bot cvars so they are listed and can be set before loading the botlib

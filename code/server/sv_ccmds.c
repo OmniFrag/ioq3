@@ -638,7 +638,9 @@ static void SV_BanNum_f( void ) {
 ==================
 SV_RehashBans_f
 
-Load saved bans from file.
+Load saved bans from file: the server's own (FS_ServerFile), or while it
+has none, the one the game directory kept before, which servers on every
+port shared
 ==================
 */
 static void SV_RehashBans_f(void)
@@ -646,16 +648,21 @@ static void SV_RehashBans_f(void)
 	int index, filelen;
 	fileHandle_t readfrom;
 	char *textbuf, *curpos, *maskpos, *newlinepos, *endpos;
-	char filepath[MAX_QPATH];
-	
+	char filepath[MAX_OSPATH];
+
 	serverBansCount = 0;
-	
+
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
 
-	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), sv_banFile->string);
+	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), FS_ServerFile(sv_banFile->string));
+	if((filelen = FS_BaseDir_FOpenFileRead(filepath, &readfrom)) < 0 && *FS_ServerDir())
+	{
+		Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), sv_banFile->string);
+		filelen = FS_BaseDir_FOpenFileRead(filepath, &readfrom);
+	}
 
-	if((filelen = FS_BaseDir_FOpenFileRead(filepath, &readfrom)) >= 0)
+	if(filelen >= 0)
 	{
 		if(filelen < 2)
 		{
@@ -720,19 +727,19 @@ static void SV_RehashBans_f(void)
 ==================
 SV_WriteBans
 
-Save bans to file.
+Save bans to file, the server's own (FS_ServerFile).
 ==================
 */
 static void SV_WriteBans(void)
 {
 	int index;
 	fileHandle_t writeto;
-	char filepath[MAX_QPATH];
-	
+	char filepath[MAX_OSPATH];
+
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
-	
-	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), sv_banFile->string);
+
+	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), FS_ServerFile(sv_banFile->string));
 
 	if((writeto = FS_BaseDir_FOpenFileWrite_HomeState(filepath)))
 	{
