@@ -1132,11 +1132,18 @@ const char *Cvar_ForeignPrograms( const char *var_name ) {
 /*
 ============
 Cvar_Scope
+
+Where a cvar is saved: by its declaration, or by who made it. A dedicated
+server has no player or device of its own, so on one, a cvar nobody
+declared, a mod's or one the admin made, is the server's
 ============
 */
 cvarScope_t Cvar_Scope( const cvar_t *var ) {
 	if ( var->declaredScope >= 0 ) {
 		return var->declaredScope;
+	}
+	if ( !Com_IsClient() ) {
+		return CVAR_SCOPE_SERVER;
 	}
 	return ( var->flags & ( CVAR_VM_CREATED | CVAR_USER_CREATED ) ) ? CVAR_SCOPE_PLAYER_MOD : CVAR_SCOPE_DEVICE;
 }
