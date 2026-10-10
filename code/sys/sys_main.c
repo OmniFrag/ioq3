@@ -743,8 +743,8 @@ void *Sys_LoadGameDll(const char *name,
 =================
 Sys_ParseArgs
 
-Answers --version and --help anywhere on the command line, and -v and -h
-alone, before the engine starts
+Answers --version, --help and --status anywhere on the command line, and
+-v and -h alone, before the engine starts
 =================
 */
 void Sys_ParseArgs( int argc, char **argv )
@@ -784,14 +784,32 @@ void Sys_ParseArgs( int argc, char **argv )
 			com_check = qtrue;
 #endif
 
+		// a health check: the status of a server, here or elsewhere
+		if( !strcmp( argv[i], "--status" ) )
+		{
+			char summary[MAX_STRING_CHARS];
+			const char *address = "127.0.0.1";
+			int status;
+
+			if( i + 1 < argc && argv[i + 1][0] != '+' && argv[i + 1][0] != '-' )
+				address = argv[i + 1];
+			status = NET_QueryServer( address, summary, sizeof( summary ) );
+			fprintf( status == QUERY_ANSWERED ? stdout : stderr, "%s\n", summary );
+			Sys_Exit( status );
+		}
+
 		if( !strcmp( argv[i], "--help" ) ||
 				( argc == 2 && !strcmp( argv[i], "-h" ) ) )
 		{
-			fprintf( stdout, "Usage: %s [--help] [--version]"
+			fprintf( stdout, "Usage: %s [--help] [--version] [--status [host[:port]]]"
 #ifdef DEDICATED
 				" [--check]"
 #endif
-				" [+command [arguments]]...\n"
+				"\n       [+command [arguments]]...\n"
+				"\n"
+				"--status asks a server (this computer's, on port 27960, by default) for\n"
+				"its status, prints it and exits: 0 if it answered within two seconds,\n"
+				"1 if it didn't, 2 if the address isn't one.\n"
 				"\n"
 				"Each +command runs as if typed into the console, after the configs.\n"
 #ifdef DEDICATED
