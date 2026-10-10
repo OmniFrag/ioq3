@@ -531,6 +531,7 @@ which data and home, and how players and admins reach it, under the heading
 */
 static void SV_PrintStartSummary( const char *heading ) {
 	int	net = Cvar_VariableIntegerValue( "net_enabled" );
+	int	i;
 
 	Com_Printf( "%s\n", heading );
 	// --check loads no map, and reports the maps itself
@@ -552,8 +553,15 @@ static void SV_PrintStartSummary( const char *heading ) {
 	if ( net & NET_ENABLEV6 ) {
 		Com_Printf( "  port:     UDP %d (IPv6)\n", Cvar_VariableIntegerValue( "net_port6" ) );
 	}
-	if ( com_dedicated->integer == 2 ) {
+	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
+		if ( sv_master[i]->string[0] ) {
+			break;
+		}
+	}
+	if ( com_dedicated->integer == 2 && i < MAX_MASTER_SERVERS ) {
 		Com_Printf( "  listed:   on the master servers (dedicated 2)\n" );
+	} else if ( com_dedicated->integer == 2 ) {
+		Com_Printf( "  listed:   no, no master servers are set (sv_master1 and on)\n" );
 	} else {
 		Com_Printf( "  listed:   no, found on the local network only; dedicated 2 lists it\n" );
 	}
