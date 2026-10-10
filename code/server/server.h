@@ -185,6 +185,7 @@ typedef struct client_s {
 	rateLimit_t		floodNoticeRate;	// limits telling it commands were ignored
 	int				lastPacketTime;		// svs.time when packet was last received
 	int				lastConnectTime;	// svs.time when connection started
+	int				lastDisconnectTime;	// svs.time it was last let go (SV_OldestFreeClient)
 	int				lastSnapshotTime;	// svs.time of last sent snapshot
 	qboolean		rateDelayed;		// true if nextSnapshotTime was set based on rate instead of snapshotMsec
 	int				timeoutCount;		// must timeout a few frames in a row so debugging doesn't break
@@ -409,6 +410,7 @@ extern qboolean	sv_mapAsked;	// a map command ran, even one that failed: no defa
 //
 void SV_GetChallenge(netadr_t from);
 
+client_t *SV_OldestFreeClient( int startIndex, int endIndex );
 void SV_DirectConnect( netadr_t from );
 
 #ifndef STANDALONE
