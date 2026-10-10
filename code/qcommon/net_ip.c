@@ -1450,7 +1450,38 @@ static void NET_PortOpened( cvar_t *portVar, int port, int tries ) {
 
 /*
 ====================
+NET_OpenIP6
+
+Opens the IPv6 socket on the first free port of ports from port6
+====================
+*/
+static qboolean NET_OpenIP6( int port6, int ports ) {
+	int		i;
+	int		err;
+
+	for( i = 0 ; i < ports ; i++ )
+	{
+		ip6_socket = NET_IP6Socket(net_ip6->string, port6 + i, &boundto, &err);
+		if (ip6_socket != INVALID_SOCKET)
+		{
+			NET_PortOpened( net_port6, port6, i );
+			return qtrue;
+		}
+		if(err == EAFNOSUPPORT)
+			break;
+		NET_PortTaken( net_port6, err, i );
+	}
+	return qfalse;
+}
+
+/*
+====================
 NET_OpenIP
+
+IPv6 opens after IPv4, and a dedicated server's on the port IPv4 got,
+unless net_port6 was chosen, so that its players find it on one port
+whichever they use; where IPv6 doesn't open there, it answers on IPv4
+alone, and says so
 ====================
 */
 void NET_OpenIP( void ) {
@@ -1458,6 +1489,7 @@ void NET_OpenIP( void ) {
 	int		err;
 	int		port;
 	int		port6;
+	cvarSource_t	source6 = Cvar_Source( net_port6 );
 
 	port = net_port->integer;
 	port6 = net_port6->integer;
@@ -1467,27 +1499,6 @@ void NET_OpenIP( void ) {
 	// automatically scan for a valid port, so multiple
 	// dedicated servers can be started without requiring
 	// a different net_port for each one
-
-	if(net_enabled->integer & NET_ENABLEV6)
-	{
-		for( i = 0 ; i < 10 ; i++ )
-		{
-			ip6_socket = NET_IP6Socket(net_ip6->string, port6 + i, &boundto, &err);
-			if (ip6_socket != INVALID_SOCKET)
-			{
-				NET_PortOpened( net_port6, port6, i );
-				break;
-			}
-			else
-			{
-				if(err == EAFNOSUPPORT)
-					break;
-				NET_PortTaken( net_port6, err, i );
-			}
-		}
-		if(ip6_socket == INVALID_SOCKET)
-			Com_Printf( "WARNING: Couldn't bind to a v6 ip address.\n");
-	}
 
 	if(net_enabled->integer & NET_ENABLEV4)
 	{
@@ -1512,6 +1523,34 @@ void NET_OpenIP( void ) {
 		if(ip_socket == INVALID_SOCKET)
 			Com_Printf( "WARNING: Couldn't bind to a v4 ip address.\n");
 	}
+
+	if(net_enabled->integer & NET_ENABLEV6)
+	{
+		if( !Com_IsClient() && ip_socket != INVALID_SOCKET &&
+			( source6 == CVAR_SOURCE_DEFAULT || source6 == CVAR_SOURCE_ENGINE ) )
+		{
+			if( !NET_OpenIP6( net_port->integer, 1 ) )
+				Com_Printf( S_COLOR_YELLOW "WARNING: IPv6 didn't open on UDP port %d, so the server "
+					"answers on IPv4 alone.\n", net_port->integer );
+			else if( net_port6->integer != net_port->integer )
+				Cvar_SetValue( "net_port6", net_port->integer );
+		}
+		else if( !NET_OpenIP6( port6, 10 ) )
+			Com_Printf( "WARNING: Couldn't bind to a v6 ip address.\n");
+	}
+}
+
+/*
+====================
+NET_OpenPort
+
+The UDP port the socket for type (NA_IP, NA_IP6) is open on, 0 if none
+====================
+*/
+int NET_OpenPort( netadrtype_t type ) {
+	if( type == NA_IP6 )
+		return ip6_socket != INVALID_SOCKET ? net_port6->integer : 0;
+	return ip_socket != INVALID_SOCKET ? net_port->integer : 0;
 }
 
 
@@ -1526,15 +1565,13 @@ NET_GetCvars
 static qboolean NET_GetCvars( void ) {
 	int modified;
 
-#ifdef DEDICATED
-	// I want server owners to explicitly turn on ipv6 support.
-	net_enabled = Cvar_Get( "net_enabled", "1", CVAR_LATCH | CVAR_ARCHIVE );
-#elif defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
 	// a browser has no UDP
 	net_enabled = Cvar_Get( "net_enabled", "0", CVAR_LATCH | CVAR_ARCHIVE );
 #else
 	/* End users have it enabled so they can connect to ipv6-only hosts, but ipv4 will be
-	 * used if available due to ping */
+	 * used if available due to ping. A dedicated server answers on both, on one port,
+	 * or on ipv4 alone where ipv6 doesn't open (NET_OpenIP) */
 	net_enabled = Cvar_Get( "net_enabled", "3", CVAR_LATCH | CVAR_ARCHIVE );
 #endif
 	modified = net_enabled->modified;
@@ -1716,10 +1753,15 @@ where it has only that
 ====================
 */
 int NET_Port( void ) {
-	if ( ip_socket == INVALID_SOCKET && ip6_socket != INVALID_SOCKET ) {
-		return net_port6->integer;
+	int port = NET_OpenPort( NA_IP );
+
+	if ( !port ) {
+		port = NET_OpenPort( NA_IP6 );
 	}
-	return net_port ? net_port->integer : PORT_SERVER;
+	if ( !port ) {
+		port = net_port ? net_port->integer : PORT_SERVER;
+	}
+	return port;
 }
 
 /*
