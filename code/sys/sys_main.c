@@ -349,19 +349,17 @@ void Sys_InitPIDFile( const char *gamedir ) {
 	Sys_WarnSharedHome( );
 	if( stale ) {
 #ifndef DEDICATED
-		char message[1024];
 		char modName[MAX_OSPATH];
 
 		FS_GetModDescription( gamedir, modName, sizeof ( modName ) );
 		Q_CleanStr( modName );
 
-		Com_sprintf( message, sizeof (message), "The last time %s ran, "
-			"it didn't exit properly. This may be due to inappropriate video "
-			"settings. Would you like to start with \"safe\" video settings?", modName );
-
-		if( Sys_Dialog( DT_YES_NO, message, "Abnormal Exit" ) == DR_YES ) {
-			Cvar_Set( "com_abnormalExit", "1" );
-		}
+		// said, not asked: a dialog before the window blocked the start,
+		// often behind other windows or with nobody there. The safe start is
+		// this run's only (CL_InitRef), the player's settings untouched
+		Com_Printf( S_COLOR_YELLOW "The last time %s ran, it didn't exit properly: this run starts in a "
+			"small window, and your own video settings come back at the next start.\n", modName );
+		Cvar_Set( "com_abnormalExit", "1" );
 #endif
 	}
 }
