@@ -660,6 +660,8 @@ const char *Cmd_Origin( void );
 // "the command line", or NULL: typed at a console, sent by rcon or game
 // code, or queued by the engine
 qboolean Cmd_OriginIsCommandLine( void );
+qboolean Cmd_IsPakConfig( void );
+// the running command is a pak's config's, on a dedicated server
 void Cmd_PushOrigin( const char *name, int line );
 void Cmd_PopOrigin( void );
 // the origin of text run at once (EXEC_NOW), a settings file's line, say
@@ -820,6 +822,8 @@ void	Cvar_SetSafe( const char *var_name, const char *value );
 // CVAR_PROTECTED, or CVAR_PRIVATE (but for password)
 void	Cvar_ResetSafe( const char *var_name );
 qboolean Cvar_RunsRestricted( const char *var_name );
+qboolean Cvar_SetByPak( const char *var_name );
+// a pak's config on a dedicated server set it last (Cmd_IsPakConfig)
 // whether a cvar's value, run as commands, runs restricted: with the
 // rights of whoever set it
 qboolean Cvar_AllowedFromText( const char *var_name );
@@ -1031,6 +1035,8 @@ qboolean	FS_LastFileIsGameContent( void );
 // pk3 or a pk3dir, not a game directory
 const char	*FS_LastFilePath( const char *qpath );
 // where the last file found was, its path or its pak's
+const char	*FS_LastFileContent( void );
+// the pk3 or pk3dir the last file read is in ("pak0.pk3"), or ""
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1

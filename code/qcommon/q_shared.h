@@ -982,6 +982,8 @@ struct cvar_s {
 
 	qboolean	untrusted;	// game code or a server created it, or they or restricted text set it
 						// last: see Cvar_RunsRestricted
+	qboolean	pakSet;		// a pak's config on a dedicated server set it last: vstr runs it
+						// as that config's text (Cmd_IsPakConfig)
 
 	// Where string comes from (Cvar_Resolve), highest first, each NULL if
 	// unset: what the server we're connected to requires; the player's own
