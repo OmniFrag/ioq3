@@ -764,6 +764,14 @@ typedef struct {
 	const char	*name;
 	cvarScope_t	scope;
 	qboolean	clientOnly;	// it means nothing to a dedicated server
+	// what describes it, as the game's declarations write it, each NULL
+	// where they don't say (docs/design/settings-descriptions.md)
+	const char	*role;		// "server", "preference", "tuning", "state", "capability"
+	const char	*owner;		// the code it belongs to: "game", "bots", "server", "renderer"...
+	const char	*tier;		// "basic", "notable", "all"
+	const char	*type;		// "bool", "enum", "bits", "int", "number", "text", "password"
+	const char	*unit;		// what a number counts, as said after it: "frames a second", "ms"
+	const char	*applies;	// "at once", "next map", "restart"; NULL: as its flags say
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
