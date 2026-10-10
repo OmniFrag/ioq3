@@ -3973,6 +3973,15 @@ static void FS_CheckPak0( void )
 				founddemo = qtrue;
 		}
 
+		// the demo's pak0, put in baseq3, which FS_ChooseDemo plays
+		else if(!Q_stricmpn( curpack->pakGamename, BASEGAME, MAX_OSPATH )
+				&& !Q_stricmpn( pakBasename, "pak0", MAX_OSPATH )
+				&& curpack->checksum == DEMO_PAK0_CHECKSUM
+				&& !Q_stricmp( com_basegame->string, "demoq3" ))
+		{
+			founddemo = qtrue;
+		}
+
 		else if(!Q_stricmpn( curpack->pakGamename, BASEGAME, MAX_OSPATH )
 				&& strlen(pakBasename) == 4 && !Q_stricmpn( pakBasename, "pak", 3 )
 				&& pakBasename[3] >= '0' && pakBasename[3] <= '0' + NUM_ID_PAKS - 1)
@@ -4439,6 +4448,71 @@ void FS_PureServerSetReferencedPaks( const char *pakSums, const char *pakNames )
 
 /*
 ================
+FS_FindPak0
+
+The base game's pak0 with the checksum given, among the paks found, or NULL
+================
+*/
+static const pack_t *FS_FindPak0( const char *gameName, unsigned int checksum ) {
+	searchpath_t	*path;
+
+	for( path = fs_searchpaths; path; path = path->next ) {
+		if( path->pack && !Q_stricmp( path->pack->pakGamename, gameName ) &&
+			!Q_stricmp( path->pack->pakBasename, "pak0" ) && path->pack->checksum == checksum ) {
+			return path->pack;
+		}
+	}
+	return NULL;
+}
+
+/*
+================
+FS_ChooseDemo
+
+With the full game's pak0 nowhere, and no base game asked for, plays the
+demo's pak0, known by its checksum, where there is one: in demoq3, or in
+baseq3, where a newcomer copies it, which is then read as the demo's. So
+no one needs com_basegame demoq3. Returns whether it did
+================
+*/
+static qboolean FS_ChooseDemo( void ) {
+	const pack_t	*demo;
+	qboolean		inBase;
+
+	if( Cvar_Source( com_basegame ) != CVAR_SOURCE_DEFAULT || Q_stricmp( com_basegame->string, BASEGAME ) ||
+		FS_FindPak0( BASEGAME, pak_checksums[0] ) ) {
+		return qfalse;
+	}
+	demo = FS_FindPak0( BASEGAME, DEMO_PAK0_CHECKSUM );
+	inBase = demo != NULL;
+	// playing it from baseq3 takes fs_basegame, which an admin's may hold
+	if( inBase && fs_basegame->string[0] && Q_stricmp( fs_basegame->string, BASEGAME ) ) {
+		return qfalse;
+	}
+
+	FS_Shutdown( qfalse );
+	Cvar_Set2( "com_basegame", "demoq3", qtrue );
+	if( inBase ) {
+		Cvar_Set2( "fs_basegame", BASEGAME, qtrue );
+	}
+	FS_Startup( com_basegame->string );
+	demo = FS_FindPak0( inBase ? BASEGAME : "demoq3", DEMO_PAK0_CHECKSUM );
+	if( !demo ) {
+		// no demo either: the full game's missing data, as before
+		FS_Shutdown( qfalse );
+		Cvar_Set2( "com_basegame", BASEGAME, qtrue );
+		FS_Startup( com_basegame->string );
+		return qfalse;
+	}
+
+	Com_Printf( "Playing the demo's data (%s): the full game's paks weren't found. "
+		"Put pak0.pk3 to pak8.pk3 in %s%c" BASEGAME " to play the full game.\n",
+		demo->pakFilename, fs_homedatapath->string, PATH_SEP );
+	return qtrue;
+}
+
+/*
+================
 FS_InitFilesystem
 
 Called only at initial startup, not when the filesystem
@@ -4464,6 +4538,7 @@ void FS_InitFilesystem( void ) {
 	FS_Startup(com_basegame->string);
 
 #ifndef STANDALONE
+	FS_ChooseDemo( );
 	FS_CheckPak0( );
 #endif
 
