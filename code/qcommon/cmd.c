@@ -33,7 +33,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // a space, as the tokenizer takes it), and no command sees. "+name" opens a
 // frame whose lines are counted from 1; "=line name" one whose lines all
 // have the origin of the line that queued them (vstr's text, say, or the
-// command line's, line 0); and "-" closes the latest.
+// command line's, line 0); "*name" and "#line name" the same for a pak's
+// config on a dedicated server and what it queues (Cmd_IsPakConfig); and
+// "-" closes the latest.
 #define	CBUF_MARKER			'\x01'
 #define	MAX_ORIGIN_DEPTH	16
 
@@ -41,6 +43,7 @@ typedef struct {
 	char		name[MAX_QPATH];	// "" for text from no config
 	int			line;				// the line's number, 0 for none
 	qboolean	counted;			// a frame's: line is the next line's, and counts on
+	qboolean	pak;				// a pak's config's, on a dedicated server
 } cmdOrigin_t;
 
 typedef struct {
@@ -220,6 +223,12 @@ static void Cbuf_InsertFrame( cmd_t *buf, const char *marker, const char *text )
 		Com_Printf( "Cbuf_InsertText overflowed\n" );
 		return;
 	}
+	// a frame past the deepest kept has no origin, so a pak's text there
+	// would run as no one's: an exec loop in a pak's config stops here
+	if ( marker && ( marker[1] == '*' || marker[1] == '#' ) && buf->depth >= MAX_ORIGIN_DEPTH ) {
+		Com_Printf( "%s: configs nested too deep\n", Cmd_Origin() ? Cmd_Origin() : "a pak's config" );
+		return;
+	}
 
 	// move the existing command text
 	memmove( buf->data + len, buf->data, buf->cursize );
@@ -234,15 +243,15 @@ Cbuf_OriginMarker
 The marker of a frame whose lines all have an origin, line 0 for none
 ============
 */
-static const char *Cbuf_OriginMarker( const char *name, int line ) {
-	return va( "%c=%i %s", CBUF_MARKER, line, name );
+static const char *Cbuf_OriginMarker( const char *name, int line, qboolean pak ) {
+	return va( "%c%c%i %s", CBUF_MARKER, pak ? '#' : '=', line, name );
 }
 
 // inserts text a command queues, in a frame keeping the command's origin;
 // with none, and no frame to keep it out of, as it is
 static void Cbuf_Insert( cmd_t *buf, const char *text ) {
-	Cbuf_InsertFrame( buf, cmd_origin.name[0] || buf->depth ?
-		Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line ) : NULL, text );
+	Cbuf_InsertFrame( buf, cmd_origin.name[0] || cmd_origin.pak || buf->depth ?
+		Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, cmd_origin.pak ) : NULL, text );
 }
 
 /*
@@ -267,7 +276,8 @@ static void Cbuf_ExecuteMarker( cmd_t *buf, int at ) {
 		const char	*name = text + 2;
 
 		origin = &buf->origins[ buf->depth - 1 ];
-		origin->counted = text[1] == '+';
+		origin->counted = text[1] == '+' || text[1] == '*';
+		origin->pak = text[1] == '*' || text[1] == '#';
 		origin->line = 1;
 		if ( !origin->counted ) {
 			origin->line = atoi( name );
@@ -441,6 +451,7 @@ void Cmd_EndRestricted( void ) {
 	// nor does its origin outlive it (Cbuf_ExecuteLine, Cmd_PushOrigin)
 	cmd_origin.name[0] = '\0';
 	cmd_origin.line = 0;
+	cmd_origin.pak = qfalse;
 	cmd_numPushedOrigins = 0;
 }
 
@@ -454,11 +465,15 @@ Cbuf_ExecuteText, restricted or not, whatever the running command is
 */
 static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolean restricted )
 {
-	qboolean	running = cmd_restricted, script = cmd_script;
+	qboolean	running = cmd_restricted, script = cmd_script, pak = cmd_origin.pak;
 
-	// the engine's text, or game code's, isn't a script's
+	// the engine's text, or game code's, isn't a script's; nor is game
+	// code's a pak config's when a pak's map command started the game
 	cmd_restricted = restricted;
 	cmd_script = qfalse;
+	if ( restricted ) {
+		cmd_origin.pak = qfalse;
+	}
 	switch (exec_when)
 	{
 	case EXEC_NOW:
@@ -481,6 +496,7 @@ static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolea
 	}
 	cmd_restricted = running;
 	cmd_script = script;
+	cmd_origin.pak = pak;
 }
 
 /*
@@ -670,6 +686,18 @@ qboolean Cmd_OriginIsCommandLine( void ) {
 
 /*
 ============
+Cmd_IsPakConfig
+
+Whether the running command came from a config in a pak on a dedicated
+server, or from text one queued (Cmd_Exec_f's frame)
+============
+*/
+qboolean Cmd_IsPakConfig( void ) {
+	return cmd_origin.pak;
+}
+
+/*
+============
 Cmd_PushOrigin
 
 The origin of text run at once rather than queued, a settings file's
@@ -684,6 +712,7 @@ void Cmd_PushOrigin( const char *name, int line ) {
 	Q_strncpyz( cmd_origin.name, name, sizeof( cmd_origin.name ) );
 	cmd_origin.line = line;
 	cmd_origin.counted = qfalse;
+	cmd_origin.pak = qfalse;
 }
 
 /*
@@ -706,7 +735,7 @@ Text added to the player's buffer whose lines all have one origin
 */
 void Cbuf_AddTextFrom( const char *origin, const char *text ) {
 	cmd_t		*buf = Cbuf_Current();
-	const char	*marker = Cbuf_OriginMarker( origin, 0 );
+	const char	*marker = Cbuf_OriginMarker( origin, 0, qfalse );
 	int			len = Cbuf_WriteFrame( NULL, marker, text );
 
 	if ( buf->cursize + len >= buf->maxsize ) {
@@ -862,12 +891,14 @@ Cmd_Exec_f
 */
 void Cmd_Exec_f( void ) {
 	qboolean quiet, script, predecessor, restricted;
+	int		i;
 	union {
 		char	*c;
 		void	*v;
 	} f;
 	char	filename[MAX_QPATH];
 	char	ospath[MAX_OSPATH];
+	char	content[MAX_QPATH];
 
 	quiet = !Q_stricmp(Cmd_Argv(0), "execq");
 
@@ -879,16 +910,32 @@ void Cmd_Exec_f( void ) {
 
 	Q_strncpyz( filename, Cmd_Argv(1), sizeof( filename ) );
 	COM_DefaultExtension( filename, sizeof( filename ), ".cfg" );
+
+	FS_ReadFile( filename, &f.v);
+	Q_strncpyz( content, FS_LastFileContent(), sizeof( content ) );
+	// a pak's config execs only what's in a pak: refused before anything
+	// takes note of the exec (startup scripts, the predecessor's home)
+	if ( Cmd_IsPakConfig() && f.c && !content[0] ) {
+		FS_FreeFile( f.v );
+		Com_Printf( "%s can't exec %s, which isn't in a pak.\n", Cmd_Origin(), filename );
+		return;
+	}
+	// the pak's name goes in a marker line, which a line break would end
+	for ( i = 0; content[i]; i++ ) {
+		if ( (unsigned char)content[i] < ' ' ) {
+			content[i] = '?';
+		}
+	}
+
 	// the command line's exec runs as a startup script, where the command
 	// line puts it: before the rest of its buffer, as an exec's text runs.
 	// Taken even when the config is missing, so that a later exec of it,
 	// the admin's, isn't one
 	script = cmd_script || ( !cmd_restricted && Cmd_TakeCommandLineExec( filename ) );
 
-	FS_ReadFile( filename, &f.v);
 	// a dedicated server moved from the predecessor's home finds the configs
 	// it kept there, as it finds the paks, and says which it ran
-	predecessor = !f.c && !Com_IsClient() && !cmd_restricted &&
+	predecessor = !f.c && !Com_IsClient() && !cmd_restricted && !Cmd_IsPakConfig() &&
 		FS_ReadPredecessorConfig( filename, &f.v, ospath, sizeof( ospath ) ) >= 0;
 	if (!f.c) {
 		Com_Printf ("couldn't exec %s: it isn't in %s\n", filename,
@@ -915,13 +962,21 @@ void Cmd_Exec_f( void ) {
 	}
 
 	// a config from a pk3 or pk3dir, which a download can bring, runs
-	// restricted in the client; a dedicated server doesn't download.
-	// The first configs run before com_dedicated exists
-	restricted = cmd_restricted;
-#ifndef DEDICATED
-	restricted = restricted || ( Com_IsClient() && FS_LastFileIsGameContent() );
-#endif
-	Cbuf_InsertFrame( Cbuf_For( restricted, script ), va( "%c+%s", CBUF_MARKER, filename ), f.c );
+	// restricted in the client. On a dedicated server, where a mod's or a
+	// server pack's paks bring them, it sets what it likes, passwords
+	// among them, but can't reach past the paks: its frame is a pak's
+	// (Cmd_IsPakConfig), named for the pak, which its lines' origin shows
+	restricted = cmd_restricted || ( Com_IsClient() && content[0] );
+	if ( !Com_IsClient() && content[0] ) {
+		// but default.cfg, which every pak0 has
+		if ( !Cmd_IsPakConfig() && Q_stricmp( filename, "default.cfg" ) ) {
+			Com_Printf( "%s is in %s, so it can set settings, but not write files, exec configs "
+				"outside paks or reach the system, and what it sets isn't saved.\n", filename, content );
+		}
+		Cbuf_InsertFrame( Cbuf_For( restricted, script ), va( "%c*%s/%s", CBUF_MARKER, content, filename ), f.c );
+	} else {
+		Cbuf_InsertFrame( Cbuf_For( restricted, script ), va( "%c+%s", CBUF_MARKER, filename ), f.c );
+	}
 
 	if ( predecessor )
 		Z_Free( f.v );
@@ -950,9 +1005,15 @@ void Cmd_Vstr_f( void ) {
 		return;
 	}
 
-	// with the rights of whoever set it: see Cvar_RunsRestricted
+	// with the rights of whoever set it: see Cvar_RunsRestricted; and a
+	// pak's config's, run later by game code (vstr nextmap), keeps its limits
 	v = Cvar_VariableString( Cmd_Argv( 1 ) );
-	Cbuf_InsertTextRestricted( va("%s\n", v ), Cvar_RunsRestricted( Cmd_Argv( 1 ) ) );
+	if ( Cvar_SetByPak( Cmd_Argv( 1 ) ) ) {
+		Cbuf_InsertFrame( Cbuf_For( Cvar_RunsRestricted( Cmd_Argv( 1 ) ), cmd_script ),
+			Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, qtrue ), v );
+	} else {
+		Cbuf_InsertTextRestricted( va("%s\n", v ), Cvar_RunsRestricted( Cmd_Argv( 1 ) ) );
+	}
 }
 
 
@@ -1394,6 +1455,24 @@ void Cmd_CompleteArgument( const char *command, char *args, int argNum ) {
 
 /*
 ============
+Cmd_InList
+
+Whether a command's name is one of a list's
+============
+*/
+static qboolean Cmd_InList( const char *name, const char **list, int count ) {
+	int		i;
+
+	for ( i = 0; i < count; i++ ) {
+		if ( !Q_stricmp( name, list[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+============
 Cmd_ExecuteString
 
 A complete command line has been parsed, so try to execute it
@@ -1409,16 +1488,22 @@ void	Cmd_ExecuteString( const char *text ) {
 	}
 
 	// game code's text can't run the commands that send or print secrets,
-	// or stop the process
-	if ( cmd_restricted ) {
+	// or stop the process; nor can a pak's config on a dedicated server,
+	// which sets what it likes but writes no file either
+	{
 		static const char *denied[] = { "rcon", "condump", "setenv", "error", "crash", "freeze" };
-		int		i;
+		// and the ban list's, which writes the file sv_banFile names
+		static const char *writers[] = { "writeconfig", "settings_export", "settings_import",
+			"banaddr", "bandel", "exceptaddr", "exceptdel", "flushbans" };
 
-		for ( i = 0; i < ARRAY_LEN( denied ); i++ ) {
-			if ( !Q_stricmp( cmd_argv[0], denied[i] ) ) {
-				Com_Printf( "%s can't be run by game code or game content.\n", cmd_argv[0] );
-				return;
-			}
+		if ( cmd_restricted && Cmd_InList( cmd_argv[0], denied, ARRAY_LEN( denied ) ) ) {
+			Com_Printf( "%s can't be run by game code or game content.\n", cmd_argv[0] );
+			return;
+		}
+		if ( Cmd_IsPakConfig() && ( Cmd_InList( cmd_argv[0], denied, ARRAY_LEN( denied ) ) ||
+				Cmd_InList( cmd_argv[0], writers, ARRAY_LEN( writers ) ) ) ) {
+			Com_Printf( "%s can't be run by a config in a pak (%s).\n", cmd_argv[0], Cmd_Origin() );
+			return;
 		}
 	}
 
@@ -1427,13 +1512,10 @@ void	Cmd_ExecuteString( const char *text ) {
 	if ( cmd_holdMapCommands && cmd_script ) {
 		static const char *held[] = { "map", "devmap", "spmap", "spdevmap", "map_restart", "vstr",
 			"game_restart", "reload" };
-		int		i;
 
-		for ( i = 0; i < ARRAY_LEN( held ); i++ ) {
-			if ( !Q_stricmp( cmd_argv[0], held[i] ) ) {
-				Com_Printf( "Held back, as configs run again keep the map: %s\n", Cmd_Cmd() );
-				return;
-			}
+		if ( Cmd_InList( cmd_argv[0], held, ARRAY_LEN( held ) ) ) {
+			Com_Printf( "Held back, as configs run again keep the map: %s\n", Cmd_Cmd() );
+			return;
 		}
 	}
 

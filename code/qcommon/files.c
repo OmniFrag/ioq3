@@ -1590,6 +1590,31 @@ const char *FS_LastFilePath( const char *qpath ) {
 
 /*
 ===========
+FS_LastFileContent
+
+The pk3 or pk3dir the last file FS_FOpenFileRead found is in, such as
+"pak0.pk3", or "" when it's in a game directory
+===========
+*/
+const char *FS_LastFileContent( void ) {
+	static char	content[MAX_QPATH];
+
+	content[0] = '\0';
+	// the pack's basename, not its OS path, whose separator varies
+	if ( !FS_LastFileIsGameContent() ) {
+		return content;
+	}
+	if ( fs_lastFileSearch->pack ) {
+		Q_strncpyz( content, fs_lastFileSearch->pack->pakBasename, sizeof( content ) - 4 );
+		Q_strcat( content, sizeof( content ), ".pk3" );
+	} else {
+		Q_strncpyz( content, COM_SkipPath( fs_lastFileSearch->dir->gamedir ), sizeof( content ) );
+	}
+	return content;
+}
+
+/*
+===========
 FS_FOpenFileRead
 
 Finds the file in the search path.
@@ -3547,8 +3572,6 @@ void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
 
-	fs_lastFileSearch = NULL;	// its search paths go
-
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {
 			FS_FCloseFile(i);
@@ -3570,6 +3593,7 @@ void FS_Shutdown( qboolean closemfp ) {
 
 	// any FS_ calls will now be an error until reinitialized
 	fs_searchpaths = NULL;
+	fs_lastFileSearch = NULL;
 
 	Cmd_RemoveCommand( "path" );
 	Cmd_RemoveCommand( "dir" );
