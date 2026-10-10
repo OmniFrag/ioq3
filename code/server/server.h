@@ -327,6 +327,7 @@ extern	cvar_t	*sv_lanForceRate;
 extern	cvar_t	*sv_strictAuth;
 #endif
 extern	cvar_t	*sv_banFile;
+extern	cvar_t	*sv_rconAllow;
 
 extern	serverBan_t serverBans[SERVER_MAXBANS];
 extern	int serverBansCount;
@@ -438,6 +439,7 @@ int SV_SendQueuedMessages(void);
 // sv_ccmds.c
 //
 void SV_Heartbeat_f( void );
+qboolean SV_ParseCIDRNotation( netadr_t *dest, int *mask, char *adrstr );
 
 //
 // sv_snapshot.c

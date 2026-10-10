@@ -64,6 +64,7 @@ cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates t
 cvar_t	*sv_strictAuth;
 #endif
 cvar_t	*sv_banFile;
+cvar_t	*sv_rconAllow;		// the addresses rcon is taken from, empty for any
 
 serverBan_t serverBans[SERVER_MAXBANS];
 int serverBansCount = 0;
@@ -784,6 +785,94 @@ static void SVC_RconRefused( leakyBucket_t *bucket, netadr_t from, const char *w
 	*refused = 0;
 }
 
+#define	MAX_RCON_ALLOW	32
+
+// sv_rconAllow's addresses, as it was last parsed
+static struct {
+	netadr_t	adr;
+	int			mask;
+} rconAllow[MAX_RCON_ALLOW];
+static int		rconAllowCount;
+
+/*
+===============
+SV_ParseRconAllow
+
+Parses sv_rconAllow when it has changed, each frame, saying what it can't
+use, so a name is looked up once, as the admin sets it, rather than for a
+packet. When it has text but no address, rcon is refused to all rather
+than allowed to any
+===============
+*/
+static void SV_ParseRconAllow( void ) {
+	char	list[MAX_STRING_CHARS];
+	char	*entry;
+
+	if ( !sv_rconAllow->modified ) {
+		return;
+	}
+	sv_rconAllow->modified = qfalse;
+	rconAllowCount = 0;
+
+	Q_strncpyz( list, sv_rconAllow->string, sizeof( list ) );
+	if ( strlen( sv_rconAllow->string ) >= sizeof( list ) ) {
+		// a cut entry could name another address: leave it out whole
+		char	*p, *last = list;
+
+		for ( p = list; *p; p++ ) {
+			if ( strchr( " ,;", *p ) ) {
+				last = p;
+			}
+		}
+		*last = '\0';
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow is longer than %i characters; "
+			"the addresses after that are left out.\n", (int)sizeof( list ) - 1 );
+	}
+	for ( entry = strtok( list, " ,;" ); entry; entry = strtok( NULL, " ,;" ) ) {
+		if ( rconAllowCount == MAX_RCON_ALLOW ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow lists more than %i addresses; "
+				"%s and those after it are left out.\n", MAX_RCON_ALLOW, entry );
+			break;
+		}
+		if ( SV_ParseCIDRNotation( &rconAllow[rconAllowCount].adr, &rconAllow[rconAllowCount].mask, entry ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow: %s isn't an address; left out.\n", entry );
+			continue;
+		}
+		// "localhost" parses as the client's own loopback, which no packet
+		// comes from: rcon from this machine comes from 127.0.0.0/8
+		if ( rconAllow[rconAllowCount].adr.type == NA_LOOPBACK ) {
+			NET_StringToAdr( "127.0.0.1", &rconAllow[rconAllowCount].adr, NA_IP );
+			rconAllow[rconAllowCount].mask = 8;
+		}
+		rconAllowCount++;
+	}
+	if ( sv_rconAllow->string[0] && !rconAllowCount ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow lists no address it can use, "
+			"so rcon is refused from everywhere.\n" );
+	}
+}
+
+/*
+===============
+SVC_RconAllowed
+
+Whether rcon may come from this address: any when sv_rconAllow is empty
+===============
+*/
+static qboolean SVC_RconAllowed( netadr_t from ) {
+	int		i;
+
+	if ( !sv_rconAllow->string[0] ) {
+		return qtrue;
+	}
+	for ( i = 0; i < rconAllowCount; i++ ) {
+		if ( NET_CompareBaseAdrMask( rconAllow[i].adr, from, rconAllow[i].mask ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 /*
 ===============
 SVC_RemoteCommand
@@ -806,6 +895,12 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 	// Prevent using rcon as an amplifier and make dictionary attacks impractical
 	if ( SVC_RateLimit( bucket ? &bucket->rate : NULL, 10, 1000 ) ) {
 		SVC_RconRefused( bucket, from, "Rcon over the rate limit, dropped" );
+		return;
+	}
+
+	// no answer, so an address left out learns nothing
+	if ( !SVC_RconAllowed( from ) ) {
+		SVC_RconRefused( bucket, from, "Rcon outside sv_rconAllow, dropped" );
 		return;
 	}
 
@@ -1310,6 +1405,8 @@ void SV_Frame( int msec ) {
 
 	SV_FinishStartup();
 	SV_KeepAwake();
+	// before the pause, as rcon is taken while paused
+	SV_ParseRconAllow();
 
 	// allow pause if only the local client is connected
 	if ( SV_CheckPaused() ) {
