@@ -103,6 +103,7 @@ cvar_t	*com_legacyprotocol;
 cvar_t	*com_basegame;
 cvar_t  *com_homepath;
 cvar_t	*com_busyWait;
+static cvar_t	*com_writeConfig;
 #ifndef DEDICATED
 cvar_t  *con_autochat;
 #endif
@@ -3674,6 +3675,10 @@ void Com_Init( char *commandLine ) {
 #endif
 	com_abnormalExit = Cvar_Get( "com_abnormalExit", "0", CVAR_ROM );
 	com_busyWait = Cvar_Get("com_busyWait", "0", CVAR_ARCHIVE);
+	com_writeConfig = Cvar_Get( "com_writeConfig", "1", 0 );
+	Cvar_SetDescription( com_writeConfig, "0 leaves the saved settings as they are, never writing "
+		"changes back: for several servers sharing a home, which would otherwise overwrite each "
+		"other's (writeconfig still writes)." );
 #ifndef DEDICATED
 	// the renderer's, set when it makes the window
 	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
@@ -3962,7 +3967,7 @@ static void Com_WriteSettings( void ) {
 Com_WriteConfiguration
 
 Writes key bindings and archived cvars to the files whose text changed, if
-any was modified
+any was modified, unless com_writeConfig is 0
 ===============
 */
 void Com_WriteConfiguration( void ) {
@@ -3976,7 +3981,9 @@ void Com_WriteConfiguration( void ) {
 		return;
 	}
 	cvar_modifiedFlags &= ~CVAR_ARCHIVE;
-	Com_WriteSettings();
+	if ( com_writeConfig->integer ) {
+		Com_WriteSettings();
+	}
 
 	// not needed for dedicated or standalone
 #if !defined(DEDICATED) && !defined(STANDALONE)

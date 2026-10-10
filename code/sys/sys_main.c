@@ -330,7 +330,8 @@ static void Sys_WarnSharedHome( void )
 		{
 			Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d (%s), runs in this "
 				"home, %s: the two share its saved settings (" Q3CONFIG_CFG "), qconsole.log "
-				"and games.log. Give each server a home of its own: +set fs_homepath <folder>.\n",
+				"and games.log. Give each server a home of its own (+set fs_homepath <folder>), or "
+				"keep each from writing the settings the other saved (+set com_writeConfig 0).\n",
 				pid, files[ i ], Cvar_VariableString( "fs_homestatepath" ) );
 		}
 	}
