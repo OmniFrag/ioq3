@@ -40,6 +40,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <wincrypt.h>
 #include <shlobj.h>
 #include <psapi.h>
+// netfw.h's GUIDs, which no import library has, are defined here
+#include <netfw.h>
 #include <float.h>
 
 #ifndef KEY_WOW64_32KEY
@@ -1207,4 +1209,267 @@ No service manager on Windows reads a program's state this way
 */
 void Sys_Notify( const char *state )
 {
+}
+
+typedef enum {
+	FIREWALL_UNKNOWN,	// it couldn't be read
+	FIREWALL_OFF,
+	FIREWALL_ALLOWS,
+	FIREWALL_BLOCKS,
+	FIREWALL_BLOCKS_ALL,	// "Block all incoming connections"
+	FIREWALL_NO_RULE	// on, with no rule for the program or its port
+} firewall_t;
+
+// NET_FW_IP_PROTOCOL_ANY, which MinGW's netfw.h lacks
+#define FIREWALL_PROTOCOL_ANY 256
+
+// Windows Firewall's class and interfaces, which netfw.h declares but may
+// not define (MinGW's only after initguid.h)
+static const CLSID firewallPolicyClass = { 0xe2b3c97f, 0x6ae1, 0x41ac,
+	{ 0x81, 0x7a, 0xf6, 0xf9, 0x21, 0x66, 0xd7, 0xdd } };
+static const IID firewallPolicyInterface = { 0x98325047, 0xc671, 0x4174,
+	{ 0x8d, 0x81, 0xde, 0xfc, 0xd3, 0xf0, 0x31, 0x86 } };
+static const IID firewallRuleInterface = { 0xaf230d27, 0xbaba, 0x4e42,
+	{ 0xac, 0xed, 0xf5, 0x24, 0xf2, 0x2c, 0xfc, 0xe2 } };
+static const IID firewallRule3Interface = { 0xb21563ff, 0xd696, 0x4222,
+	{ 0xab, 0x46, 0x4e, 0x89, 0xb7, 0x3a, 0xb3, 0x4a } };
+
+/*
+=================
+Sys_FirewallPortsInclude
+
+Whether a rule's local ports, "*" or a list of ports and ranges, take in
+port
+=================
+*/
+static qboolean Sys_FirewallPortsInclude( BSTR ports, int port )
+{
+	char	list[ 1024 ];
+	char	*p;
+	int		low, high;
+
+	if( !ports || !ports[ 0 ] )
+		return qtrue;
+	if( !WideCharToMultiByte( CP_UTF8, 0, ports, -1, list, sizeof( list ), NULL, NULL ) )
+		return qfalse;
+	for( p = strtok( list, "," ); p; p = strtok( NULL, "," ) )
+	{
+		if( !strcmp( p, "*" ) )
+			return qtrue;
+		if( sscanf( p, "%d-%d", &low, &high ) == 2 ? port >= low && port <= high : atoi( p ) == port )
+			return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+=================
+Sys_FirewallAny
+
+Frees a rule's text property, and says whether it was empty or "*", or
+match when given
+=================
+*/
+static qboolean Sys_FirewallAny( BSTR text, const WCHAR *match )
+{
+	qboolean any = !text || !text[ 0 ] || !wcscmp( text, L"*" ) || ( match && !_wcsicmp( text, match ) );
+
+	SysFreeString( text );
+	return any;
+}
+
+/*
+=================
+Sys_FirewallRuleApplies
+
+Whether an inbound rule decides whether players reach this program on
+port: enabled in a current profile, for UDP, for this program or for any
+(not a service's, an app package's or a user's), and for the port, from
+any address to any of this computer's, on any kind of network interface
+=================
+*/
+static qboolean Sys_FirewallRuleApplies( INetFwRule *rule, LONG profiles, const WCHAR *exe, int port )
+{
+	VARIANT_BOOL			enabled;
+	NET_FW_RULE_DIRECTION	direction;
+	LONG					ruleProfiles, protocol;
+	BSTR					text = NULL;
+	INetFwRule3				*rule3 = NULL;
+	qboolean				applies;
+
+	// the most telling first: most rules are for another program
+	if( FAILED( rule->lpVtbl->get_Enabled( rule, &enabled ) ) || !enabled ||
+		FAILED( rule->lpVtbl->get_Direction( rule, &direction ) ) || direction != NET_FW_RULE_DIR_IN ||
+		FAILED( rule->lpVtbl->get_ApplicationName( rule, &text ) ) || !Sys_FirewallAny( text, exe ) ||
+		FAILED( rule->lpVtbl->get_Profiles( rule, &ruleProfiles ) ) || !( ruleProfiles & profiles ) ||
+		FAILED( rule->lpVtbl->get_Protocol( rule, &protocol ) ) ||
+		( protocol != NET_FW_IP_PROTOCOL_UDP && protocol != FIREWALL_PROTOCOL_ANY ) ||
+		FAILED( rule->lpVtbl->get_ServiceName( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
+		FAILED( rule->lpVtbl->get_LocalAddresses( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
+		FAILED( rule->lpVtbl->get_RemoteAddresses( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
+		FAILED( rule->lpVtbl->get_InterfaceTypes( rule, &text ) ) || !Sys_FirewallAny( text, L"All" ) )
+		return qfalse;
+
+	// a Store app's rules, and a user's, name no program
+	if( SUCCEEDED( rule->lpVtbl->QueryInterface( rule, &firewallRule3Interface, (void **)&rule3 ) ) )
+	{
+		applies =
+			SUCCEEDED( rule3->lpVtbl->get_LocalAppPackageId( rule3, &text ) ) && Sys_FirewallAny( text, NULL ) &&
+			SUCCEEDED( rule3->lpVtbl->get_LocalUserOwner( rule3, &text ) ) && Sys_FirewallAny( text, NULL );
+		rule3->lpVtbl->Release( rule3 );
+		if( !applies )
+			return qfalse;
+	}
+
+	if( FAILED( rule->lpVtbl->get_LocalPorts( rule, &text ) ) )
+		return qfalse;
+	applies = Sys_FirewallPortsInclude( text, port );
+	SysFreeString( text );
+	return applies;
+}
+
+/*
+=================
+Sys_Firewall
+
+Whether Windows Firewall lets players on other computers reach this
+program on port, as far as a user without administrator rights can read
+its policy: a block rule wins over an allow rule, and its name goes in
+blocker
+=================
+*/
+static firewall_t Sys_Firewall( const WCHAR *exe, int port, char *blocker, int size )
+{
+	static const NET_FW_PROFILE_TYPE2 types[] = {
+		NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_PUBLIC
+	};
+	INetFwPolicy2	*policy = NULL;
+	INetFwRules		*rules = NULL;
+	IUnknown		*enumerator = NULL;
+	IEnumVARIANT	*ruleList = NULL;
+	VARIANT			item;
+	VARIANT_BOOL	on;
+	LONG			profiles;
+	HRESULT			init;
+	qboolean		firewallOn = qfalse, allowed = qfalse, blocked = qfalse, blockedAll = qfalse;
+	firewall_t		result = FIREWALL_UNKNOWN;
+	int				i;
+
+	init = CoInitializeEx( NULL, COINIT_APARTMENTTHREADED );
+	if( FAILED( CoCreateInstance( &firewallPolicyClass, NULL, CLSCTX_INPROC_SERVER,
+			&firewallPolicyInterface, (void **)&policy ) ) ||
+		FAILED( policy->lpVtbl->get_CurrentProfileTypes( policy, &profiles ) ) )
+		goto done;
+
+	for( i = 0; i < ARRAY_LEN( types ); i++ )
+	{
+		if( ( profiles & types[ i ] ) &&
+			SUCCEEDED( policy->lpVtbl->get_FirewallEnabled( policy, types[ i ], &on ) ) && on )
+		{
+			firewallOn = qtrue;
+			if( SUCCEEDED( policy->lpVtbl->get_BlockAllInboundTraffic( policy, types[ i ], &on ) ) && on )
+				blockedAll = qtrue;
+		}
+	}
+	if( !firewallOn || blockedAll )
+	{
+		result = blockedAll ? FIREWALL_BLOCKS_ALL : FIREWALL_OFF;
+		goto done;
+	}
+
+	if( FAILED( policy->lpVtbl->get_Rules( policy, &rules ) ) ||
+		FAILED( rules->lpVtbl->get__NewEnum( rules, &enumerator ) ) ||
+		FAILED( enumerator->lpVtbl->QueryInterface( enumerator, &IID_IEnumVARIANT, (void **)&ruleList ) ) )
+		goto done;
+
+	VariantInit( &item );
+	while( !blocked && ruleList->lpVtbl->Next( ruleList, 1, &item, NULL ) == S_OK )
+	{
+		INetFwRule		*rule = NULL;
+		NET_FW_ACTION	action;
+
+		if( V_VT( &item ) == VT_DISPATCH && V_DISPATCH( &item ) &&
+			SUCCEEDED( V_DISPATCH( &item )->lpVtbl->QueryInterface( V_DISPATCH( &item ),
+				&firewallRuleInterface, (void **)&rule ) ) )
+		{
+			if( Sys_FirewallRuleApplies( rule, profiles, exe, port ) &&
+				SUCCEEDED( rule->lpVtbl->get_Action( rule, &action ) ) )
+			{
+				if( action == NET_FW_ACTION_BLOCK )
+				{
+					BSTR name = NULL;
+
+					blocked = qtrue;
+					if( SUCCEEDED( rule->lpVtbl->get_Name( rule, &name ) ) && name )
+						WideCharToMultiByte( CP_UTF8, 0, name, -1, blocker, size, NULL, NULL );
+					SysFreeString( name );
+				}
+				else
+					allowed = qtrue;
+			}
+			rule->lpVtbl->Release( rule );
+		}
+		VariantClear( &item );
+	}
+	result = blocked ? FIREWALL_BLOCKS : allowed ? FIREWALL_ALLOWS : FIREWALL_NO_RULE;
+
+done:
+	if( ruleList )
+		ruleList->lpVtbl->Release( ruleList );
+	if( enumerator )
+		enumerator->lpVtbl->Release( enumerator );
+	if( rules )
+		rules->lpVtbl->Release( rules );
+	if( policy )
+		policy->lpVtbl->Release( policy );
+	if( SUCCEEDED( init ) )
+		CoUninitialize( );
+	return result;
+}
+
+/*
+=================
+Sys_PrintFirewall
+
+For a dedicated server's start summary: whether Windows Firewall lets
+players on other computers in, and if not, the netsh lines that would,
+for an administrator to run. Nothing when it can't be read
+=================
+*/
+void Sys_PrintFirewall( int port )
+{
+	WCHAR	exe[ MAX_PATH ];
+	char	path[ MAX_OSPATH ];
+	char	blocker[ 256 ] = "";
+
+	if( !GetModuleFileNameW( NULL, exe, ARRAY_LEN( exe ) ) ||
+		!WideCharToMultiByte( CP_UTF8, 0, exe, -1, path, sizeof( path ), NULL, NULL ) )
+		return;
+
+	switch( Sys_Firewall( exe, port, blocker, sizeof( blocker ) ) )
+	{
+		case FIREWALL_OFF:
+			Com_Printf( "  firewall: Windows Firewall is off\n" );
+			return;
+		case FIREWALL_ALLOWS:
+			Com_Printf( "  firewall: Windows Firewall lets players in\n" );
+			return;
+		case FIREWALL_BLOCKS_ALL:
+			Com_Printf( "  firewall: Windows Firewall blocks all incoming connections, so players on other\n"
+				"    computers can't join: its \"Block all incoming connections\" setting is on\n" );
+			return;
+		case FIREWALL_BLOCKS:
+			Com_Printf( "  firewall: Windows Firewall's rule \"%s\" blocks players on other computers.\n"
+				"    To let them in, run as administrator:\n"
+				"    netsh advfirewall firewall delete rule name=\"%s\" dir=in\n", blocker, blocker );
+			break;
+		case FIREWALL_NO_RULE:
+			Com_Printf( "  firewall: no Windows Firewall rule lets players on other computers in yet,\n"
+				"    and Windows may block them. To let them in, run as administrator:\n" );
+			break;
+		default:
+			return;
+	}
+	Com_Printf( "    netsh advfirewall firewall add rule name=\"" PRODUCT_NAME " dedicated server\" "
+		"dir=in action=allow program=\"%s\" protocol=UDP localport=%d\n", path, port );
 }
