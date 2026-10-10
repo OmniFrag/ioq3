@@ -244,11 +244,15 @@ typedef struct {
 	qboolean	connected;
 } challenge_t;
 
+// what each map change sets svs.time to (SV_RebaseTime): an hour, so that
+// the times kept from it before stay above 0
+#define SV_TIME_REBASED	( 60 * 60 * 1000 )
+
 // this structure will be cleared only when the game dll changes
 typedef struct {
 	qboolean	initialized;				// sv_init has completed
 
-	int			time;						// will be strictly increasing across level changes
+	int			time;						// increasing within a map; set back as maps change (SV_RebaseTime)
 
 	int			snapFlagServerBit;			// ^= SNAPFLAG_SERVERCOUNT every SV_SpawnServer()
 
