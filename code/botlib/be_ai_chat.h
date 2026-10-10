@@ -54,7 +54,7 @@ typedef struct bot_consolemessage_s
 //match variable
 typedef struct bot_matchvariable_s
 {
-	char offset;
+	signed char offset;	// -1 for none, where char is unsigned too (Quake3e's 98691272)
 	int length;
 } bot_matchvariable_t;
 //returned to AI when a match is found

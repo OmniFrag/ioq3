@@ -2190,6 +2190,8 @@ int AAS_Reachability_Jump(int area1num, int area2num)
 			} //end for
 		} //end for
 	} //end for
+	// no edge pair supplied endpoints (Quake3e's db818a31)
+	if (bestdist == 999999) return qfalse;
 	VectorMiddle(beststart, beststart2, beststart);
 	VectorMiddle(bestend, bestend2, bestend);
 	if (bestdist > 4 && bestdist < maxjumpdistance)
