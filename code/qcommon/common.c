@@ -56,6 +56,8 @@ jmp_buf abortframe;		// an ERR_DROP occurred, exit the entire frame
 FILE *debuglogfile;
 static fileHandle_t pipefile;
 static fileHandle_t logfile;
+// qconsole.log, kept across starts, starts afresh past this
+#define QCONSOLE_MAX_BYTES	( 16 << 20 )
 fileHandle_t	com_journalFile;			// events are written here
 fileHandle_t	com_journalDataFile;		// config files are written here
 
@@ -257,6 +259,125 @@ static void Com_LogWrite( const char *text ) {
 	FS_Write( text, strlen( text ), logfile );
 }
 
+extern int	com_numConsoleLines;
+extern char	*com_consoleLines[];
+
+/*
+=============
+Com_Word
+
+The word at p, spaces before it skipped, into word; returns its end, at a
+space, a ; or the string's end. Not COM_Parse, whose token the command
+being run may be using
+=============
+*/
+static const char *Com_Word( const char *p, char *word, int size ) {
+	int		length = 0;
+
+	while ( *p == ' ' ) {
+		p++;
+	}
+	for ( ; *p && *p != ' ' && *p != ';'; p++ ) {
+		if ( length < size - 1 ) {
+			word[length++] = *p;
+		}
+	}
+	word[length] = '\0';
+	return p;
+}
+
+/*
+=============
+Com_HideSecret
+
+A command line's line as the log shows it: each command in it (the first,
+and any after a ;, which runs as well) that sets a password (rconpassword,
+g_password, sv_privatePassword) with its value hidden. A private cvar's,
+a path say, is the admin's to see here
+=============
+*/
+static void Com_HideSecret( const char *line, char *text, int size ) {
+	static const char *setters[] = { "set", "seta", "sets", "setu" };
+	char		name[MAX_TOKEN_CHARS];
+	const char	*end, *next;
+	qboolean	quoted;
+	int			i, length;
+
+	text[0] = '\0';
+	while ( *line ) {
+		end = Com_Word( line, name, sizeof( name ) );
+		for ( i = 0; i < ARRAY_LEN( setters ); i++ ) {
+			if ( !Q_stricmp( name, setters[i] ) ) {
+				end = Com_Word( end, name, sizeof( name ) );
+				break;
+			}
+		}
+		// the command ends at a ; outside quotes, as Cbuf_Execute splits
+		quoted = qfalse;
+		for ( next = line; *next && ( quoted || *next != ';' ); next++ ) {
+			if ( *next == '"' ) {
+				quoted = !quoted;
+			}
+		}
+		if ( !Q_stristr( name, "password" ) ) {
+			end = next;
+		}
+		// the command up to its value, never past the end of text
+		length = strlen( text );
+		Q_strncpyz( text + length, line, MIN( size - length, (int)( end - line ) + 1 ) );
+		if ( end != next ) {
+			Q_strcat( text, size, " (hidden)" );
+		}
+		if ( *next == ';' ) {
+			Q_strcat( text, size, ";" );
+			next++;
+		}
+		line = next;
+	}
+	for ( length = strlen( text ); length > 0 && text[length - 1] == ' '; length-- ) {
+		text[length - 1] = '\0';
+	}
+}
+
+/*
+=============
+Com_LogStart
+
+qconsole.log keeps what every start wrote; each start, the first time it
+opens the log, marks itself with the date and time, the version and its
+command line, passwords hidden and, as in the log's other lines, the bytes
+that control a terminal left out
+=============
+*/
+static void Com_LogStart( const struct tm *now ) {
+	static qboolean	marked;
+	// once, so not on Com_Printf's stack
+	static char		line[MAXPRINTMSG], command[MAX_STRING_CHARS];
+	char			date[32];
+	const char		*p;
+	int				i;
+
+	if ( marked ) {
+		return;
+	}
+	marked = qtrue;
+
+	strftime( date, sizeof( date ), "%Y-%m-%d %H:%M:%S", now );
+	Com_sprintf( line, sizeof( line ), "==== %s: %s %s started:", date, Q3_VERSION, PLATFORM_STRING );
+	for ( i = 0; i < com_numConsoleLines; i++ ) {
+		Com_HideSecret( com_consoleLines[i], command, sizeof( command ) );
+		if ( command[0] ) {
+			Q_strcat( line, sizeof( line ), i ? " +" : " " );
+			Q_strcat( line, sizeof( line ), command );
+		}
+	}
+	Q_strcat( line, sizeof( line ), "\n" );
+	for ( p = line; *p; ) {
+		p += Q_FilterTerminalText( command, sizeof( command ), p );
+		Com_LogWrite( command );
+	}
+}
+
 /*
 =============
 Com_Printf
@@ -303,16 +424,24 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 		if ( !logfile && FS_Initialized() && !opening_qconsole) {
 			struct tm *newtime;
 			time_t aclock;
+			qboolean rotated;
 
       opening_qconsole = qtrue;
 
 			time( &aclock );
 			newtime = localtime( &aclock );
 
-			logfile = FS_FOpenFileWrite_HomeData( "qconsole.log" );
-			
+			// grown past its bound, it starts afresh, the lines before kept
+			rotated = FS_RotateFile_HomeData( "qconsole.log", QCONSOLE_MAX_BYTES );
+			logfile = FS_FOpenFileAppend_HomeData( "qconsole.log" );
+
 			if(logfile)
 			{
+				Com_LogStart( newtime );
+				if ( rotated ) {
+					Com_Printf( "qconsole.log grew past %d MB, so it starts afresh; the lines before "
+						"are in qconsole.log.1\n", QCONSOLE_MAX_BYTES >> 20 );
+				}
 				Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
 			
 				if ( com_logfile->integer > 1 )
