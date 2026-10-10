@@ -215,9 +215,8 @@ qboolean Sys_IsServerPIDFile( const char *name )
 =================
 Sys_PIDFileName
 
-A dedicated server's is in its own directory (FS_ServerDir), named by the
-port it answers on, which differs from the directory's when two servers
-were started on one port
+A dedicated server's is in its own directory (FS_ServerDir), named by its
+port
 =================
 */
 static char *Sys_PIDFileName( const char *gamedir )
@@ -277,7 +276,9 @@ void Sys_RemovePIDFile( void )
 =================
 Sys_WritePIDFile
 
-Return qtrue if there is an existing stale PID file
+Return qtrue if there is an existing stale PID file. One naming a running
+dedicated server is another server's on this port at another address
+(net_ip), which shares this one's own directory: it says so
 =================
 */
 static qboolean Sys_WritePIDFile( const char *gamedir )
@@ -293,6 +294,13 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 	// a PID file already there names a process that's gone, or none
 	pid = Sys_ReadPIDFile( pidFile );
 	stale = pid == 0 || ( pid > 0 && !Sys_PIDIsRunning( pid ) );
+	if( !Com_IsClient( ) && pid > 0 && pid != Sys_PID( ) && !stale )
+	{
+		Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d, answers on this port at "
+			"another address and keeps its files in this server's folder, %s: the two share their "
+			"saved settings (" Q3CONFIG_CFG "), qconsole.log, games.log and PID file. Give each "
+			"server a port of its own (+set net_port <port>).\n", pid, FS_ServerDir( ) );
+	}
 
 	if( FS_CreatePath( pidFile ) ) {
 		return 0;
@@ -312,54 +320,12 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 
 /*
 =================
-Sys_WarnSharedHome
-
-Another dedicated server running with the same own directory, started on
-the same port (one that moved to the next free port, or one on another
-address), shares its saved settings and logs: a dedicated server says so
-as it starts, naming the other by its PID file
-=================
-*/
-static void Sys_WarnSharedHome( void )
-{
-	char		directory[ MAX_OSPATH ];
-	char		**files;
-	int			numFiles, i, pid;
-
-	if( Com_IsClient( ) || !pidFileWritten[ 0 ] )
-		return;
-
-	// the directory of this server's own PID file
-	Q_strncpyz( directory, pidFileWritten, sizeof( directory ) );
-	*strrchr( directory, '/' ) = '\0';
-	files = Sys_ListFiles( directory, ".pid", NULL, &numFiles, qfalse );
-	for( i = 0; i < numFiles; i++ )
-	{
-		if( !Sys_IsServerPIDFile( files[ i ] ) )
-			continue;
-
-		pid = Sys_ReadPIDFile( va( "%s/%s", directory, files[ i ] ) );
-		if( pid > 0 && pid != Sys_PID( ) && Sys_PIDIsRunning( pid ) )
-		{
-			Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d (%s), keeps its files "
-				"in this server's folder, %s: the two were started on one port, and share their "
-				"saved settings (" Q3CONFIG_CFG "), qconsole.log and games.log. Start each server "
-				"on a port of its own (+set net_port <port>).\n",
-				pid, files[ i ], directory );
-		}
-	}
-	Sys_FreeFileList( files );
-}
-
-/*
-=================
 Sys_InitPIDFile
 =================
 */
 void Sys_InitPIDFile( const char *gamedir ) {
 	qboolean stale = Sys_WritePIDFile( gamedir );
 
-	Sys_WarnSharedHome( );
 	if( stale ) {
 #ifndef DEDICATED
 		char modName[MAX_OSPATH];

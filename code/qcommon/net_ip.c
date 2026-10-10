@@ -1415,20 +1415,26 @@ NET_PortTaken
 
 A socket that didn't open. When its first port was in use, or refused
 (Windows refuses a port it reserves, or one another program holds for
-itself), a dedicated server whose port was chosen (on the command line,
-in a config or at the console) stops rather than answer on another, where
-its players and its firewall don't expect it
+itself), a dedicated server stops rather than answer on another, where
+its players and its firewall don't expect it, and whose own directory
+(FS_ServerDir, named by the port it was given) another server uses. An
+IPv6 port left to its default beside an open IPv4 one is the exception:
+the server answers on IPv4 alone (NET_OpenIP)
 ====================
 */
 static void NET_PortTaken( const cvar_t *portVar, int err, int tries ) {
-	cvarSource_t source = Cvar_Source( portVar );
+	cvarSource_t	source = Cvar_Source( portVar );
+	qboolean	chosen = source != CVAR_SOURCE_DEFAULT && source != CVAR_SOURCE_ENGINE;
 
 	if( ( err == EADDRINUSE || err == EACCES ) && tries == 0 && !Com_IsClient() &&
-		source != CVAR_SOURCE_DEFAULT && source != CVAR_SOURCE_ENGINE ) {
-		Com_ErrorExit( EXIT_NO_NETWORK, "UDP port %s, which %s names, %s. Choose another "
-			"port, or stop what uses it.", portVar->string, portVar->name,
+		( chosen || ip_socket == INVALID_SOCKET ) ) {
+		Com_ErrorExit( EXIT_NO_NETWORK, "UDP port %s, %s, %s. Start the server on a free one "
+			"(+set %s <port>), or stop what uses it (\"ss -ulpn\" on Linux, \"netstat -abno -p udp\" "
+			"on Windows, \"lsof -iUDP:%s\" on macOS name it).", portVar->string,
+			chosen ? va( "which %s names", portVar->name ) : "the default",
 			err == EADDRINUSE ? "is in use, by another server perhaps" :
-			"was refused: the system reserves it, or another program holds it" );
+			"was refused: the system reserves it, or another program holds it",
+			portVar->name, portVar->string );
 	}
 }
 
@@ -1496,9 +1502,8 @@ void NET_OpenIP( void ) {
 
 	NET_GetLocalAddress();
 
-	// automatically scan for a valid port, so multiple
-	// dedicated servers can be started without requiring
-	// a different net_port for each one
+	// a client, or a listen server, scans for a free port; a dedicated
+	// server stops on its own port in use (NET_PortTaken)
 
 	if(net_enabled->integer & NET_ENABLEV4)
 	{
