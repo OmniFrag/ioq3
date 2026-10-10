@@ -3707,7 +3707,11 @@ void Com_Init( char *commandLine ) {
 
 	Sys_Init();
 
-	Sys_InitPIDFile( FS_GetCurrentGameDir() );
+	// a dedicated server's is named by its port, once its socket is open
+	// (Sys_Start)
+	if ( com_isClient ) {
+		Sys_InitPIDFile( FS_GetCurrentGameDir() );
+	}
 
 	// Pick a random port value
 	Com_RandomBytes( (byte*)&qport, sizeof(int) );
