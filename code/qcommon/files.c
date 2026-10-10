@@ -4854,13 +4854,40 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 
 /*
 ===========
+FS_NameLength
+
+How much of a name of length characters Windows goes by: it drops the
+final dots and spaces, so "q3key." and "q3key " open q3key
+===========
+*/
+static size_t FS_NameLength( const char *name, size_t length ) {
+	while ( length && ( name[length - 1] == '.' || name[length - 1] == ' ' ) ) {
+		length--;
+	}
+	return length;
+}
+
+/*
+===========
+FS_NameIs
+
+Whether the length characters at qpath are name, ignoring case
+===========
+*/
+static qboolean FS_NameIs( const char *qpath, size_t length, const char *name ) {
+	return strlen( name ) == length && !Q_stricmpn( qpath, name, length );
+}
+
+/*
+===========
 FS_IsEngineFile
 
 Whether a game directory's file is one the engine keeps for itself: the
 player's settings and CD key, the console log, the crash log and the
 command pipe, and anything in the dedicated servers' own directories
 (servers/, FS_ServerDir). Named as the search would find it: ignoring
-case, leading slashes and "./"
+case, leading slashes and "./", and as Windows would, without final dots
+and spaces
 ===========
 */
 qboolean FS_IsEngineFile( const char *qpath ) {
@@ -4873,20 +4900,15 @@ qboolean FS_IsEngineFile( const char *qpath ) {
 
 	qpath = FS_SkipPathPrefix( qpath );
 
-	// servers/ as a directory, as Windows finds it too: without the final
-	// dots and spaces it drops
+	// servers/ as a directory
 	length = strcspn( qpath, "/\\" );
-	if ( qpath[length] ) {
-		while ( length && ( qpath[length - 1] == '.' || qpath[length - 1] == ' ' ) ) {
-			length--;
-		}
-		if ( length == strlen( "servers" ) && !Q_stricmpn( qpath, "servers", length ) ) {
-			return qtrue;
-		}
+	if ( qpath[length] && FS_NameIs( qpath, FS_NameLength( qpath, length ), "servers" ) ) {
+		return qtrue;
 	}
 
+	length = FS_NameLength( qpath, strlen( qpath ) );
 	for ( i = 0; i < ARRAY_LEN( names ); i++ ) {
-		if ( !Q_stricmp( qpath, names[i] ) ) {
+		if ( FS_NameIs( qpath, length, names[i] ) ) {
 			return qtrue;
 		}
 	}
@@ -4904,7 +4926,7 @@ qboolean FS_IsEngineFile( const char *qpath ) {
 		}
 	}
 
-	return pipe[0] && !Q_stricmp( qpath, FS_SkipPathPrefix( pipe ) );
+	return pipe[0] && FS_NameIs( qpath, length, FS_SkipPathPrefix( pipe ) );
 }
 
 /*
@@ -4918,6 +4940,8 @@ every Quake III game module writes) goes in the server's own directory
 ===========
 */
 int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+	// as Windows goes by it (FS_NameLength)
+	size_t	length = FS_NameLength( qpath, strlen( qpath ) );
 	int		r;
 
 	// the engine's own files hold the player's settings and secrets, or
@@ -4925,7 +4949,7 @@ int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_
 	// ':' names another drive or an NTFS stream. Nor may it write any
 	// other config, which someone may exec later with full rights
 	if ( FS_IsEngineFile( qpath ) || strchr( qpath, ':' ) ||
-		( mode != FS_READ && COM_CompareExtension( qpath, ".cfg" ) ) ) {
+		( mode != FS_READ && length >= 4 && !Q_stricmpn( qpath + length - 4, ".cfg", 4 ) ) ) {
 		if ( mode != FS_READ ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: game code may not write %s\n", qpath );
 		}
