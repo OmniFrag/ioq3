@@ -529,6 +529,12 @@ void SV_DirectConnect( netadr_t from ) {
 		}
 	}
 
+	// a draining server takes no new player: the ones on it reconnect above
+	if ( sv_drainReason[0] ) {
+		SV_RefuseConnect( from, "%s\n", sv_drainReason );
+		return;
+	}
+
 	// a new player from an address with sv_maxclientsPerIP players already
 	// is refused (bots aside; a reconnect took its slot above)
 	if ( sv_maxclientsPerIP->integer ) {
