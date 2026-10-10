@@ -584,6 +584,8 @@ void Cbuf_ExecuteScripts( void );
 // rest for the frame
 
 qboolean Cbuf_Empty( void );
+qboolean Cbuf_ScriptsEmpty( void );
+// Whether no startup script's text waits (Cbuf_AddScriptText)
 // Whether no text waits in any buffer: everything queued has run
 
 void Cbuf_Clear( void );
@@ -647,6 +649,10 @@ void	Cmd_TokenizeStringIgnoreQuotes( const char *text_in );
 void	Cmd_ExecuteString( const char *text );
 // Parses a single line of text into arguments and tries to execute it
 // as if it was typed at the console
+
+void	Cmd_HoldMapCommands( void );
+// a reload's: the scripts' map, map_restart and vstr wait until the
+// scripts' text queued has run
 
 #define	CMD_ORIGIN_COMMAND_LINE	"the command line"
 const char *Cmd_Origin( void );
@@ -1217,6 +1223,9 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 #define EXIT_NO_NETWORK		5	// a dedicated server can't open its port
 void 		Com_Quit_f( void ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
+void		Com_QueueReload( void );
+// SIGHUP's: the next frame runs the command line's configs again (reload),
+// safe to call from a signal handler
 
 int			Com_Milliseconds( void );	// will be journaled properly
 unsigned	Com_BlockChecksum( const void *buffer, int length );

@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include <setjmp.h>
+#include <signal.h>
 #ifndef _WIN32
 #include <netinet/in.h>
 #include <sys/stat.h> // umask
@@ -660,6 +661,19 @@ void Com_StartupVariable( const char *match ) {
 
 /*
 =================
+Com_IsConfigExec
+
+Whether a command line's command is an exec of one config, which a
+dedicated server runs as a startup script, and again on reload
+=================
+*/
+static qboolean Com_IsConfigExec( const char *line ) {
+	Cmd_TokenizeString( line );
+	return Cmd_Argc() == 2 && ( !Q_stricmp( Cmd_Argv( 0 ), "exec" ) || !Q_stricmp( Cmd_Argv( 0 ), "execq" ) );
+}
+
+/*
+=================
 Com_AddStartupCommands
 
 Adds command line parameters as script statements
@@ -688,9 +702,7 @@ qboolean Com_AddStartupCommands( void ) {
 		added = qtrue;
 		// a dedicated server's server.cfg runs every start, as autoexec.cfg
 		// does; a client's +exec stands for one the player typed
-		Cmd_TokenizeString( com_consoleLines[i] );
-		if ( !Com_IsClient() && Cmd_Argc() == 2 &&
-			( !Q_stricmp( Cmd_Argv( 0 ), "exec" ) || !Q_stricmp( Cmd_Argv( 0 ), "execq" ) ) ) {
+		if ( !Com_IsClient() && Com_IsConfigExec( com_consoleLines[i] ) ) {
 			Cmd_AddCommandLineExec( Cmd_Argv( 1 ) );
 		}
 		Cbuf_AddTextFrom( CMD_ORIGIN_COMMAND_LINE, com_consoleLines[i] );
@@ -3215,6 +3227,65 @@ void Com_ExecuteCfg(void)
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
 }
 
+// a reload asked for by a signal, run in the next frame
+static volatile sig_atomic_t	com_reloadQueued;
+
+/*
+==================
+Com_ReloadConfigs
+
+Runs the configs a dedicated server's command line execs again, as
+startup scripts, with the map commands in them held back
+(Cmd_HoldMapCommands), so that a changed server.cfg's settings apply and
+the map stays: on reload, SIGHUP and a game restart. Returns whether it
+had any to run
+==================
+*/
+static qboolean Com_ReloadConfigs( void ) {
+	int		i;
+	qboolean	any = qfalse;
+
+	Cmd_HoldMapCommands();
+	for ( i = 0; i < com_numConsoleLines; i++ ) {
+		if ( Com_IsConfigExec( com_consoleLines[i] ) ) {
+			Cbuf_AddScriptText( va( "%s\n", com_consoleLines[i] ) );
+			any = qtrue;
+		}
+	}
+	Cbuf_ExecuteScripts();
+	return any;
+}
+
+/*
+==================
+Com_Reload_f
+==================
+*/
+static void Com_Reload_f( void ) {
+	if ( Com_IsClient() ) {
+		Com_Printf( "Only a dedicated server runs its command line's configs again.\n" );
+		return;
+	}
+	// a reload's holding back would catch the map commands of scripts
+	// still to run, such as server.cfg's after a wait at startup
+	if ( !Cbuf_ScriptsEmpty() ) {
+		Com_Printf( "The startup scripts haven't finished running; reload once they have.\n" );
+		return;
+	}
+	if ( !Com_ReloadConfigs() ) {
+		Com_Printf( "The command line execs no config to run again.\n" );
+	}
+}
+
+/*
+==================
+Com_QueueReload
+==================
+*/
+void Com_QueueReload( void ) {
+	com_reloadQueued = 1;
+}
+
 /*
 ==================
 Com_GameRestart
@@ -3255,6 +3326,10 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 		// configs as at startup; not those of the cvars it kept, such as
 		// fs_game, which the restart may have changed
 		Com_StartupVariables( NULL, CVAR_ROM | CVAR_INIT | CVAR_NORESTART );
+		// and its configs, server.cfg's settings, as they ran after those
+		if ( !Com_IsClient() ) {
+			Com_ReloadConfigs();
+		}
 
 		if(disconnect)
 		{
@@ -3594,6 +3669,10 @@ void Com_Init( char *commandLine ) {
 	Cmd_AddCommand ("settings_import", Com_SettingsImport_f );
 	Cmd_SetCommandCompletionFunc( "writeconfig", Cmd_CompleteCfgName );
 	Cmd_AddCommand("game_restart", Com_GameRestart_f);
+	// only a dedicated server's: a client's would shadow a mod's own reload
+	if ( !Com_IsClient() ) {
+		Cmd_AddCommand( "reload", Com_Reload_f );
+	}
 
 	Com_ExecuteCfg();
 
@@ -4523,6 +4602,12 @@ void Com_Frame( void ) {
 	
 	msec = com_frameTime - com_lastFrameTime;
 
+	// once the startup scripts have run (Com_Reload_f)
+	if ( com_reloadQueued && Cbuf_ScriptsEmpty() ) {
+		com_reloadQueued = 0;
+		Com_Printf( "SIGHUP: running the command line's configs again\n" );
+		Com_Reload_f();
+	}
 	Cbuf_Execute ();
 
 	if (com_altivec->modified)

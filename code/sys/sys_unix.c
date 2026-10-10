@@ -1390,6 +1390,25 @@ void Sys_SetFloatEnv(void)
 	fesetround(FE_TONEAREST);
 }
 
+#ifdef DEDICATED
+/*
+==============
+Sys_SigReload
+
+A dedicated server's SIGHUP, as daemons take it: run the configs again.
+On a terminal's console it's the terminal hanging up, which stops the
+server, as before
+==============
+*/
+static void Sys_SigReload( int signal )
+{
+	if( stdinIsATTY )
+		Sys_SigHandler( signal );
+	else
+		Com_QueueReload( );
+}
+#endif
+
 /*
 ==============
 Sys_PlatformInit
@@ -1401,7 +1420,11 @@ void Sys_PlatformInit( void )
 {
 	const char* term = getenv( "TERM" );
 
+#ifdef DEDICATED
+	signal( SIGHUP, Sys_SigReload );
+#else
 	signal( SIGHUP, Sys_SigHandler );
+#endif
 	signal( SIGQUIT, Sys_SigHandler );
 	signal( SIGTRAP, Sys_SigHandler );
 	signal( SIGABRT, Sys_SigHandler );
