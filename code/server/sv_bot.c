@@ -141,8 +141,10 @@ static Q_PRINTF_FUNC(2, 3) void QDECL BotImport_Print(int type, char *fmt, ...)
 	switch(type) {
 		case PRT_MESSAGE: {
 			// what it loaded and how, for developers: in a local game the
-			// client showed each line as if a player had said it
-			if (Cvar_VariableIntegerValue("bot_developer"))
+			// client showed each line as if a player had said it. A
+			// dedicated server prints them all, as hosting tools wait for
+			// "AAS initialized." to call it started
+			if (com_dedicated->integer || Cvar_VariableIntegerValue("bot_developer"))
 				Com_Printf("%s", str);
 			else
 				Com_DPrintf("%s", str);
