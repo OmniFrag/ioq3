@@ -268,6 +268,9 @@ static void SV_Startup( void ) {
 		Com_Error( ERR_FATAL, "SV_Startup: svs.initialized" );
 	}
 	SV_BoundMaxClients( 1 );
+	// OmniFrag's tests start the clock near where it would wrap; otherwise
+	// it starts at 0
+	svs.time = MAX( 0, Cvar_Get( "sv_timeStart", "0", CVAR_INIT )->integer );
 
 	svs.clients = Z_Malloc (sizeof(client_t) * sv_maxclients->integer );
 	if ( com_dedicated->integer ) {
@@ -289,6 +292,63 @@ static void SV_Startup( void ) {
 	NET_JoinMulticast6();
 }
 
+
+/*
+==================
+SV_RebasedTime
+
+A time from svs.time, after a rebase that set it back delta msec; one
+from before the time it's set back to, long past, is 0
+==================
+*/
+static int SV_RebasedTime( int time, int delta ) {
+	return time > delta ? time - delta : 0;
+}
+
+/*
+==================
+SV_RebaseTime
+
+Sets svs.time back to SV_TIME_REBASED as a map changes, and every time
+kept from it with it, so that it wraps only if a map runs 21.7 days (SV_Frame
+restarts the server then), not after that long up. No client sees it:
+snapshots carry sv.time, which each map starts again
+==================
+*/
+static void SV_RebaseTime( void ) {
+	int			delta = svs.time - SV_TIME_REBASED, i, j;
+	client_t	*cl;
+	challenge_t	*challenge;
+
+	// within its first hour up the clock is behind where it would be
+	// set: moving it forward would turn the unacknowledged frames' -1
+	// into acknowledged times, and there's nothing to gain
+	if ( delta <= 0 ) {
+		return;
+	}
+	svs.time = SV_TIME_REBASED;
+	svs.nextHeartbeatTime = SV_RebasedTime( svs.nextHeartbeatTime, delta );
+	svs.nextKeepAwakeTime = SV_RebasedTime( svs.nextKeepAwakeTime, delta );
+	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
+		svs.masterResolveTime[i] = SV_RebasedTime( svs.masterResolveTime[i], delta );
+	}
+	for ( i = 0, challenge = svs.challenges; i < MAX_CHALLENGES; i++, challenge++ ) {
+		challenge->time = SV_RebasedTime( challenge->time, delta );
+		challenge->pingTime = SV_RebasedTime( challenge->pingTime, delta );
+		challenge->firstTime = SV_RebasedTime( challenge->firstTime, delta );
+	}
+	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+		cl->lastPacketTime = SV_RebasedTime( cl->lastPacketTime, delta );
+		cl->lastConnectTime = SV_RebasedTime( cl->lastConnectTime, delta );
+		cl->lastSnapshotTime = SV_RebasedTime( cl->lastSnapshotTime, delta );
+		cl->downloadSendTime = SV_RebasedTime( cl->downloadSendTime, delta );
+		for ( j = 0; j < PACKET_BACKUP; j++ ) {
+			cl->frames[j].messageSent = SV_RebasedTime( cl->frames[j].messageSent, delta );
+			// unacknowledged is -1, and stays at or below 0
+			cl->frames[j].messageAcked = SV_RebasedTime( cl->frames[j].messageAcked, delta );
+		}
+	}
+}
 
 /*
 ==================
@@ -596,6 +656,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		if ( sv_maxclients->modified ) {
 			SV_ChangeMaxClients();
 		}
+		SV_RebaseTime();
 	}
 
 	// clear pak references
