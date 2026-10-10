@@ -33,6 +33,40 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #import <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
+#import <IOKit/pwr_mgt/IOPMLib.h>
+
+/*
+==============
+Sys_KeepAwake
+
+Holds a power assertion against idle sleep, which pmset -g assertions
+lists, named for the app, or releases it
+==============
+*/
+qboolean Sys_KeepAwake( qboolean awake )
+{
+	static IOPMAssertionID	assertion = kIOPMNullAssertionID;
+	static qboolean		refused = qfalse;
+
+	if( awake && assertion == kIOPMNullAssertionID )
+	{
+		if( IOPMAssertionCreateWithName( kIOPMAssertionTypePreventUserIdleSystemSleep, kIOPMAssertionLevelOn,
+			CFSTR( PRODUCT_NAME " is serving players" ), &assertion ) != kIOReturnSuccess )
+		{
+			// asked again each second while players are on: say it once
+			if( !refused )
+				Com_Printf( S_COLOR_YELLOW "WARNING: macOS refused to keep this Mac awake for the players\n" );
+			refused = qtrue;
+			assertion = kIOPMNullAssertionID;
+		}
+	}
+	else if( !awake && assertion != kIOPMNullAssertionID )
+	{
+		IOPMAssertionRelease( assertion );
+		assertion = kIOPMNullAssertionID;
+	}
+	return qtrue;
+}
 
 /*
 ==============
