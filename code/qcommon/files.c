@@ -201,6 +201,35 @@ static const unsigned int missionpak_checksums[] =
 };
 #endif
 
+// a checksum the tests have the server take for one of the game's own
+// paks (FS_RetailPak), from OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM at startup
+static qboolean		fs_refusedTestPak;
+static unsigned int	fs_refusedTestChecksum;
+
+/*
+================
+FS_RetailPakGame
+
+Which of the game's own paks, Quake III Arena 1.32's or Team Arena's, a
+checksum is: its game directory, and its number in index; NULL for none
+================
+*/
+static const char *FS_RetailPakGame( unsigned int checksum, int *index ) {
+#ifndef STANDALONE
+	for( *index = 0; *index < ARRAY_LEN( pak_checksums ); ( *index )++ ) {
+		if( checksum == pak_checksums[*index] ) {
+			return BASEGAME;
+		}
+	}
+	for( *index = 0; *index < ARRAY_LEN( missionpak_checksums ); ( *index )++ ) {
+		if( checksum == missionpak_checksums[*index] ) {
+			return BASETA;
+		}
+	}
+#endif
+	return NULL;
+}
+
 // if this is defined, the executable positively won't work with any paks other
 // than the demo pak, even if productid is present.  This is only used for our
 // last demo release to prevent the mac and linux users from using the demo
@@ -4052,41 +4081,24 @@ static void FS_CheckPak0( void )
 		else
 		{
 			int index;
+			const char *game;
 
 			// Finally check whether this pak's checksum is listed because the user tried
 			// to trick us by renaming the file, and set foundPak's highest bit to indicate this case.
-
-			for(index = 0; index < ARRAY_LEN(pak_checksums); index++)
+			if((game = FS_RetailPakGame(curpack->checksum, &index)) != NULL)
 			{
-				if(curpack->checksum == pak_checksums[index])
-				{
-					Com_Printf("\n\n"
-							"**************************************************\n"
-							"WARNING: %s is renamed pak file %s%cpak%d.pk3\n"
-							"Running in standalone mode won't work\n"
-							"Please rename, or remove this file\n"
-							"**************************************************\n\n\n",
-							curpack->pakFilename, BASEGAME, PATH_SEP, index);
+				Com_Printf("\n\n"
+						"**************************************************\n"
+						"WARNING: %s is renamed pak file %s%cpak%d.pk3\n"
+						"Running in standalone mode won't work\n"
+						"Please rename, or remove this file\n"
+						"**************************************************\n\n\n",
+						curpack->pakFilename, game, PATH_SEP, index);
 
-
+				if(!strcmp(game, BASEGAME))
 					foundPak |= 0x80000000;
-				}
-			}
-
-			for(index = 0; index < ARRAY_LEN(missionpak_checksums); index++)
-			{
-				if(curpack->checksum == missionpak_checksums[index])
-				{
-					Com_Printf("\n\n"
-							"**************************************************\n"
-							"WARNING: %s is renamed pak file %s%cpak%d.pk3\n"
-							"Running in standalone mode won't work\n"
-							"Please rename, or remove this file\n"
-							"**************************************************\n\n\n",
-							curpack->pakFilename, BASETA, PATH_SEP, index);
-
+				else
 					foundTA |= 0x80000000;
-				}
 			}
 		}
 	}
@@ -4488,6 +4500,43 @@ static const pack_t *FS_FindPak0( const char *gameName, unsigned int checksum ) 
 
 /*
 ================
+FS_RetailPak
+
+Whether the pak a download names ("<game>/<name>", as the referenced paks
+are named) is one of the game's own, Quake III Arena 1.32's or Team
+Arena's (the demo's pak0 isn't), known by its checksum whatever its name;
+if so, its own name, for the player to add ("baseq3/pak3.pk3"). The
+tests' OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM adds a checksum
+================
+*/
+qboolean FS_RetailPak( const char *download, char *retail, int size ) {
+	searchpath_t	*path;
+	const pack_t	*pak;
+	const char		*game;
+	int				index;
+
+	for( path = fs_searchpaths; path; path = path->next ) {
+		pak = path->pack;
+		if( pak && !FS_FilenameCompare( va( "%s/%s", pak->pakGamename, pak->pakBasename ), download ) ) {
+			break;
+		}
+	}
+	if( !path ) {
+		return qfalse;
+	}
+	if( ( game = FS_RetailPakGame( pak->checksum, &index ) ) != NULL ) {
+		Com_sprintf( retail, size, "%s/pak%d.pk3", game, index );
+		return qtrue;
+	}
+	if( fs_refusedTestPak && pak->checksum == fs_refusedTestChecksum ) {
+		Com_sprintf( retail, size, "%s/%s.pk3", pak->pakGamename, pak->pakBasename );
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+================
 FS_ChooseDemo
 
 With the full game's pak0 nowhere, and no base game asked for, plays the
@@ -4541,6 +4590,15 @@ is resetting due to a game change
 ================
 */
 void FS_InitFilesystem( void ) {
+	const char	*refusedTest = getenv( "OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM" );
+
+	// read once, so setenv can't change it later; signed, as
+	// sv_referencedPaks lists it
+	if ( refusedTest && *refusedTest ) {
+		fs_refusedTestPak = qtrue;
+		fs_refusedTestChecksum = (unsigned int)strtoll( refusedTest, NULL, 10 );
+	}
+
 	// allow command line parms to override our defaults
 	// we have to specially handle this, because normal command
 	// line variable sets don't happen until after the filesystem

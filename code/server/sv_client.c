@@ -1051,8 +1051,9 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 	int unreferenced = 1;
 	char errorMessage[1024];
 	char pakbuf[MAX_QPATH], *pakptr;
+	char retail[MAX_QPATH];
 	int numRefPaks;
-	qboolean full = qfalse;
+	qboolean full = qfalse, refused = qfalse;
 
 	if (!*cl->downloadName)
 		return 0;	// Nothing being downloaded
@@ -1101,6 +1102,7 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 		if ( !(sv_allowDownload->integer & DLF_ENABLE) ||
 			(sv_allowDownload->integer & DLF_NO_UDP) ||
 			unreferenced ||
+			( refused = sv_refuseRetailPaks->integer && FS_RetailPak( pakbuf, retail, sizeof( retail ) ) ) ||
 			( full = SV_DownloadsFull() ) ||
 			( cl->downloadSize = FS_BaseDir_FOpenFileRead( cl->downloadName, &cl->download ) ) < 0 ) {
 			// cannot auto-download file
@@ -1122,6 +1124,17 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
                     "The server you are connecting to is not a pure server, "
                     "set autodownload to No in your settings and you might be "
                     "able to join the game anyway.\n", cl->downloadName);
+				}
+			} else if ( refused ) {
+				Com_Printf( "clientDownload: %d : \"%s\" is the game's own %s, which sv_refuseRetailPaks keeps from downloads\n",
+					(int) (cl - svs.clients), cl->downloadName, retail );
+				if ( !FS_FilenameCompare( cl->downloadName, retail ) ) {
+					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send the game's own paks. "
+						"Add %s from your own copy of the game, then connect again.\n", retail );
+				} else {
+					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send the game's own paks: "
+						"\"%s\" is %s. Add %s from your own copy of the game, then connect again.\n",
+						cl->downloadName, retail, retail );
 				}
 			} else if ( full ) {
 				Com_Printf("clientDownload: %d : \"%s\" refused, %d downloads already\n", (int) (cl - svs.clients), cl->downloadName, sv_maxDownloads->integer);
