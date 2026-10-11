@@ -1178,15 +1178,22 @@ const void	*RB_SwapBuffers( const void *data ) {
 	// we measure overdraw by reading back the stencil buffer and
 	// counting up the number of increments that have happened
 	if ( r_measureOverdraw->integer ) {
-		int i;
+		int i, y, rowLength;
 		long sum = 0;
 		unsigned char *stencilReadback;
+		GLint packAlign;
 
-		stencilReadback = ri.Hunk_AllocateTempMemory( glConfig.vidWidth * glConfig.vidHeight );
+		// each row is padded to the pack alignment, as for a screenshot
+		qglGetIntegerv( GL_PACK_ALIGNMENT, &packAlign );
+		rowLength = PAD( glConfig.vidWidth, packAlign );
+
+		stencilReadback = ri.Hunk_AllocateTempMemory( rowLength * glConfig.vidHeight );
 		qglReadPixels( 0, 0, glConfig.vidWidth, glConfig.vidHeight, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencilReadback );
 
-		for ( i = 0; i < glConfig.vidWidth * glConfig.vidHeight; i++ ) {
-			sum += stencilReadback[i];
+		for ( y = 0; y < glConfig.vidHeight; y++ ) {
+			for ( i = 0; i < glConfig.vidWidth; i++ ) {
+				sum += stencilReadback[y * rowLength + i];
+			}
 		}
 
 		backEnd.pc.c_overDraw += sum;
