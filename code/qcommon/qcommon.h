@@ -1039,6 +1039,9 @@ const char	*FS_SearchDirs( const char *predecessorFile );
 long		FS_ReadPredecessorConfig( const char *filename, void **buffer, char *ospath, int size );
 // the same for a config in the predecessor's game directory, read only,
 // where a dedicated server that ran before this one kept its server.cfg
+long		FS_ReadUncopiedConfig( const char *filename, void **buffer, char *ospath, int size );
+// under --check, which copies nothing, the predecessor's config a start
+// would copy as the home config directory's filename, read where it is
 const char	*FS_LoadedGameDir( void );
 // the game directory loaded, which fs_game names before a restart loads it
 void	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
