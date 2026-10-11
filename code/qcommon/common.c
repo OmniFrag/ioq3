@@ -3223,16 +3223,17 @@ Com_ImportConfig
 
 Applies a config (Com_ApplyConfig) as its writer saved it
 (Com_ConfigWriter), on a dedicated server at its writer's dedicated
-server's defaults too; returns who wrote it
+server's defaults too; returns who wrote it. --check's report says where
+it was read: from, or the home's config directory when that's NULL
 =================
 */
-static const char *Com_ImportConfig( char *text, const char *path, qboolean homeConfig, qboolean modOnly ) {
+static const char *Com_ImportConfig( char *text, const char *path, const char *from, qboolean modOnly ) {
 	const configWriter_t	*saved;
 	const char		*writer = Com_ConfigWriter( text, &saved );
 
 	if ( com_check ) {
-		Com_NoteConfigRun( path, va( "%s, saved settings written by %s", homeConfig ?
-			FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), path ) : FS_LastFilePath( path ), writer ) );
+		Com_NoteConfigRun( path, va( "%s, saved settings written by %s", from ? from :
+			FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), path ), writer ) );
 	}
 	Com_ApplyConfig( text, path, saved ? saved->defaults : NULL,
 		saved && !Com_IsClient() ? saved->serverDefaults : NULL, saved ? saved->renames : NULL, modOnly );
@@ -3256,7 +3257,7 @@ static qboolean Com_ImportOldConfig( const char *game, qboolean modOnly ) {
 	if ( FS_BaseDir_ReadFile_HomeConfig( path, (void **)&text ) < 0 ) {
 		return qfalse;
 	}
-	Com_Printf( "Imported %s, written by %s.\n", path, Com_ImportConfig( text, path, qtrue, modOnly ) );
+	Com_Printf( "Imported %s, written by %s.\n", path, Com_ImportConfig( text, path, NULL, modOnly ) );
 	Z_Free( text );
 	return qtrue;
 }
@@ -3273,7 +3274,7 @@ a write compares with
 =================
 */
 static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
-	char	path[MAX_OSPATH], oldPath[MAX_OSPATH];
+	char	path[MAX_OSPATH], oldPath[MAX_OSPATH], from[MAX_OSPATH];
 	char	*text;
 
 	if ( file->text ) {
@@ -3287,11 +3288,17 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 			return qfalse;
 		}
 		Com_SettingsPath( file->oldPath, oldPath, sizeof( oldPath ) );
-		if ( FS_BaseDir_ReadFile_HomeConfig( oldPath, (void **)&text ) < 0 ) {
+		if ( FS_BaseDir_ReadFile_HomeConfig( oldPath, (void **)&text ) >= 0 ) {
+			Com_Printf( "Reading %s, to be saved as %s\n", oldPath, path );
+			Com_ImportConfig( text, oldPath, NULL, qfalse );
+		} else if ( FS_ReadUncopiedConfig( path, (void **)&text, from, sizeof( from ) ) >= 0 ) {
+			// --check copies no config from the predecessor's home: the
+			// one a start would copy here is read where it is
+			Com_Printf( "Reading %s, which a start copies as %s\n", from, path );
+			Com_ImportConfig( text, path, from, qfalse );
+		} else {
 			return qfalse;
 		}
-		Com_Printf( "Reading %s, to be saved as %s\n", oldPath, path );
-		Com_ImportConfig( text, oldPath, qtrue, qfalse );
 		Z_Free( text );
 		return qtrue;
 	}
@@ -3299,7 +3306,7 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 	// a config can outgrow the small one CopyString uses
 	text = Z_Malloc( strlen( file->text ) + 1 );
 	strcpy( text, file->text );
-	Com_ImportConfig( text, path, qtrue, qfalse );
+	Com_ImportConfig( text, path, NULL, qfalse );
 	Z_Free( text );
 	return qtrue;
 }
@@ -4371,7 +4378,7 @@ static void Com_SettingsImport_f( void ) {
 	if ( FS_LastFileIsGameContent() ) {
 		Com_Printf( "%s is game content, which isn't imported.\n", filename );
 	} else {
-		Com_Printf( "Imported %s, written by %s.\n", filename, Com_ImportConfig( text, filename, qfalse, qfalse ) );
+		Com_Printf( "Imported %s, written by %s.\n", filename, Com_ImportConfig( text, filename, FS_LastFilePath( filename ), qfalse ) );
 	}
 	FS_FreeFile( text );
 }
