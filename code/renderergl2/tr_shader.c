@@ -2607,6 +2607,10 @@ static int CollapseStagesToGLSL(void)
 			if (pStage->adjustColorsForFog)
 				continue;
 
+			// the lightall shader ignores alphaGen
+			if (pStage->alphaGen == AGEN_LIGHTING_SPECULAR || pStage->alphaGen == AGEN_PORTAL)
+				continue;
+
 			if (pStage->bundle[TB_DIFFUSEMAP].tcGen != TCGEN_LIGHTMAP)
 				continue;
 
@@ -2638,6 +2642,10 @@ static int CollapseStagesToGLSL(void)
 				continue;
 
 			if (pStage->adjustColorsForFog)
+				continue;
+
+			// the lightall shader ignores alphaGen
+			if (pStage->alphaGen == AGEN_LIGHTING_SPECULAR || pStage->alphaGen == AGEN_PORTAL)
 				continue;
 
 			if (pStage->rgbGen == CGEN_LIGHTING_DIFFUSE)
