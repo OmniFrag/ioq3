@@ -48,6 +48,7 @@ typedef enum
 
 typedef struct image_s {
 	char		imgName[MAX_QPATH];		// game path, including extension
+	char		fileName[MAX_QPATH];	// the file it was read from, "" for one made in code
 	int			width, height;				// source image
 	int			uploadWidth, uploadHeight;	// after power of two and picmip but not including clamp to MAX_TEXTURE_SIZE
 	GLuint		texnum;					// gl texture binding
@@ -147,6 +148,7 @@ image_t *R_CreateImage( const char *name, byte *pic, int width, int height, imgT
 void R_InitUpscale2D( void );
 void R_ShutdownUpscale2D( void );
 void R_Upscale2D( const char *name, byte **pic, int *width, int *height, qboolean powerOfTwo, qboolean uploadShrinks );
+qboolean R_Is2DArt( const char *name );
 
 void R_IssuePendingRenderCommands( void );
 qhandle_t		 RE_RegisterShaderLightMap( const char *name, int lightmapIndex );
