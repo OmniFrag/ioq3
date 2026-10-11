@@ -4776,7 +4776,18 @@ qboolean Com_WaitFrame( void ) {
 		if(com_busyWait->integer || timeVal < 1)
 			NET_Sleep(0);
 		else
-			NET_Sleep(timeVal - 1);
+		{
+			// toward the end of timeVal's last millisecond, precisely
+			// where the system can; packets that arrive end the wait, to
+			// send what they queue. Elsewhere, or when the wait fails,
+			// whole milliseconds; then the network is polled through the
+			// last
+			int64_t	now = Sys_Nanoseconds();
+			int		msecs = MIN(com_frameTime + minMsec - (int)(now / 1000000), timeVal);
+
+			if(!NET_SleepUntil((now / 1000000 + msecs) * 1000000))
+				NET_Sleep(timeVal - 1);
+		}
 	} while(timeVal < 2 && Com_TimeVal(minMsec));
 
 	return !Com_TimeVal(minMsec);
