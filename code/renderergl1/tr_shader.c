@@ -2188,6 +2188,9 @@ static void InitShader( const char *name, int lightmapIndex ) {
 
 	Q_strncpyz( shader.name, name, sizeof( shader.name ) );
 	shader.lightmapIndex = lightmapIndex;
+	// the index asked for, which FinishShader may change lightmapIndex
+	// from, so the next search for it finds this shader
+	shader.lightmapSearchIndex = lightmapIndex;
 
 	for ( i = 0 ; i < MAX_SHADER_STAGES ; i++ ) {
 		stages[i].bundle[0].texMods = texMods[i];
@@ -2544,7 +2547,7 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 		// then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
 		// have to check all default shaders otherwise for every call to R_FindShader
 		// with that same strippedName a new default shader is created.
-		if ( (sh->lightmapIndex == lightmapIndex || sh->defaultShader) &&
+		if ( (sh->lightmapSearchIndex == lightmapIndex || sh->defaultShader) &&
 		     !Q_stricmp(sh->name, strippedName)) {
 			// match found
 			return sh;
@@ -2681,7 +2684,7 @@ qhandle_t RE_RegisterShaderFromImage(const char *name, int lightmapIndex, image_
 		// then a default shader is created with lightmapIndex == LIGHTMAP_NONE, so we
 		// have to check all default shaders otherwise for every call to R_FindShader
 		// with that same strippedName a new default shader is created.
-		if ( (sh->lightmapIndex == lightmapIndex || sh->defaultShader) &&
+		if ( (sh->lightmapSearchIndex == lightmapIndex || sh->defaultShader) &&
 			// index by name
 			!Q_stricmp(sh->name, name)) {
 			// match found
