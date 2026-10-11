@@ -547,10 +547,9 @@ static void SV_PrintStartSummary( const char *heading ) {
 		port = ( net & NET_ENABLEV4 ) ? Cvar_VariableIntegerValue( "net_port" ) : 0;
 		port6 = ( net & NET_ENABLEV6 ) ? Cvar_VariableIntegerValue( "net_port6" ) : 0;
 	}
-	// on loopback addresses alone (net_ip 127.0.0.1, net_ip6 ::1), only this
-	// computer can connect: no other finds it, and no firewall is in the way
-	local = ( port || port6 ) && ( !port || NET_BindsLoopback( NA_IP ) ) &&
-		( !port6 || NET_BindsLoopback( NA_IP6 ) );
+	// only this computer can connect: no other finds it, and no firewall is
+	// in the way
+	local = NET_LoopbackOnly( port, port6 );
 
 	Com_Printf( "%s\n", heading );
 	// --check loads no map, and reports the maps itself
