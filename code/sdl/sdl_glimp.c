@@ -944,16 +944,6 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 		glConfig.isFullscreen = qfalse;
 	}
 
-	colorBits = r_colorbits->value;
-	if ((!colorBits) || (colorBits >= 32))
-		colorBits = 24;
-
-	if (!r_depthbits->value)
-		depthBits = 24;
-	else
-		depthBits = r_depthbits->value;
-
-	stencilBits = r_stencilbits->value;
 	samples = r_ext_multisample->value;
 
 	numContexts = 0;
@@ -1012,6 +1002,19 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 		contexts[numContexts].minorVersion = 1;
 		numContexts++;
 	}
+
+attempts:
+	// the bits asked for, which the attempts below step down from
+	colorBits = r_colorbits->value;
+	if ((!colorBits) || (colorBits >= 32))
+		colorBits = 24;
+
+	if (!r_depthbits->value)
+		depthBits = 24;
+	else
+		depthBits = r_depthbits->value;
+
+	stencilBits = r_stencilbits->value;
 
 	for (i = 0; i < 16; i++)
 	{
@@ -1243,6 +1246,14 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 		ri.Printf( PRINT_ALL, "Using %d color bits, %d depth, %d stencil display.\n",
 				glConfig.colorBits, glConfig.depthBits, glConfig.stencilBits );
 		break;
+	}
+
+	// some drivers offer no visual with multisampling at all
+	if( !SDL_window && samples )
+	{
+		ri.Printf( PRINT_ALL, "Couldn't get a visual with %d samples, so trying without multisampling\n", samples );
+		samples = 0;
+		goto attempts;
 	}
 
 	SDL_DestroySurface( icon );
