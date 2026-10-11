@@ -1497,7 +1497,8 @@ void RB_IQMSurfaceAnim( surfaceType_t *surface ) {
 	if ( color ) {
 		Com_Memcpy( outColor, color, surf->num_vertexes * sizeof( outColor[0] ) );
 	} else {
-		Com_Memset( outColor, 0, surf->num_vertexes * sizeof( outColor[0] ) );
+		// white, as for models with no vertex colors at all
+		Com_Memset( outColor, 0xff, surf->num_vertexes * sizeof( outColor[0] ) );
 	}
 
 	tri = data->triangles + 3 * surf->first_triangle;
