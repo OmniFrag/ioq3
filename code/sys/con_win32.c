@@ -50,6 +50,15 @@ static int qconsole_cursor;
 static HANDLE qconsole_hout;
 static HANDLE qconsole_hin;
 
+// standard input that isn't a console window, read as lines of commands
+// until it ends: its type, FILE_TYPE_PIPE or FILE_TYPE_DISK, or
+// FILE_TYPE_UNKNOWN (0) for none
+static DWORD qconsole_stdinType;
+static qboolean qconsole_stdinEnded;
+static qboolean qconsole_stdinSkipping; // the rest of a line too long
+static char qconsole_stdinBuf[ MAX_STRING_CHARS ];
+static int qconsole_stdinLen;
+
 /*
 ==================
 CON_ColorCharToAttrib
@@ -316,13 +325,22 @@ void CON_Init( void )
 	if( qconsole_hout == INVALID_HANDLE_VALUE )
 		return;
 
-	GetConsoleMode( qconsole_hin, &qconsole_orig_mode );
+	if( GetConsoleMode( qconsole_hin, &qconsole_orig_mode ) )
+	{
+		// allow mouse wheel scrolling
+		SetConsoleMode( qconsole_hin,
+			qconsole_orig_mode & ~ENABLE_MOUSE_INPUT );
 
-	// allow mouse wheel scrolling
-	SetConsoleMode( qconsole_hin,
-		qconsole_orig_mode & ~ENABLE_MOUSE_INPUT );
+		FlushConsoleInputBuffer( qconsole_hin );
+	}
+	else
+	{
+		// commands piped in, or redirected from a file
+		DWORD type = GetFileType( qconsole_hin );
 
-	FlushConsoleInputBuffer( qconsole_hin ); 
+		if( type == FILE_TYPE_PIPE || type == FILE_TYPE_DISK )
+			qconsole_stdinType = type;
+	}
 
 	GetConsoleScreenBufferInfo( qconsole_hout, &info );
 	qconsole_attrib = info.wAttributes;
@@ -340,6 +358,92 @@ void CON_Init( void )
 
 /*
 ==================
+CON_StdinInput
+
+The next line from standard input that isn't a console window, or NULL
+if there's no whole line yet. It never blocks: a pipe is read only as far
+as it holds. A line too long for the buffer is dropped, with a warning,
+rather than run in pieces. At the end of the input, reading stops, as in
+con_tty.c, and the program keeps running
+==================
+*/
+static char *CON_StdinInput( void )
+{
+	static char line[ sizeof( qconsole_stdinBuf ) + 1 ];
+	char *end;
+	DWORD avail, count = 0;
+	int len, used;
+
+	end = memchr( qconsole_stdinBuf, '\n', qconsole_stdinLen );
+
+	if( !end && !qconsole_stdinEnded )
+	{
+		if( qconsole_stdinLen == sizeof( qconsole_stdinBuf ) )
+		{
+			if( !qconsole_stdinSkipping )
+				Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of standard input "
+					"longer than %d characters\n", (int)sizeof( qconsole_stdinBuf ) - 1 );
+
+			qconsole_stdinSkipping = qtrue;
+			qconsole_stdinLen = 0;
+		}
+
+		avail = sizeof( qconsole_stdinBuf ) - qconsole_stdinLen;
+
+		if( qconsole_stdinType == FILE_TYPE_PIPE )
+		{
+			// fails once the writer has closed it and it's empty
+			if( !PeekNamedPipe( qconsole_hin, NULL, 0, NULL, &count, NULL ) )
+				qconsole_stdinEnded = qtrue;
+			else if( !count )
+				return NULL;
+			else if( count < avail )
+				avail = count;
+		}
+
+		if( !qconsole_stdinEnded )
+		{
+			if( !ReadFile( qconsole_hin, qconsole_stdinBuf + qconsole_stdinLen, avail, &count, NULL ) || !count )
+				qconsole_stdinEnded = qtrue;
+			else
+				qconsole_stdinLen += count;
+		}
+
+		end = memchr( qconsole_stdinBuf, '\n', qconsole_stdinLen );
+	}
+
+	// a line, or what's left at the end of the input
+	if( end )
+	{
+		len = end - qconsole_stdinBuf;
+		used = len + 1;
+	}
+	else if( qconsole_stdinEnded && qconsole_stdinLen )
+		len = used = qconsole_stdinLen;
+	else
+		return NULL;
+
+	if( len > 0 && qconsole_stdinBuf[ len - 1 ] == '\r' )
+		len--;
+
+	memcpy( line, qconsole_stdinBuf, len );
+	line[ len ] = '\0';
+
+	qconsole_stdinLen -= used;
+	memmove( qconsole_stdinBuf, qconsole_stdinBuf + used, qconsole_stdinLen );
+
+	// the end of a line too long
+	if( qconsole_stdinSkipping )
+	{
+		qconsole_stdinSkipping = qfalse;
+		return NULL;
+	}
+
+	return line;
+}
+
+/*
+==================
 CON_Input
 ==================
 */
@@ -350,6 +454,9 @@ char *CON_Input( void )
 	WORD key = 0;
 	int i;
 	int newlinepos = -1;
+
+	if( qconsole_stdinType )
+		return CON_StdinInput( );
 
 	if( !GetNumberOfConsoleInputEvents( qconsole_hin, &events ) )
 		return NULL;
