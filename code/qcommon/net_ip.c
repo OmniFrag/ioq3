@@ -73,6 +73,9 @@ typedef u_long	ioctlarg_t;
 static WSADATA	winsockdata;
 static qboolean	winsockInitialized = qfalse;
 
+static void NET_WaitInit( void );
+static void NET_WaitShutdown( void );
+
 #else
 
 #	if MAC_OS_X_VERSION_MIN_REQUIRED == 1020
@@ -1992,6 +1995,8 @@ void NET_Init( void ) {
 
 	winsockInitialized = qtrue;
 	Com_Printf( "Winsock Initialized\n" );
+
+	NET_WaitInit();
 #endif
 
 	NET_Config( qtrue );
@@ -2013,6 +2018,7 @@ void NET_Shutdown( void ) {
 	NET_Config( qfalse );
 
 #ifdef _WIN32
+	NET_WaitShutdown();
 	WSACleanup();
 	winsockInitialized = qfalse;
 #endif
@@ -2184,12 +2190,115 @@ void NET_Sleep(int msec)
 }
 
 // how much earlier than asked NET_SleepUntil's waits end, as they wake late:
-// ppoll by up to 0.15 ms
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+// a high-resolution waitable timer by about 0.3 ms, ppoll by up to 0.15 ms
+#ifdef _WIN32
+#define NET_WAKE_EARLY	500000
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
 #define NET_WAKE_EARLY	200000
 #endif
 
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#ifdef _WIN32
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+// NET_WaitNs': none before Windows 10's high-resolution timers
+static HANDLE	net_waitTimer;
+static WSAEVENT	net_waitEvent = WSA_INVALID_EVENT;
+
+/*
+====================
+NET_WaitInit
+
+Creates NET_WaitNs' timer and event, or neither
+====================
+*/
+static void NET_WaitInit( void )
+{
+	net_waitTimer = CreateWaitableTimerExW( NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS );
+	if( !net_waitTimer )
+		return;
+
+	net_waitEvent = WSACreateEvent();
+	if( net_waitEvent == WSA_INVALID_EVENT )
+	{
+		CloseHandle( net_waitTimer );
+		net_waitTimer = NULL;
+	}
+}
+
+/*
+====================
+NET_WaitShutdown
+====================
+*/
+static void NET_WaitShutdown( void )
+{
+	if( !net_waitTimer )
+		return;
+
+	WSACloseEvent( net_waitEvent );
+	CloseHandle( net_waitTimer );
+	net_waitEvent = WSA_INVALID_EVENT;
+	net_waitTimer = NULL;
+}
+
+/*
+====================
+NET_WaitNs
+
+Waits up to ns, or until a packet arrives, and handles the packets; for
+NET_SleepUntil. Returns qfalse if it couldn't wait
+====================
+*/
+static qboolean NET_WaitNs( int64_t ns )
+{
+	SOCKET			sockets[3];
+	HANDLE			handles[2];
+	LARGE_INTEGER	due;
+	DWORD			woke = WAIT_FAILED;
+	int				i, selected;
+
+	// in 100 ns units, negative for a time from now
+	due.QuadPart = -MAX( ns / 100, 1 );
+	if( !SetWaitableTimer( net_waitTimer, &due, 0, NULL, NULL, FALSE ) )
+		return qfalse;
+
+	// a packet on any socket sets the event, for the wait's length only;
+	// a socket that can't set it would go unheard, so then there's no wait
+	sockets[0] = ip_socket;
+	sockets[1] = ip6_socket;
+	sockets[2] = multicast6_socket != ip6_socket ? multicast6_socket : INVALID_SOCKET;
+	for( selected = 0; selected < ARRAY_LEN( sockets ); selected++ )
+	{
+		if( sockets[selected] != INVALID_SOCKET &&
+			WSAEventSelect( sockets[selected], net_waitEvent, FD_READ ) == SOCKET_ERROR )
+			break;
+	}
+
+	if( selected == ARRAY_LEN( sockets ) )
+	{
+		handles[0] = net_waitEvent;
+		handles[1] = net_waitTimer;
+		woke = WaitForMultipleObjects( 2, handles, FALSE, (DWORD)( ns / 1000000 + 2 ) );
+	}
+
+	for( i = 0; i < selected; i++ )
+	{
+		if( sockets[i] != INVALID_SOCKET )
+			WSAEventSelect( sockets[i], NULL, 0 );
+	}
+
+	// a packet can set it after the timer ends the wait, too
+	WSAResetEvent( net_waitEvent );
+
+	if( woke == WAIT_OBJECT_0 )
+		NET_Sleep( 0 );
+
+	// a timeout means the timer is late, and the wait is over all the same
+	return woke != WAIT_FAILED;
+}
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
 /*
 ====================
 NET_WaitNs
@@ -2231,13 +2340,19 @@ millisecond: until then or until packets arrive, which it handles, and
 returns, so the caller can send what they queued. A wait wakes a little
 late, so it ends NET_WAKE_EARLY early; from there each call polls the
 network once. Returns qfalse, without waiting, where it can't wait so:
-on systems other than Linux, and when the wait fails
+on Windows before Windows 10's high-resolution timers, on systems other
+than Windows and Linux, and when the wait fails
 ====================
 */
 qboolean NET_SleepUntil( int64_t ns )
 {
 #ifdef NET_WAKE_EARLY
 	int64_t		left;
+
+#ifdef _WIN32
+	if( !net_waitTimer )
+		return qfalse;
+#endif
 
 	left = ns - Sys_Nanoseconds();
 	if( left <= NET_WAKE_EARLY )
