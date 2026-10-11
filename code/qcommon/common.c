@@ -58,6 +58,11 @@ static fileHandle_t pipefile;
 static fileHandle_t logfile;
 // qconsole.log, kept across starts, starts afresh past this
 #define QCONSOLE_MAX_BYTES	( 16 << 20 )
+// and is measured each time this much more is written to it
+#define QCONSOLE_CHECK_BYTES	( 64 << 10 )
+static int		logWrittenSinceCheck;
+// closed to be set aside; and, where that failed, left to grow this run
+static qboolean	logRotating, logUnbounded;
 fileHandle_t	com_journalFile;			// events are written here
 fileHandle_t	com_journalDataFile;		// config files are written here
 
@@ -256,7 +261,10 @@ Com_LogWrite
 =============
 */
 static void Com_LogWrite( const char *text ) {
-	FS_Write( text, strlen( text ), logfile );
+	int		length = strlen( text );
+
+	FS_Write( text, length, logfile );
+	logWrittenSinceCheck += length;
 }
 
 extern int	com_numConsoleLines;
@@ -437,6 +445,8 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			Q_strncpyz( name, FS_ServerFile( "qconsole.log" ), sizeof( name ) );
 			rotated = FS_RotateFile_HomeData( name, QCONSOLE_MAX_BYTES );
 			logfile = FS_FOpenFileAppend_HomeData( name );
+			logUnbounded = logRotating && !rotated;
+			logRotating = qfalse;
 
 			if(logfile)
 			{
@@ -444,6 +454,10 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 				if ( rotated ) {
 					Com_Printf( "qconsole.log grew past %d MB, so it starts afresh; the lines before "
 						"are in qconsole.log.1\n", QCONSOLE_MAX_BYTES >> 20 );
+				} else if ( logUnbounded ) {
+					Com_Printf( S_COLOR_YELLOW "WARNING: qconsole.log grew past %d MB but couldn't be "
+						"set aside as qconsole.log.1, which another program may hold open; it grows "
+						"until the next start\n", QCONSOLE_MAX_BYTES >> 20 );
 				}
 				Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
 			
@@ -465,8 +479,22 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 		if ( logfile && FS_Initialized()) {
 			// as Sys_Print, with times unless com_timestamps is 0
 			static qboolean	lineStart = qtrue;
+			int				size;
 
 			Com_PrintLines( msg, &lineStart, 1, Com_LogWrite );
+
+			// so a server up for months keeps its bound: grown past it, the
+			// log is closed at a line's end, and the next print opens it
+			// again, setting it aside as qconsole.log.1
+			if ( lineStart && !logUnbounded && logWrittenSinceCheck >= QCONSOLE_CHECK_BYTES ) {
+				logWrittenSinceCheck = 0;
+				size = FS_FTell( logfile );
+				if ( size < 0 || size > QCONSOLE_MAX_BYTES ) {
+					FS_FCloseFile( logfile );
+					logfile = 0;
+					logRotating = qtrue;
+				}
+			}
 		}
 	}
 }
