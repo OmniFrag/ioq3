@@ -1017,6 +1017,17 @@ void Sys_SigHandler( int signal )
 	else
 	{
 		signalcaught = qtrue;
+		// what code built with -fsanitize-trap=bounds (or gcc's
+		// -fsanitize-undefined-trap-on-error) raises on an index past an
+		// array's end, rather than read or write beyond it: an illegal
+		// instruction on x86, a trap on arm64. Other faults raise them too
+		if( signal == SIGILL
+#ifdef SIGTRAP
+			|| signal == SIGTRAP
+#endif
+			)
+			Com_Printf( S_COLOR_RED "Signal %d may be a bounds check trapping: "
+				"an index past the end of an array, in code built to trap on one\n", signal );
 		VM_Forced_Unload_Start();
 #ifndef DEDICATED
 		CL_Shutdown(va("Received signal %d", signal), qtrue, qtrue);
