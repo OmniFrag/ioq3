@@ -842,7 +842,9 @@ const void *RB_StretchPic ( const void *data ) {
 	}
 
 	shader = cmd->shader;
-	if ( shader != tess.shader ) {
+	// an empty surface may be left from before: RB_EndSurface keeps
+	// tess.shader, and RE_StretchRaw ends a surface with no new one begun
+	if ( shader != tess.shader || !tess.numIndexes ) {
 		if ( tess.numIndexes ) {
 			RB_EndSurface();
 		}
