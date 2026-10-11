@@ -3998,14 +3998,12 @@ void CL_Init( void ) {
 	Cvar_Get ("team_headmodel", "*james", CVAR_USERINFO | CVAR_ARCHIVE );
 	Cvar_SetDescription( Cvar_Get ("g_redTeam", "Stroggs", CVAR_SERVERINFO | CVAR_ARCHIVE),
 		"Red team's name, in Team Arena only\n"
-		"Team Arena's game shows it, and takes the red team's player models and base textures from a "
-		"folder of that name. Quake III's own game and OmniFrag's don't use it, so on a dedicated server "
-		"it does nothing." );
+		"Team Arena's game code, ours included, shows it, and takes the red team's player models and base "
+		"textures from a folder of that name. The base game doesn't use it." );
 	Cvar_SetDescription( Cvar_Get ("g_blueTeam", "Pagans", CVAR_SERVERINFO | CVAR_ARCHIVE),
 		"Blue team's name, in Team Arena only\n"
-		"Team Arena's game shows it, and takes the blue team's player models and base textures from a "
-		"folder of that name. Quake III's own game and OmniFrag's don't use it, so on a dedicated server "
-		"it does nothing." );
+		"Team Arena's game code, ours included, shows it, and takes the blue team's player models and base "
+		"textures from a folder of that name. The base game doesn't use it." );
 	Cvar_Get ("color1",  "4", CVAR_USERINFO | CVAR_ARCHIVE );
 	Cvar_Get ("color2", "5", CVAR_USERINFO | CVAR_ARCHIVE );
 	Cvar_Get ("handicap", "100", CVAR_USERINFO | CVAR_ARCHIVE );
