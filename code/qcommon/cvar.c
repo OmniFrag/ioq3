@@ -3228,8 +3228,8 @@ void Cvar_SetRangeByName( cvarModule_t module, const char *var_name, int type, c
 		break;
 	case CVAR_RANGE_INTEGER:
 	case CVAR_RANGE_BITMASK:
-		min = INT_MIN;
-		max = INT_MAX;
+		min = CVAR_INT_MIN;
+		max = CVAR_INT_MAX;
 		break;
 	case CVAR_RANGE_BOOL:
 		Cvar_SetRange( var, 0, 1, qtrue, qtrue );
