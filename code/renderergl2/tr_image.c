@@ -2463,8 +2463,10 @@ Loads any of the supported image types into a canonical
 32 bit format.
 =================
 */
-void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum *picFormat, int *numMips )
+void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum *picFormat, int *numMips, char *fileName )
 {
+	// fileName, MAX_QPATH long, is set to each file tried, so it names the
+	// one that loaded
 	qboolean orgNameFailed = qfalse;
 	int orgLoader = -1;
 	int i;
@@ -2490,6 +2492,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 
 	if (r_ext_compressed_textures->integer) {
 		// Try DDS first
+		Q_strncpyz(fileName, ddsName, MAX_QPATH);
 		R_LoadDDS(ddsName, pic, width, height, picFormat, numMips);
 		if (*pic) return;
 
@@ -2497,6 +2500,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 		if (ext && *ext && Q_stricmp(ext, "dds")) {
 			for (i = 0; i < numImageLoaders; i++) {
 				if (!Q_stricmp(ext, imageLoaders[i].ext)) {
+					Q_strncpyz(fileName, localName, MAX_QPATH);
 					imageLoaders[i].ImageLoader(localName, pic, width, height);
 					if (*pic) return;
 					orgNameFailed = qtrue;
@@ -2512,6 +2516,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 			if (i == orgLoader)
 				continue;
 			altName = va("%s.%s", localName, imageLoaders[i].ext);
+			Q_strncpyz(fileName, altName, MAX_QPATH);
 			imageLoaders[i].ImageLoader(altName, pic, width, height);
 			if (*pic) {
 				if (orgNameFailed)
@@ -2527,6 +2532,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 	if (ext && *ext && Q_stricmp(ext, "dds")) {
 		for (i = 0; i < numImageLoaders; i++) {
 			if (!Q_stricmp(ext, imageLoaders[i].ext)) {
+				Q_strncpyz(fileName, localName, MAX_QPATH);
 				imageLoaders[i].ImageLoader(localName, pic, width, height);
 				if (*pic) return;
 				orgNameFailed = qtrue;
@@ -2544,6 +2550,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 		if (!Q_stricmp(imageLoaders[i].ext, "dds"))
 			continue;
 		altName = va("%s.%s", localName, imageLoaders[i].ext);
+		Q_strncpyz(fileName, altName, MAX_QPATH);
 		imageLoaders[i].ImageLoader(altName, pic, width, height);
 		if (*pic) {
 			if (orgNameFailed)
@@ -2554,6 +2561,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 
 	// Finally, allow DDS fallback even when compressed textures are off
 	if (!*pic) {
+		Q_strncpyz(fileName, ddsName, MAX_QPATH);
 		R_LoadDDS(ddsName, pic, width, height, picFormat, numMips);
 		if (*pic) ri.Printf(PRINT_DEVELOPER, "WARNING: falling back to compressed texture %s when r_ext_compressed_textures=0\n", ddsName);
 	}
@@ -2577,6 +2585,7 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	int picNumMips;
 	long	hash;
 	imgFlags_t checkFlagsTrue, checkFlagsFalse;
+	char	fileName[MAX_QPATH];
 
 	if (!name) {
 		return NULL;
@@ -2602,9 +2611,19 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	//
 	// load the pic from disk
 	//
-	R_LoadImage( name, &pic, &width, &height, &picFormat, &picNumMips );
+	R_LoadImage( name, &pic, &width, &height, &picFormat, &picNumMips, fileName );
 	if ( pic == NULL ) {
 		return NULL;
+	}
+
+	// another name for a file already read for the same use, as "x" and
+	// "x.png" or a missing "x.jpg" are, gets the same image; not 2D art,
+	// which each load upscales from a budget (R_Upscale2D)
+	for ( image = hashTable[hash]; image && !R_Is2DArt( name ); image = image->next ) {
+		if ( !strcmp( fileName, image->fileName ) && image->type == type && image->flags == flags ) {
+			ri.Free( pic );
+			return image;
+		}
 	}
 
 	// mipmapped uploads round to powers of two
@@ -2732,6 +2751,7 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	}
 
 	image = R_CreateImage2( ( char * ) name, pic, width, height, picFormat, picNumMips, type, flags, 0 );
+	Q_strncpyz( image->fileName, fileName, sizeof( image->fileName ) );
 	ri.Free( pic );
 	return image;
 }

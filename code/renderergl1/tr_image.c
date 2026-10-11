@@ -940,8 +940,10 @@ Loads any of the supported image types into a canonical
 32 bit format.
 =================
 */
-void R_LoadImage( const char *name, byte **pic, int *width, int *height )
+void R_LoadImage( const char *name, byte **pic, int *width, int *height, char *fileName )
 {
+	// fileName, MAX_QPATH long, is set to each file tried, so it names the
+	// one that loaded
 	qboolean orgNameFailed = qfalse;
 	int orgLoader = -1;
 	int i;
@@ -965,6 +967,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height )
 			if( !Q_stricmp( ext, imageLoaders[ i ].ext ) )
 			{
 				// Load
+				Q_strncpyz( fileName, localName, MAX_QPATH );
 				imageLoaders[ i ].ImageLoader( localName, pic, width, height );
 				break;
 			}
@@ -997,6 +1000,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height )
 			continue;
 
 		altName = va( "%s.%s", localName, imageLoaders[ i ].ext );
+		Q_strncpyz( fileName, altName, MAX_QPATH );
 
 		// Load
 		imageLoaders[ i ].ImageLoader( altName, pic, width, height );
@@ -1029,6 +1033,7 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	int		width, height;
 	byte	*pic;
 	long	hash;
+	char	fileName[MAX_QPATH];
 
 	if (!name) {
 		return NULL;
@@ -1054,15 +1059,26 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 	//
 	// load the pic from disk
 	//
-	R_LoadImage( name, &pic, &width, &height );
+	R_LoadImage( name, &pic, &width, &height, fileName );
 	if ( pic == NULL ) {
 		return NULL;
+	}
+
+	// another name for a file already read for the same use, as "x" and
+	// "x.tga" or a missing "x.jpg" are, gets the same image; not 2D art,
+	// which each load upscales from a budget (R_Upscale2D)
+	for ( image = hashTable[hash]; image && !R_Is2DArt( name ); image = image->next ) {
+		if ( !strcmp( fileName, image->fileName ) && image->type == type && image->flags == flags ) {
+			ri.Free( pic );
+			return image;
+		}
 	}
 
 	// every upload rounds to powers of two
 	R_Upscale2D( name, &pic, &width, &height, qtrue, ( flags & IMGFLAG_PICMIP ) && r_picmip->integer );
 
 	image = R_CreateImage( ( char * ) name, pic, width, height, type, flags, 0 );
+	Q_strncpyz( image->fileName, fileName, sizeof( image->fileName ) );
 	ri.Free( pic );
 	return image;
 }
