@@ -824,6 +824,10 @@ void RB_UpdateTessVao(unsigned int attribBits)
 
 		R_BindVao(tess.vao);
 
+		// so R_DrawElements draws the indexes uploaded here, streamed or not,
+		// rather than the VAO cache's
+		tess.useCacheVao = qfalse;
+
 		if (glRefConfig.mapBufferRange)
 		{
 			if (RB_StreamTessVao(attribBits))
