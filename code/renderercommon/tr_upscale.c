@@ -98,7 +98,7 @@ Whether the image is art drawn in 2D: in one of upscalePaths, or a
 player's head icon on the scoreboard (models/players/<model>/icon_<skin>)
 ===============
 */
-static qboolean R_Is2DArt( const char *name ) {
+qboolean R_Is2DArt( const char *name ) {
 	const char *file;
 	int i;
 
