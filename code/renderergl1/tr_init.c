@@ -1226,6 +1226,8 @@ void R_Register( void )
 	r_lockpvs = ri.Cvar_Get ("r_lockpvs", "0", CVAR_CHEAT);
 	r_noportals = ri.Cvar_Get ("r_noportals", "0", CVAR_CHEAT);
 	r_shadows = ri.Cvar_Get( "cg_shadows", "1", 0 );
+	ri.Cvar_SetDescription( ri.Cvar_Get( "r_shadowModes", "0", CVAR_ROM ),
+		"The cg_shadows modes this renderer draws, as bits 1 << mode, for the cgame to draw blobs for the others" );
 
 	r_marksOnTriangleMeshes = ri.Cvar_Get("r_marksOnTriangleMeshes", "0", CVAR_ARCHIVE);
 
@@ -1328,6 +1330,10 @@ void R_Init( void ) {
 	// and not in quad-buffered stereo
 	ri.Cvar_Set( "r_viewScaleMin", glConfig.stereoEnabled ? "1" : "0.25" );
 	ri.Cvar_Set( "r_viewScaleMax", "1" );
+
+	// blobs (the cgame's), stencil shadows given a stencil buffer, and
+	// projected ones
+	ri.Cvar_Set( "r_shadowModes", va( "%d", 1 << 1 | ( glConfig.stencilBits >= 4 ) << 2 | 1 << 3 ) );
 
 	R_InitImages();
 
