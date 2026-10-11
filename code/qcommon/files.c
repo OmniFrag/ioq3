@@ -288,6 +288,9 @@ static	cvar_t		*fs_steampath;
 static	cvar_t		*fs_gogpath;
 static	cvar_t		*fs_predecessorpath;
 static	char		fs_predecessorConfigPath[MAX_OSPATH];	// its config home, the data one's on XDG
+// under --check, its config a start would copy as ours, and where to
+// (FS_ImportPredecessorConfig)
+static	char		fs_uncopiedConfig[MAX_OSPATH], fs_uncopiedConfigTo[MAX_OSPATH];
 static	cvar_t		*fs_microsoftstorepath;
 
 static	cvar_t		*fs_basepath;
@@ -575,6 +578,23 @@ char *FS_BaseDir_BuildOSPath( const char *base, const char *qpath ) {
 
 /*
 ============
+FS_CheckRefuses
+
+--check writes nothing. Its callers skip what they'd write, saying so
+where that's clearer; this refuses anything else that would make, write,
+rename or remove a file or folder, saying which
+============
+*/
+static qboolean FS_CheckRefuses( const char *function, const char *ospath ) {
+	if ( !com_check ) {
+		return qfalse;
+	}
+	Com_Printf( "--check writes no file: %s refused %s\n", function, ospath );
+	return qtrue;
+}
+
+/*
+============
 FS_CreatePath
 
 Creates any directories needed to store the given filename
@@ -586,6 +606,10 @@ qboolean FS_CreatePath (const char *OSPath) {
 	
 	if (!OSPath || !*OSPath) {
 		return qfalse;
+	}
+
+	if ( FS_CheckRefuses( __func__, OSPath ) ) {
+		return qtrue;
 	}
 
 	// make absolutely sure that it can't back up the path
@@ -684,6 +708,9 @@ FS_Remove
 void FS_Remove( const char *osPath ) {
 	FS_CheckFilenameIsMutable( osPath, __func__ );
 
+	if ( FS_CheckRefuses( __func__, osPath ) ) {
+		return;
+	}
 	remove( osPath );
 }
 
@@ -694,10 +721,7 @@ FS_Remove_HomeData
 ===========
 */
 void FS_Remove_HomeData( const char *homePath ) {
-	FS_CheckFilenameIsMutable( homePath, __func__ );
-
-	remove( FS_BuildOSPath( fs_homedatapath->string,
-			fs_gamedir, homePath ) );
+	FS_Remove( FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, homePath ) );
 }
 
 /*
@@ -771,7 +795,7 @@ static fileHandle_t FS_OSPath_FOpenFileWrite( const char *ospath, const char *fi
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
 
-	if( FS_CreatePath( ospath ) ) {
+	if( FS_CheckRefuses( __func__, ospath ) || FS_CreatePath( ospath ) ) {
 		return 0;
 	}
 
@@ -975,6 +999,26 @@ long FS_ReadPredecessorConfig( const char *filename, void **buffer, char *ospath
 
 /*
 ===========
+FS_ReadUncopiedConfig
+
+Under --check, which copies nothing, the predecessor's config a start
+would copy as filename, in the home's config directory
+(FS_ImportPredecessorConfig), read where it is. ospath gets where. Free
+the buffer with Z_Free
+===========
+*/
+long FS_ReadUncopiedConfig( const char *filename, void **buffer, char *ospath, int size )
+{
+	*buffer = NULL;
+	if ( !fs_uncopiedConfig[0] || strcmp( filename, fs_uncopiedConfigTo ) ) {
+		return -1;
+	}
+	Q_strncpyz( ospath, fs_uncopiedConfig, size );
+	return FS_ReadOSFile( fs_uncopiedConfig, buffer );
+}
+
+/*
+===========
 FS_LoadedGameDir
 ===========
 */
@@ -1010,6 +1054,9 @@ void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe
 		FS_CheckFilenameIsMutable( to_ospath, __func__ );
 	}
 
+	if ( FS_CheckRefuses( __func__, from_ospath ) ) {
+		return;
+	}
 	rename(from_ospath, to_ospath);
 }
 
@@ -1103,6 +1150,9 @@ qboolean FS_RotateFile_HomeData( const char *filename, long maxBytes ) {
 	if ( length >= 0 && length <= maxBytes ) {
 		return qfalse;
 	}
+	if ( FS_CheckRefuses( __func__, ospath ) ) {
+		return qfalse;
+	}
 
 	// cut short, the name could be the file's own (Windows drops a final .)
 	if ( strlen( ospath ) + 2 >= sizeof( rotated ) ) {
@@ -1147,7 +1197,7 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
 
-	if( FS_CreatePath( ospath ) ) {
+	if( FS_CheckRefuses( __func__, ospath ) || FS_CreatePath( ospath ) ) {
 		return 0;
 	}
 
@@ -1190,6 +1240,9 @@ fileHandle_t FS_FCreateOpenPipeFile( const char *filename ) {
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
 
+	if ( FS_CheckRefuses( __func__, ospath ) ) {
+		return 0;
+	}
 	// a dedicated server's is in its own directory, which may be new
 	FS_CreatePath( ospath );
 	fifo = Sys_Mkfifo( ospath );
@@ -3758,6 +3811,9 @@ copied, naming where it came from ("" when it wasn't)
 static void FS_MarkPredecessorConfig( const char *mark, const char *from ) {
 	FILE	*out;
 
+	if ( FS_CheckRefuses( __func__, mark ) ) {
+		return;
+	}
 	if ( ( out = Sys_FOpen( mark, "wb" ) ) ) {
 		fprintf( out, "%s\n", from );
 		fclose( out );
@@ -3772,7 +3828,9 @@ While our home has no config, copies the one in predHome, the config
 home of the product this build succeeds, so its players keep their
 settings. That home is only ever read. A copy, or finding ours already
 there, leaves a mark beside ours, so a player who deletes our config to
-reset it doesn't get the old one back.
+reset it doesn't get the old one back. --check copies and marks nothing:
+it notes the config it would copy, which it reads where it is
+(FS_ReadUncopiedConfig).
 ================
 */
 static void FS_ImportPredecessorConfig( const char *predHome, const char *gameName ) {
@@ -3782,6 +3840,7 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	FILE	*in, *out;
 	qboolean	failed;
 
+	fs_uncopiedConfig[0] = '\0';
 	if ( !predHome[0] ) {
 		return;
 	}
@@ -3797,10 +3856,17 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	}
 	if ( FS_FileInPathExists( to ) || FS_FileInPathExists( old ) ) {
 		// ours was made without a copy, or by a build before the mark
-		FS_MarkPredecessorConfig( mark, "" );
+		if ( !com_check ) {
+			FS_MarkPredecessorConfig( mark, "" );
+		}
 		return;
 	}
 	Q_strncpyz( from, FS_BuildOSPath( predHome, gameName, Q3CONFIG_CFG ), sizeof( from ) );
+	if ( com_check ) {
+		Q_strncpyz( fs_uncopiedConfig, from, sizeof( fs_uncopiedConfig ) );
+		Com_sprintf( fs_uncopiedConfigTo, sizeof( fs_uncopiedConfigTo ), "%s/%s", gameName, FS_ServerFile( Q3CONFIG_CFG ) );
+		return;
+	}
 	if ( !( in = Sys_FOpen( from, "rb" ) ) ) {
 		return;
 	}
@@ -3894,14 +3960,14 @@ static void FS_Startup( const char *gameName )
 		Com_Error( ERR_DROP, "Invalid fs_game '%s'", fs_gamedirvar->string );
 	}
 
-	// --check writes nothing: no home made, no config copied
+	// --check writes nothing: no home made
 	if ( !com_check ) {
 		FS_CreatePath(fs_homeconfigpath->string);
 		FS_CreatePath(fs_homedatapath->string);
 		FS_CreatePath(fs_homestatepath->string);
-
-		FS_ImportPredecessorConfig(predConfigPath, gameName);
 	}
+
+	FS_ImportPredecessorConfig(predConfigPath, gameName);
 
 	FS_AddGameDirectories(gameName);
 
