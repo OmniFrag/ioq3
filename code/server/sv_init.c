@@ -535,6 +535,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	int	port = NET_OpenPort( NA_IP );
 	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
+	const char	*data;
 
 	// --check opens no socket: the ports a server would open
 	if ( com_check ) {
@@ -550,11 +551,19 @@ static void SV_PrintStartSummary( const char *heading ) {
 		Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
 	}
 	if ( !Q_stricmp( com_basegame->string, "demoq3" ) ) {
-		Com_Printf( "  data:     the demo's (%s)\n", com_basegame->string );
+		data = "the demo's";
 	} else if ( !com_standalone->integer ) {
-		Com_Printf( "  data:     the full game's (%s)\n", com_basegame->string );
+		data = "the full game's";
 	} else {
-		Com_Printf( "  data:     a standalone game's (%s)\n", com_basegame->string );
+		data = "a standalone game's";
+	}
+	// Team Arena's data goes on top of the base game's, as fs_game or a
+	// mod's fs_basegame, when FS_CheckPak0 asks for its paks
+	if ( !com_standalone->integer && ( !Q_stricmp( Cvar_VariableString( "fs_game" ), BASETA )
+		|| !Q_stricmp( Cvar_VariableString( "fs_basegame" ), BASETA ) ) ) {
+		Com_Printf( "  data:     Team Arena's (%s), on %s (%s)\n", BASETA, data, com_basegame->string );
+	} else {
+		Com_Printf( "  data:     %s (%s)\n", data, com_basegame->string );
 	}
 	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homedatapath" ) );
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
