@@ -812,7 +812,7 @@ static void ComputeFogColorMask( shaderStage_t *pStage, vec4_t fogColorMask )
 
 static void ForwardDlight( void ) {
 	int		l;
-	//vec3_t	origin;
+	vec3_t	origin;
 	//float	scale;
 	float	radius;
 
@@ -844,7 +844,6 @@ static void ForwardDlight( void ) {
 		}
 
 		dl = &backEnd.refdef.dlights[l];
-		//VectorCopy( dl->transformed, origin );
 		radius = dl->radius;
 		//scale = 1.0f / radius;
 
@@ -910,7 +909,11 @@ static void ForwardDlight( void ) {
 		VectorSet(vector, 0, 0, 0);
 		GLSL_SetUniformVec3(sp, UNIFORM_AMBIENTLIGHT, vector);
 
-		VectorCopy(dl->origin, vector);
+		// in the surface's space, as its vertices are
+		VectorSubtract(dl->origin, backEnd.or.origin, origin);
+		vector[0] = DotProduct(origin, backEnd.or.axis[0]);
+		vector[1] = DotProduct(origin, backEnd.or.axis[1]);
+		vector[2] = DotProduct(origin, backEnd.or.axis[2]);
 		vector[3] = 1.0f;
 		GLSL_SetUniformVec4(sp, UNIFORM_LIGHTORIGIN, vector);
 
