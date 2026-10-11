@@ -192,6 +192,7 @@ qboolean	NET_GetLoopPacket (netsrc_t sock, netadr_t *net_from, msg_t *net_messag
 void		NET_JoinMulticast6(void);
 void		NET_LeaveMulticast6(void);
 void		NET_Sleep(int msec);
+qboolean	NET_SleepUntil( int64_t ns );
 
 
 #define	MAX_MSGLEN				16384		// max length of a message, which may

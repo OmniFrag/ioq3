@@ -20,6 +20,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE	// ppoll
+#endif
+
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 
@@ -2051,6 +2055,47 @@ static void NET_Event(netsocks_t *readsocks)
 	}
 }
 
+#ifndef _WIN32
+/*
+====================
+NET_PollFds
+
+The sockets to wait on with poll(), which takes descriptors past
+FD_SETSIZE, which pk3s can push the sockets to
+====================
+*/
+static void NET_PollFds(struct pollfd fds[3])
+{
+	fds[0].fd = ip_socket;
+	fds[0].events = POLLIN;
+
+	fds[1].fd = ip6_socket;
+	fds[1].events = POLLIN;
+
+	fds[2].fd = (multicast6_socket != ip6_socket) ? multicast6_socket : INVALID_SOCKET;
+	fds[2].events = POLLIN;
+}
+
+/*
+====================
+NET_PollEvent
+
+Reads the sockets poll() returned, those with a pending error too, which
+reading clears, or poll() would keep returning at once
+====================
+*/
+static void NET_PollEvent(const struct pollfd fds[3])
+{
+	netsocks_t readsocks;
+
+	readsocks.ip         = fds[0].revents != 0;
+	readsocks.ip6        = fds[1].revents != 0;
+	readsocks.multicast6 = fds[2].revents != 0;
+
+	NET_Event(&readsocks);
+}
+#endif
+
 /*
 ====================
 NET_Sleep
@@ -2061,22 +2106,13 @@ Sleeps msec or until something happens on the network
 void NET_Sleep(int msec)
 {
 #ifndef _WIN32
-	// poll() takes descriptors past FD_SETSIZE, which pk3s can push
-	// the sockets to
 	struct pollfd fds[3];
 	int retval;
 
 	if(msec < 0)
 		msec = 0;
 
-	fds[0].fd = ip_socket;
-	fds[0].events = POLLIN;
-
-	fds[1].fd = ip6_socket;
-	fds[1].events = POLLIN;
-
-	fds[2].fd = (multicast6_socket != ip6_socket) ? multicast6_socket : INVALID_SOCKET;
-	fds[2].events = POLLIN;
+	NET_PollFds(fds);
 
 	retval = poll(fds, ARRAY_LEN(fds), msec);
 
@@ -2087,17 +2123,7 @@ void NET_Sleep(int msec)
 			Com_Printf("Warning: poll() syscall failed: %s\n", NET_ErrorString());
 	}
 	else if(retval > 0)
-	{
-		netsocks_t readsocks;
-
-		// read a socket with a pending error too, which clears it,
-		// or poll() would keep returning at once
-		readsocks.ip         = fds[0].revents != 0;
-		readsocks.ip6        = fds[1].revents != 0;
-		readsocks.multicast6 = fds[2].revents != 0;
-
-		NET_Event(&readsocks);
-	}
+		NET_PollEvent(fds);
 #else
 	// Windows' fd_set is a list of sockets, not a bitmap
 	struct timeval timeout;
@@ -2154,6 +2180,75 @@ void NET_Sleep(int msec)
 
 		NET_Event(&readsocks);
 	}
+#endif
+}
+
+// how much earlier than asked NET_SleepUntil's waits end, as they wake late:
+// ppoll by up to 0.15 ms
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#define NET_WAKE_EARLY	200000
+#endif
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+/*
+====================
+NET_WaitNs
+
+Waits up to ns, or until a packet arrives, and handles the packets; for
+NET_SleepUntil. Returns qfalse if it couldn't wait
+====================
+*/
+static qboolean NET_WaitNs( int64_t ns )
+{
+	struct pollfd	fds[3];
+	struct timespec	timeout;
+	int				retval;
+
+	NET_PollFds( fds );
+
+	timeout.tv_sec = ns / 1000000000;
+	timeout.tv_nsec = ns % 1000000000;
+
+	retval = ppoll( fds, ARRAY_LEN( fds ), &timeout, NULL );
+
+	// a signal only cuts the wait short
+	if( retval == SOCKET_ERROR )
+		return socketError == EINTR;
+
+	if( retval > 0 )
+		NET_PollEvent( fds );
+
+	return qtrue;
+}
+#endif
+
+/*
+====================
+NET_SleepUntil
+
+Sleeps toward Sys_Nanoseconds reaching ns, as NET_Sleep does toward a
+millisecond: until then or until packets arrive, which it handles, and
+returns, so the caller can send what they queued. A wait wakes a little
+late, so it ends NET_WAKE_EARLY early; from there each call polls the
+network once. Returns qfalse, without waiting, where it can't wait so:
+on systems other than Linux, and when the wait fails
+====================
+*/
+qboolean NET_SleepUntil( int64_t ns )
+{
+#ifdef NET_WAKE_EARLY
+	int64_t		left;
+
+	left = ns - Sys_Nanoseconds();
+	if( left <= NET_WAKE_EARLY )
+	{
+		NET_Sleep( 0 );
+		return qtrue;
+	}
+
+	return NET_WaitNs( left - NET_WAKE_EARLY );
+#else
+	return qfalse;
 #endif
 }
 
