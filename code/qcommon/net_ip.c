@@ -1558,6 +1558,25 @@ int NET_OpenPort( netadrtype_t type ) {
 	return ip_socket != INVALID_SOCKET ? net_port->integer : 0;
 }
 
+/*
+====================
+NET_BindsLoopback
+
+Whether net_ip (type NA_IP) or net_ip6 (NA_IP6) names a loopback address,
+127.0.0.0/8 or ::1, which only this computer can reach
+====================
+*/
+qboolean NET_BindsLoopback( netadrtype_t type ) {
+	static const byte	loopback6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+	netadr_t	adr;
+
+	if( !Sys_StringToAdr( ( type == NA_IP6 ? net_ip6 : net_ip )->string, &adr, type ) )
+		return qfalse;
+	if( type == NA_IP6 )
+		return !memcmp( adr.ip6, loopback6, sizeof( loopback6 ) );
+	return adr.ip[0] == 127;
+}
+
 
 //===================================================================
 

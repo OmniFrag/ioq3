@@ -535,7 +535,10 @@ static void SV_PrintStartSummary( const char *heading ) {
 	int	port = NET_OpenPort( NA_IP );
 	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
+	qboolean	local;
 	const char	*data;
+	const char	*ip = Cvar_VariableString( "net_ip" );
+	const char	*ip6 = Cvar_VariableString( "net_ip6" );
 
 	// --check opens no socket: the ports a server would open
 	if ( com_check ) {
@@ -544,6 +547,10 @@ static void SV_PrintStartSummary( const char *heading ) {
 		port = ( net & NET_ENABLEV4 ) ? Cvar_VariableIntegerValue( "net_port" ) : 0;
 		port6 = ( net & NET_ENABLEV6 ) ? Cvar_VariableIntegerValue( "net_port6" ) : 0;
 	}
+	// on loopback addresses alone (net_ip 127.0.0.1, net_ip6 ::1), only this
+	// computer can connect: no other finds it, and no firewall is in the way
+	local = ( port || port6 ) && ( !port || NET_BindsLoopback( NA_IP ) ) &&
+		( !port6 || NET_BindsLoopback( NA_IP6 ) );
 
 	Com_Printf( "%s\n", heading );
 	// --check loads no map, and reports the maps itself
@@ -569,17 +576,20 @@ static void SV_PrintStartSummary( const char *heading ) {
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
 	Com_Printf( "  own dir:  %s/%s: this server's saved settings, logs and bans\n", FS_GetCurrentGameDir(), FS_ServerDir() );
 	if ( port ) {
-		Com_Printf( "  port:     UDP %d (IPv4%s)\n", port, port == port6 ? " and IPv6" : "" );
+		Com_Printf( "  port:     UDP %d (IPv4%s)%s\n", port, port == port6 ? " and IPv6" : "",
+			!local ? "" : port == port6 ? va( ", on %s and %s only", ip, ip6 ) : va( ", on %s only", ip ) );
 	}
 	if ( port6 && port6 != port ) {
-		Com_Printf( "  port:     UDP %d (IPv6)\n", port6 );
+		Com_Printf( "  port:     UDP %d (IPv6)%s\n", port6, local ? va( ", on %s only", ip6 ) : "" );
 	}
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
 		if ( sv_master[i]->string[0] ) {
 			break;
 		}
 	}
-	if ( com_dedicated->integer == 2 && i < MAX_MASTER_SERVERS ) {
+	if ( local ) {
+		Com_Printf( "  listed:   no, only this computer can connect\n" );
+	} else if ( com_dedicated->integer == 2 && i < MAX_MASTER_SERVERS ) {
 		Com_Printf( "  listed:   on the master servers (dedicated 2)\n" );
 	} else if ( com_dedicated->integer == 2 ) {
 		Com_Printf( "  listed:   no, no master servers are set (sv_master1 and on)\n" );
@@ -587,7 +597,11 @@ static void SV_PrintStartSummary( const char *heading ) {
 		Com_Printf( "  listed:   no, found on the local network only; dedicated 2 lists it\n" );
 	}
 	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
-	Sys_PrintFirewall( NET_Port() );
+	if ( local ) {
+		Com_Printf( "  firewall: not needed, only this computer can connect\n" );
+	} else {
+		Sys_PrintFirewall( NET_Port() );
+	}
 	if ( !sv_rconPassword->string[0] ) {
 		Com_Printf( "  rcon:     off: set rconpassword to use it\n" );
 	} else if ( sv_rconAllow->string[0] ) {
