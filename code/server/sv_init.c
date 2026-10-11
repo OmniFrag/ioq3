@@ -470,13 +470,15 @@ qboolean	sv_mapAsked;
 ================
 SV_GametypeName
 
-g_gametype's name: the base game's game types, in the order of the game
-modules' gametype_t (bg_public.h, which the engine doesn't include)
+g_gametype's name: the base game's game types, then Team Arena's, which
+mods built on its code share, in the order of the game modules' gametype_t
+(bg_public.h, which the engine doesn't include)
 ================
 */
 static const char *SV_GametypeName( int gametype ) {
 	static const char * const names[] = {
-		"free for all", "tournament", "single player", "team deathmatch", "capture the flag"
+		"free for all", "tournament", "single player", "team deathmatch", "capture the flag",
+		"one flag", "overload", "harvester"
 	};
 
 	if ( gametype >= 0 && gametype < ARRAY_LEN( names ) ) {
