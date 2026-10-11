@@ -379,6 +379,7 @@ typedef intptr_t (QDECL *vmMainProc)(int callNum, int arg0, int arg1, int arg2, 
 // which ends with a NULL name.
 typedef struct {
 	const char	*name;		// "qagame", "cgame" or "ui"
+	const char	*gameDir;	// the game directory it's for, or NULL for the base game
 	vmMainProc	vmMain;
 	void		(*dllEntry)( intptr_t (QDECL *syscallptr)( intptr_t arg, ... ) );
 	byte		*data, *dataEnd;	// initialized data

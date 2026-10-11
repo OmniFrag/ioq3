@@ -5,10 +5,10 @@
 #   -fno-zero-initialized-in-bss makes them, since zeroed statics would go
 #   to __DATA,__bss, apart from every marker;
 # - in each architecture of the executable, the data markers are in __data
-#   and the bss markers in zero fill, every writable symbol the module
-#   exports (named <module>_...) lies between them, and every symbol between
-#   them is one the module's objects define, so the reset clears nothing of
-#   the engine's.
+#   and the bss markers in zero fill, every writable symbol the module's
+#   objects export lies between them, and every symbol between them is one
+#   the module's objects define, so the reset clears nothing of the
+#   engine's.
 # A static can share its name with the engine's or another module's, and
 # the linker strips unused ones, so the executable's statics can't be told
 # apart by name; the objects are checked for those instead.
@@ -16,6 +16,8 @@
 #   cmake -DNM=<nm> -DBINARY=<executable> -DARCHS=<arch|arch|...>
 #         -DMODULES=<module|module|...> -DOBJECTS_<module>=<object|...>
 #         -P check_linked_layout_macho.cmake
+#
+# The modules are named by their IDs (linked_game_module.cmake).
 #
 # Prints each stray symbol and fails, or prints nothing.
 
@@ -27,14 +29,15 @@ if(NOT ARCHS)
     set(ARCHS "-") # a thin binary: nm without -arch
 endif()
 
-set(MARKER "^_([A-Za-z0-9]+)_linked(Data|Bss)(Begin|End)$")
+set(MARKER "^_([A-Za-z0-9_]+)_linked(Data|Bss)(Begin|End)$")
 set(WRITABLE "^__DATA,__(data|bss|common)$")
 set(ZERO_FILL "^__DATA,__(bss|common)$")
 
-# Runs nm -m, and returns "<address> <section> <name>" for each symbol a
-# __DATA or __DATA_CONST section holds, leaving out the assembler's
-# temporary labels (ltmp0). nm prints 64-bit addresses in full, so they
-# compare in order as strings.
+# Runs nm -m, and returns "<address> <section> <name> <external>" for each
+# symbol a __DATA or __DATA_CONST section holds, leaving out the assembler's
+# temporary labels (ltmp0); <external> is 1 for a symbol other objects can
+# see, as a module's renamed globals are, and 0 for a static. nm prints
+# 64-bit addresses in full, so they compare in order as strings.
 function(data_symbols OUT ARCH)
     set(ARGS -m)
     if(NOT ARCH STREQUAL "-")
@@ -52,8 +55,13 @@ function(data_symbols OUT ARCH)
     set(SYMBOLS "")
     foreach(LINE IN LISTS LINES)
         # "0000000100257800 (__DATA,__common) non-external ... _name"
-        if(LINE MATCHES "^([0-9a-f]+) \\((__DATA[A-Z_]*,[^)]+)\\) .* ([^ l][^ ]*)$")
-            list(APPEND SYMBOLS "${CMAKE_MATCH_1} ${CMAKE_MATCH_2} ${CMAKE_MATCH_3}")
+        if(LINE MATCHES "^([0-9a-f]+) \\((__DATA[A-Z_]*,[^)]+)\\) (.*) ([^ l][^ ]*)$")
+            set(SYMBOL "${CMAKE_MATCH_1} ${CMAKE_MATCH_2} ${CMAKE_MATCH_4}")
+            if(CMAKE_MATCH_3 MATCHES "non-external")
+                list(APPEND SYMBOLS "${SYMBOL} 0")
+            else()
+                list(APPEND SYMBOLS "${SYMBOL} 1")
+            endif()
         endif()
     endforeach()
     set(${OUT} "${SYMBOLS}" PARENT_SCOPE)
@@ -143,16 +151,22 @@ foreach(ARCH IN LISTS ARCHS)
         string(REPLACE "|" ";" OBJECTS "${OBJECTS_${MODULE}}")
         data_symbols(OBJECT_SYMBOLS "${ARCH}" ${OBJECTS})
 
-        # the names the module's objects define, and any zeroed data
+        # the names the module's objects define, those they export, and any
+        # zeroed data
         set(OWN "")
+        set(EXPORTED "")
         foreach(SYMBOL IN LISTS OBJECT_SYMBOLS)
             string(REPLACE " " ";" FIELDS "${SYMBOL}")
             list(GET FIELDS 1 SECTION)
             list(GET FIELDS 2 NAME)
+            list(GET FIELDS 3 EXTERNAL)
             if(NAME MATCHES "${MARKER}")
                 continue()
             endif()
             list(APPEND OWN "${NAME}")
+            if(EXTERNAL AND SECTION MATCHES "${WRITABLE}")
+                list(APPEND EXPORTED "${NAME}")
+            endif()
             if(SECTION MATCHES "${ZERO_FILL}")
                 message("${WHERE}: ${MODULE}: ${NAME} is in ${SECTION}, outside the module's markers, where loading the module won't reset it")
                 set(FAILED TRUE)
@@ -170,7 +184,9 @@ foreach(ARCH IN LISTS ARCHS)
             if(IN STREQUAL MODULE AND NOT NAME IN_LIST OWN)
                 message("${WHERE}: ${MODULE}: ${NAME} lies between the module's markers")
                 set(FAILED TRUE)
-            elseif(NOT IN STREQUAL MODULE AND NAME MATCHES "^_${MODULE}_" AND SECTION MATCHES "${WRITABLE}")
+            # an exported name is the module's alone, where a static's can be
+            # another's too
+            elseif(NOT IN STREQUAL MODULE AND NAME IN_LIST EXPORTED)
                 message("${WHERE}: ${MODULE}: ${NAME} lies outside the module's markers, where loading the module won't reset it")
                 set(FAILED TRUE)
             endif()
