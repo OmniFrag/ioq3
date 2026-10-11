@@ -415,6 +415,9 @@ void RB_MDRSurfaceAnim( mdrSurface_t *surface )
 		tess.texCoords[baseVertex + j][0][0] = v->texCoords[0];
 		tess.texCoords[baseVertex + j][0][1] = v->texCoords[1];
 
+		// no vertex colors: white, for rgbGen vertex
+		* ( unsigned int * ) &tess.vertexColors[baseVertex + j] = 0xffffffff;
+
 		v = (mdrVertex_t *)&v->weights[v->numWeights];
 	}
 

@@ -1031,7 +1031,7 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 		for (i = 0; i < iqmData->num_surfaces; i++, vaoSurf++, surf++)
 		{
 			uint32_t offset_xyz, offset_st, offset_normal, offset_tangent;
-			uint32_t offset_blendindexes = 0, offset_blendweights = 0, stride;
+			uint32_t offset_color = 0, offset_blendindexes = 0, offset_blendweights = 0, stride;
 			uint32_t dataSize, dataOfs;
 			uint8_t *data;
 			glIndex_t indexes[SHADER_MAX_INDEXES];
@@ -1042,10 +1042,17 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			offset_st      = offset_xyz + sizeof(float) * 3;
 			offset_normal  = offset_st + sizeof(float) * 2;
 			offset_tangent = offset_normal + sizeof(int16_t) * 4;
+			stride = offset_tangent + sizeof(int16_t) * 4;
+
+			if ( iqmData->colors )
+			{
+				offset_color = stride;
+				stride += sizeof(byte) * 4;
+			}
 
 			if ( iqmData->num_joints )
 			{
-				offset_blendindexes = offset_tangent + sizeof(int16_t) * 4;
+				offset_blendindexes = stride;
 				offset_blendweights = offset_blendindexes + sizeof(byte) * 4;
 
 				if ( vertexArrayFormat[IQM_BLENDWEIGHTS] == IQM_FLOAT ) {
@@ -1053,10 +1060,6 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 				} else {
 					stride = offset_blendweights + sizeof(byte) * 4;
 				}
-			}
-			else
-			{
-				stride = offset_tangent + sizeof(int16_t) * 4;
 			}
 
 			dataSize = surf->num_vertexes * stride;
@@ -1083,6 +1086,13 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 				// tangent
 				R_VaoPackTangent((int16_t*)(data + dataOfs), &iqmData->tangents[vtx*4]);
 				dataOfs += sizeof(int16_t) * 4;
+
+				if ( iqmData->colors )
+				{
+					// color
+					memcpy(data + dataOfs, &iqmData->colors[vtx*4], sizeof(byte) * 4);
+					dataOfs += sizeof(byte) * 4;
+				}
 
 				if ( iqmData->num_joints )
 				{
@@ -1148,6 +1158,16 @@ qboolean R_LoadIQM( model_t *mod, void *buffer, int filesize, const char *mod_na
 			vaoSurf->vao->attribs[ATTR_INDEX_TEXCOORD].stride = stride;
 			vaoSurf->vao->attribs[ATTR_INDEX_NORMAL  ].stride = stride;
 			vaoSurf->vao->attribs[ATTR_INDEX_TANGENT ].stride = stride;
+
+			if ( iqmData->colors )
+			{
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].enabled = 1;
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].count = 4;
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].type = GL_UNSIGNED_BYTE;
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].normalized = GL_TRUE;
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].offset = offset_color;
+				vaoSurf->vao->attribs[ATTR_INDEX_COLOR].stride = stride;
+			}
 
 			if ( iqmData->num_joints )
 			{
@@ -1688,12 +1708,8 @@ void RB_IQMSurfaceAnim( surfaceType_t *surface ) {
 			outColor[3] = color[3] * 257;
 		}
 	} else {
-		for( i = 0; i < surf->num_vertexes; i++, outColor+=4 ) {
-			outColor[0] = 0;
-			outColor[1] = 0;
-			outColor[2] = 0;
-			outColor[3] = 0;
-		}
+		// white, as for models with no vertex colors at all
+		Com_Memset( outColor, 0xff, surf->num_vertexes * sizeof( tess.color[0] ) );
 	}
 
 	tri = data->triangles + 3 * surf->first_triangle;
