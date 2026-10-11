@@ -55,10 +55,11 @@ void R_TransformDlights( int count, dlight_t *dl, orientationr_t *or) {
 =============
 R_DlightBmodel
 
-Determine which dynamic lights may effect this bmodel
+Determine which dynamic lights may effect this bmodel, and return them
+as a mask
 =============
 */
-void R_DlightBmodel( bmodel_t *bmodel ) {
+int R_DlightBmodel( bmodel_t *bmodel ) {
 	int			i, j;
 	dlight_t	*dl;
 	int			mask;
@@ -102,6 +103,8 @@ void R_DlightBmodel( bmodel_t *bmodel ) {
 			((srfTriangles_t *)surf->data)->dlightBits = mask;
 		}
 	}
+
+	return mask;
 }
 
 

@@ -320,6 +320,7 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 	int			clip;
 	model_t		*pModel;
 	int			i;
+	int			mask;
 
 	pModel = R_GetModelByHandle( ent->e.hModel );
 
@@ -331,10 +332,10 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 	}
 	
 	R_SetupEntityLighting( &tr.refdef, ent );
-	R_DlightBmodel( bmodel );
+	mask = R_DlightBmodel( bmodel );
 
 	for ( i = 0 ; i < bmodel->numSurfaces ; i++ ) {
-		R_AddWorldSurface( bmodel->firstSurface + i, tr.currentEntity->needDlights );
+		R_AddWorldSurface( bmodel->firstSurface + i, mask );
 	}
 }
 
