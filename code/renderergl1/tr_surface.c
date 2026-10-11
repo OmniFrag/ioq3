@@ -760,6 +760,8 @@ static void RB_SurfaceMesh(md3Surface_t *surface) {
 		tess.texCoords[Doug + j][0][0] = texCoords[j*2+0];
 		tess.texCoords[Doug + j][0][1] = texCoords[j*2+1];
 		// FIXME: fill in lightmapST for completeness?
+		// no vertex colors: white, for rgbGen vertex
+		* ( unsigned int * ) &tess.vertexColors[Doug + j] = 0xffffffff;
 	}
 
 	tess.numVertexes += surface->numVerts;
