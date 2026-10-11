@@ -1532,6 +1532,8 @@ void R_Register( void )
 	r_lockpvs = ri.Cvar_Get ("r_lockpvs", "0", CVAR_CHEAT);
 	r_noportals = ri.Cvar_Get ("r_noportals", "0", CVAR_CHEAT);
 	r_shadows = ri.Cvar_Get( "cg_shadows", "1", 0 );
+	ri.Cvar_SetDescription( ri.Cvar_Get( "r_shadowModes", "0", CVAR_ROM ),
+		"The cg_shadows modes this renderer draws, as bits 1 << mode, for the cgame to draw blobs for the others" );
 
 	r_marksOnTriangleMeshes = ri.Cvar_Get("r_marksOnTriangleMeshes", "0", CVAR_ARCHIVE);
 
@@ -1661,6 +1663,11 @@ void R_Init( void ) {
 	ri.Cvar_Set( "r_viewScaleMin", glRefConfig.framebufferObject ? "0.25" : "1" );
 	ri.Cvar_Set( "r_viewScaleMax", glRefConfig.framebufferObject ? "2" : "1" );
 	R_UpdateViewScale();
+
+	// blobs (the cgame's), projected shadows, and given framebuffer
+	// objects shadow maps; no stencil shadows, as RB_ShadowTessEnd draws
+	// nothing (RND-017)
+	ri.Cvar_Set( "r_shadowModes", va( "%d", 1 << 1 | 1 << 3 | glRefConfig.framebufferObject << 4 ) );
 
 	GLSL_InitGPUShaders();
 
