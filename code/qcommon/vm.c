@@ -79,7 +79,7 @@ void VM_Init( void ) {
 	// native code, so only the player or the operator chooses it, never a
 	// server or a game module
 	vm_linked = Cvar_Get( "vm_linked", "1", CVAR_PROTECTED );
-	Cvar_SetDescription( vm_linked, "Use the game modules linked into the executable when running the base game" );
+	Cvar_SetDescription( vm_linked, "Use the game modules linked into the executable when running the game directory they were built for" );
 
 	Cmd_AddCommand ("vmprofile", VM_VmProfile_f );
 	Cmd_AddCommand ("vminfo", VM_VmInfo_f );
@@ -732,24 +732,35 @@ vm_t *VM_Restart(vm_t *vm, qboolean unpure)
 ================
 VM_FindLinked
 
-Game modules linked into the executable are the base game's code, so a mod
-still loads its own from its game directory.
+A game module linked into the executable is the code of one game
+directory: the base game's, or the one the build named, such as
+missionpack. A mod with none linked still loads its own from its game
+directory. A module linked for the current directory wins over the base
+game's, as when com_basegame names that directory too.
 ================
 */
 static vmLinkedModule_t *VM_FindLinked( const char *module ) {
-	vmLinkedModule_t	*linked;
+	const char			*gameDir = FS_GetCurrentGameDir();
+	qboolean			inBaseGame = !Q_stricmp( gameDir, com_basegame->string );
+	vmLinkedModule_t	*linked, *baseGame = NULL;
 
-	if ( !vm_linked->integer || Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) ) {
+	if ( !vm_linked->integer ) {
 		return NULL;
 	}
 
 	for ( linked = vm_linkedModules; linked->name; linked++ ) {
-		if ( !Q_stricmp( linked->name, module ) ) {
+		if ( Q_stricmp( linked->name, module ) ) {
+			continue;
+		}
+		if ( linked->gameDir && !Q_stricmp( linked->gameDir, gameDir ) ) {
 			return linked;
+		}
+		if ( !linked->gameDir && inBaseGame ) {
+			baseGame = linked;
 		}
 	}
 
-	return NULL;
+	return baseGame;
 }
 
 // MSVC defines __SANITIZE_ADDRESS__ too, but has no __attribute__, and
@@ -804,7 +815,8 @@ static void VM_ResetLinked( vmLinkedModule_t *linked ) {
 	// the build brackets the module's objects with these markers; out of
 	// order, the linker didn't keep the module's data together
 	if ( linked->dataEnd <= linked->data || linked->bssEnd <= linked->bss ) {
-		Com_Error( ERR_FATAL, "VM_Create: the linked %s's data isn't in one piece", linked->name );
+		Com_Error( ERR_FATAL, "VM_Create: the data of the linked %s for %s isn't in one piece",
+			linked->name, linked->gameDir ? linked->gameDir : "the base game" );
 	}
 
 	if ( !linked->initialData ) {
@@ -867,7 +879,12 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
 	if ( linked ) {
 		fileHandle_t	f;
 
-		Com_Printf( "Using linked %s\n", module );
+		// the base game's keeps the line logs and tests look for
+		if ( linked->gameDir ) {
+			Com_Printf( "Using linked %s for %s\n", module, linked->gameDir );
+		} else {
+			Com_Printf( "Using linked %s\n", module );
+		}
 
 		// A pure server checks the paks the client's cgame and ui came
 		// from, which the filesystem notes as it opens their QVMs. Open

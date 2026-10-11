@@ -1,13 +1,22 @@
 # Links the game modules added with add_linked_game_module() into the client
-# (all of them) and the dedicated server (${GAME_MODULE}), and generates each
-# executable's vm_linkedModules table, which is empty when none are linked.
+# (all of them) and the dedicated server (each ${GAME_MODULE}), and generates
+# each executable's vm_linkedModules table, which is empty when none are
+# linked. The modules are named by their IDs (linked_game_module.cmake).
 
 get_property(LINKED_MODULES GLOBAL PROPERTY LINKED_GAME_MODULES)
+get_property(SERVER_LINKED_MODULES GLOBAL PROPERTY LINKED_GAME_SERVER_MODULES)
 
 function(add_linked_game_modules EXECUTABLE)
     set(DECLARATIONS "")
     set(ENTRIES "")
     foreach(MODULE IN LISTS ARGN)
+        get_property(NAME TARGET ${MODULE}_linked PROPERTY LINKED_GAME_MODULE_NAME)
+        get_property(DIRECTORY TARGET ${MODULE}_linked PROPERTY LINKED_GAME_DIRECTORY)
+        if(NOT "${DIRECTORY}" STREQUAL "")
+            set(DIRECTORY "\"${DIRECTORY}\"")
+        else()
+            set(DIRECTORY NULL)
+        endif()
         target_link_libraries(${EXECUTABLE} PRIVATE ${MODULE}_linked)
         string(CONFIGURE [[
 intptr_t @MODULE@_vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11 );
@@ -16,7 +25,7 @@ extern byte @MODULE@_linkedDataBegin[], @MODULE@_linkedDataEnd[];
 extern byte @MODULE@_linkedBssBegin[], @MODULE@_linkedBssEnd[];
 ]] DECLARATION @ONLY)
         string(CONFIGURE [[
-	{ "@MODULE@", @MODULE@_vmMain, @MODULE@_dllEntry,
+	{ "@NAME@", @DIRECTORY@, @MODULE@_vmMain, @MODULE@_dllEntry,
 		@MODULE@_linkedDataBegin, @MODULE@_linkedDataEnd,
 		@MODULE@_linkedBssBegin, @MODULE@_linkedBssEnd },
 ]] ENTRY @ONLY)
@@ -78,7 +87,5 @@ if(TARGET ${CLIENT_BINARY})
 endif()
 
 if(TARGET ${SERVER_BINARY})
-    set(SERVER_LINKED_MODULES ${LINKED_MODULES})
-    list(FILTER SERVER_LINKED_MODULES INCLUDE REGEX "^${GAME_MODULE}$")
     add_linked_game_modules(${SERVER_BINARY} ${SERVER_LINKED_MODULES})
 endif()

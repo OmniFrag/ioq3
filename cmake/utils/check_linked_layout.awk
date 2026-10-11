@@ -3,7 +3,10 @@
 # between its bss markers, comes from the module's own objects. Anything
 # else there would be zeroed or overwritten each time the module loads.
 #
-#   awk -v modules="cgame qagame ui" -f check_linked_layout.awk <map>
+#   awk -v modules="cgame qagame ui missionpack_qagame" -f check_linked_layout.awk <map>
+#
+# The modules are named by their IDs (linked_game_module.cmake); a path is
+# matched from a slash, so qagame's objects aren't missionpack_qagame's.
 #
 # Prints each stray input section and exits 1, or exits 0.
 
@@ -69,10 +72,10 @@ END {
 				if (secsize[i] == 0 || secname[i] !~ ("^\\." kind)) {
 					continue
 				}
-				if (index(secfile[i], mod "_linkedBegin.c")) {
+				if (index(secfile[i], "/" mod "_linkedBegin.c")) {
 					begin = secaddr[i]
 					out = secout[i]
-				} else if (index(secfile[i], mod "_linkedEnd.c")) {
+				} else if (index(secfile[i], "/" mod "_linkedEnd.c")) {
 					end = secaddr[i]
 					endout = secout[i]
 				}
@@ -89,7 +92,7 @@ END {
 			}
 			for (i = 1; i <= n; i++) {
 				if (secsize[i] > 0 && secout[i] == out && secaddr[i] >= begin && secaddr[i] < end &&
-					!index(secfile[i], mod "_linked.dir/")) {
+					!index(secfile[i], "/" mod "_linked.dir/")) {
 					printf "%s: %s at %.0f from %s lies between the module's %s markers\n", mod, secname[i], secaddr[i], secfile[i], kind
 					failed = 1
 				}
