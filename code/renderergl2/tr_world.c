@@ -166,7 +166,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 				continue;
 			}
 			dl = &tr.refdef.dlights[i];
-			d = DotProduct( dl->origin, surf->cullinfo.plane.normal ) - surf->cullinfo.plane.dist;
+			d = DotProduct( dl->transformed, surf->cullinfo.plane.normal ) - surf->cullinfo.plane.dist;
 			if ( d < -dl->radius || d > dl->radius ) {
 				// dlight doesn't reach the plane
 				dlightBits &= ~( 1 << i );
@@ -181,12 +181,12 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 				continue;
 			}
 			dl = &tr.refdef.dlights[i];
-			if ( dl->origin[0] - dl->radius > surf->cullinfo.bounds[1][0]
-				|| dl->origin[0] + dl->radius < surf->cullinfo.bounds[0][0]
-				|| dl->origin[1] - dl->radius > surf->cullinfo.bounds[1][1]
-				|| dl->origin[1] + dl->radius < surf->cullinfo.bounds[0][1]
-				|| dl->origin[2] - dl->radius > surf->cullinfo.bounds[1][2]
-				|| dl->origin[2] + dl->radius < surf->cullinfo.bounds[0][2] ) {
+			if ( dl->transformed[0] - dl->radius > surf->cullinfo.bounds[1][0]
+				|| dl->transformed[0] + dl->radius < surf->cullinfo.bounds[0][0]
+				|| dl->transformed[1] - dl->radius > surf->cullinfo.bounds[1][1]
+				|| dl->transformed[1] + dl->radius < surf->cullinfo.bounds[0][1]
+				|| dl->transformed[2] - dl->radius > surf->cullinfo.bounds[1][2]
+				|| dl->transformed[2] + dl->radius < surf->cullinfo.bounds[0][2] ) {
 				// dlight doesn't reach the bounds
 				dlightBits &= ~( 1 << i );
 			}
@@ -200,7 +200,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 				continue;
 			}
 			dl = &tr.refdef.dlights[i];
-			if (!SpheresIntersect(dl->origin, dl->radius, surf->cullinfo.localOrigin, surf->cullinfo.radius))
+			if (!SpheresIntersect(dl->transformed, dl->radius, surf->cullinfo.localOrigin, surf->cullinfo.radius))
 			{
 				// dlight doesn't reach the bounds
 				dlightBits &= ~( 1 << i );
@@ -792,6 +792,9 @@ void R_AddWorldSurfaces (void) {
 		pshadowBits = 0;
 	}
 
+	// the surfaces cull the dlights in their model's space, the world's here
+	if ( dlightBits )
+		R_TransformDlights( tr.refdef.num_dlights, tr.refdef.dlights, &tr.viewParms.world );
 	R_RecursiveWorldNode( tr.world->nodes, planeBits, dlightBits, pshadowBits);
 
 	// now add all the potentially visible surfaces
