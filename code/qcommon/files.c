@@ -5125,22 +5125,19 @@ FS_ServerDir
 A dedicated server's own directory in each home's game directory, for
 what's its alone: its saved settings, qconsole.log, games.log, PID file
 and bans, while servers sharing a home share paks and scripts.
-"servers/<port>", by the port the command line gave (or the default), so
-it's known before the config is read and stays for the run. "" on a
-client
+"servers/<port>", by the port it answers on (NET_ServerPort), fixed for
+the run before the config is read. "" on a client
 ================
 */
 const char *FS_ServerDir( void )
 {
 	static char	dir[MAX_QPATH];
-	int		port;
 
 	if ( Com_IsClient() ) {
 		return "";
 	}
 	if ( !dir[0] ) {
-		port = Cvar_VariableIntegerValue( "net_port" );
-		Com_sprintf( dir, sizeof( dir ), "servers/%d", port > 0 ? port : PORT_SERVER );
+		Com_sprintf( dir, sizeof( dir ), "servers/%d", NET_ServerPort() );
 	}
 	return dir;
 }
