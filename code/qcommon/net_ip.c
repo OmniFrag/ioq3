@@ -1417,7 +1417,7 @@ A socket that didn't open. When its first port was in use, or refused
 (Windows refuses a port it reserves, or one another program holds for
 itself), a dedicated server stops rather than answer on another, where
 its players and its firewall don't expect it, and whose own directory
-(FS_ServerDir, named by the port it was given) another server uses. An
+(FS_ServerDir, named by NET_ServerPort) another server uses. An
 IPv6 port left to its default beside an open IPv4 one is the exception:
 the server answers on IPv4 alone (NET_OpenIP)
 ====================
@@ -1751,6 +1751,37 @@ void NET_Config( qboolean enableNetworking ) {
 
 /*
 ====================
+NET_ServerPort
+
+The port a dedicated server answers on, by what the command line gave, so
+it's known before the network opens: net_port, or net_port6 where it
+answers on IPv6 alone, which NET_OpenIP opens there and not on net_port.
+It stops rather than move to another (NET_PortTaken). Fixed at the first
+call, so the folder (FS_ServerDir) and the PID file it names agree
+whatever the config sets later
+====================
+*/
+int NET_ServerPort( void ) {
+	static int	port;
+	int			enabled;
+
+	if ( port ) {
+		return port;
+	}
+	enabled = Cvar_VariableIntegerValue( "net_enabled" );
+	if ( ( enabled & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) == NET_ENABLEV6 ) {
+		port = Cvar_VariableIntegerValue( "net_port6" );
+	} else {
+		port = Cvar_VariableIntegerValue( "net_port" );
+	}
+	if ( port <= 0 ) {
+		port = PORT_SERVER;
+	}
+	return port;
+}
+
+/*
+====================
 NET_Port
 
 The UDP port a server answers on: its IPv4 socket's, or its IPv6 one's
@@ -1764,7 +1795,7 @@ int NET_Port( void ) {
 		port = NET_OpenPort( NA_IP6 );
 	}
 	if ( !port ) {
-		port = net_port ? net_port->integer : PORT_SERVER;
+		port = NET_ServerPort();
 	}
 	return port;
 }

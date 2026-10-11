@@ -215,8 +215,8 @@ qboolean Sys_IsServerPIDFile( const char *name )
 =================
 Sys_PIDFileName
 
-A dedicated server's is in its own directory (FS_ServerDir), named by its
-port
+A dedicated server's is in its own directory (FS_ServerDir), named by the
+same port
 =================
 */
 static char *Sys_PIDFileName( const char *gamedir )
@@ -227,7 +227,7 @@ static char *Sys_PIDFileName( const char *gamedir )
 		return NULL;
 
 	if( !Com_IsClient( ) )
-		return va( "%s/%s/%s/" PID_SERVER_PREFIX "_%d.pid", homeStatePath, gamedir, FS_ServerDir( ), NET_Port( ) );
+		return va( "%s/%s/%s/" PID_SERVER_PREFIX "_%d.pid", homeStatePath, gamedir, FS_ServerDir( ), NET_ServerPort( ) );
 
 	return va( "%s/%s/" PRODUCT_NAME ".pid", homeStatePath, gamedir );
 }
@@ -300,7 +300,7 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 		Com_Printf( S_COLOR_YELLOW "WARNING: another server, process %d, answers on this port at "
 			"another address and keeps its files in this server's folder, %s: the two share their "
 			"saved settings (" Q3CONFIG_CFG "), qconsole.log, games.log and PID file. Give each "
-			"server a port of its own (+set net_port <port>).\n", pid, FS_ServerDir( ) );
+			"server a port of its own (+set net_port <port>, or net_port6 for one on IPv6 alone).\n", pid, FS_ServerDir( ) );
 	}
 
 	if( FS_CreatePath( pidFile ) ) {
