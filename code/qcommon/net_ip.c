@@ -1563,18 +1563,35 @@ int NET_OpenPort( netadrtype_t type ) {
 NET_BindsLoopback
 
 Whether net_ip (type NA_IP) or net_ip6 (NA_IP6) names a loopback address,
-127.0.0.0/8 or ::1, which only this computer can reach
+which only this computer can reach: 127.0.0.0/8, ::1, or 127.0.0.0/8
+mapped into IPv6 (::ffff:127.0.0.0/104)
 ====================
 */
-qboolean NET_BindsLoopback( netadrtype_t type ) {
+static qboolean NET_BindsLoopback( netadrtype_t type ) {
 	static const byte	loopback6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+	static const byte	mapped127[13] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127 };
 	netadr_t	adr;
 
 	if( !Sys_StringToAdr( ( type == NA_IP6 ? net_ip6 : net_ip )->string, &adr, type ) )
 		return qfalse;
 	if( type == NA_IP6 )
-		return !memcmp( adr.ip6, loopback6, sizeof( loopback6 ) );
+		return !memcmp( adr.ip6, loopback6, sizeof( loopback6 ) ) ||
+			!memcmp( adr.ip6, mapped127, sizeof( mapped127 ) );
 	return adr.ip[0] == 127;
+}
+
+/*
+====================
+NET_LoopbackOnly
+
+Whether only this computer can reach a server whose IPv4 socket is on
+port and IPv6 one on port6 (0 for one not open): each open one is on a
+loopback address (NET_BindsLoopback)
+====================
+*/
+qboolean NET_LoopbackOnly( int port, int port6 ) {
+	return ( port || port6 ) && ( !port || NET_BindsLoopback( NA_IP ) ) &&
+		( !port6 || NET_BindsLoopback( NA_IP6 ) );
 }
 
 

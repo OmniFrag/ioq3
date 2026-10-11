@@ -327,6 +327,12 @@ void SV_MasterHeartbeat(const char *message)
 
 	svs.nextHeartbeatTime = svs.time + HEARTBEAT_MSEC;
 
+	// only this computer can reach a server on loopback addresses alone,
+	// which its start summary says isn't listed: the masters aren't
+	// resolved, nor sent heartbeats, even one on this computer
+	if ( NET_LoopbackOnly( NET_OpenPort( NA_IP ), NET_OpenPort( NA_IP6 ) ) )
+		return;
+
 	// send to group masters
 	for (i = 0; i < MAX_MASTER_SERVERS; i++)
 	{
