@@ -579,6 +579,7 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	static int	errorCount;
 	int			currentTime;
 	qboolean	restartClient;
+	char		why[MAX_STRING_CHARS];
 
 	if(com_errorEntered)
 		Sys_Error("recursive error after: %s", com_errorMessage);
@@ -632,6 +633,12 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		longjmp (abortframe, -1);
 	} else if (code == ERR_DROP) {
 		Com_Printf ("********************\nERROR: %s\n********************\n", com_errorMessage);
+		// a dedicated server starts its map again, or exits for its service
+		// manager to restart it
+		if ( com_dedicated && com_dedicated->integer && !SV_RestartAfterError( why, sizeof( why ) ) ) {
+			com_errorEntered = qfalse;
+			Com_ErrorExit( EXIT_MAP_ERROR, "%s", why );
+		}
 		VM_Forced_Unload_Start();
 		SV_Shutdown (va("Server crashed: %s",  com_errorMessage));
 		if ( restartClient ) {

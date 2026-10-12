@@ -1498,6 +1498,10 @@ void SV_Frame( int msec ) {
 
 	if (!com_sv_running->integer)
 	{
+		// a map an error ended starts again (SV_RestartAfterError)
+		if ( SV_RetryMap() )
+			return;
+
 		// Running as a server, but no map loaded: a dedicated server
 		// given none starts one
 		if ( SV_StartDefaultMap() )

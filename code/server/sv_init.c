@@ -686,6 +686,76 @@ static void SV_CheckRconPassword( void ) {
 	}
 }
 
+// the map the server last started to load; mapname names it only once
+// it's partly loaded
+static char	sv_mapStarted[MAX_QPATH];
+qboolean	sv_mapCheats;
+
+// a map an error ended, to start again; and whether the map running is
+// that start, since when
+static char		sv_retryMap[MAX_QPATH];
+static qboolean	sv_retryCheats;
+static qboolean	sv_retrying;		// SV_RetryMap is starting it
+static qboolean	sv_mapRetried;
+static int		sv_retryTime;
+
+// how long after a map is started again, following an error, another
+// error makes the server exit instead
+#define SV_ERROR_RETRY_MSEC		( 5 * 60 * 1000 )
+
+/*
+================
+SV_RestartAfterError
+
+A dedicated server whose map an ERR_DROP ends starts it again, once
+(SV_RetryMap), as one left with no map waits forever for an admin who
+isn't there. That start ended by an error within SV_ERROR_RETRY_MSEC, it
+returns qfalse, with the reason, and the server exits EXIT_MAP_ERROR, so
+its service manager restarts it, and that manager's limits stop a server
+that fails at every start. A server with no map running or loading is
+left as it is.
+================
+*/
+qboolean SV_RestartAfterError( char *why, int size ) {
+	if ( !com_sv_running || !com_sv_running->integer || !sv_mapStarted[0] ) {
+		return qtrue;
+	}
+	if ( sv_mapRetried && Sys_Milliseconds() - sv_retryTime < SV_ERROR_RETRY_MSEC ) {
+		Com_sprintf( why, size, "%s ended with an error again within %d minutes of starting again, "
+			"so the server exits (status %d) for its service manager to restart it",
+			sv_mapStarted, SV_ERROR_RETRY_MSEC / 60000, EXIT_MAP_ERROR );
+		return qfalse;
+	}
+	Q_strncpyz( sv_retryMap, sv_mapStarted, sizeof( sv_retryMap ) );
+	sv_retryCheats = sv_mapCheats;
+	Com_Printf( S_COLOR_YELLOW "WARNING: starting %s again; another error within %d minutes "
+		"exits the server (status %d)\n", sv_mapStarted, SV_ERROR_RETRY_MSEC / 60000, EXIT_MAP_ERROR );
+	return qtrue;
+}
+
+/*
+================
+SV_RetryMap
+
+Starts the map an error ended again, once no command waits to run: a
+config or an admin's commands, which may start a map of their own, come
+first. Returns whether it ran
+================
+*/
+qboolean SV_RetryMap( void ) {
+	char	map[MAX_QPATH];
+
+	if ( !sv_retryMap[0] || !Cbuf_Empty() ) {
+		return qfalse;
+	}
+	Q_strncpyz( map, sv_retryMap, sizeof( map ) );
+	sv_retrying = qtrue;
+	Cmd_ExecuteString( va( "%s \"%s\"", sv_retryCheats ? "devmap" : "map", map ) );
+	sv_retrying = qfalse;
+	sv_retryMap[0] = '\0';
+	return qtrue;
+}
+
 /*
 ================
 SV_SpawnServer
@@ -701,6 +771,15 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	qboolean	isBot;
 	char		systemInfo[16384];
 	const char	*p;
+
+	// any map started takes the place of one waiting to start again
+	Q_strncpyz( sv_mapStarted, server, sizeof( sv_mapStarted ) );
+	sv_retryMap[0] = '\0';
+	sv_mapRetried = sv_retrying;
+	sv_retrying = qfalse;
+	if ( sv_mapRetried ) {
+		sv_retryTime = Sys_Milliseconds();
+	}
 
 	// a draining server stops as its map ends, rather than start another
 	if ( sv_drainReason[0] ) {
