@@ -377,6 +377,87 @@ qhandle_t RE_RegisterModel( const char *name ) {
 
 /*
 =================
+R_MdvSurfaceFrame
+
+Expands one frame of an MD3 surface's vertexes: the position, the normal
+and, with tangents, the tangent from the frame's triangles
+=================
+*/
+void R_MdvSurfaceFrame(const mdvSurface_t *surf, int frame, mdvVertex_t *out, qboolean tangents)
+{
+	static vec3_t   sdirs[SHADER_MAX_VERTEXES], tdirs[SHADER_MAX_VERTEXES];
+	const md3XyzNormal_t *in = surf->xyzNormals + frame * surf->numVerts;
+	const glIndex_t *tri;
+	mdvVertex_t    *v;
+	int             j;
+
+	for(j = 0, v = out; j < surf->numVerts; j++, in++, v++)
+	{
+		unsigned lat, lng;
+		unsigned short normal;
+		vec3_t fNormal;
+
+		v->xyz[0] = in->xyz[0] * MD3_XYZ_SCALE;
+		v->xyz[1] = in->xyz[1] * MD3_XYZ_SCALE;
+		v->xyz[2] = in->xyz[2] * MD3_XYZ_SCALE;
+
+		normal = in->normal;
+
+		lat = ( normal >> 8 ) & 0xff;
+		lng = ( normal & 0xff );
+		lat *= (FUNCTABLE_SIZE/256);
+		lng *= (FUNCTABLE_SIZE/256);
+
+		// decode X as cos( lat ) * sin( long )
+		// decode Y as sin( lat ) * sin( long )
+		// decode Z as cos( long )
+
+		fNormal[0] = tr.sinTable[(lat+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK] * tr.sinTable[lng];
+		fNormal[1] = tr.sinTable[lat] * tr.sinTable[lng];
+		fNormal[2] = tr.sinTable[(lng+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK];
+
+		R_VaoPackNormal(v->normal, fNormal);
+	}
+
+	if (!tangents)
+		return;
+
+	// calc tangent spaces
+	Com_Memset(sdirs, 0, sizeof(*sdirs) * surf->numVerts);
+	Com_Memset(tdirs, 0, sizeof(*tdirs) * surf->numVerts);
+	for(j = 0, tri = surf->indexes; j < surf->numIndexes; j += 3, tri += 3)
+	{
+		vec3_t sdir, tdir;
+
+		R_CalcTexDirs(sdir, tdir, out[tri[0]].xyz, out[tri[1]].xyz, out[tri[2]].xyz,
+			surf->st[tri[0]].st, surf->st[tri[1]].st, surf->st[tri[2]].st);
+
+		VectorAdd(sdir, sdirs[tri[0]], sdirs[tri[0]]);
+		VectorAdd(sdir, sdirs[tri[1]], sdirs[tri[1]]);
+		VectorAdd(sdir, sdirs[tri[2]], sdirs[tri[2]]);
+		VectorAdd(tdir, tdirs[tri[0]], tdirs[tri[0]]);
+		VectorAdd(tdir, tdirs[tri[1]], tdirs[tri[1]]);
+		VectorAdd(tdir, tdirs[tri[2]], tdirs[tri[2]]);
+	}
+
+	for(j = 0, v = out; j < surf->numVerts; j++, v++)
+	{
+		vec3_t normal;
+		vec4_t tangent;
+
+		VectorNormalize(sdirs[j]);
+		VectorNormalize(tdirs[j]);
+
+		R_VaoUnpackNormal(normal, v->normal);
+
+		tangent[3] = R_CalcTangentSpace(tangent, NULL, normal, sdirs[j], tdirs[j]);
+
+		R_VaoPackTangent(v->tangent, tangent);
+	}
+}
+
+/*
+=================
 R_LoadMD3
 =================
 */
@@ -390,7 +471,7 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 	md3Shader_t    *md3Shader;
 	md3Triangle_t  *md3Tri;
 	md3St_t        *md3st;
-	md3XyzNormal_t *md3xyz;
+	md3XyzNormal_t *md3xyz, *xyzNormal;
 	md3Tag_t       *md3Tag;
 
 	mdvModel_t     *mdvModel;
@@ -398,7 +479,7 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 	mdvSurface_t   *surf;//, *surface;
 	int            *shaderIndex;
 	glIndex_t	   *tri;
-	mdvVertex_t    *v;
+	mdvVertex_t    *v, *verts;
 	mdvSt_t        *st;
 	mdvTag_t       *tag;
 	mdvTagName_t   *tagName;
@@ -565,37 +646,17 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 			tri[2] = LittleLong(md3Tri->indexes[2]);
 		}
 
-		// swap all the XyzNormals
+		// swap all the XyzNormals; R_MdvSurfaceFrame expands them
 		surf->numVerts = md3Surf->numVerts;
-		surf->verts = v = ri.Hunk_Alloc(sizeof(*v) * (md3Surf->numVerts * md3Surf->numFrames), h_low);
+		surf->xyzNormals = xyzNormal = ri.Hunk_Alloc(sizeof(*xyzNormal) * (md3Surf->numVerts * md3Surf->numFrames), h_low);
 
 		md3xyz = (md3XyzNormal_t *) ((byte *) md3Surf + md3Surf->ofsXyzNormals);
-		for(j = 0; j < md3Surf->numVerts * md3Surf->numFrames; j++, md3xyz++, v++)
+		for(j = 0; j < md3Surf->numVerts * md3Surf->numFrames; j++, md3xyz++, xyzNormal++)
 		{
-			unsigned lat, lng;
-			unsigned short normal;
-			vec3_t fNormal;
-
-			v->xyz[0] = LittleShort(md3xyz->xyz[0]) * MD3_XYZ_SCALE;
-			v->xyz[1] = LittleShort(md3xyz->xyz[1]) * MD3_XYZ_SCALE;
-			v->xyz[2] = LittleShort(md3xyz->xyz[2]) * MD3_XYZ_SCALE;
-
-			normal = LittleShort(md3xyz->normal);
-
-			lat = ( normal >> 8 ) & 0xff;
-			lng = ( normal & 0xff );
-			lat *= (FUNCTABLE_SIZE/256);
-			lng *= (FUNCTABLE_SIZE/256);
-
-			// decode X as cos( lat ) * sin( long )
-			// decode Y as sin( lat ) * sin( long )
-			// decode Z as cos( long )
-
-			fNormal[0] = tr.sinTable[(lat+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK] * tr.sinTable[lng];
-			fNormal[1] = tr.sinTable[lat] * tr.sinTable[lng];
-			fNormal[2] = tr.sinTable[(lng+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK];
-
-			R_VaoPackNormal(v->normal, fNormal);
+			xyzNormal->xyz[0] = LittleShort(md3xyz->xyz[0]);
+			xyzNormal->xyz[1] = LittleShort(md3xyz->xyz[1]);
+			xyzNormal->xyz[2] = LittleShort(md3xyz->xyz[2]);
+			xyzNormal->normal = LittleShort(md3xyz->normal);
 		}
 
 		// swap all the ST
@@ -606,67 +667,6 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 		{
 			st->st[0] = LittleFloat(md3st->st[0]);
 			st->st[1] = LittleFloat(md3st->st[1]);
-		}
-
-		// calc tangent spaces
-		{
-			vec3_t *sdirs = ri.Malloc(sizeof(*sdirs) * surf->numVerts * mdvModel->numFrames);
-			vec3_t *tdirs = ri.Malloc(sizeof(*tdirs) * surf->numVerts * mdvModel->numFrames);
-
-			for(j = 0, v = surf->verts; j < (surf->numVerts * mdvModel->numFrames); j++, v++)
-			{
-				VectorClear(sdirs[j]);
-				VectorClear(tdirs[j]);
-			}
-
-			for(f = 0; f < mdvModel->numFrames; f++)
-			{
-				for(j = 0, tri = surf->indexes; j < surf->numIndexes; j += 3, tri += 3)
-				{
-					vec3_t sdir, tdir;
-					const float *v0, *v1, *v2, *t0, *t1, *t2;
-					glIndex_t index0, index1, index2;
-
-					index0 = surf->numVerts * f + tri[0];
-					index1 = surf->numVerts * f + tri[1];
-					index2 = surf->numVerts * f + tri[2];
-
-					v0 = surf->verts[index0].xyz;
-					v1 = surf->verts[index1].xyz;
-					v2 = surf->verts[index2].xyz;
-
-					t0 = surf->st[tri[0]].st;
-					t1 = surf->st[tri[1]].st;
-					t2 = surf->st[tri[2]].st;
-
-					R_CalcTexDirs(sdir, tdir, v0, v1, v2, t0, t1, t2);
-
-					VectorAdd(sdir, sdirs[index0], sdirs[index0]);
-					VectorAdd(sdir, sdirs[index1], sdirs[index1]);
-					VectorAdd(sdir, sdirs[index2], sdirs[index2]);
-					VectorAdd(tdir, tdirs[index0], tdirs[index0]);
-					VectorAdd(tdir, tdirs[index1], tdirs[index1]);
-					VectorAdd(tdir, tdirs[index2], tdirs[index2]);
-				}
-			}
-
-			for(j = 0, v = surf->verts; j < (surf->numVerts * mdvModel->numFrames); j++, v++)
-			{
-				vec3_t normal;
-				vec4_t tangent;
-
-				VectorNormalize(sdirs[j]);
-				VectorNormalize(tdirs[j]);
-
-				R_VaoUnpackNormal(normal, v->normal);
-
-				tangent[3] = R_CalcTangentSpace(tangent, NULL, normal, sdirs[j], tdirs[j]);
-
-				R_VaoPackTangent(v->tangent, tangent);
-			}
-
-			ri.Free(sdirs);
-			ri.Free(tdirs);
 		}
 
 		// find the next surface
@@ -725,6 +725,7 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 
 			data = ri.Malloc(dataSize);
 			dataOfs = 0;
+			verts = ri.Malloc(sizeof(*verts) * surf->numVerts);
 
 			if (mdvModel->numFrames > 1)
 			{
@@ -734,25 +735,29 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 					dataOfs += sizeof(st->st);
 				}
 
-				v = surf->verts;
-				for ( j = 0; j < surf->numVerts * mdvModel->numFrames ; j++, v++ )
+				for ( f = 0; f < mdvModel->numFrames; f++ )
 				{
-					// xyz
-					memcpy(data + dataOfs, &v->xyz, sizeof(vec3_t));
-					dataOfs += sizeof(vec3_t);
+					R_MdvSurfaceFrame(surf, f, verts, qtrue);
+					for ( j = 0, v = verts; j < surf->numVerts; j++, v++ )
+					{
+						// xyz
+						memcpy(data + dataOfs, &v->xyz, sizeof(vec3_t));
+						dataOfs += sizeof(vec3_t);
 
-					// normal
-					memcpy(data + dataOfs, &v->normal, sizeof(int16_t) * 4);
-					dataOfs += sizeof(int16_t) * 4;
+						// normal
+						memcpy(data + dataOfs, &v->normal, sizeof(int16_t) * 4);
+						dataOfs += sizeof(int16_t) * 4;
 
-					// tangent
-					memcpy(data + dataOfs, &v->tangent, sizeof(int16_t) * 4);
-					dataOfs += sizeof(int16_t) * 4;
+						// tangent
+						memcpy(data + dataOfs, &v->tangent, sizeof(int16_t) * 4);
+						dataOfs += sizeof(int16_t) * 4;
+					}
 				}
 			}
 			else
 			{
-				v = surf->verts;
+				R_MdvSurfaceFrame(surf, 0, verts, qtrue);
+				v = verts;
 				st = surf->st;
 				for ( j = 0; j < surf->numVerts; j++, v++, st++ )
 				{
@@ -823,6 +828,7 @@ static qboolean R_LoadMD3(model_t * mod, int lod, void *buffer, int bufferSize, 
 
 			Vao_SetVertexPointers(vaoSurf->vao);
 
+			ri.Free(verts);
 			ri.Free(data);
 		}
 	}
