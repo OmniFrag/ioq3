@@ -503,6 +503,83 @@ qboolean Sys_Rename( const char *from, const char *to )
 
 /*
 ==================
+Sys_DiskSpace
+
+The bytes free to this user, and in all, on the disk holding path
+==================
+*/
+qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total )
+{
+	ULARGE_INTEGER	free, all;
+
+	if( !GetDiskFreeSpaceEx( path, &free, &all, NULL ) || !all.QuadPart )
+		return qfalse;
+
+	*available = free.QuadPart;
+	*total = all.QuadPart;
+	return qtrue;
+}
+
+struct sysThread_s
+{
+	HANDLE	handle;
+	void	(*func)( void *arg );
+	void	*arg;
+};
+
+static DWORD WINAPI Sys_RunThread( LPVOID data )
+{
+	sysThread_t	*thread = data;
+
+	thread->func( thread->arg );
+	return 0;
+}
+
+/*
+==================
+Sys_StartThread
+
+Runs func( arg ) on a thread of its own; Sys_ThreadFinished says when
+it's done. NULL if it couldn't start
+==================
+*/
+sysThread_t *Sys_StartThread( void (*func)( void *arg ), void *arg )
+{
+	sysThread_t	*thread = calloc( 1, sizeof( *thread ) );
+
+	if( !thread )
+		return NULL;
+
+	thread->func = func;
+	thread->arg = arg;
+	thread->handle = CreateThread( NULL, 0, Sys_RunThread, thread, 0, NULL );
+	if( !thread->handle )
+	{
+		free( thread );
+		return NULL;
+	}
+	return thread;
+}
+
+/*
+==================
+Sys_ThreadFinished
+
+Whether thread's function has returned; once it has, thread is freed
+==================
+*/
+qboolean Sys_ThreadFinished( sysThread_t *thread )
+{
+	if( WaitForSingleObject( thread->handle, 0 ) != WAIT_OBJECT_0 )
+		return qfalse;
+
+	CloseHandle( thread->handle );
+	free( thread );
+	return qtrue;
+}
+
+/*
+==================
 Sys_Mkfifo
 Noop on windows because named pipes do not function the same way
 ==================
