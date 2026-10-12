@@ -210,6 +210,12 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 		return;
 	}
 
+	// a player starting over (the overflow below) is sent the commands
+	// waiting with its gamestate, and those after it; any between are lost
+	if ( client->resync && client->state == CS_ACTIVE ) {
+		return;
+	}
+
 	client->reliableSequence++;
 	// a bot reads its commands only as it thinks (SV_BotGetConsoleMessage),
 	// so a burst, such as many bots joining at once, can outrun it: it loses
@@ -222,13 +228,32 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	}
 	// if we would be losing an old command that hasn't been acknowledged,
 	// or that the client hasn't had a snapshot with (snapshotAcknowledge),
-	// we must drop the connection
+	// we must start the client over or drop the connection
 	// we check == instead of >= so a broadcast print added by SV_DropClient()
 	// doesn't cause a recursive drop client
 	if ( client->reliableSequence - oldest == MAX_RELIABLE_COMMANDS + 1 ) {
 		if ( client->gamestateMessageNum == -1 )  {
 			// invalid game state message 
 			// this can occur in SV_DropClient() to avoid calling it more than once
+			return;
+		}
+
+		// a player who falls behind for the first time in SV_RESYNC_WINDOW
+		// is sent the gamestate again, as a map change sends it, and plays
+		// on (SV_SendClientMessages). The gamestate carries the commands
+		// still waiting, which its game runs before those after it, so
+		// they're numbered on; this one, and any until it goes, are lost
+		// (one already resyncing while active returned above)
+		if ( client->state == CS_ACTIVE &&
+			!SVC_RateLimit( &client->resyncRate, 1, SV_RESYNC_WINDOW ) ) {
+			Com_Printf( "%s is %d server commands behind: sending them the gamestate again\n",
+				client->name, client->reliableSequence - 1 - oldest );
+			client->resync = qtrue;
+			// taken as the gamestate goes out (SV_ResyncClient): a map
+			// change or restart under way now connects the player to the
+			// game again, and the gamestate it sends must begin them
+			client->resyncServerId = -1;
+			client->reliableSequence--;
 			return;
 		}
 

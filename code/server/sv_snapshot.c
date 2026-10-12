@@ -702,6 +702,13 @@ void SV_SendClientMessages(void)
 		if(!c->state)
 			continue;		// not connected
 
+		// a client behind on server commands starts over (SV_AddServerCommand)
+		if(c->resync && c->state == CS_ACTIVE)
+		{
+			SV_ResyncClient(c);
+			continue;
+		}
+
 		if(svs.time - c->lastSnapshotTime < c->snapshotMsec * com_timescale->value)
 			continue;		// It's not time yet
 
