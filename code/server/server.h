@@ -250,6 +250,13 @@ typedef struct {
 // the times kept from it before stay above 0
 #define SV_TIME_REBASED	( 60 * 60 * 1000 )
 
+// a dedicated server's hibernation (SV_Hibernate)
+typedef enum {
+	HIBERNATE_AWAKE,
+	HIBERNATE_ASLEEP,	// the game is frozen until a player comes
+	HIBERNATE_WAKING	// woken since the last frame, whose time the game skips
+} hibernation_t;
+
 // this structure will be cleared only when the game dll changes
 typedef struct {
 	qboolean	initialized;				// sv_init has completed
@@ -264,6 +271,8 @@ typedef struct {
 	entityState_t	*snapshotEntities;		// [numSnapshotEntities]
 	int			nextHeartbeatTime;
 	int			nextKeepAwakeTime;	// SV_KeepAwake's next check
+	int			hibernateFrom;		// when the last player left, bots aside, or the server last woke
+	hibernation_t	hibernation;
 	challenge_t	challenges[MAX_CHALLENGES];	// to prevent invalid IPs from connecting
 	netadr_t	redirectAddress;			// for rcon return messages
 #ifndef STANDALONE
@@ -291,6 +300,7 @@ extern	vm_t			*gvm;				// game virtual machine
 
 extern	cvar_t	*sv_fps;
 extern	cvar_t	*sv_timeout;
+extern	cvar_t	*sv_hibernateTime;
 extern	cvar_t	*sv_zombietime;
 extern	cvar_t	*sv_rconPassword;
 extern	cvar_t	*sv_privatePassword;
@@ -413,6 +423,7 @@ void SV_CheckReport( void );
 void SV_CheckExit( void );
 void SV_KeepAwake( void );
 int SV_HumanCount( void );
+void SV_Wake( const char *why );
 extern qboolean	sv_mapAsked;	// a map command ran, even one that failed: no default map
 extern qboolean	sv_mapCheats;	// the last map command was a devmap, which sv_cheats says only once it's loaded
 

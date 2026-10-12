@@ -33,6 +33,7 @@ vm_t			*gvm = NULL;				// game virtual machine
 
 cvar_t	*sv_fps = NULL;			// time rate for running non-clients
 cvar_t	*sv_timeout;			// seconds without any message
+cvar_t	*sv_hibernateTime;		// msec without players before the game freezes
 cvar_t	*sv_zombietime;			// seconds to sink messages after disconnect
 cvar_t	*sv_rconPassword;		// password for remote server commands
 cvar_t	*sv_privatePassword;		// password for the privateClient slots
@@ -1383,6 +1384,10 @@ static qboolean SV_CheckPaused( void ) {
 	return qtrue;
 }
 
+// how often a hibernating server runs its frame (SV_Hibernate): seldom,
+// and under the half second past which a dedicated server warns of a hitch
+#define HIBERNATE_FRAME_MSEC	250
+
 /*
 ==================
 SV_FrameMsec
@@ -1395,7 +1400,7 @@ int SV_FrameMsec(void)
 	{
 		int frameMsec;
 		
-		frameMsec = SV_FrameLength();
+		frameMsec = svs.hibernation == HIBERNATE_ASLEEP ? HIBERNATE_FRAME_MSEC : SV_FrameLength();
 		
 		if(frameMsec < sv.timeResidual)
 			return 0;
@@ -1488,6 +1493,64 @@ static void SV_FrameRateChanged( void ) {
 
 /*
 ==================
+SV_Wake
+
+A player has connected, or the map changes: a hibernating server's game
+carries on from where it froze, without catching up the time it slept,
+and an awake one waits sv_hibernateTime again before it hibernates
+==================
+*/
+void SV_Wake( const char *why ) {
+	svs.hibernateFrom = svs.time;
+	if ( svs.hibernation == HIBERNATE_ASLEEP ) {
+		svs.hibernation = HIBERNATE_WAKING;
+		Com_Printf( "Waking from hibernation: %s\n", why );
+	}
+}
+
+/*
+==================
+SV_Hibernate
+
+A dedicated server that has had no players for sv_hibernateTime
+milliseconds, bots aside, hibernates: it runs no game frames, so the bots,
+the level's time and its clock, votes and the map rotation all freeze,
+and the game logs nothing. The server itself goes on, a frame every
+HIBERNATE_FRAME_MSEC: it answers status queries, rcon and connections,
+and sends heartbeats. The frozen game takes a player's connection as
+ever, and the next frame wakes it (SV_Wake): a server scanned for
+challenges stays asleep. A delayed map_restart keeps it awake until the
+restart. Returns whether the game skips this
+frame: while hibernating, and the first frame after waking, whose time
+was slept.
+==================
+*/
+static qboolean SV_Hibernate( void ) {
+	int		players = SV_HumanCount();
+
+	if ( svs.hibernation == HIBERNATE_ASLEEP && ( players || sv_hibernateTime->integer <= 0 ) ) {
+		SV_Wake( players ? "a player connected" : "turned off" );
+	}
+	if ( svs.hibernation == HIBERNATE_WAKING ) {
+		svs.hibernation = HIBERNATE_AWAKE;
+		return qtrue;
+	}
+	if ( svs.hibernation == HIBERNATE_ASLEEP ) {
+		return qtrue;
+	}
+
+	if ( !com_dedicated->integer || sv_hibernateTime->integer <= 0 || players || sv.restartTime ) {
+		svs.hibernateFrom = svs.time;
+	} else if ( svs.time - svs.hibernateFrom >= sv_hibernateTime->integer ) {
+		svs.hibernation = HIBERNATE_ASLEEP;
+		Com_Printf( "Hibernating: no players for %g seconds, so the game is frozen until one connects\n",
+			sv_hibernateTime->integer / 1000.0 );
+	}
+	return qfalse;
+}
+
+/*
+==================
 SV_Frame
 
 Player movement occurs as a result of packet events, which
@@ -1497,6 +1560,7 @@ happen before SV_Frame is called
 void SV_Frame( int msec ) {
 	int		frameMsec;
 	int		startTime;
+	qboolean	frozen;
 
 	// the menu kills the server with this cvar
 	if ( sv_killserver->integer ) {
@@ -1561,7 +1625,14 @@ void SV_Frame( int msec ) {
 		frameMsec = 1;
 	}
 
-	sv.timeResidual += msec;
+	// a hibernating server's own clock goes on, for timeouts, heartbeats
+	// and rate limits, while the game's stays where it froze
+	frozen = SV_Hibernate();
+	if ( frozen ) {
+		svs.time += msec;
+	} else {
+		sv.timeResidual += msec;
+	}
 
 	if (!com_dedicated->integer) SV_BotFrame (sv.time + sv.timeResidual);
 
@@ -1600,10 +1671,10 @@ void SV_Frame( int msec ) {
 	// update ping based on the all received frames
 	SV_CalcPings();
 
-	if (com_dedicated->integer) SV_BotFrame (sv.time);
+	if (com_dedicated->integer && !frozen) SV_BotFrame (sv.time);
 
 	// run the game simulation in chunks
-	while ( sv.timeResidual >= frameMsec ) {
+	while ( !frozen && sv.timeResidual >= frameMsec ) {
 		sv.timeResidual -= frameMsec;
 		svs.time += frameMsec;
 		sv.time += frameMsec;
@@ -1619,8 +1690,11 @@ void SV_Frame( int msec ) {
 	// check timeouts
 	SV_CheckTimeouts();
 
-	// send messages back to the clients
-	SV_SendClientMessages();
+	// send messages back to the clients, unless the world is frozen: its
+	// bots don't think, and a player who's just connected gets the next
+	if ( !frozen ) {
+		SV_SendClientMessages();
+	}
 
 	// send a heartbeat to the master if needed
 	SV_MasterHeartbeat(HEARTBEAT_FOR_MASTER);
