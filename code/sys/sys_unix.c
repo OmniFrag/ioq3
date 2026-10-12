@@ -811,6 +811,18 @@ qboolean Sys_Mkdir( const char *path )
 
 /*
 ==================
+Sys_Rename
+
+Renames from to to, replacing a file there
+==================
+*/
+qboolean Sys_Rename( const char *from, const char *to )
+{
+	return rename( from, to ) == 0;
+}
+
+/*
+==================
 Sys_Mkfifo
 ==================
 */

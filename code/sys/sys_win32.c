@@ -489,6 +489,20 @@ qboolean Sys_Mkdir( const char *path )
 
 /*
 ==================
+Sys_Rename
+
+Renames from to to, replacing a file there, which rename won't do on
+Windows; to is kept if from can't be renamed, as when another program
+holds it open
+==================
+*/
+qboolean Sys_Rename( const char *from, const char *to )
+{
+	return MoveFileEx( from, to, MOVEFILE_REPLACE_EXISTING ) != 0;
+}
+
+/*
+==================
 Sys_Mkfifo
 Noop on windows because named pipes do not function the same way
 ==================
