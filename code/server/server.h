@@ -405,6 +405,7 @@ void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 void SV_ChangeMaxClients( void );
 void SV_SpawnServer( char *server, qboolean killBots );
 qboolean SV_StartDefaultMap( void );
+qboolean SV_RetryMap( void );
 void SV_NoteStartupMap( const char *map, qboolean found );
 void SV_FinishStartup( void );
 void SV_CheckMap( const char *map, qboolean found );
@@ -413,6 +414,7 @@ void SV_CheckExit( void );
 void SV_KeepAwake( void );
 int SV_HumanCount( void );
 extern qboolean	sv_mapAsked;	// a map command ran, even one that failed: no default map
+extern qboolean	sv_mapCheats;	// the last map command was a devmap, which sv_cheats says only once it's loaded
 
 
 
