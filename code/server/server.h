@@ -138,6 +138,11 @@ typedef struct netchan_buffer_s {
 	struct netchan_buffer_s *next;
 } netchan_buffer_t;
 
+// a player more than MAX_RELIABLE_COMMANDS server commands behind is sent the
+// gamestate again, as a map change sends it, and plays on; a second time
+// within this long, it's dropped (SV_AddServerCommand)
+#define SV_RESYNC_WINDOW	( 5 * 60 * 1000 )
+
 typedef struct client_s {
 	clientState_t	state;
 	char			userinfo[MAX_INFO_STRING];		// name, etc
@@ -187,6 +192,13 @@ typedef struct client_s {
 	int				lastConnectTime;	// svs.time when connection started
 	int				lastDisconnectTime;	// svs.time it was last let go (SV_OldestFreeClient)
 	qboolean		loadingSaySkipped;	// said in the log that its load is skipping what's said (SV_AddServerCommand)
+	// after a server command overflow (SV_AddServerCommand), until the client
+	// enters the world again: while it's active, the gamestate is still to
+	// send (SV_SendClientMessages)
+	qboolean		resync;
+	int				resyncSequence;		// the commands its gamestate carried: a packet acknowledging fewer predates it
+	int				resyncServerId;		// sv.serverId when its gamestate went out (SV_ResyncClient), -1 until then: a map change or restart since needs ClientBegin
+	rateLimit_t		resyncRate;			// one resync in SV_RESYNC_WINDOW
 	int				lastSnapshotTime;	// svs.time of last sent snapshot
 	qboolean		rateDelayed;		// true if nextSnapshotTime was set based on rate instead of snapshotMsec
 	int				timeoutCount;		// must timeout a few frames in a row so debugging doesn't break
@@ -447,6 +459,7 @@ void SV_UpdateSnapshotRate( client_t *cl );
 qboolean SV_IsUnlimitedRate( client_t *cl );
 
 void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd );
+void SV_ResyncClient( client_t *client );
 void SV_FreeClient(client_t *client);
 void SV_DropClient( client_t *drop, const char *reason );
 

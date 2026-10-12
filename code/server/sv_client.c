@@ -796,10 +796,10 @@ Sends the first message from the server to a connected client.
 This will be sent on the initial connection and upon each new map load.
 
 It will be resent if the client acknowledges a later message but has
-the wrong gamestate.
+the wrong gamestate. Returns its size in bytes, 0 when it didn't fit.
 ================
 */
-static void SV_SendClientGameState( client_t *client ) {
+static int SV_SendClientGameState( client_t *client ) {
 	int			start;
 	entityState_t	*base, nullstate;
 	msg_t		msg;
@@ -885,11 +885,12 @@ static void SV_SendClientGameState( client_t *client ) {
 		NET_OutOfBandPrint( NS_SERVER, client->netchan.remoteAddress,
 			"print\n" S_COLOR_RED "SERVER ERROR: gamestate overflow\n" );
 		SV_DropClient( client, "gamestate overflow" );
-		return;
+		return 0;
 	}
 
 	// deliver this to the client
 	SV_SendMessageToClient( &msg, client );
+	return msg.cursize;
 }
 
 /*
@@ -912,6 +913,30 @@ static void SV_ResendGameState( client_t *client ) {
 	SV_SendClientGameState( client );
 }
 
+/*
+================
+SV_ResyncClient
+
+Sends a player that fell behind on server commands (SV_AddServerCommand)
+the gamestate again, as a map change does. Its game loads the map again
+and the player plays on: the game itself isn't told, and the player
+enters the world again without the game's ClientBegin, which would
+respawn them
+================
+*/
+void SV_ResyncClient( client_t *client ) {
+	int		size;
+
+	client->resyncServerId = sv.serverId;
+	size = SV_SendClientGameState( client );
+	client->resyncSequence = client->reliableSequence;
+	if ( size ) {
+		Com_Printf( "Sent %s the gamestate again, %i bytes\n", client->name, size );
+	}
+	// so a lost packet doesn't make SV_ResendGameState send it again at once
+	SVC_RateLimit( &client->gamestateRate, 1, 1000 );
+}
+
 
 /*
 ==================
@@ -921,6 +946,16 @@ SV_ClientEnterWorld
 void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 	int		clientNum;
 	sharedEntity_t *ent;
+	qboolean	inGame = qfalse;
+
+	// a player resynced after falling behind (SV_ResyncClient) has been in
+	// the game all along, unless the map changed or restarted since its
+	// gamestate went out. map_restart also enters a player whose gamestate
+	// is still to go: the game begins them then, and the resync goes on
+	if ( client->resync && client->state == CS_PRIMED ) {
+		client->resync = qfalse;
+		inGame = ( client->resyncServerId == sv.serverId );
+	}
 
 	Com_DPrintf( "Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name );
 	client->state = CS_ACTIVE;
@@ -942,6 +977,10 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 		memcpy(&client->lastUsercmd, cmd, sizeof(client->lastUsercmd));
 	else
 		memset(&client->lastUsercmd, '\0', sizeof(client->lastUsercmd));
+
+	if ( inGame ) {
+		return;
+	}
 
 	// call the game begin function
 	VM_Call( gvm, GAME_CLIENT_BEGIN, client - svs.clients );
@@ -2146,6 +2185,7 @@ Parse a client packet
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	int			c;
 	int			serverId;
+	int			reliableAcknowledge;
 
 	MSG_Bitstream(msg);
 
@@ -2161,7 +2201,20 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 		return;
 	}
 
-	cl->reliableAcknowledge = MSG_ReadLong( msg );
+	reliableAcknowledge = MSG_ReadLong( msg );
+
+	// a resync (SV_AddServerCommand) keeps the serverId, and only the
+	// gamestate carries a client the commands up to resyncSequence: one that
+	// acknowledges fewer hasn't had it, and its packet is ignored, as an old
+	// map's are, so it doesn't enter the world before it has loaded. The
+	// gamestate is sent again once it acknowledges a later message
+	if ( cl->resync && cl->state != CS_ACTIVE && reliableAcknowledge < cl->resyncSequence ) {
+		if ( cl->messageAcknowledge > cl->gamestateMessageNum ) {
+			SV_ResendGameState( cl );
+		}
+		return;
+	}
+	cl->reliableAcknowledge = reliableAcknowledge;
 
 	// NOTE: when the client message is fux0red the acknowledgement numbers
 	// can be out of range, this could cause the server to send thousands of server
