@@ -26,8 +26,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // finished file is named by the day it started (games-2026-10-11.log, then
 // .2), compressed with gzip on a thread of its own, and the oldest of them
 // deleted to keep all of them within com_logSpace and com_logFreeSpace of
-// the disk free. In a browser, the home's logs keep within com_logSpace
-// uncompressed, with no disk to measure for com_logFreeSpace
+// the disk free, and those last written more than com_logDays days ago. In a
+// browser, the home's logs keep within com_logSpace uncompressed, with no
+// disk to measure for com_logFreeSpace
 
 #include "q_shared.h"
 #include "qcommon.h"
@@ -35,6 +36,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifdef _WIN32
+#include <sys/utime.h>
+#else
+#include <utime.h>
+#endif
 
 #ifdef USE_INTERNAL_ZLIB
 #include "zlib.h"
@@ -52,6 +58,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 static cvar_t	*com_logSpace;
 static cvar_t	*com_logFreeSpace;
+static cvar_t	*com_logDays;
+
+// the next local midnight after Log_Prune last ran, when it runs again
+static time_t	logNextDay;
 
 // the day each log opened in this run started, as yyyymmdd
 typedef struct {
@@ -101,6 +111,30 @@ static int Log_Day( time_t t ) {
 		return 0;
 	}
 	return ( tm->tm_year + 1900 ) * 10000 + ( tm->tm_mon + 1 ) * 100 + tm->tm_mday;
+}
+
+/*
+=============
+Log_DaysFrom
+
+The local time the given number of days from today's start, -1 if it
+can't be known
+=============
+*/
+static time_t Log_DaysFrom( int days ) {
+	time_t		now = time( NULL );
+	struct tm	*tm = localtime( &now ), t;
+
+	if ( !tm ) {
+		return (time_t)-1;
+	}
+	// mktime normalizes the day, and the hour it finds for midnight on a
+	// change to or from daylight saving
+	t = *tm;
+	t.tm_mday += days;
+	t.tm_hour = t.tm_min = t.tm_sec = 0;
+	t.tm_isdst = -1;
+	return mktime( &t );
 }
 
 /*
@@ -191,7 +225,8 @@ static qboolean Log_Archive( const char *name, int *day, int *number, qboolean *
 		return qfalse;
 	}
 	p = stem + length - 11;
-	if ( p[0] != '-' || p[5] != '-' || p[8] != '-' || sscanf( p + 1, "%4d-%2d-%2d", &y, &m, &d ) != 3 ) {
+	if ( p[0] != '-' || p[5] != '-' || p[8] != '-' || sscanf( p + 1, "%4d-%2d-%2d", &y, &m, &d ) != 3 ||
+		m < 1 || m > 12 || d < 1 || d > 31 ) {
 		return qfalse;
 	}
 	*day = y * 10000 + m * 100 + d;
@@ -239,6 +274,8 @@ static void Log_Compress( void *data ) {
 	uLong				crc = crc32( 0, Z_NULL, 0 );
 	size_t				length, written;
 	int					flush = Z_NO_FLUSH, i;
+	struct stat			st;
+	struct utimbuf		times;
 
 	Com_sprintf( gz, sizeof( gz ), "%s.gz", job->path );
 	Com_sprintf( tmp, sizeof( tmp ), "%s.gz.tmp", job->path );
@@ -306,6 +343,13 @@ done:
 	if ( job->error ) {
 		remove( tmp );
 	} else {
+		// as gzip does, the compressed log keeps its time, the day it was
+		// last written, which com_logDays goes by
+		if ( stat( job->path, &st ) == 0 ) {
+			times.actime = st.st_atime;
+			times.modtime = st.st_mtime;
+			utime( gz, &times );
+		}
 		remove( job->path );
 	}
 }
@@ -512,6 +556,7 @@ void Log_Prepare( const char *ospath ) {
 typedef struct {
 	const char	*name;			// in its directory's Sys_ListFiles
 	int			dir, day, number;
+	int			written;		// the day it was last written
 	long long	bytes;
 } logArchive_t;
 
@@ -529,9 +574,14 @@ static int QDECL Log_CompareArchives( const void *a, const void *b ) {
 Log_Prune
 
 Deletes the oldest finished logs while all the logs together are over
-com_logSpace, or the disk has less free than com_logFreeSpace. With none
-left to delete and the disk still under it, logs stop being written until
-a map load finds it over it again
+com_logSpace, or the disk has less free than com_logFreeSpace, and every
+finished log that started, and was last written, more than com_logDays
+days before today: one kept open for weeks, by a server that loaded no
+map, is set aside under the day it started, and its last lines are new.
+A log named by a day after today, as after the clock was set back, isn't
+old.
+With none left to delete and the disk still under com_logFreeSpace, logs
+stop being written until a map load finds it over it again
 =============
 */
 static void Log_Prune( void ) {
@@ -541,10 +591,12 @@ static void Log_Prune( void ) {
 	long long			total = 0;
 	unsigned long long	available = 0, reserve = 0;
 	char				**names[MAX_LOG_DIRS], path[MAX_OSPATH];
-	int					i, j, count[MAX_LOG_DIRS], numNames = 0, numArchives = 0;
-	qboolean			compressed, known, below;
+	int					i, j, count[MAX_LOG_DIRS], numNames = 0, numArchives = 0, oldest = 0;
+	time_t				cutoff;
+	qboolean			compressed, known, below, over, old;
 	struct stat			st;
 
+	logNextDay = Log_DaysFrom( 1 );
 	if ( pruning || !numLogDirs ) {
 		return;
 	}
@@ -576,6 +628,7 @@ static void Log_Prune( void ) {
 			if ( archive && !( logThread && !Q_stricmp( path, logJobs[logJobHead].path ) ) ) {
 				a->name = names[i][j];
 				a->dir = i;
+				a->written = Log_Day( st.st_mtime );
 				a->bytes = st.st_size;
 				numArchives++;
 			}
@@ -585,17 +638,31 @@ static void Log_Prune( void ) {
 		qsort( archives, numArchives, sizeof( archives[0] ), Log_CompareArchives );
 	}
 
+	// the first day kept; with no day known, none is too old
+	if ( com_logDays->integer > 0 && ( cutoff = Log_DaysFrom( -com_logDays->integer ) ) != (time_t)-1 ) {
+		oldest = Log_Day( cutoff );
+	}
 	known = Log_Free( &available, &reserve );
 	for ( i = 0; i < numArchives; i++ ) {
 		below = known && available < reserve;
-		if ( !( budget > 0 && total > budget ) && !below ) {
-			break;
+		over = budget > 0 && total > budget;
+		old = archives[i].day < oldest && archives[i].written < oldest;
+		// a log started long ago may have been written lately, so past the
+		// space's oldest, an old one may still come
+		if ( !over && !below && !old ) {
+			if ( !oldest ) {
+				break;
+			}
+			continue;
 		}
 		Com_sprintf( path, sizeof( path ), "%s%c%s", logDirs[archives[i].dir], PATH_SEP, archives[i].name );
 		FS_Remove( path );
 		total -= archives[i].bytes;
 		available += archives[i].bytes;
-		if ( below ) {
+		if ( old ) {
+			Com_Printf( "Deleted %s, a log last written more than %d days ago (com_logDays)\n",
+				path, com_logDays->integer );
+		} else if ( below ) {
 			Com_Printf( "Deleted %s, the oldest log, to keep %d%% of the disk free (com_logFreeSpace)\n",
 				path, com_logFreeSpace->integer );
 		} else {
@@ -676,7 +743,8 @@ qboolean Log_Paused( void ) {
 =============
 Log_Frame
 
-A compressed log's result, and the next one started
+A compressed log's result, and the next one started; and at a day's
+turn, the logs too old for com_logDays deleted
 =============
 */
 void Log_Frame( void ) {
@@ -684,6 +752,16 @@ void Log_Frame( void ) {
 	char		path[MAX_OSPATH];
 
 	logMapLoading = qfalse;
+	// a new day deletes the logs past com_logDays, also on a server that
+	// loads no map for days, as one hibernating; and after the clock was
+	// set back more than a day, a midnight long to come is found again
+	if ( logNextDay != (time_t)-1 ) {
+		time_t	now = time( NULL );
+
+		if ( now >= logNextDay || logNextDay - now > 2 * 24 * 60 * 60 ) {
+			Log_Prune();
+		}
+	}
 	if ( !logThread || !Sys_ThreadFinished( logThread ) ) {
 		return;
 	}
@@ -719,4 +797,9 @@ void Log_Init( void ) {
 	Cvar_SetDescription( com_logFreeSpace, "Percent of the disk the logs leave free; 0 for none\n"
 		"Old logs are deleted, oldest first, to keep it free; with none left, no log is written "
 		"until a map loads with it free again" );
+	com_logDays = Cvar_Get( "com_logDays", "30", CVAR_ARCHIVE );
+	Cvar_CheckRange( com_logDays, 0, 36500, qtrue );
+	Cvar_SetDescription( com_logDays, "Days old logs are kept; 0 for no limit\n"
+		"An old log started and last written more than this many days before today is deleted as a "
+		"map loads, a log is compressed or the day turns. The logs being written are kept" );
 }
