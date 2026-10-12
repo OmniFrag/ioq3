@@ -1281,6 +1281,8 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 // stop, 2 for any other signal, and 3 for a fatal error (Sys_Error)
 #define EXIT_MISSING_DATA	4	// the game's data isn't installed
 #define EXIT_NO_NETWORK		5	// a dedicated server can't open its port
+#define EXIT_MAP_ERROR		6	// a dedicated server's map ended with an error
+									// again soon after it was started again
 void 		Com_Quit_f( void ) Q_NO_RETURN;
 void		Com_Quit( char *reason ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
@@ -1526,6 +1528,9 @@ void SCR_DebugGraph (float value);	// FIXME: move logging to common?
 //
 void SV_Init( void );
 void SV_Shutdown( char *finalmsg );
+// after an ERR_DROP, a dedicated server starts its map again; qfalse, with
+// the reason, when it should exit instead
+qboolean SV_RestartAfterError( char *why, int size );
 void SV_Frame( int msec );
 void SV_PacketEvent( netadr_t from, msg_t *msg );
 int SV_FrameMsec(void);
