@@ -1159,12 +1159,7 @@ qboolean FS_RotateFile_HomeData( const char *filename, long maxBytes ) {
 		return qfalse;
 	}
 	Com_sprintf( rotated, sizeof( rotated ), "%s.1", ospath );
-	if ( rename( ospath, rotated ) == 0 ) {
-		return qtrue;
-	}
-	// Windows' rename won't replace a file
-	FS_Remove( rotated );
-	return rename( ospath, rotated ) == 0;
+	return Sys_Rename( ospath, rotated );
 }
 
 /*
