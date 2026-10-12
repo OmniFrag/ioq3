@@ -332,7 +332,8 @@ typedef struct {
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
 	const vm_t	*owner;			// the module that opened it (FS_VM_FOpenFile)
-	qboolean	writeFailed;	// FS_Write drops its writes until it's closed
+	int			writeError;		// FS_Write drops its writes until it's closed
+	qboolean	isLog;			// and drops them while Log_Paused
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
@@ -1072,10 +1073,10 @@ it's opened again, so a full disk loses lines rather than stalling on them
 =================
 */
 static void FS_FailWrite( fileHandle_t h ) {
-	if ( fsh[h].writeFailed ) {
+	if ( fsh[h].writeError ) {
 		return;
 	}
-	fsh[h].writeFailed = qtrue;
+	fsh[h].writeError = errno ? errno : -1;
 	Sys_Print( va( S_COLOR_YELLOW "WARNING: couldn't write %s (%s); its lines are lost until it's "
 		"opened again\n", fsh[h].name, errno ? strerror( errno ) : "no reason given" ) );
 }
@@ -1147,43 +1148,28 @@ fileHandle_t FS_FOpenFileWrite_HomeState( const char *filename ) {
 
 /*
 ===========
-FS_RotateFile_HomeData
+FS_IsLog
 
-Where the home's file is larger than maxBytes, it becomes <filename>.1,
-replacing an older one there, so the next to open it starts afresh.
-Returns whether it did
+Whether a file appended to is a log the logs' budget keeps: qconsole.log
+or the game's g_log, in the server's own directory on a dedicated server
 ===========
 */
-qboolean FS_RotateFile_HomeData( const char *filename, long maxBytes ) {
-	char	ospath[MAX_OSPATH];
-	char	rotated[MAX_OSPATH];
-	FILE	*f;
-	long	length;
+static qboolean FS_IsLog( const char *filename ) {
+	const char	*name = FS_SkipPathPrefix( filename );
+	const char	*dir = FS_ServerDir();
+	size_t		length = strlen( dir );
 
-	if ( !fs_searchpaths ) {
-		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
-	}
-
-	Q_strncpyz( ospath, FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename ), sizeof( ospath ) );
-	if ( ( f = Sys_FOpen( ospath, "rb" ) ) == NULL ) {
+	if ( !COM_CompareExtension( name, ".log" ) ) {
 		return qfalse;
 	}
-	length = FS_fplength( f );
-	fclose( f );
-	// a length long can't hold, past 2 GB on Windows, is -1
-	if ( length >= 0 && length <= maxBytes ) {
-		return qfalse;
+	if ( length ) {
+		if ( Q_stricmpn( name, dir, length ) || name[length] != '/' ) {
+			return qfalse;
+		}
+		name += length + 1;
 	}
-	if ( FS_CheckRefuses( __func__, ospath ) ) {
-		return qfalse;
-	}
-
-	// cut short, the name could be the file's own (Windows drops a final .)
-	if ( strlen( ospath ) + 2 >= sizeof( rotated ) ) {
-		return qfalse;
-	}
-	Com_sprintf( rotated, sizeof( rotated ), "%s.1", ospath );
-	return Sys_Rename( ospath, rotated );
+	return !Q_stricmp( name, "qconsole.log" ) ||
+		!Q_stricmp( name, FS_SkipPathPrefix( Cvar_VariableString( "g_log" ) ) );
 }
 
 /*
@@ -1195,6 +1181,7 @@ FS_FOpenFileAppend_HomeData
 fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 	char			*ospath;
 	fileHandle_t	f;
+	qboolean		isLog;
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
@@ -1220,10 +1207,20 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 		return 0;
 	}
 
+	// a log kept within the logs' budget, qconsole.log or the game's: it
+	// may first start afresh; and isn't written while the disk is short of
+	// com_logFreeSpace
+	isLog = FS_IsLog( filename );
+	if ( isLog ) {
+		Log_Prepare( ospath );
+	}
+
 	fsh[f].handleFiles.file.o = Sys_FOpen( ospath, "ab" );
 	fsh[f].handleSync = qfalse;
 	if (!fsh[f].handleFiles.file.o) {
 		f = 0;
+	} else {
+		fsh[f].isLog = isLog;
 	}
 	return f;
 }
@@ -1974,7 +1971,7 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 	}
 
 	f = FS_FileForHandle(h);
-	if ( fsh[h].writeFailed ) {
+	if ( fsh[h].writeError || ( fsh[h].isLog && Log_Paused() ) ) {
 		return 0;
 	}
 	buf = (byte *)buffer;
@@ -2010,12 +2007,13 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 =================
 FS_WriteFailed
 
-Whether a write to h failed, so that FS_Write drops its writes
+The errno of a write to h that failed, so that FS_Write drops its writes,
+or -1 without one; 0 if none did
 =================
 */
-qboolean FS_WriteFailed( fileHandle_t h ) {
+int FS_WriteFailed( fileHandle_t h ) {
 	FS_FileForHandle( h );
-	return fsh[h].writeFailed;
+	return fsh[h].writeError;
 }
 
 void QDECL FS_Printf( fileHandle_t h, const char *fmt, ... ) {
@@ -5064,7 +5062,7 @@ int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_
 	}
 
 	// only a .log: the module sets g_log, so it could otherwise name one of
-	// the engine's files there (the bans, the PID file, qconsole.log.1)
+	// the engine's files there (the bans, the PID file)
 	if ( mode != FS_READ && *FS_ServerDir() && COM_CompareExtension( qpath, ".log" ) &&
 		!Q_stricmp( FS_SkipPathPrefix( qpath ), FS_SkipPathPrefix( Cvar_VariableString( "g_log" ) ) ) ) {
 		qpath = FS_ServerFile( FS_SkipPathPrefix( qpath ) );
