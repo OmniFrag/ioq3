@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include <setjmp.h>
 #include <signal.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <netinet/in.h>
 #include <sys/stat.h> // umask
@@ -56,13 +57,13 @@ jmp_buf abortframe;		// an ERR_DROP occurred, exit the entire frame
 FILE *debuglogfile;
 static fileHandle_t pipefile;
 static fileHandle_t logfile;
-// qconsole.log, kept across starts, starts afresh past this
-#define QCONSOLE_MAX_BYTES	( 16 << 20 )
-// and is measured each time this much more is written to it
+// qconsole.log, kept across starts, is checked against the logs' budget
+// each time this much more is written to it
 #define QCONSOLE_CHECK_BYTES	( 64 << 10 )
 static int		logWrittenSinceCheck;
-// closed to be set aside; and, where that failed, left to grow this run
-static qboolean	logRotating, logUnbounded;
+// until the next map: qconsole.log, failing again on a disk with room,
+// isn't opened again at a line's end; nor, its reopening failed, at all
+static qboolean	logRetried, logReopenFailed;
 fileHandle_t	com_journalFile;			// events are written here
 fileHandle_t	com_journalDataFile;		// config files are written here
 
@@ -269,14 +270,18 @@ static void Com_LogWrite( const char *text ) {
 
 /*
 =============
-Com_RetryLog
+Com_LogMapLoad
 
-A map loads: a qconsole.log whose write failed, and which FS_Write has
-written no more since, is closed, so the next print opens it again
+A map loads: old logs are deleted to keep within their budget, and
+qconsole.log is closed, for the next print to open it again: where it
+started on a day before or has grown past its size, it then starts afresh
+(Log_Prepare), and where a write to it failed, it's written again
 =============
 */
-void Com_RetryLog( void ) {
-	if ( logfile && FS_WriteFailed( logfile ) ) {
+void Com_LogMapLoad( void ) {
+	Log_MapLoad();
+	logRetried = logReopenFailed = qfalse;
+	if ( logfile ) {
 		FS_FCloseFile( logfile );
 		logfile = 0;
 	}
@@ -444,37 +449,30 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 	if ( com_logfile && com_logfile->integer && !com_check ) {
     // TTimo: only open the qconsole.log if the filesystem is in an initialized state
     //   also, avoid recursing in the qconsole.log opening (i.e. if fs_debug is on)
-		if ( !logfile && FS_Initialized() && !opening_qconsole) {
+		if ( !logfile && FS_Initialized() && !opening_qconsole && !logReopenFailed ) {
+			static qboolean opened;
 			struct tm *newtime;
 			time_t aclock;
-			qboolean rotated;
-			char name[MAX_OSPATH];
 
       opening_qconsole = qtrue;
 
+			// a dedicated server's in its own directory; from a day before,
+			// or grown past its size, it starts afresh, the lines before set
+			// aside and compressed (Log_Prepare)
+			logfile = FS_FOpenFileAppend_HomeData( FS_ServerFile( "qconsole.log" ) );
+
+			// after Log_Prepare, whose localtime would change it
 			time( &aclock );
 			newtime = localtime( &aclock );
-
-			// grown past its bound, it starts afresh, the lines before kept;
-			// a dedicated server's in its own directory
-			Q_strncpyz( name, FS_ServerFile( "qconsole.log" ), sizeof( name ) );
-			rotated = FS_RotateFile_HomeData( name, QCONSOLE_MAX_BYTES );
-			logfile = FS_FOpenFileAppend_HomeData( name );
-			logUnbounded = logRotating && !rotated;
-			logRotating = qfalse;
 
 			if(logfile)
 			{
 				Com_LogStart( newtime );
-				if ( rotated ) {
-					Com_Printf( "qconsole.log grew past %d MB, so it starts afresh; the lines before "
-						"are in qconsole.log.1\n", QCONSOLE_MAX_BYTES >> 20 );
-				} else if ( logUnbounded ) {
-					Com_Printf( S_COLOR_YELLOW "WARNING: qconsole.log grew past %d MB but couldn't be "
-						"set aside as qconsole.log.1, which another program may hold open; it grows "
-						"until the next start\n", QCONSOLE_MAX_BYTES >> 20 );
+				// once: it's opened again at each map
+				if ( !opened ) {
+					Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
+					opened = qtrue;
 				}
-				Com_Printf( "logfile opened on %s\n", asctime( newtime ) );
 			
 				if ( com_logfile->integer > 1 )
 				{
@@ -482,6 +480,13 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 					// data even if we are crashing
 					FS_ForceFlush(logfile);
 				}
+			}
+			else if ( opened )
+			{
+				// opened again, at a map or past its size: tried at the next
+				// map, as a program holding it may let it go
+				logReopenFailed = qtrue;
+				Com_Printf( S_COLOR_YELLOW "WARNING: couldn't open qconsole.log again; it's tried at the next map\n" );
 			}
 			else
 			{
@@ -498,17 +503,23 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 
 			Com_PrintLines( msg, &lineStart, 1, Com_LogWrite );
 
-			// so a server up for months keeps its bound: grown past it, the
-			// log is closed at a line's end, and the next print opens it
-			// again, setting it aside as qconsole.log.1
-			if ( lineStart && !logUnbounded && logWrittenSinceCheck >= QCONSOLE_CHECK_BYTES ) {
+			// so a server up for months keeps within its logs' budget, at a
+			// line's end: the log is closed for the next print to open it
+			// again where it's grown past its size, which sets it aside, or,
+			// once a map, where a write to it failed for want of space and
+			// the disk has room again; and old logs are deleted if the disk
+			// is short of com_logFreeSpace
+			if ( lineStart && logWrittenSinceCheck >= QCONSOLE_CHECK_BYTES ) {
+				qboolean	retry = !logRetried && FS_WriteFailed( logfile ) == ENOSPC && Log_HasRoom();
+
 				logWrittenSinceCheck = 0;
 				size = FS_FTell( logfile );
-				if ( size < 0 || size > QCONSOLE_MAX_BYTES ) {
+				if ( size < 0 || size > Log_SplitBytes() || retry ) {
 					FS_FCloseFile( logfile );
 					logfile = 0;
-					logRotating = qtrue;
+					logRetried |= retry;
 				}
+				Log_Check();
 			}
 		}
 	}
@@ -3955,6 +3966,7 @@ void Com_Init( char *commandLine ) {
 	com_blood = Cvar_Get ("com_blood", "1", CVAR_ARCHIVE);
 
 	com_logfile = Cvar_Get ("logfile", "0", CVAR_TEMP | CVAR_PROTECTED );
+	Log_Init();
 
 	com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT | CVAR_SYSTEMINFO );
 	com_fixedtime = Cvar_Get ("fixedtime", "0", CVAR_CHEAT);
@@ -4986,6 +4998,9 @@ void Com_Frame( void ) {
 	}
 
 	Com_ReadFromPipe( );
+
+	// a log compressed on its own thread
+	Log_Frame();
 
 	com_frameNumber++;
 }

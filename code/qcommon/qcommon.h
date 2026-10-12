@@ -1024,8 +1024,17 @@ fileHandle_t	FS_FOpenFileWrite_HomeConfig( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeData( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeState( const char *filename );
 fileHandle_t	FS_FOpenFileAppend_HomeData( const char *filename );
-qboolean	FS_RotateFile_HomeData( const char *filename, long maxBytes );
-// the file becomes <filename>.1 where it's larger than maxBytes
+
+// logs.c: logs kept within com_logSpace and com_logFreeSpace
+void		Log_Init( void );
+void		Log_Prepare( const char *ospath );
+// before a .log is opened to append to (FS_FOpenFileAppend_HomeData)
+long long	Log_SplitBytes( void );
+qboolean	Log_HasRoom( void );
+void		Log_Check( void );
+void		Log_MapLoad( void );
+qboolean	Log_Paused( void );
+void		Log_Frame( void );
 fileHandle_t	FS_FCreateOpenPipeFile( const char *filename );
 // will properly create any needed paths and deal with seperater character issues
 
@@ -1076,8 +1085,9 @@ int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
 
 int		FS_Write( const void *buffer, int len, fileHandle_t f );
-qboolean	FS_WriteFailed( fileHandle_t f );
-// a write to f failed, so FS_Write drops its writes until it's closed
+int			FS_WriteFailed( fileHandle_t f );
+// a write to f failed, its errno or -1, so FS_Write drops its writes until
+// it's closed
 
 int		FS_Read( void *buffer, int len, fileHandle_t f );
 // properly handles partial reads and reads from other dlls
@@ -1261,8 +1271,9 @@ void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void		Com_PrintLines( const char *msg, qboolean *lineStart, int level,
 	void (*write)( const char *text ) );
 void 		QDECL Com_DPrintf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
-void		Com_RetryLog( void );
-// a map loads: a qconsole.log whose write failed is opened again
+void		Com_LogMapLoad( void );
+// a map loads: qconsole.log may start afresh, or, if its write failed, be
+// opened again; and old logs are deleted to keep within their budget
 void 		QDECL Com_Error( int code, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
 void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
 
