@@ -210,6 +210,15 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	}
 
 	client->reliableSequence++;
+	// a bot reads its commands only as it thinks (SV_BotGetConsoleMessage),
+	// so a burst, such as many bots joining at once, can outrun it: it loses
+	// its oldest command, rather than be dropped
+	if ( client->netchan.remoteAddress.type == NA_BOT &&
+		client->reliableSequence - oldest > MAX_RELIABLE_COMMANDS ) {
+		client->reliableAcknowledge = client->reliableSequence - MAX_RELIABLE_COMMANDS;
+		client->snapshotAcknowledge = client->reliableAcknowledge;
+		oldest = client->reliableAcknowledge;
+	}
 	// if we would be losing an old command that hasn't been acknowledged,
 	// or that the client hasn't had a snapshot with (snapshotAcknowledge),
 	// we must drop the connection
