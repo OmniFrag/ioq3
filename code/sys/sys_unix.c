@@ -47,6 +47,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <sys/socket.h>
 #include <sys/un.h>
 #endif
+#ifndef __EMSCRIPTEN__
+#include <sys/statvfs.h>
+#endif
+#if !defined( __EMSCRIPTEN__ ) || defined( __EMSCRIPTEN_PTHREADS__ )
+#include <pthread.h>
+#define USE_THREADS
+#endif
 
 qboolean stdinIsATTY;
 
@@ -819,6 +826,99 @@ Renames from to to, replacing a file there
 qboolean Sys_Rename( const char *from, const char *to )
 {
 	return rename( from, to ) == 0;
+}
+
+/*
+==================
+Sys_DiskSpace
+
+The bytes free to this user, and in all, on the disk holding path; not
+known in a browser, whose storage isn't a disk the page can measure
+==================
+*/
+qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total )
+{
+#ifdef __EMSCRIPTEN__
+	return qfalse;
+#else
+	struct statvfs	st;
+
+	if( statvfs( path, &st ) != 0 || !st.f_blocks )
+		return qfalse;
+
+	*available = (unsigned long long)st.f_bavail * st.f_frsize;
+	*total = (unsigned long long)st.f_blocks * st.f_frsize;
+	return qtrue;
+#endif
+}
+
+struct sysThread_s
+{
+#ifdef USE_THREADS
+	pthread_t	thread;
+#endif
+	void		(*func)( void *arg );
+	void		*arg;
+	int			finished;
+};
+
+#ifdef USE_THREADS
+static void *Sys_RunThread( void *data )
+{
+	sysThread_t	*thread = data;
+
+	thread->func( thread->arg );
+	__atomic_store_n( &thread->finished, 1, __ATOMIC_RELEASE );
+	return NULL;
+}
+#endif
+
+/*
+==================
+Sys_StartThread
+
+Runs func( arg ) on a thread of its own; Sys_ThreadFinished says when
+it's done. NULL if it couldn't start, as where there are no threads
+==================
+*/
+sysThread_t *Sys_StartThread( void (*func)( void *arg ), void *arg )
+{
+#ifdef USE_THREADS
+	sysThread_t	*thread = calloc( 1, sizeof( *thread ) );
+
+	if( !thread )
+		return NULL;
+
+	thread->func = func;
+	thread->arg = arg;
+	if( pthread_create( &thread->thread, NULL, Sys_RunThread, thread ) != 0 )
+	{
+		free( thread );
+		return NULL;
+	}
+	return thread;
+#else
+	return NULL;
+#endif
+}
+
+/*
+==================
+Sys_ThreadFinished
+
+Whether thread's function has returned; once it has, thread is freed
+==================
+*/
+qboolean Sys_ThreadFinished( sysThread_t *thread )
+{
+	if( !__atomic_load_n( &thread->finished, __ATOMIC_ACQUIRE ) )
+		return qfalse;
+
+#ifdef USE_THREADS
+	pthread_join( thread->thread, NULL );
+#endif
+	free( thread );
+	return qtrue;
 }
 
 /*
