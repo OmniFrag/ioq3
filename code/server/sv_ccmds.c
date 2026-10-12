@@ -256,6 +256,9 @@ static void SV_MapRestart_f( void ) {
 		return;
 	}
 
+	// the restart, delayed or not, runs in the game's time
+	SV_Wake( "the map restarted" );
+
 	if ( sv.restartTime ) {
 		return;
 	}

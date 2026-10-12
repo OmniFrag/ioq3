@@ -822,6 +822,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		}
 		SV_RebaseTime();
 	}
+	SV_Wake( "the map changed" );
 
 	// clear pak references
 	FS_ClearPakReferences(0);
@@ -1251,6 +1252,14 @@ void SV_Init (void)
 		"tab, stays in the match standing still until then, and then everyone sees \"timed out\". It also "
 		"covers players loading a map, so a slow load needs it long. 0 doesn't mean never: it drops "
 		"every player within 6 server frames." );
+	sv_hibernateTime = Cvar_Get ("sv_hibernateTime", "30000", CVAR_TEMP );
+	// a day at most: a float holds it exactly, as it doesn't INT_MAX
+	Cvar_CheckRange( sv_hibernateTime, 0, 86400000, qtrue );
+	Cvar_SetDescription( sv_hibernateTime,
+		"Milliseconds without players before the match freezes; 0 for never\n"
+		"Bots don't count. While frozen, a dedicated server's bots, clock, votes and map rotation stop and "
+		"nothing is logged, but server lists still show it, its bots too, and rcon works. The first player "
+		"to connect wakes it and the match carries on where it stopped; a listen server never freezes." );
 	sv_zombietime = Cvar_Get ("sv_zombietime", "2", CVAR_TEMP );
 	Cvar_SetDescription( sv_zombietime,
 		"Seconds a slot stays held after its player leaves or is kicked\n"
