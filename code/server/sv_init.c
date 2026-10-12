@@ -713,11 +713,17 @@ isn't there. That start ended by an error within SV_ERROR_RETRY_MSEC, it
 returns qfalse, with the reason, and the server exits EXIT_MAP_ERROR, so
 its service manager restarts it, and that manager's limits stop a server
 that fails at every start. A server with no map running or loading is
-left as it is.
+left as it is, and a draining one quits, as it would as the map ended.
 ================
 */
 qboolean SV_RestartAfterError( char *why, int size ) {
 	if ( !com_sv_running || !com_sv_running->integer || !sv_mapStarted[0] ) {
+		return qtrue;
+	}
+	// a draining server stops as its map ends, by an error too
+	if ( sv_drainReason[0] ) {
+		Com_Printf( "Drained: %s\n", sv_drainReason );
+		Cbuf_AddText( "quit\n" );
 		return qtrue;
 	}
 	if ( sv_mapRetried && Sys_Milliseconds() - sv_retryTime < SV_ERROR_RETRY_MSEC ) {
