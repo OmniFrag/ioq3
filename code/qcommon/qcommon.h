@@ -1620,6 +1620,11 @@ void		Sys_ShowIP(void);
 FILE	*Sys_FOpen( const char *ospath, const char *mode );
 qboolean Sys_Mkdir( const char *path );
 qboolean Sys_Rename( const char *from, const char *to );
+qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total );
+typedef struct sysThread_s sysThread_t;
+sysThread_t *Sys_StartThread( void (*func)( void *arg ), void *arg );
+qboolean Sys_ThreadFinished( sysThread_t *thread );
+// a thread for work that touches nothing of the engine's but its argument
 FILE	*Sys_Mkfifo( const char *ospath );
 char	*Sys_Cwd( void );
 void	Sys_SetDefaultInstallPath(const char *path);
