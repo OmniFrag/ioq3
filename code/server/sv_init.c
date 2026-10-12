@@ -710,6 +710,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
 
+	Com_RetryLog();
 	Com_Printf ("------ Server Initialization ------\n");
 	Com_Printf ("Server: %s\n",server);
 
