@@ -900,6 +900,8 @@ void CL_InitCGame( void ) {
 
 	t1 = Sys_Milliseconds();
 
+	Com_RetryLog();
+
 	// put away the console
 	Con_Close();
 

@@ -32,6 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "unzip.h"
+#include <errno.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -331,6 +332,7 @@ typedef struct {
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
 	const vm_t	*owner;			// the module that opened it (FS_VM_FOpenFile)
+	qboolean	writeFailed;	// FS_Write drops its writes until it's closed
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
@@ -1061,6 +1063,24 @@ void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe
 }
 
 /*
+=================
+FS_FailWrite
+
+Warns that a write to h failed, once, on the terminal alone (not in a log,
+which may be h, nor to an rcon redirect), and drops its later writes until
+it's opened again, so a full disk loses lines rather than stalling on them
+=================
+*/
+static void FS_FailWrite( fileHandle_t h ) {
+	if ( fsh[h].writeFailed ) {
+		return;
+	}
+	fsh[h].writeFailed = qtrue;
+	Sys_Print( va( S_COLOR_YELLOW "WARNING: couldn't write %s (%s); its lines are lost until it's "
+		"opened again\n", fsh[h].name, errno ? strerror( errno ) : "no reason given" ) );
+}
+
+/*
 ==============
 FS_FCloseFile
 
@@ -1084,9 +1104,13 @@ void FS_FCloseFile( fileHandle_t f ) {
 		return;
 	}
 
-	// we didn't find it as a pak, so close it as a unique file
+	// we didn't find it as a pak, so close it as a unique file; a write
+	// still buffered can fail here
 	if (fsh[f].handleFiles.file.o) {
-		fclose (fsh[f].handleFiles.file.o);
+		errno = 0;
+		if ( fclose( fsh[f].handleFiles.file.o ) ) {
+			FS_FailWrite( f );
+		}
 	}
 	Com_Memset( &fsh[f], 0, sizeof( fsh[f] ) );
 }
@@ -1950,10 +1974,14 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 	}
 
 	f = FS_FileForHandle(h);
+	if ( fsh[h].writeFailed ) {
+		return 0;
+	}
 	buf = (byte *)buffer;
 
 	remaining = len;
 	tries = 0;
+	errno = 0;
 	while (remaining) {
 		block = remaining;
 		written = fwrite (buf, 1, block, f);
@@ -1961,23 +1989,33 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 			if (!tries) {
 				tries = 1;
 			} else {
-				Com_Printf( "FS_Write: 0 bytes written\n" );
+				FS_FailWrite( h );
 				return 0;
 			}
-		}
-
-		if (written == -1) {
-			Com_Printf( "FS_Write: -1 bytes written\n" );
-			return 0;
 		}
 
 		remaining -= written;
 		buf += written;
 	}
-	if ( fsh[h].handleSync ) {
-		fflush( f );
+	// a buffered write that failed to reach the disk can return in full,
+	// leaving only the stream's error
+	if ( ferror( f ) || ( fsh[h].handleSync && fflush( f ) ) ) {
+		FS_FailWrite( h );
+		return 0;
 	}
 	return len;
+}
+
+/*
+=================
+FS_WriteFailed
+
+Whether a write to h failed, so that FS_Write drops its writes
+=================
+*/
+qboolean FS_WriteFailed( fileHandle_t h ) {
+	FS_FileForHandle( h );
+	return fsh[h].writeFailed;
 }
 
 void QDECL FS_Printf( fileHandle_t h, const char *fmt, ... ) {

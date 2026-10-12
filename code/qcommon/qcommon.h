@@ -1076,6 +1076,8 @@ int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
 
 int		FS_Write( const void *buffer, int len, fileHandle_t f );
+qboolean	FS_WriteFailed( fileHandle_t f );
+// a write to f failed, so FS_Write drops its writes until it's closed
 
 int		FS_Read( void *buffer, int len, fileHandle_t f );
 // properly handles partial reads and reads from other dlls
@@ -1259,6 +1261,8 @@ void 		QDECL Com_Printf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
 void		Com_PrintLines( const char *msg, qboolean *lineStart, int level,
 	void (*write)( const char *text ) );
 void 		QDECL Com_DPrintf( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
+void		Com_RetryLog( void );
+// a map loads: a qconsole.log whose write failed is opened again
 void 		QDECL Com_Error( int code, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
 void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRINTF_FUNC(2, 3);
 

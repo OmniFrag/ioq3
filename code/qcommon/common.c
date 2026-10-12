@@ -267,6 +267,21 @@ static void Com_LogWrite( const char *text ) {
 	logWrittenSinceCheck += length;
 }
 
+/*
+=============
+Com_RetryLog
+
+A map loads: a qconsole.log whose write failed, and which FS_Write has
+written no more since, is closed, so the next print opens it again
+=============
+*/
+void Com_RetryLog( void ) {
+	if ( logfile && FS_WriteFailed( logfile ) ) {
+		FS_FCloseFile( logfile );
+		logfile = 0;
+	}
+}
+
 extern int	com_numConsoleLines;
 extern char	*com_consoleLines[];
 
