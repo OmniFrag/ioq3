@@ -777,12 +777,17 @@ static void RB_SurfaceLightningBolt( void ) {
 
 static void LerpMeshVertexes(mdvSurface_t *surf, float backlerp)
 {
+	// the frames, expanded from the model's compressed vertexes
+	static mdvVertex_t newFrame[SHADER_MAX_VERTEXES], oldFrame[SHADER_MAX_VERTEXES];
+	// tangents only for a shader that uses them, as tess uploads only its attributes
+	qboolean tangents = ( tess.shader->vertexAttribs & ATTR_TANGENT ) != 0;
 	float *outXyz;
 	int16_t *outNormal, *outTangent;
 	mdvVertex_t *newVerts;
 	int		vertNum;
 
-	newVerts = surf->verts + backEnd.currentEntity->e.frame * surf->numVerts;
+	R_MdvSurfaceFrame(surf, backEnd.currentEntity->e.frame, newFrame, tangents);
+	newVerts = newFrame;
 
 	outXyz =     tess.xyz[tess.numVertexes];
 	outNormal =  tess.normal[tess.numVertexes];
@@ -798,7 +803,8 @@ static void LerpMeshVertexes(mdvSurface_t *surf, float backlerp)
 		{
 			VectorCopy(newVerts->xyz,    outXyz);
 			VectorCopy4(newVerts->normal, outNormal);
-			VectorCopy4(newVerts->tangent, outTangent);
+			if (tangents)
+				VectorCopy4(newVerts->tangent, outTangent);
 
 			newVerts++;
 			outXyz += 4;
@@ -814,7 +820,8 @@ static void LerpMeshVertexes(mdvSurface_t *surf, float backlerp)
 
 		mdvVertex_t *oldVerts;
 
-		oldVerts = surf->verts + backEnd.currentEntity->e.oldframe * surf->numVerts;
+		R_MdvSurfaceFrame(surf, backEnd.currentEntity->e.oldframe, oldFrame, tangents);
+		oldVerts = oldFrame;
 
 		for (vertNum=0 ; vertNum < surf->numVerts ; vertNum++)
 		{
@@ -825,10 +832,13 @@ static void LerpMeshVertexes(mdvSurface_t *surf, float backlerp)
 			outNormal[2] = (int16_t)(newVerts->normal[2] * (1.0f - backlerp) + oldVerts->normal[2] * backlerp);
 			outNormal[3] = 0;
 
-			outTangent[0] = (int16_t)(newVerts->tangent[0] * (1.0f - backlerp) + oldVerts->tangent[0] * backlerp);
-			outTangent[1] = (int16_t)(newVerts->tangent[1] * (1.0f - backlerp) + oldVerts->tangent[1] * backlerp);
-			outTangent[2] = (int16_t)(newVerts->tangent[2] * (1.0f - backlerp) + oldVerts->tangent[2] * backlerp);
-			outTangent[3] = newVerts->tangent[3];
+			if (tangents)
+			{
+				outTangent[0] = (int16_t)(newVerts->tangent[0] * (1.0f - backlerp) + oldVerts->tangent[0] * backlerp);
+				outTangent[1] = (int16_t)(newVerts->tangent[1] * (1.0f - backlerp) + oldVerts->tangent[1] * backlerp);
+				outTangent[2] = (int16_t)(newVerts->tangent[2] * (1.0f - backlerp) + oldVerts->tangent[2] * backlerp);
+				outTangent[3] = newVerts->tangent[3];
+			}
 
 			newVerts++;
 			oldVerts++;
