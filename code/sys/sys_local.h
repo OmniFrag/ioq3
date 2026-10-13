@@ -38,6 +38,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // Input
 union SDL_Event;
 void IN_ProcessEvent( const union SDL_Event *e );
+
+#ifdef SDL_PLATFORM_WINDOWS
+// win_caption.c: a button in the window's title bar that goes fullscreen
+void Sys_CreateFullscreenButton( void *window, void ( *pressed )( void ) );
+void Sys_DestroyFullscreenButton( void );
+#endif
 #endif
 
 // Console
