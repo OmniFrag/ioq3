@@ -1408,8 +1408,20 @@ static bool SDLCALL Sys_WindowsMessageHook( void *userdata, MSG *msg )
 
 	if( !framePosted && !inFrame && Com_FrameDue( ) && Sys_InModalLoop( ) )
 	{
-		framePosted = PostMessage( msg->hwnd, SYS_FRAME_MESSAGE, 0, 0 ) != 0;
-		framePostedTo = msg->hwnd;
+		// to SDL's window: the windows it owns, as the title bar's button
+		// (win_caption.c) and its tooltip, would drop the message. Not to
+		// the thread: a modal loop drops that, and it would never come.
+		HWND to = GetAncestor( msg->hwnd, GA_ROOTOWNER );
+
+		if( !to )
+		{
+			to = msg->hwnd;
+		}
+		if( to )
+		{
+			framePosted = PostMessage( to, SYS_FRAME_MESSAGE, 0, 0 ) != 0;
+			framePostedTo = to;
+		}
 	}
 
 	return true;
