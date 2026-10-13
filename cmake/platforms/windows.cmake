@@ -9,7 +9,16 @@ list(APPEND SYSTEM_PLATFORM_SOURCES
     ${SOURCE_DIR}/sys/win_resource.rc
 )
 
-list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/con_passive.c)
+list(APPEND CLIENT_PLATFORM_SOURCES
+    ${SOURCE_DIR}/sys/con_passive.c
+    ${SOURCE_DIR}/sys/win_caption.c
+)
+list(APPEND CLIENT_LIBRARIES
+    comctl32 # the title bar button's subclass and tooltip
+    dwmapi   # where the title bar's buttons are
+    oleacc   # the button, to screen readers
+    uxtheme  # its tooltip, as the caption buttons' look
+)
 list(APPEND SERVER_PLATFORM_SOURCES ${SOURCE_DIR}/sys/con_win32.c)
 
 if(USE_HTTP)

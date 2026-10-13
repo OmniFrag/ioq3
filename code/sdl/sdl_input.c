@@ -71,6 +71,12 @@ static int64_t in_newestInput = 0;	// the newest key or mouse event, in Sys_Nano
 
 static SDL_Window *SDL_window = NULL;
 
+#ifdef SDL_PLATFORM_WINDOWS
+static cvar_t *r_fullscreenButton = NULL;
+// the title bar's button was pressed (win_caption.c)
+static Uint32 fullscreenButtonEvent = 0;
+#endif
+
 #define CTRL(a) ((a)-'a'+1)
 
 /*
@@ -1153,6 +1159,56 @@ int64_t IN_NewestInput( void )
 	return in_newestInput;
 }
 
+#ifdef SDL_PLATFORM_WINDOWS
+/*
+===============
+IN_FullscreenButtonPressed
+
+From the window's message loop: the toggle waits for the frame's other
+events, and reaches Present_ToggleFullscreen before the frame, as
+Alt+Enter's does
+===============
+*/
+static void IN_FullscreenButtonPressed( void )
+{
+	SDL_Event e;
+
+	SDL_zero( e );
+	e.type = fullscreenButtonEvent;
+	SDL_PushEvent( &e );
+}
+
+/*
+===============
+IN_FullscreenButton
+
+The window's title bar has the button while r_fullscreenButton is on: for
+a new window, or when the setting changed
+===============
+*/
+static void IN_FullscreenButton( qboolean newWindow )
+{
+	void *window;
+
+	if( !r_fullscreenButton )
+	{
+		r_fullscreenButton = Cvar_Get( "r_fullscreenButton", "1", CVAR_ARCHIVE );
+		Cvar_SetDescription( r_fullscreenButton, "A button in the window's title bar, left of minimize, that goes fullscreen" );
+		fullscreenButtonEvent = SDL_RegisterEvents( 1 );
+	}
+	if( !newWindow && !r_fullscreenButton->modified )
+		return;
+
+	r_fullscreenButton->modified = qfalse;
+	window = SDL_window ? SDL_GetPointerProperty( SDL_GetWindowProperties( SDL_window ),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL ) : NULL;
+	if( window && r_fullscreenButton->integer && fullscreenButtonEvent )
+		Sys_CreateFullscreenButton( window, IN_FullscreenButtonPressed );
+	else
+		Sys_DestroyFullscreenButton( );
+}
+#endif
+
 /*
 ===============
 IN_ProcessEvent
@@ -1170,6 +1226,14 @@ void IN_ProcessEvent( const SDL_Event *e )
 
 	if( !SDL_WasInit( SDL_INIT_VIDEO ) )
 			return;
+
+#ifdef SDL_PLATFORM_WINDOWS
+	if( fullscreenButtonEvent && e->type == fullscreenButtonEvent )
+	{
+		Present_ToggleFullscreen( CVAR_SOURCE_PLAYER );
+		return;
+	}
+#endif
 
 	switch( e->type )
 	{
@@ -1546,6 +1610,10 @@ void IN_Frame( void )
 		IN_WindowResized( );
 	}
 
+#ifdef SDL_PLATFORM_WINDOWS
+	IN_FullscreenButton( qfalse );
+#endif
+
 	// Set event time for next frame to earliest possible time an event could happen
 	in_eventTime = Sys_Milliseconds( );
 
@@ -1632,6 +1700,10 @@ void IN_Init( void *windowData )
 	Cvar_SetValue( "com_minimized", appState & SDL_WINDOW_MINIMIZED );
 	Cvar_SetValue( "r_displayScale", SDL_GetWindowDisplayScale( SDL_window ) );
 
+#ifdef SDL_PLATFORM_WINDOWS
+	IN_FullscreenButton( qtrue );
+#endif
+
 	IN_InitJoystick( );
 	Com_DPrintf( "------------------------------------\n" );
 }
@@ -1643,6 +1715,9 @@ IN_Shutdown
 */
 void IN_Shutdown( void )
 {
+#ifdef SDL_PLATFORM_WINDOWS
+	Sys_DestroyFullscreenButton( );
+#endif
 	SDL_StopTextInput( SDL_window );
 
 	IN_DeactivateMouse( cls.glconfig.isFullscreen );
