@@ -615,10 +615,13 @@ Called by SV_SendClientSnapshot and SV_SendClientGameState
 */
 void SV_SendMessageToClient(msg_t *msg, client_t *client)
 {
-	// record information about the message
-	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageSize = msg->cursize;
-	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageSent = svs.time;
-	client->frames[client->netchan.outgoingSequence & PACKET_MASK].messageAcked = -1;
+	// record information about the message, under the number it goes out
+	// with, after any still being sent
+	clientSnapshot_t *frame = &client->frames[SV_Netchan_NextSequence(client) & PACKET_MASK];
+
+	frame->messageSize = msg->cursize;
+	frame->messageSent = svs.time;
+	frame->messageAcked = -1;
 
 	// send the datagram
 	SV_Netchan_Transmit(client, msg);
