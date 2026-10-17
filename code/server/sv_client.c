@@ -810,8 +810,9 @@ static int SV_SendClientGameState( client_t *client ) {
 	client->state = CS_PRIMED;
 	client->pureAuthentic = 0;
 	client->gotCP = qfalse;
-	// each load says if it skips what's said (SV_AddServerCommand)
+	// each load says if it skips what's said, or more (SV_AddServerCommand)
 	client->loadingSaySkipped = qfalse;
+	client->resyncSkipped = qfalse;
 
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
@@ -970,10 +971,17 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 	// a player resynced after falling behind (SV_ResyncClient) has been in
 	// the game all along, unless the map changed or restarted since its
 	// gamestate went out. map_restart also enters a player whose gamestate
-	// is still to go: the game begins them then, and the resync goes on
+	// is still to go: the game begins them then, and the resync goes on;
+	// and one still loading a gamestate, whose commands may fill its queue,
+	// so the restart's would overflow it: it's sent one after the restart
 	if ( client->resync && client->state == CS_PRIMED ) {
-		client->resync = qfalse;
-		inGame = ( client->resyncServerId == sv.serverId );
+		if ( client->resyncServerId != sv.serverId &&
+			client->messageAcknowledge < client->gamestateMessageNum ) {
+			client->resyncServerId = -1;
+		} else {
+			client->resync = qfalse;
+			inGame = ( client->resyncServerId == sv.serverId );
+		}
 	}
 
 	Com_DPrintf( "Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name );
