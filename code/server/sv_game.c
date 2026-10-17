@@ -929,11 +929,25 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case BOTLIB_AI_REMOVE_CONSOLE_MESSAGE:
 		botlib_export->ai.BotRemoveConsoleMessage( args[1], args[2] );
 		return 0;
-	case BOTLIB_AI_NEXT_CONSOLE_MESSAGE:
+	case BOTLIB_AI_NEXT_CONSOLE_MESSAGE: {
 		// botlib writes the fields before the list pointers, whose size
-		// differs between a QVM and the engine
-		return botlib_export->ai.BotNextConsoleMessage( args[1],
-			VMA_BUF( 2, offsetof( bot_consolemessage_t, prev ) ) );
+		// differs between a QVM and the engine. It writes them, when it
+		// returns a handle, to a message of the engine's, as a QVM's buffer
+		// may not be aligned for the pointers
+		bot_consolemessage_t	message;
+		void	*buffer = VMA_BUF( 2, offsetof( bot_consolemessage_t, prev ) );
+		int		handle;
+
+		// botlib leaves the padding before the pointers unwritten, which
+		// mustn't carry the engine's stack into the QVM
+		Com_Memset( &message, 0, sizeof( message ) );
+		handle = botlib_export->ai.BotNextConsoleMessage( args[1], &message );
+
+		if ( handle ) {
+			Com_Memcpy( buffer, &message, offsetof( bot_consolemessage_t, prev ) );
+		}
+		return handle;
+	}
 	case BOTLIB_AI_NUM_CONSOLE_MESSAGE:
 		return botlib_export->ai.BotNumConsoleMessages( args[1] );
 	case BOTLIB_AI_INITIAL_CHAT:
