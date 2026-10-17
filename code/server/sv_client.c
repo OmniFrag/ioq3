@@ -815,8 +815,9 @@ static int SV_SendClientGameState( client_t *client ) {
 
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
-	// gamestate message was not just sent, forcing a retransmit
-	client->gamestateMessageNum = client->netchan.outgoingSequence;
+	// gamestate message was not just sent, forcing a retransmit.
+	// It goes out after any message still being sent (SV_Netchan_Transmit)
+	client->gamestateMessageNum = SV_Netchan_NextSequence( client );
 
 	MSG_Init( &msg, msgBuffer, sizeof( msgBuffer ) );
 
