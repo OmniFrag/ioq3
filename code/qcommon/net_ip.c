@@ -210,7 +210,7 @@ char *NET_ErrorString( void ) {
 		case WSAENETDOWN: return "WSAENETDOWN";
 		case WSAENETUNREACH: return "WSAENETUNREACH";
 		case WSAENETRESET: return "WSAENETRESET";
-		case WSAECONNABORTED: return "WSWSAECONNABORTEDAEINTR";
+		case WSAECONNABORTED: return "WSAECONNABORTED";
 		case WSAECONNRESET: return "WSAECONNRESET";
 		case WSAENOBUFS: return "WSAENOBUFS";
 		case WSAEISCONN: return "WSAEISCONN";
@@ -502,7 +502,8 @@ const char	*NET_AdrToString (netadr_t a)
 
 const char	*NET_AdrToStringwPort (netadr_t a)
 {
-	static	char	s[NET_ADDRSTRMAXLEN];
+	// the address, as long as NET_AdrToString's, and "[", "]:" and the port
+	static	char	s[NET_ADDRSTRMAXLEN + 8];
 
 	if (a.type == NA_LOOPBACK)
 		Com_sprintf (s, sizeof(s), "loopback");
