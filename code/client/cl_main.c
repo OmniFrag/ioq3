@@ -1106,14 +1106,18 @@ void CL_PlayDemo_f( void ) {
 		return;
 	}
 
-	// make sure a local server is killed
-	// 2 means don't force disconnect of local client
-	Cvar_Set( "sv_killserver", "2" );
-
 	// open the demo file
 	Q_strncpyz( arg, Cmd_Argv(1), sizeof( arg ) );
 	
 	CL_Disconnect( qtrue );
+
+	// make sure a local server is killed now, before the demo's gamestate
+	// starts cgame: it would see sv_running, and the server's level would
+	// stay on the hunk under the demo
+	// 2 means don't force disconnect of local client
+	Cvar_Set( "sv_killserver", "2" );
+	SV_Frame( 0 );
+
 	// from here, so an error opening it ends it as one (CL_NextDemoAfterError)
 	clc.demoplaying = qtrue;
 
