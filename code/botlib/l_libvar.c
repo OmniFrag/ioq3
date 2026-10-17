@@ -30,8 +30,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *****************************************************************************/
 
 #include "../qcommon/q_shared.h"
+#include "botlib.h"
 #include "l_memory.h"
 #include "l_libvar.h"
+#include "be_interface.h"
 
 //list with library variables
 libvar_t *libvarlist = NULL;
@@ -230,6 +232,32 @@ float LibVarValue(const char *var_name, const char *value)
 	v = LibVar(var_name, value);
 	return v->value;
 } //end of the function LibVarValue
+//===========================================================================
+// the integer value of a library variable that sizes an allocation, which
+// is created if not existing already: below min it is reset to the default
+// and above max it is set to max, with an error
+//
+// Parameter:				-
+// Returns:					-
+// Changes Globals:		-
+//===========================================================================
+int LibVarInteger(const char *var_name, const char *value, int min, int max)
+{
+	libvar_t *v;
+
+	v = LibVar(var_name, value);
+	if (v->value >= min && (double) v->value <= max) return (int) v->value;
+	botimport.Print(PRT_ERROR, "%s %s is out of range, %d to %d\n",
+						var_name, v->string, min, max);
+	if (v->value < min)
+	{
+		LibVarSet(var_name, value);
+		return (int) v->value;
+	} //end if
+	//a float may not hold max exactly
+	LibVarSet(var_name, va("%d", max));
+	return max;
+} //end of the function LibVarInteger
 //===========================================================================
 //
 // Parameter:				-
