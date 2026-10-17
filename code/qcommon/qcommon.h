@@ -1553,6 +1553,7 @@ void IN_Shutdown( void );
 void IN_Restart( void );
 qboolean IN_GetSafeArea( int rect[4] );
 int64_t IN_NewestInput( void );	// the newest key or mouse event, in Sys_Nanoseconds
+qboolean IN_ModifierHeld( int key );	// K_SHIFT, K_CTRL or K_ALT held now
 
 /*
 ==============================================================

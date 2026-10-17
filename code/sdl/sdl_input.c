@@ -1159,6 +1159,31 @@ int64_t IN_NewestInput( void )
 	return in_newestInput;
 }
 
+/*
+===============
+IN_ModifierHeld
+
+Whether K_SHIFT, K_CTRL or K_ALT is held now, as SDL saw the keyboard
+while the window had its focus
+===============
+*/
+qboolean IN_ModifierHeld( int key )
+{
+	SDL_Keymod mod;
+
+	if( !SDL_window || !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_INPUT_FOCUS ) )
+		return qfalse;
+
+	mod = SDL_GetModState( );
+	switch( key )
+	{
+		case K_SHIFT: return ( mod & SDL_KMOD_SHIFT ) ? qtrue : qfalse;
+		case K_CTRL:  return ( mod & SDL_KMOD_CTRL ) ? qtrue : qfalse;
+		case K_ALT:   return ( mod & SDL_KMOD_ALT ) ? qtrue : qfalse;
+		default:      return qfalse;
+	}
+}
+
 #ifdef SDL_PLATFORM_WINDOWS
 /*
 ===============
