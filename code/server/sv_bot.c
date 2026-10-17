@@ -492,6 +492,7 @@ SV_BotInitCvars
 ==================
 */
 void SV_BotInitCvars(void) {
+	cvar_t	*cv;
 
 	Cvar_SetDescription( Cvar_Get( "bot_enable", "1", 0 ),
 		"Whether the server runs bots at all\n"
@@ -500,7 +501,9 @@ void SV_BotInitCvars(void) {
 		"map_restart keeps the old value." );
 	Cvar_Get("bot_developer", "0", CVAR_CHEAT);			//bot developer mode
 	Cvar_Get("bot_debug", "0", CVAR_CHEAT);				//enable bot debugging
-	Cvar_Get("bot_maxdebugpolys", "2", 0);				//maximum number of debug polys
+	cv = Cvar_Get("bot_maxdebugpolys", "2", 0);			//maximum number of debug polys
+	// they size an allocation (SV_BotInitBotLib)
+	Cvar_CheckRange(cv, 0, INT_MAX / sizeof(bot_debugpoly_t), qtrue);
 	Cvar_Get("bot_groundonly", "1", 0);					//only show ground faces of areas
 	Cvar_Get("bot_reachability", "0", 0);				//show all reachabilities to other areas
 	Cvar_Get("bot_visualizejumppads", "0", CVAR_CHEAT);	//show jumppads
