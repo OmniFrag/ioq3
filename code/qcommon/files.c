@@ -2304,13 +2304,27 @@ long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void *
 		return len;
 	}
 
+	buf = Hunk_AllocateTempMemory(len+1);
+
+	// a damaged or truncated pak can hold less than its directory says,
+	// and the rest of the buffer would be whatever the hunk held before
+	if ( FS_Read( buf, len, h ) != len ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't read all of %s\n", qpath );
+		Hunk_FreeTempMemory( buf );
+		FS_FCloseFile( h );
+		*buffer = NULL;
+		// a journal records it as missing, as playback will find it
+		if ( isConfig && com_journal && com_journal->integer == 1 ) {
+			len = 0;
+			FS_Write( &len, sizeof( len ), com_journalDataFile );
+			FS_Flush( com_journalDataFile );
+		}
+		return -1;
+	}
+
 	fs_loadCount++;
 	fs_loadStack++;
-
-	buf = Hunk_AllocateTempMemory(len+1);
 	*buffer = buf;
-
-	FS_Read (buf, len, h);
 
 	// guarantee that it will have a trailing 0 for string operations
 	buf[len] = 0;
