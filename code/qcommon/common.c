@@ -45,6 +45,9 @@ int demo_protocols[] =
 #define DEF_COMHUNKMEGS 	128
 #define MIN_COMHUNKMEGS		DEF_COMHUNKMEGS
 #define DEF_COMZONEMEGS		48
+// the most com_hunkMegs and com_zoneMegs can be, so that their size in
+// bytes, and the hunk's alignment slack, fits an int
+#define MAX_COMMEGS			( ( INT_MAX - 31 ) / ( 1024 * 1024 ) )
 #define DEF_COMHUNKMEGS_S	XSTRING(DEF_COMHUNKMEGS)
 #define DEF_COMZONEMEGS_S	XSTRING(DEF_COMZONEMEGS)
 
@@ -1871,12 +1874,9 @@ void Com_InitZoneMemory( void ) {
 
 	// allocate the random block zone
 	cv = Cvar_Get( "com_zoneMegs", DEF_COMZONEMEGS_S, CVAR_LATCH | CVAR_ARCHIVE );
+	Cvar_CheckRange( cv, DEF_COMZONEMEGS, MAX_COMMEGS, qtrue );
 
-	if ( cv->integer < DEF_COMZONEMEGS ) {
-		s_zoneTotal = 1024 * 1024 * DEF_COMZONEMEGS;
-	} else {
-		s_zoneTotal = cv->integer * 1024 * 1024;
-	}
+	s_zoneTotal = cv->integer * 1024 * 1024;
 
 	mainzone = calloc( s_zoneTotal, 1 );
 	if ( !mainzone ) {
@@ -1988,6 +1988,7 @@ void Com_InitHunkMemory( void ) {
 
 	// allocate the stack based hunk allocator
 	cv = Cvar_Get( "com_hunkMegs", DEF_COMHUNKMEGS_S, CVAR_LATCH | CVAR_ARCHIVE );
+	Cvar_CheckRange( cv, MIN_DEDICATED_COMHUNKMEGS, MAX_COMMEGS, qtrue );
 	Cvar_SetDescription(cv, "The size of the hunk memory segment");
 
 	// if we are not dedicated min allocation is 56, otherwise min is 1
