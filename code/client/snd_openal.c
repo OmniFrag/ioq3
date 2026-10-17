@@ -774,7 +774,9 @@ void S_AL_SrcShutdown( void )
 		if(curSource->isLocked)
 			Com_DPrintf( S_COLOR_YELLOW "WARNING: Source %d is locked\n", i);
 
-		if(curSource->entity > 0)
+		// only a loop owns its entity's slot, as in S_AL_SrcKill: a one-shot
+		// sound with an origin keeps whatever entity number cgame passed
+		if(curSource->isLooping && curSource->entity != -1)
 			entityList[curSource->entity].srcAllocated = qfalse;
 
 		qalSourceStop(srcList[i].alSource);
