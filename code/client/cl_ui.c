@@ -44,25 +44,46 @@ static void GetClientState( uiClientState_t *state ) {
 
 /*
 ====================
+LAN_TerminateServerStrings
+
+The names in servers read from servercache.dat end within their fields:
+every slot's, since ui can ask for any slot, not only those counted
+====================
+*/
+static void LAN_TerminateServerStrings( serverInfo_t *servers, int count ) {
+	for ( ; count > 0; count--, servers++ ) {
+		servers->hostName[sizeof( servers->hostName ) - 1] = '\0';
+		servers->mapName[sizeof( servers->mapName ) - 1] = '\0';
+		servers->game[sizeof( servers->game ) - 1] = '\0';
+	}
+}
+
+/*
+====================
 LAN_LoadCachedServers
 ====================
 */
 void LAN_LoadCachedServers( void ) {
-	int size;
+	int size = 0, numGlobal = 0, numFavorite = 0;
 	fileHandle_t fileIn;
 	cls.numglobalservers = cls.numfavoriteservers = 0;
 	cls.numGlobalServerAddresses = 0;
 	if (FS_BaseDir_FOpenFileRead("servercache.dat", &fileIn)) {
-		FS_Read(&cls.numglobalservers, sizeof(int), fileIn);
-		FS_Read(&cls.numfavoriteservers, sizeof(int), fileIn);
-		FS_Read(&size, sizeof(int), fileIn);
-		if (size == sizeof(cls.globalServers) + sizeof(cls.favoriteServers)) {
-			FS_Read(&cls.globalServers, sizeof(cls.globalServers), fileIn);
-			FS_Read(&cls.favoriteServers, sizeof(cls.favoriteServers), fileIn);
-		} else {
-			cls.numglobalservers = cls.numfavoriteservers = 0;
-			cls.numGlobalServerAddresses = 0;
+		// a short or damaged file leaves the lists empty
+		if (FS_Read(&numGlobal, sizeof(int), fileIn) == sizeof(int) &&
+			FS_Read(&numFavorite, sizeof(int), fileIn) == sizeof(int) &&
+			FS_Read(&size, sizeof(int), fileIn) == sizeof(int) &&
+			size == sizeof(cls.globalServers) + sizeof(cls.favoriteServers) &&
+			numGlobal >= 0 && numGlobal <= MAX_GLOBAL_SERVERS &&
+			numFavorite >= 0 && numFavorite <= MAX_OTHER_SERVERS &&
+			FS_Read(&cls.globalServers, sizeof(cls.globalServers), fileIn) == sizeof(cls.globalServers) &&
+			FS_Read(&cls.favoriteServers, sizeof(cls.favoriteServers), fileIn) == sizeof(cls.favoriteServers)) {
+			cls.numglobalservers = numGlobal;
+			cls.numfavoriteservers = numFavorite;
 		}
+		// even when the file ended partway through the lists
+		LAN_TerminateServerStrings(cls.globalServers, MAX_GLOBAL_SERVERS);
+		LAN_TerminateServerStrings(cls.favoriteServers, MAX_OTHER_SERVERS);
 		FS_FCloseFile(fileIn);
 	}
 }
