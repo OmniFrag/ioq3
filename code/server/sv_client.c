@@ -848,6 +848,9 @@ static int SV_SendClientGameState( client_t *client ) {
 			MSG_WriteBigString( &msg, sv.configstrings[start] );
 		}
 	}
+	// they're all as they are now, so none needs sending again when the
+	// client enters (SV_UpdateConfigstrings)
+	Com_Memset( client->csUpdated, 0, sizeof( client->csUpdated ) );
 
 	// write the baselines
 	Com_Memset( &nullstate, 0, sizeof( nullstate ) );
