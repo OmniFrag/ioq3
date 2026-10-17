@@ -1272,7 +1272,13 @@ Sys_SetMaxFileLimit
 */
 qboolean Sys_SetMaxFileLimit( void )
 {
-	return qtrue;
+	// every pk3 stays open as a C stream, and the C runtime allows only 512
+	// unless raised: 8192 is the UCRT's most, 2048 msvcrt's
+	if( _setmaxstdio( 8192 ) != -1 || _setmaxstdio( 2048 ) != -1 )
+		return qtrue;
+
+	Com_DPrintf( S_COLOR_YELLOW "WARNING: _setmaxstdio failed\n" );
+	return qfalse;
 }
 
 /*
