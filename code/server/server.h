@@ -202,6 +202,7 @@ typedef struct client_s {
 	qboolean		resync;
 	int				resyncServerId;		// sv.serverId when its gamestate went out (SV_ResyncClient), -1 until then: a map change or restart since needs ClientBegin
 	int				resyncLateTime;		// svs.time of the first packet from before its gamestate once that had all gone, 0 for none
+	qboolean		resyncSkipped;		// said in the log that its load is skipping commands (SV_AddServerCommand)
 	rateLimit_t		resyncRate;			// one resync in SV_RESYNC_WINDOW
 	int				lastSnapshotTime;	// svs.time of last sent snapshot
 	qboolean		rateDelayed;		// true if nextSnapshotTime was set based on rate instead of snapshotMsec

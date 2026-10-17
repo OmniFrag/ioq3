@@ -216,6 +216,20 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 		return;
 	}
 
+	// and while it loads that gamestate, it can't take more: its game runs
+	// commands in order from the last it ran, and ends at a gap of more than
+	// MAX_RELIABLE_COMMANDS, which the gamestate's may fill. Until it's in,
+	// those that would overflow are skipped, said once, rather than drop it
+	if ( client->resync && client->state == CS_PRIMED &&
+		client->reliableSequence - oldest >= MAX_RELIABLE_COMMANDS ) {
+		if ( !client->resyncSkipped ) {
+			client->resyncSkipped = qtrue;
+			Com_Printf( "%s is loading the gamestate again with %d server commands waiting: others are "
+				"skipped for them until they're in\n", client->name, client->reliableSequence - oldest );
+		}
+		return;
+	}
+
 	client->reliableSequence++;
 	// a bot reads its commands only as it thinks (SV_BotGetConsoleMessage),
 	// so a burst, such as many bots joining at once, can outrun it: it loses
