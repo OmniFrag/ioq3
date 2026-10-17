@@ -1460,6 +1460,7 @@ Key_ClearStates
 */
 void Key_ClearStates (void)
 {
+	static const int modifiers[] = { K_SHIFT, K_CTRL, K_ALT };
 	int		i;
 
 	anykeydown = 0;
@@ -1471,6 +1472,17 @@ void Key_ClearStates (void)
 		}
 		keys[i].down = 0;
 		keys[i].repeats = 0;
+	}
+
+	// a modifier that is still held sends no key down again, so it stays
+	// down for Ctrl+L, Shift+Insert and the like; its binding was released
+	// above and doesn't run again
+	for ( i = 0; i < ARRAY_LEN( modifiers ); i++ ) {
+		if ( IN_ModifierHeld( modifiers[i] ) ) {
+			keys[modifiers[i]].down = qtrue;
+			keys[modifiers[i]].repeats = 1;
+			anykeydown++;
+		}
 	}
 }
 
