@@ -705,12 +705,16 @@ void SV_SendClientMessages(void)
 		if(!c->state)
 			continue;		// not connected
 
-		// a client behind on server commands starts over (SV_AddServerCommand)
+		// a client behind on server commands starts over (SV_AddServerCommand),
+		// and is sent nothing more until it acknowledges the gamestate
+		// (SV_ResyncAwaitingAck)
 		if(c->resync && c->state == CS_ACTIVE)
 		{
 			SV_ResyncClient(c);
 			continue;
 		}
+		if(SV_ResyncAwaitingAck(c))
+			continue;
 
 		if(svs.time - c->lastSnapshotTime < c->snapshotMsec * com_timescale->value)
 			continue;		// It's not time yet
