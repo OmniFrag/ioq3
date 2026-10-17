@@ -157,6 +157,7 @@ S_Base_SoundList
 void S_Base_SoundList( void ) {
 	int		i;
 	sfx_t	*sfx;
+	sndBuffer	*chunk;
 	int		size, total;
 	char	type[4][16];
 	char	mem[2][16];
@@ -169,12 +170,16 @@ void S_Base_SoundList( void ) {
 	strcpy(mem[1], "resident ");
 	total = 0;
 	for (sfx=s_knownSfx, i=0 ; i<s_numSfx ; i++, sfx++) {
-		size = sfx->soundLength;
+		// the sound memory its chunks take, none once it's paged out
+		size = 0;
+		for ( chunk = sfx->soundData; chunk; chunk = chunk->next ) {
+			size += sizeof( sndBuffer );
+		}
 		total += size;
-		Com_Printf("%6i[%s] : %s[%s]\n", size, type[sfx->soundCompressionMethod],
-				sfx->soundName, mem[sfx->inMemory] );
+		Com_Printf("%8i bytes %7i samples [%s] : %s[%s]\n", size, sfx->soundLength,
+				type[sfx->soundCompressionMethod], sfx->soundName, mem[sfx->inMemory] );
 	}
-	Com_Printf ("Total resident: %i\n", total);
+	Com_Printf ("Total resident: %i bytes\n", total);
 	S_DisplayFreeMemory();
 }
 
