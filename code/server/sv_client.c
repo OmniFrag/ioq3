@@ -818,6 +818,9 @@ static int SV_SendClientGameState( client_t *client ) {
 	// gamestate message was not just sent, forcing a retransmit.
 	// It goes out after any message still being sent (SV_Netchan_Transmit)
 	client->gamestateMessageNum = SV_Netchan_NextSequence( client );
+	// a resync's packets from before it are counted from this one on
+	// (SV_ExecuteClientMessage)
+	client->resyncLateTime = 0;
 
 	MSG_Init( &msg, msgBuffer, sizeof( msgBuffer ) );
 
@@ -930,12 +933,27 @@ void SV_ResyncClient( client_t *client ) {
 
 	client->resyncServerId = sv.serverId;
 	size = SV_SendClientGameState( client );
-	client->resyncSequence = client->reliableSequence;
 	if ( size ) {
 		Com_Printf( "Sent %s the gamestate again, %i bytes\n", client->name, size );
 	}
 	// so a lost packet doesn't make SV_ResendGameState send it again at once
 	SVC_RateLimit( &client->gamestateRate, 1, 1000 );
+}
+
+/*
+================
+SV_ResyncAwaitingAck
+
+Whether a client sent the gamestate again (SV_ResyncClient) has yet to
+acknowledge it. That gamestate keeps the serverId, so only its message
+number tells a packet from before it, and it's the last message the client
+is sent until then (SV_SendClientMessages): a later one would carry the
+same commands, and the client would acknowledge them without it
+================
+*/
+qboolean SV_ResyncAwaitingAck( const client_t *client ) {
+	return client->resync && client->state == CS_PRIMED && client->resyncServerId == sv.serverId &&
+		client->messageAcknowledge < client->gamestateMessageNum;
 }
 
 
@@ -2204,14 +2222,28 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 
 	reliableAcknowledge = MSG_ReadLong( msg );
 
-	// a resync (SV_AddServerCommand) keeps the serverId, and only the
-	// gamestate carries a client the commands up to resyncSequence: one that
-	// acknowledges fewer hasn't had it, and its packet is ignored, as an old
-	// map's are, so it doesn't enter the world before it has loaded. The
-	// gamestate is sent again once it acknowledges a later message
-	if ( cl->resync && cl->state != CS_ACTIVE && reliableAcknowledge < cl->resyncSequence ) {
-		if ( cl->messageAcknowledge > cl->gamestateMessageNum ) {
-			SV_ResendGameState( cl );
+	// a packet from before a resync's gamestate, still to go
+	// (SV_SendClientMessages) or not yet acknowledged (SV_ResyncAwaitingAck),
+	// is ignored, as an old map's are, so the client doesn't enter the world
+	// before it has loaded, nor acknowledge commands: one MAX_RELIABLE_COMMANDS
+	// behind would be taken to have them all (below), and the gamestate
+	// wouldn't carry them. Once such packets have kept coming for
+	// SV_RESYNC_LOST after the gamestate had all gone, the client didn't get
+	// it, and it's sent again. (Not SV_ResendGameState's rate, which counts
+	// from when it began going: a slow one would go again before a client
+	// could acknowledge it, and with nothing sent after it, no later
+	// message's acknowledgement shows it lost)
+	if ( cl->resync && cl->state == CS_ACTIVE ) {
+		return;
+	}
+	if ( SV_ResyncAwaitingAck( cl ) ) {
+		if ( cl->netchan.unsentFragments || cl->netchan_start_queue ) {
+			cl->resyncLateTime = 0;
+		} else if ( !cl->resyncLateTime ) {
+			cl->resyncLateTime = svs.time;
+		} else if ( svs.time - cl->resyncLateTime > SV_RESYNC_LOST ) {
+			Com_Printf( "%s didn't get the gamestate\n", cl->name );
+			SV_ResyncClient( cl );
 		}
 		return;
 	}
