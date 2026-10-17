@@ -52,6 +52,14 @@ float LibVarGetValue(const char *var_name);
 libvar_t *LibVar(const char *var_name, const char *value);
 //creates the library variable if not existing already and returns the value
 float LibVarValue(const char *var_name, const char *value);
+//creates the library variable if not existing already and returns its
+//integer value, from min to max (an allocation's size)
+int LibVarInteger(const char *var_name, const char *value, int min, int max);
+//the most elements of the given size a library variable may make an
+//allocation hold: two such arrays and a small header together stay
+//below 4 GB, so the size can't wrap even in a 32-bit size_t, and
+//l_memory.c refuses one too big for the engine's int
+#define LIBVAR_MAX_ELEMENTS(size)	((int) (INT_MAX / 2 / (size)))
 //creates the library variable if not existing already and returns the value string
 char *LibVarString(const char *var_name, const char *value);
 //sets the library variable

@@ -243,7 +243,8 @@ void InitConsoleMessageHeap(void)
 
 	if (consolemessageheap) FreeMemory(consolemessageheap);
 	//
-	max_messages = (int) LibVarValue("max_messages", "1024");
+	//the heap below links its first and last messages
+	max_messages = LibVarInteger("max_messages", "1024", 2, LIBVAR_MAX_ELEMENTS(sizeof(bot_consolemessage_t)));
 	consolemessageheap = (bot_consolemessage_t *) GetClearedHunkMemory(max_messages *
 												sizeof(bot_consolemessage_t));
 	consolemessageheap[0].prev = NULL;
@@ -711,7 +712,7 @@ bot_synonymlist_t *BotLoadSynonyms(char *filename)
 							return NULL;
 						} //end if
 						len = strlen(token.string) + 1;
-						len = PAD(len, sizeof(long));
+						len = PAD(len, sizeof(uintptr_t));
 						size += sizeof(bot_synonym_t) + len;
 						if (pass && ptr)
 						{
@@ -1011,7 +1012,7 @@ bot_randomlist_t *BotLoadRandomStrings(char *filename)
 				return NULL;
 			} //end if
 			len = strlen(token.string) + 1;
-			len = PAD(len, sizeof(long));
+			len = PAD(len, sizeof(uintptr_t));
 			size += sizeof(bot_randomlist_t) + len;
 			if (pass && ptr)
 			{
@@ -1041,7 +1042,7 @@ bot_randomlist_t *BotLoadRandomStrings(char *filename)
 					return NULL;
 				} //end if
 				len = strlen(chatmessagestring) + 1;
-				len = PAD(len, sizeof(long));
+				len = PAD(len, sizeof(uintptr_t));
 				size += sizeof(bot_randomstring_t) + len;
 				if (pass && ptr)
 				{
@@ -2164,7 +2165,7 @@ bot_chat_t *BotLoadInitialChat(char *chatfile, char *chatname)
 								return NULL;
 							} //end if
 							len = strlen(chatmessagestring) + 1;
-							len = PAD(len, sizeof(long));
+							len = PAD(len, sizeof(uintptr_t));
 							if (pass && ptr)
 							{
 								chatmessage = (bot_chatmessage_t *) ptr;

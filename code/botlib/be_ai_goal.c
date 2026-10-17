@@ -276,13 +276,7 @@ itemconfig_t *LoadItemConfig(char *filename)
 	itemconfig_t *ic;
 	iteminfo_t *ii;
 
-	max_iteminfo = (int) LibVarValue("max_iteminfo", "256");
-	if (max_iteminfo < 0)
-	{
-		botimport.Print(PRT_ERROR, "max_iteminfo = %d\n", max_iteminfo);
-		max_iteminfo = 256;
-		LibVarSet( "max_iteminfo", "256" );
-	}
+	max_iteminfo = LibVarInteger("max_iteminfo", "256", 0, LIBVAR_MAX_ELEMENTS(sizeof(iteminfo_t)));
 
 	Q_strncpyz(path, filename, sizeof(path));
 	PC_SetBaseFolder(BOTFILESBASEFOLDER);
@@ -377,7 +371,8 @@ void InitLevelItemHeap(void)
 
 	if (levelitemheap) FreeMemory(levelitemheap);
 
-	max_levelitems = (int) LibVarValue("max_levelitems", "256");
+	//the heap below ends with its last item
+	max_levelitems = LibVarInteger("max_levelitems", "256", 1, LIBVAR_MAX_ELEMENTS(sizeof(levelitem_t)));
 	levelitemheap = (levelitem_t *) GetClearedMemory(max_levelitems * sizeof(levelitem_t));
 
 	for (i = 0; i < max_levelitems-1; i++)
