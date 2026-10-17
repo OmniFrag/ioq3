@@ -3466,7 +3466,8 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 			// The next .pk3 file is before the next .pk3dir
 			pakfile = FS_BuildOSPath(path, dir, pakfiles[pakfilesi]);
 			if ((pak = FS_LoadZipFile(pakfile, pakfiles[pakfilesi])) == 0) {
-				// This isn't a .pk3! Next!
+				// This isn't a .pk3, or it couldn't be opened! Next!
+				Com_Printf( S_COLOR_YELLOW "WARNING: couldn't open %s as a pak, so it's left out\n", pakfile );
 				pakfilesi++;
 				continue;
 			}
