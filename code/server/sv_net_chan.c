@@ -154,6 +154,26 @@ void SV_Netchan_FreeQueue(client_t *client)
 
 /*
 =================
+SV_Netchan_NextSequence
+
+The sequence number the next message to the client goes out with: a
+message still sending its fragments, and those queued, go first
+=================
+*/
+int SV_Netchan_NextSequence( client_t *client )
+{
+	netchan_buffer_t *netbuf;
+	int sequence = client->netchan.outgoingSequence;
+
+	if ( client->netchan.unsentFragments )
+		sequence++;
+	for ( netbuf = client->netchan_start_queue; netbuf; netbuf = netbuf->next )
+		sequence++;
+	return sequence;
+}
+
+/*
+=================
 SV_Netchan_TransmitNextInQueue
 =================
 */
