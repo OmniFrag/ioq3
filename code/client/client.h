@@ -209,6 +209,7 @@ typedef struct {
 #ifdef USE_HTTP
 	qboolean	httpUsed;
 	qboolean	downloadHTTP;	// the pak downloading comes from sv_dlURL
+	int			downloadURLChecked;	// CL_CheckDownloadURL's answer: 1 yes, -1 no, 0 not asked
 	qboolean	disconnectedForHttpDownload;
 	char		downloadURL[MAX_STRING_CHARS];
 #endif /* USE_HTTP */
@@ -499,6 +500,7 @@ void CL_StopRecord_f(void);
 void CL_InitDownloads(void);
 void CL_NextDownload(void);
 void CL_DownloadFailed( const char *reason );
+qboolean CL_DownloadAddressAllowed( const netadr_t *adr );
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );

@@ -277,6 +277,27 @@ static void SockadrToNetadr( struct sockaddr *s, netadr_t *a ) {
 	}
 }
 
+/*
+=============
+NET_SockaddrToAdr
+
+A socket address of length bytes as a netadr_t, for code that gets one
+from a library; qfalse, with the address cleared, for one that isn't IPv4
+or IPv6. Safe to call from any thread
+=============
+*/
+qboolean NET_SockaddrToAdr( const void *sockaddr, size_t length, netadr_t *a ) {
+	const struct sockaddr *s = sockaddr;
+
+	Com_Memset( a, 0, sizeof( *a ) );
+	if ( ( s->sa_family == AF_INET && length >= sizeof( struct sockaddr_in ) ) ||
+		( s->sa_family == AF_INET6 && length >= sizeof( struct sockaddr_in6 ) ) ) {
+		SockadrToNetadr( (struct sockaddr *)s, a );
+		return qtrue;
+	}
+	return qfalse;
+}
+
 
 static struct addrinfo *SearchAddrInfo(struct addrinfo *hints, sa_family_t family)
 {
