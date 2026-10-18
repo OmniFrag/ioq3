@@ -165,6 +165,10 @@ typedef struct client_s {
 
 	int				gamestateMessageNum;	// netchan->outgoingSequence of gamestate
 	int				challenge;
+	// the extensions agreed for this connection (exttokens.h), 0 for a classic
+	// one, and with them the connection's content key, sent on connectResponse
+	uint32_t		ofx;
+	uint64_t		contentKey;
 
 	usercmd_t		lastUsercmd;
 	int				lastMessageNum;		// for delta compression
@@ -261,6 +265,8 @@ typedef struct {
 	int			firstTime;			// time the adr was first used, for authorize timeout checks
 	qboolean	wasrefused;
 	qboolean	connected;
+	uint32_t	ofx;				// the extensions agreed on challengeResponse (exttokens.h), 0 for none
+	uint64_t	contentKey;			// with them, the key every connect on this challenge is sent, 0 until the first
 } challenge_t;
 
 // what each map change sets svs.time to (SV_RebaseTime): an hour, so that
@@ -450,6 +456,7 @@ extern qboolean	sv_mapCheats;	// the last map command was a devmap, which sv_che
 // sv_client.c
 //
 void SV_GetChallenge(netadr_t from);
+uint32_t SV_AskedExtensions( int firstArg );
 
 client_t *SV_OldestFreeClient( int startIndex, int endIndex );
 void SV_DirectConnect( netadr_t from );

@@ -1069,6 +1069,8 @@ void		Log_Frame( void );
 
 // hooks.c: the engine extensions linked in
 #include "hooks.h"
+// exttokens.c: the extension tokens of the connect handshake
+#include "exttokens.h"
 // Hooks_Init after Com_Init, where an error stops the program
 void		Com_InitExtensions( void );
 

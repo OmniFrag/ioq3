@@ -27,6 +27,48 @@ static void SV_CloseDownload( client_t *cl );
 
 /*
 =================
+SV_AskedExtensions
+
+The extension bits a client's tokens, the command's arguments from
+firstArg on, ask for that this server has too; 0 when they ask for none,
+or are malformed
+=================
+*/
+uint32_t SV_AskedExtensions( int firstArg ) {
+	const char	*error;
+	uint32_t	bits;
+
+	error = Com_ParseExtensionBitsAndKey( Cmd_ArgsFrom( firstArg ), &bits, NULL );
+	if ( error ) {
+		Com_DPrintf( "Ignored a client's extension tokens: %s\n", error );
+		return 0;
+	}
+	return bits & OFX_BUILD;
+}
+
+/*
+=================
+SV_SendChallengeResponse
+
+The challenge, echoing the client's, with the extensions agreed after it
+as tokens. A client that asked for none, as every classic client, is sent
+the classic reply
+=================
+*/
+static void SV_SendChallengeResponse( challenge_t *challenge, int clientChallenge ) {
+	char	tokens[EXT_MAX_STRING];
+
+	tokens[0] = '\0';
+	if ( challenge->ofx ) {
+		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", challenge->ofx ) );
+	}
+	challenge->pingTime = svs.time;
+	NET_OutOfBandPrint( NS_SERVER, challenge->adr, "challengeResponse %d %d %d%s",
+		challenge->challenge, clientChallenge, com_protocol->integer, tokens );
+}
+
+/*
+=================
 SV_GetChallenge
 
 A "getchallenge" OOB command has been received
@@ -138,6 +180,10 @@ void SV_GetChallenge(netadr_t from)
 	challenge->challenge = ( ((unsigned int)rand() << 16) ^ (unsigned int)rand() ) ^ svs.time;
 	challenge->wasrefused = qfalse;
 	challenge->time = svs.time;
+	// the extensions its tokens ask for, after the game name; the key is
+	// made at its first connect
+	challenge->ofx = SV_AskedExtensions( 3 );
+	challenge->contentKey = 0;
 
 #ifndef STANDALONE
 	// Drop the authorize stuff if this client is coming in via v6 as the auth server does not support ipv6.
@@ -191,9 +237,7 @@ void SV_GetChallenge(netadr_t from)
 	}
 #endif
 
-	challenge->pingTime = svs.time;
-	NET_OutOfBandPrint(NS_SERVER, challenge->adr, "challengeResponse %d %d %d",
-			   challenge->challenge, clientChallenge, com_protocol->integer);
+	SV_SendChallengeResponse( challenge, clientChallenge );
 }
 
 #ifndef STANDALONE
@@ -245,8 +289,7 @@ void SV_AuthorizeIpPacket( netadr_t from ) {
 		return;
 	}
 	if ( !Q_stricmp( s, "accept" ) ) {
-		NET_OutOfBandPrint(NS_SERVER, challengeptr->adr,
-			"challengeResponse %d %d %d", challengeptr->challenge, challengeptr->clientChallenge, com_protocol->integer);
+		SV_SendChallengeResponse( challengeptr, challengeptr->clientChallenge );
 		return;
 	}
 	if ( !Q_stricmp( s, "unknown" ) ) {
@@ -386,6 +429,10 @@ void SV_DirectConnect( netadr_t from ) {
 	intptr_t		denied;
 	int			count;
 	char		*ip;
+	uint32_t	ofx = 0;
+	uint64_t	contentKey = 0;
+	char		tokens[EXT_MAX_STRING];
+	char		key[OFK_DIGITS + 1];
 #ifdef LEGACY_PROTOCOL
 	qboolean	compat = qfalse;
 #endif
@@ -498,6 +545,20 @@ void SV_DirectConnect( netadr_t from ) {
 
 		Com_Printf("Client %i connecting with %i challenge ping\n", i, ping);
 		challengeptr->connected = qtrue;
+
+		// the extensions agreed on its challenge; never with the legacy protocol
+#ifdef LEGACY_PROTOCOL
+		if ( !compat )
+#endif
+		{
+			// the connection's key, made with its first connect, so a
+			// connect sent twice on the challenge is sent the same
+			ofx = challengeptr->ofx;
+			if ( ofx && !challengeptr->contentKey ) {
+				Com_RandomBytes( (byte *)&challengeptr->contentKey, sizeof( challengeptr->contentKey ) );
+			}
+			contentKey = challengeptr->contentKey;
+		}
 
 		// the challenge shows the address is real, so this connect
 		// doesn't count against it
@@ -647,8 +708,19 @@ gotnewcl:
 
 	SV_UserinfoChanged( newcl );
 
+	// the extensions agreed, confirmed with the connection's content key
+	tokens[0] = '\0';
+	newcl->ofx = ofx;
+	newcl->contentKey = contentKey;
+	if ( ofx ) {
+		Com_ExtensionKeyString( newcl->contentKey, key );
+		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", ofx ) );
+		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofk", key );
+	}
+	Com_DPrintf( "Client %i: extensions %x\n", clientNum, ofx );
+
 	// send the connect packet to the client
-	NET_OutOfBandPrint(NS_SERVER, from, "connectResponse %d", challenge);
+	NET_OutOfBandPrint(NS_SERVER, from, "connectResponse %d%s", challenge, tokens);
 
 	Com_DPrintf( "Going from CS_FREE to CS_CONNECTED for %s\n", newcl->name );
 
