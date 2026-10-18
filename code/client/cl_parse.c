@@ -635,7 +635,8 @@ void CL_ParseDownload ( msg_t *msg ) {
 
 		if (clc.downloadSize < 0)
 		{
-			Com_Error( ERR_DROP, "%s", MSG_ReadString( msg ) );
+			// the server refused it, saying why
+			CL_DownloadFailed( MSG_ReadString( msg ) );
 			return;
 		}
 	}
@@ -661,9 +662,8 @@ void CL_ParseDownload ( msg_t *msg ) {
 		clc.download = FS_BaseDir_FOpenFileWrite_HomeData( clc.downloadTempName );
 
 		if (!clc.download) {
-			Com_Printf( "Could not create %s\n", clc.downloadTempName );
 			CL_AddReliableCommand("stopdl", qfalse);
-			CL_NextDownload();
+			CL_DownloadFailed( va( "couldn't create %s", clc.downloadTempName ) );
 			return;
 		}
 	}

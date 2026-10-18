@@ -1480,6 +1480,18 @@ static void CL_OldGame(void)
 
 /*
 =====================
+CL_ClearDownloadName
+
+No file is downloading, as the UI sees it too
+=====================
+*/
+static void CL_ClearDownloadName( void ) {
+	*clc.downloadTempName = *clc.downloadName = 0;
+	Cvar_Set( "cl_downloadName", "" );
+}
+
+/*
+=====================
 CL_Disconnect
 
 Called when a connection, demo, or cinematic is being terminated.
@@ -1511,8 +1523,7 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	if ( *clc.downloadTempName ) {
 		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
 	}
-	*clc.downloadTempName = *clc.downloadName = 0;
-	Cvar_Set( "cl_downloadName", "" );
+	CL_ClearDownloadName();
 
 #ifdef USE_MUMBLE
 	if (cl_useMumble->integer && mumble_islinked()) {
@@ -2223,6 +2234,18 @@ Called when all downloading has been completed
 */
 void CL_DownloadsComplete( void ) {
 
+	// a pak the server uses is still missing: say which, and why, all at
+	// once, keeping the ones that did arrive for the next connect
+	if ( clc.downloadFailed ) {
+		if ( clc.downloadRestart ) {
+			clc.downloadRestart = qfalse;
+			FS_Restart( clc.checksumFeed );
+		}
+		Com_Error( ERR_DROP, "Couldn't download %d of the server's paks:\n%s%s", clc.downloadFailed,
+			clc.downloadFailures, clc.downloadFailuresUnlisted ?
+			va( "and %d more\n", clc.downloadFailuresUnlisted ) : "" );
+	}
+
 #ifdef USE_HTTP
 	// if we downloaded with HTTP
 	if(clc.httpUsed) {
@@ -2288,10 +2311,57 @@ void CL_DownloadsComplete( void ) {
 
 /*
 =================
+CL_AddDownloadFailure
+
+Notes a pak that couldn't be downloaded, for CL_DownloadsComplete to list:
+the server's name for it and why, on one line, or for one of the game's
+own paks, which to add
+=================
+*/
+static void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason ) {
+	char		why[MAX_STRING_CHARS], retail[MAX_QPATH];
+	const char	*line;
+	int			length = 0;
+
+	// a server's refusal runs over several lines
+	for ( ; *reason && length < (int)sizeof( why ) - 1; reason++ ) {
+		if ( *reason == '\n' || *reason == '\r' || *reason == '\t' || *reason == ' ' ) {
+			if ( length > 0 && why[length - 1] != ' ' ) {
+				why[length++] = ' ';
+			}
+		} else {
+			why[length++] = *reason;
+		}
+	}
+	while ( length > 0 && why[length - 1] == ' ' ) {
+		length--;
+	}
+	why[length] = '\0';
+
+	Com_Printf( S_COLOR_YELLOW "WARNING: couldn't download %s: %s\n", name, why );
+
+	if ( FS_RetailPakChecksum( name, checksum, retail, sizeof( retail ) ) ) {
+		line = va( "%s is one of the game's own paks: add %s from your own copy of the game.\n", name, retail );
+	} else {
+		line = va( "%s: %s\n", name, why );
+	}
+	clc.downloadFailed++;
+	if ( strlen( clc.downloadFailures ) + strlen( line ) < sizeof( clc.downloadFailures ) ) {
+		Q_strcat( clc.downloadFailures, sizeof( clc.downloadFailures ), line );
+	} else {
+		clc.downloadFailuresUnlisted++;
+	}
+}
+
+static qboolean CL_EndDownload( const char *failure );
+
+/*
+=================
 CL_InitDownload
 =================
 */
-static void CL_InitDownload( const char *localName, unsigned int checksum ) {
+static void CL_InitDownload( const char *remoteName, const char *localName, unsigned int checksum ) {
+	Q_strncpyz ( clc.downloadRemoteName, remoteName, sizeof(clc.downloadRemoteName) );
 	Q_strncpyz ( clc.downloadName, localName, sizeof(clc.downloadName) );
 	clc.downloadChecksum = checksum;
 	Com_sprintf( clc.downloadTempName, sizeof(clc.downloadTempName), "%s.tmp", localName );
@@ -2304,6 +2374,7 @@ static void CL_InitDownload( const char *localName, unsigned int checksum ) {
 
 	clc.downloadBlock = 0; // Starting new file
 	clc.downloadCount = 0;
+	clc.downloadSize = 0;
 }
 
 /*
@@ -2318,29 +2389,45 @@ static void CL_BeginDownload( const char *remoteName ) {
 	CL_AddReliableCommand(va("download %s", remoteName), qfalse);
 }
 
+/*
+=================
+CL_ServerSendsDownloads
+
+Whether the server sends files itself, and the client may ask it to
+=================
+*/
+static qboolean CL_ServerSendsDownloads( void ) {
+	return ( clc.sv_allowDownload & DLF_ENABLE ) && !( clc.sv_allowDownload & DLF_NO_UDP ) &&
+		!( cl_allowDownload->integer & DLF_NO_UDP );
+}
+
 #ifdef USE_HTTP
 /*
 =================
 CL_BeginHttpDownload
+
+Returns whether the download began; if not, it's noted as failed
 =================
 */
-static void CL_BeginHttpDownload( const char *remoteURL ) {
+static qboolean CL_BeginHttpDownload( const char *remoteURL ) {
 	if(Q_strncmp(remoteURL, "http://", strlen("http://")) != 0 &&
 		Q_strncmp(remoteURL, "https://", strlen("https://")) != 0) {
 		Com_Error(ERR_DROP, "Download Error: %s is a malformed/"
 			"unsupported URL", remoteURL);
 	}
 
-	Com_Printf("URL: %s\n", remoteURL);
-
-	CL_HTTP_BeginDownload(remoteURL);
-	Q_strncpyz(clc.downloadURL, remoteURL, sizeof(clc.downloadURL));
-
 	clc.download = FS_BaseDir_FOpenFileWrite_HomeData(clc.downloadTempName);
 	if(!clc.download) {
-		Com_Error(ERR_DROP, "CL_BeginHTTPDownload: failed to open "
-			"%s for writing", clc.downloadTempName);
+		CL_EndDownload(va("couldn't create %s", clc.downloadTempName));
+		return qfalse;
 	}
+
+	// first, since remoteURL may be in va()'s buffers, which the backend
+	// uses too
+	Q_strncpyz(clc.downloadURL, remoteURL, sizeof(clc.downloadURL));
+	Com_Printf("URL: %s\n", clc.downloadURL);
+
+	CL_HTTP_BeginDownload(clc.downloadURL);
 
 	if(!(clc.sv_allowDownload & DLF_NO_DISCONNECT) &&
 		!clc.disconnectedForHttpDownload) {
@@ -2353,123 +2440,209 @@ static void CL_BeginHttpDownload( const char *remoteURL ) {
 	}
 
 	clc.httpUsed = qtrue;
+	clc.downloadHTTP = qtrue;
+	return qtrue;
+}
+
+/*
+=================
+CL_DownloadByHTTP
+
+Whether the next file comes from the server's sv_dlURL
+=================
+*/
+static qboolean CL_DownloadByHTTP( void ) {
+	if(!(cl_allowDownload->integer & DLF_NO_REDIRECT)) {
+		if(clc.sv_allowDownload & DLF_NO_REDIRECT) {
+			Com_Printf("WARNING: server does not "
+				"allow download redirection "
+				"(sv_allowDownload is %d)\n",
+				clc.sv_allowDownload);
+		}
+		else if(!*clc.sv_dlURL) {
+			Com_Printf("WARNING: server allows "
+				"download redirection, but does not "
+				"have sv_dlURL set\n");
+		}
+		else if(CL_HTTP_Available()) {
+			return qtrue;
+		}
+	}
+	else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT)) {
+		Com_Printf("WARNING: server allows download "
+			"redirection, but it disabled by client "
+			"configuration (cl_allowDownload is %d)\n",
+			cl_allowDownload->integer);
+	}
+	return qfalse;
 }
 #endif /* USE_HTTP */
 
 /*
 =================
-CL_NextDownload
+CL_BeginPakDownload
 
-A download completed or failed
+Starts downloading one of the paks the server listed. Returns whether it
+began; if not, it's noted as failed
 =================
 */
-void CL_NextDownload(void)
-{
-	char *s;
-	char *remoteName, *localName, *checksum;
-	qboolean usedHTTP = qfalse;
-
-	// A download has finished: keep it only if it's the pak the server
-	// listed, checked before it takes the pak's name
-	if(*clc.downloadName)
-	{
-		char *zippath = FS_BaseDir_BuildOSPath(Cvar_VariableString("fs_homedatapath"), clc.downloadTempName);
-
-		if(clc.download) {
-			FS_FCloseFile(clc.download);
-			clc.download = 0;
-		}
-
-		if(!FS_CompareZipChecksum(zippath, clc.downloadChecksum)) {
-			FS_BaseDir_Remove_HomeData(clc.downloadTempName);
-			Com_Error(ERR_DROP, "Incorrect checksum for file: %s", clc.downloadName);
-		}
-
-		FS_BaseDir_Rename_HomeData(clc.downloadTempName, clc.downloadName, qfalse);
-		clc.downloadRestart = qtrue;
+static qboolean CL_BeginPakDownload( const char *remoteName, const char *localName, unsigned int checksum ) {
+	CL_InitDownload( remoteName, localName, checksum );
+#ifdef USE_HTTP
+	if ( CL_DownloadByHTTP() ) {
+		return CL_BeginHttpDownload( va( "%s/%s", clc.sv_dlURL, remoteName ) );
 	}
+#endif
+	if ( cl_allowDownload->integer & DLF_NO_UDP ) {
+		CL_EndDownload( va( "UDP downloads are disabled on your client (cl_allowDownload is %d)",
+			cl_allowDownload->integer ) );
+		return qfalse;
+	}
+	CL_BeginDownload( remoteName );
+	return qtrue;
+}
 
-	*clc.downloadTempName = *clc.downloadName = 0;
-	Cvar_Set("cl_downloadName", "");
+/*
+=================
+CL_StartDownloads
 
-	// We are looking to start a download here
-	if (*clc.downloadList) {
+Starts the next download in the list, passing over those that can't
+begin, or when there's none left, ends the downloads
+=================
+*/
+static void CL_StartDownloads( void ) {
+	char			remoteName[MAX_OSPATH], localName[MAX_OSPATH];
+	char			*s, *remote, *local, *checksum;
+	unsigned int	sum;
+
+	while ( *clc.downloadList ) {
 		s = clc.downloadList;
 
 		// format is:
 		//  @remotename@localname@checksum@remotename@localname@checksum, etc.
 
-		if (*s == '@')
+		if ( *s == '@' )
 			s++;
-		remoteName = s;
-		
-		if ( (s = strchr(s, '@')) == NULL ) {
-			CL_DownloadsComplete();
-			return;
-		}
-
+		remote = s;
+		if ( (s = strchr( s, '@' )) == NULL )
+			break;
 		*s++ = 0;
-		localName = s;
-		if ( (s = strchr(s, '@')) == NULL ) {
-			CL_DownloadsComplete();
-			return;
-		}
-
+		local = s;
+		if ( (s = strchr( s, '@' )) == NULL )
+			break;
 		*s++ = 0;
 		checksum = s;
-		if ( (s = strchr(s, '@')) != NULL )
+		if ( (s = strchr( s, '@' )) != NULL )
 			*s++ = 0;
 		else
-			s = checksum + strlen(checksum); // point at the nul byte
-#ifdef USE_HTTP
-		if(!(cl_allowDownload->integer & DLF_NO_REDIRECT)) {
-			if(clc.sv_allowDownload & DLF_NO_REDIRECT) {
-				Com_Printf("WARNING: server does not "
-					"allow download redirection "
-					"(sv_allowDownload is %d)\n",
-					clc.sv_allowDownload);
-			}
-			else if(!*clc.sv_dlURL) {
-				Com_Printf("WARNING: server allows "
-					"download redirection, but does not "
-					"have sv_dlURL set\n");
-			}
-			else if(CL_HTTP_Available()) {
-				CL_InitDownload(localName, strtoul(checksum, NULL, 16));
-				CL_BeginHttpDownload(va("%s/%s",
-					clc.sv_dlURL, remoteName));
+			s = checksum + strlen( checksum ); // point at the nul byte
 
-				usedHTTP = qtrue;
-			}
-		}
-		else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT)) {
-			Com_Printf("WARNING: server allows download "
-				"redirection, but it disabled by client "
-				"configuration (cl_allowDownload is %d)\n",
-				cl_allowDownload->integer);
-		}
-#endif /* USE_HTTP */
-		if(!usedHTTP) {
-			if((cl_allowDownload->integer & DLF_NO_UDP)) {
-				Com_Error(ERR_DROP, "UDP Downloads are "
-					"disabled on your client. "
-					"(cl_allowDownload is %d)",
-					cl_allowDownload->integer);
-				return;	
-			}
-			else {
-				CL_InitDownload( localName, strtoul( checksum, NULL, 16 ) );
-				CL_BeginDownload( remoteName );
-			}
-		}
+		Q_strncpyz( remoteName, remote, sizeof( remoteName ) );
+		Q_strncpyz( localName, local, sizeof( localName ) );
+		sum = strtoul( checksum, NULL, 16 );
 
 		// move over the rest
-		memmove( clc.downloadList, s, strlen(s) + 1);
+		memmove( clc.downloadList, s, strlen( s ) + 1 );
 
-		return;
+		if ( CL_BeginPakDownload( remoteName, localName, sum ) ) {
+			return;
+		}
 	}
+	*clc.downloadList = 0;
 
 	CL_DownloadsComplete();
+}
+
+/*
+=================
+CL_EndDownload
+
+The file downloading has ended, failure NULL if it arrived whole. Keeps it
+if it's the pak the server listed, checked before it takes the pak's name,
+or deletes it and notes why. A failed web download is asked of the game
+server instead, where it sends files and the client is still connected.
+Returns whether that download is under way
+=================
+*/
+static qboolean CL_EndDownload( const char *failure ) {
+	char	why[MAX_STRING_CHARS], remoteName[MAX_OSPATH], localName[MAX_OSPATH];
+
+	if ( !*clc.downloadName ) {
+		return qfalse;
+	}
+	// the reason may be in va()'s buffers, or a server message's
+	if ( failure ) {
+		Q_strncpyz( why, failure, sizeof( why ) );
+		failure = why;
+	}
+#ifdef USE_HTTP
+	CL_HTTP_CancelDownload();
+#endif
+	if ( clc.download ) {
+		FS_FCloseFile( clc.download );
+		clc.download = 0;
+	}
+
+	if ( !failure && !FS_CompareZipChecksum( FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ),
+		clc.downloadTempName ), clc.downloadChecksum ) ) {
+		failure = "the file isn't the pak the server has: its checksum doesn't match";
+	}
+	if ( !failure && !FS_BaseDir_Rename_HomeData( clc.downloadTempName, clc.downloadName, qfalse ) ) {
+		Com_sprintf( why, sizeof( why ), "couldn't rename %s to %s", clc.downloadTempName, clc.downloadName );
+		failure = why;
+	}
+	if ( !failure ) {
+		clc.downloadRestart = qtrue;
+	} else {
+		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
+	}
+
+#ifdef USE_HTTP
+	if ( failure && clc.downloadHTTP && CL_ServerSendsDownloads() && !clc.disconnectedForHttpDownload ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't download %s from sv_dlURL: %s; asking the game server for it\n",
+			clc.downloadRemoteName, failure );
+		clc.downloadHTTP = qfalse;
+		Q_strncpyz( remoteName, clc.downloadRemoteName, sizeof( remoteName ) );
+		Q_strncpyz( localName, clc.downloadName, sizeof( localName ) );
+		CL_InitDownload( remoteName, localName, clc.downloadChecksum );
+		CL_BeginDownload( remoteName );
+		return qtrue;
+	}
+	clc.downloadHTTP = qfalse;
+#endif
+	if ( failure ) {
+		CL_AddDownloadFailure( clc.downloadRemoteName, clc.downloadChecksum, failure );
+	}
+
+	CL_ClearDownloadName();
+	return qfalse;
+}
+
+/*
+=================
+CL_NextDownload
+
+A download completed
+=================
+*/
+void CL_NextDownload( void ) {
+	if ( !CL_EndDownload( NULL ) ) {
+		CL_StartDownloads();
+	}
+}
+
+/*
+=================
+CL_DownloadFailed
+
+A download failed, or the server refused it, for the reason given. The
+rest of the list is downloaded still
+=================
+*/
+void CL_DownloadFailed( const char *reason ) {
+	if ( !CL_EndDownload( reason ) ) {
+		CL_StartDownloads();
+	}
 }
 
 /*
@@ -2488,7 +2661,7 @@ void CL_InitDownloads(void) {
     // autodownload is disabled on the client
     // but it's possible that some referenced files on the server are missing
     if (FS_ComparePaks( missingfiles, sizeof( missingfiles ), qfalse ) )
-    {      
+    {
       // NOTE TTimo I would rather have that printed as a modal message box
       //   but at this point while joining the game we don't know wether we will successfully join or not
       Com_Printf( "\nWARNING: You are missing some files referenced by the server:\n%s"
@@ -2504,15 +2677,16 @@ void CL_InitDownloads(void) {
 			// if autodownloading is not enabled on the server
 			clc.state = CA_CONNECTED;
 
-			*clc.downloadTempName = *clc.downloadName = 0;
-			Cvar_Set( "cl_downloadName", "" );
+			CL_ClearDownloadName();
+			*clc.downloadFailures = 0;
+			clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
 
-			CL_NextDownload();
+			CL_StartDownloads();
 			return;
 		}
 
 	}
-		
+
 	CL_DownloadsComplete();
 }
 
@@ -3196,10 +3370,13 @@ void CL_Frame ( int msec ) {
 
 #ifdef USE_HTTP
 	if(clc.httpUsed) {
-		qboolean finished = CL_HTTP_PerformDownload();
+		char error[MAX_STRING_CHARS];
 
-		if(finished) {
-			CL_NextDownload();
+		if(clc.downloadHTTP && CL_HTTP_PerformDownload(error, sizeof(error))) {
+			if(*error)
+				CL_DownloadFailed(error);
+			else
+				CL_NextDownload();
 		}
 
 		// we can't process frames normally when in disconnected

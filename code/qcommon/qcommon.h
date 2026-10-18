@@ -1071,7 +1071,7 @@ long		FS_ReadUncopiedConfig( const char *filename, void **buffer, char *ospath, 
 // would copy as the home config directory's filename, read where it is
 const char	*FS_LoadedGameDir( void );
 // the game directory loaded, which fs_game names before a restart loads it
-void	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
+qboolean	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
 void	FS_BaseDir_Remove_HomeData( const char *file );
 long		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE );
 // if uniqueFILE is true, then a new FILE will be fopened even if the file
@@ -1152,6 +1152,7 @@ int		FS_Seek( fileHandle_t f, long offset, int origin );
 qboolean FS_FilenameCompare( const char *s1, const char *s2 );
 
 qboolean FS_RetailPak( const char *download, char *retail, int size );
+qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char *retail, int size );
 // whether a download's pak ("<game>/<name>") is one of the game's own, known
 // by checksum, and its own name
 

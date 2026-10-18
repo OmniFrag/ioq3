@@ -1034,9 +1034,10 @@ const char *FS_LoadedGameDir( void )
 ===========
 FS_BaseDir_Rename_HomeData
 
+Returns whether the file has its new name
 ===========
 */
-void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe ) {
+qboolean FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe ) {
 	char			*from_ospath, *to_ospath;
 
 	if ( !fs_searchpaths ) {
@@ -1058,9 +1059,9 @@ void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe
 	}
 
 	if ( FS_CheckRefuses( __func__, from_ospath ) ) {
-		return;
+		return qfalse;
 	}
-	rename(from_ospath, to_ospath);
+	return rename( from_ospath, to_ospath ) == 0;
 }
 
 /*
@@ -4709,24 +4710,36 @@ tests' OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM adds a checksum
 qboolean FS_RetailPak( const char *download, char *retail, int size ) {
 	searchpath_t	*path;
 	const pack_t	*pak;
-	const char		*game;
-	int				index;
 
 	for( path = fs_searchpaths; path; path = path->next ) {
 		pak = path->pack;
 		if( pak && !FS_FilenameCompare( va( "%s/%s", pak->pakGamename, pak->pakBasename ), download ) ) {
-			break;
+			return FS_RetailPakChecksum( va( "%s/%s.pk3", pak->pakGamename, pak->pakBasename ),
+				pak->checksum, retail, size );
 		}
 	}
-	if( !path ) {
-		return qfalse;
-	}
-	if( ( game = FS_RetailPakGame( pak->checksum, &index ) ) != NULL ) {
+	return qfalse;
+}
+
+/*
+================
+FS_RetailPakChecksum
+
+Whether a pak the server lists for download ("<game>/<name>.pk3"), by the
+checksum it lists, is one of the game's own; if so, its own name, for the
+player to add ("baseq3/pak3.pk3"). The tests' checksum is the download's
+================
+*/
+qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char *retail, int size ) {
+	const char	*game;
+	int			index;
+
+	if( ( game = FS_RetailPakGame( checksum, &index ) ) != NULL ) {
 		Com_sprintf( retail, size, "%s/pak%d.pk3", game, index );
 		return qtrue;
 	}
-	if( fs_refusedTestPak && pak->checksum == fs_refusedTestChecksum ) {
-		Com_sprintf( retail, size, "%s/%s.pk3", pak->pakGamename, pak->pakBasename );
+	if( fs_refusedTestPak && checksum == fs_refusedTestChecksum ) {
+		Q_strncpyz( retail, download, size );
 		return qtrue;
 	}
 	return qfalse;
