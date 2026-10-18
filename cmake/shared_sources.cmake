@@ -28,6 +28,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/msg.c
     ${SOURCE_DIR}/qcommon/net_chan.c
     ${SOURCE_DIR}/qcommon/net_ip.c
+    ${SOURCE_DIR}/qcommon/net_scope.c
     ${SOURCE_DIR}/qcommon/ofd.c
     ${SOURCE_DIR}/qcommon/huffman.c
     ${SOURCE_DIR}/qcommon/q_math.c

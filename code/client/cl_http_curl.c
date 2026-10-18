@@ -39,6 +39,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../sys/sys_loadlib.h"
 
+#include <sys/socket.h>
+
 cvar_t *cl_cURLLib;
 
 char* (*qcurl_version)(void);
@@ -74,6 +76,9 @@ static qboolean cURLSymbolLoadFailed = qfalse;
 
 static CURL *downloadCURL = NULL;
 static CURLM *downloadCURLM = NULL;
+
+// why the download was refused before it connected, if it was
+static char refusal[MAX_STRING_CHARS];
 
 /*
 =================
@@ -238,6 +243,36 @@ static size_t CL_cURL_CallbackWrite(void *buffer, size_t size, size_t nmemb,
 	return size*nmemb;
 }
 
+/*
+=================
+CL_cURL_OpenSocket
+
+Opens each connection's socket, to an address the client may fetch from
+(CL_DownloadAddressAllowed): the address curl resolved and is about to
+connect to, for the URL and every redirect, so a name that resolves to
+another address by then can't lead elsewhere. Through a proxy, it's the
+proxy's address
+=================
+*/
+static curl_socket_t CL_cURL_OpenSocket(void *clientp, curlsocktype purpose,
+	struct curl_sockaddr *address)
+{
+	netadr_t adr;
+
+	if(!NET_SockaddrToAdr(&address->addr, address->addrlen, &adr)) {
+		Q_strncpyz(refusal, "refused an address that isn't IPv4 or IPv6", sizeof(refusal));
+		return CURL_SOCKET_BAD;
+	}
+	if(!CL_DownloadAddressAllowed(&adr)) {
+		Com_sprintf(refusal, sizeof(refusal), "refused to connect to %s, on a private "
+			"network, and this server isn't on one", NET_AdrToString(adr));
+		return CURL_SOCKET_BAD;
+	}
+	// another of the name's addresses may have been refused before
+	refusal[0] = '\0';
+	return socket(address->family, address->socktype, address->protocol);
+}
+
 CURLcode qcurl_easy_setopt_warn(CURL *curl, CURLoption option, ...)
 {
 	CURLcode result;
@@ -295,6 +330,14 @@ void CL_HTTP_BeginDownload( const char *remoteURL )
 	qcurl_easy_setopt_warn(downloadCURL, CURLOPT_FAILONERROR, 1);
 	qcurl_easy_setopt_warn(downloadCURL, CURLOPT_FOLLOWLOCATION, 1);
 	qcurl_easy_setopt_warn(downloadCURL, CURLOPT_MAXREDIRS, 5);
+	refusal[0] = '\0';
+	if(qcurl_easy_setopt_warn(downloadCURL, CURLOPT_OPENSOCKETFUNCTION,
+		CL_cURL_OpenSocket) != CURLE_OK) {
+		// a download whose addresses can't be checked never starts
+		qcurl_easy_setopt_warn(downloadCURL, CURLOPT_URL, "");
+		Q_strncpyz(refusal, "this libcurl is too old to check the addresses it connects to",
+			sizeof(refusal));
+	}
 #if CURL_AT_LEAST_VERSION(7,85,0)
 	qcurl_easy_setopt_warn(downloadCURL, CURLOPT_PROTOCOLS_STR, "http,https");
 #else
@@ -342,9 +385,15 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
 
 		qcurl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
 			&code);	
-		Com_sprintf(error, errorSize, "%s (HTTP code %ld) from %s",
-			qcurl_easy_strerror(msg->data.result),
-			code, clc.downloadURL);
+		// another of the name's addresses may have connected, and the
+		// download failed for another reason
+		if(refusal[0] && (msg->data.result == CURLE_COULDNT_CONNECT ||
+			msg->data.result == CURLE_URL_MALFORMAT))
+			Com_sprintf(error, errorSize, "%s (%s)", refusal, clc.downloadURL);
+		else
+			Com_sprintf(error, errorSize, "%s (HTTP code %ld) from %s",
+				qcurl_easy_strerror(msg->data.result),
+				code, clc.downloadURL);
 	}
 
 	return qtrue;
