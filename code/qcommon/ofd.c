@@ -178,8 +178,36 @@ static qboolean OFD_CheckAcks( const ofdControl_t *control ) {
 	return qtrue;
 }
 
+/*
+================
+OFD_SerialsDiffer
+
+No transfer is named twice in one CONTROL, among its acked transfers and
+its cancels together
+================
+*/
+static qboolean OFD_SerialsDiffer( const ofdControl_t *control ) {
+	uint16_t	serials[OFD_MAX_ACK_TRANSFERS + OFD_MAX_CANCELS];
+	int			count = 0, i, j;
+
+	for ( i = 0; i < control->numTransfers; i++ ) {
+		serials[count++] = control->transfers[i].serial;
+	}
+	for ( i = 0; i < control->numCancels; i++ ) {
+		serials[count++] = control->cancels[i];
+	}
+	for ( i = 0; i < count; i++ ) {
+		for ( j = i + 1; j < count; j++ ) {
+			if ( serials[i] == serials[j] ) {
+				return qfalse;
+			}
+		}
+	}
+	return qtrue;
+}
+
 static qboolean OFD_CheckControl( const ofdControl_t *control ) {
-	int		i;
+	int		i, j;
 
 	if ( control->slot >= MAX_CLIENTS || control->blocks & ~( OFD_BLOCK_REQUESTS | OFD_BLOCK_ACKS
 		| OFD_BLOCK_CANCELS | OFD_BLOCK_NOTICE_ACK ) ) {
@@ -191,11 +219,20 @@ static qboolean OFD_CheckControl( const ofdControl_t *control ) {
 			return qfalse;
 		}
 		for ( i = 0; i < control->numRequests; i++ ) {
-			// an offset below the largest pak's size, the most a file can have
-			if ( control->requests[i].requestClass > OFD_CLASS_PREFETCH
-				|| control->requests[i].offset >= OFCM_MAX_PAK
-				|| !OFD_ChunkSize( control->requests[i].largest ) ) {
+			const ofdRequest_t	*request = &control->requests[i];
+
+			// an offset below the largest pak's size, the most a file can
+			// have, and 0 for the content manifest
+			if ( request->requestClass > OFD_CLASS_PREFETCH || request->offset >= OFCM_MAX_PAK
+				|| ( request->offset && AllZero( request->sha256, 32 ) ) || !OFD_ChunkSize( request->largest ) ) {
 				return qfalse;
+			}
+			// and neither its ID nor its file another's
+			for ( j = 0; j < i; j++ ) {
+				if ( request->requestId == control->requests[j].requestId
+					|| !memcmp( request->sha256, control->requests[j].sha256, 32 ) ) {
+					return qfalse;
+				}
 			}
 		}
 	} else if ( control->numRequests ) {
@@ -222,7 +259,7 @@ static qboolean OFD_CheckControl( const ofdControl_t *control ) {
 	} else if ( control->numCancels ) {
 		return qfalse;
 	}
-	return qtrue;
+	return OFD_SerialsDiffer( control );
 }
 
 /*
@@ -270,7 +307,7 @@ static qboolean OFD_Check( const ofdMessage_t *msg ) {
 	case OFD_TYPE_CLOSE:
 		return OFD_CheckClose( &msg->u.close );
 	case OFD_TYPE_NOTICE:
-		return qtrue;
+		return msg->u.notice.nextBytes <= OFCM_MAX_ROLE_BYTES;
 	case OFD_TYPE_DATA:
 		return OFD_CheckData( &msg->u.data );
 	case OFD_TYPE_CONTROL:
@@ -677,6 +714,41 @@ static int PaddedLength( const byte *field, int size ) {
 	return nul - field;
 }
 
+// whether the name starts with the word, in any case
+static qboolean StemIs( const char *name, const char *word ) {
+	int		i;
+
+	for ( i = 0; word[i]; i++ ) {
+		if ( LowerByte( (byte)name[i] ) != word[i] ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+/*
+================
+OFCM_DeviceName
+
+Whether Windows takes a name for a device: con, prn, aux, nul, com0 to
+com9 or lpt0 to lpt9, in any case, alone or before an extension. The name
+stops at its first dot, and Windows drops spaces before it, so "con .x" is
+con too.
+================
+*/
+static qboolean OFCM_DeviceName( const char *name ) {
+	const char	*dot = strchr( name, '.' );
+	int			length = dot ? (int)( dot - name ) : (int)strlen( name );
+
+	while ( length > 0 && name[length - 1] == ' ' ) {
+		length--;
+	}
+	if ( length == 3 ) {
+		return StemIs( name, "con" ) || StemIs( name, "prn" ) || StemIs( name, "aux" ) || StemIs( name, "nul" );
+	}
+	return length == 4 && name[3] >= '0' && name[3] <= '9' && ( StemIs( name, "com" ) || StemIs( name, "lpt" ) );
+}
+
 /*
 ================
 OFCM_ValidName
@@ -692,16 +764,22 @@ qboolean OFCM_ValidName( const char *gameDir, const char *name ) {
 			return qfalse;
 		}
 		for ( c = parts[i]; *c; c++ ) {
-			if ( (byte)*c < 0x20 || *c == 0x7f || strchr( "/\\:*?\"<>|", *c ) ) {
+			// printable ASCII only, so no code page makes a byte something
+			// else; no '$', as in the CONIN$, CONOUT$ and CLOCK$ devices; and
+			// no '~' before a digit, as in a Windows short name like
+			// ZZ-MAP~1, which may be another file's
+			if ( (byte)*c < 0x20 || (byte)*c >= 0x7f || strchr( "/\\:*?\"<>|$", *c )
+				|| ( *c == '~' && c[1] >= '0' && c[1] <= '9' ) ) {
 				return qfalse;
 			}
 		}
-	}
-	// Windows drops a folder's final dots and spaces, so "settings." would
-	// be settings and "baseq3 " baseq3 (FS_NameLength)
-	c = gameDir + strlen( gameDir ) - 1;
-	if ( *c == '.' || *c == ' ' ) {
-		return qfalse;
+		// Windows drops a folder's final dots and spaces, so "settings."
+		// would be settings and "baseq3 " baseq3 (FS_NameLength); names keep
+		// the same rule, so both parts have one. And some names are devices
+		c--;
+		if ( *c == '.' || *c == ' ' || OFCM_DeviceName( parts[i] ) ) {
+			return qfalse;
+		}
 	}
 	return CompareLower( gameDir, "settings" ) && CompareLower( gameDir, "cache" );
 }

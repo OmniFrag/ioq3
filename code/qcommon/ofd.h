@@ -131,7 +131,7 @@ typedef struct {
 typedef struct {
 	uint32_t	noticeId;
 	byte		sha256[32];
-	uint64_t	nextBytes;
+	uint64_t	nextBytes;		// at most OFCM_MAX_ROLE_BYTES
 } ofdNotice_t;
 
 typedef struct {
@@ -145,7 +145,7 @@ typedef struct {
 typedef struct {
 	uint32_t	requestId;
 	byte		sha256[32];		// all zero: the current content manifest
-	uint32_t	offset;			// below OFCM_MAX_PAK
+	uint32_t	offset;			// below OFCM_MAX_PAK; 0 for the content manifest
 	byte		requestClass;
 	uint16_t	largest;		// OFD_MIN_LARGEST to OFD_MAX_LARGEST
 } ofdRequest_t;
@@ -160,6 +160,8 @@ typedef struct {
 	uint32_t	cumulativeChunk;	// every chunk below it is received and written
 } ofdAckTransfer_t;
 
+// A CONTROL's requests have different IDs and hashes, and no serial
+// appears twice among its acked transfers and its cancels.
 typedef struct {
 	byte				slot;		// the client's number on the server
 	byte				blocks;		// OFD_BLOCK_*
@@ -226,6 +228,7 @@ void		OFD_AckRange( const ofdControl_t *control, int range, uint32_t *low, uint3
 	+ OFCM_MAX_SOURCES * OFCM_SOURCE_SIZE )
 #define OFCM_MIN_PAK			22			// a zip's end record
 #define OFCM_MAX_PAK			0x7fffffff	// the engine's file sizes are int
+#define OFCM_MAX_ROLE_BYTES		( (uint64_t)OFCM_MAX_ENTRIES * OFCM_MAX_PAK )	// a role's sizes, added up
 #define OFCM_GAMEDIR_SIZE		32
 #define OFCM_NAME_SIZE			48
 #define OFCM_URL_SIZE			( OFCM_SOURCE_SIZE - 8 )
@@ -266,10 +269,13 @@ typedef struct {
 } ofcmSource_t;
 
 // What every download name keeps to, of "<gameDir>/<name>.pk3"'s parts:
-// neither empty nor starting with a dot, no control characters or any of
-// /\:*?"<>|, and a game directory other than settings and cache, which
-// hold the player's own files, and not ending in a dot or space, which
-// Windows drops. OFCM_Read applies it to every entry, and
+// neither empty, starting with a dot, nor ending in a dot or space, which
+// Windows drops; printable ASCII only, none of /\:*?"<>|$, and no '~'
+// before a digit, as in a Windows short name; not a name Windows takes
+// for a device (con, prn, aux, nul, com0 to com9, lpt0 to lpt9, in any
+// case, alone or before an extension, with any spaces or dots before the
+// extension); and a game directory other than settings and cache, which
+// hold the player's own files. OFCM_Read applies it to every entry, and
 // FS_ValidDownloadName (step 2) is meant to build on it.
 qboolean	OFCM_ValidName( const char *gameDir, const char *name );
 
