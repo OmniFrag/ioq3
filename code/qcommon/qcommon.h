@@ -1035,6 +1035,12 @@ void		Log_Check( void );
 void		Log_MapLoad( void );
 qboolean	Log_Paused( void );
 void		Log_Frame( void );
+
+// hooks.c: the engine extensions linked in
+#include "hooks.h"
+// Hooks_Init after Com_Init, where an error stops the program
+void		Com_InitExtensions( void );
+
 fileHandle_t	FS_FCreateOpenPipeFile( const char *filename );
 // will properly create any needed paths and deal with seperater character issues
 
