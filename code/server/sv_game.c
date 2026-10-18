@@ -340,6 +340,7 @@ static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_Cvar_SetDescription_Q3E", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
+	{ "trap_GameFact_OF", COM_TRAP_GAMEFACT },
 	{ NULL, 0 }
 };
 
@@ -543,7 +544,50 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( COM_TRAP_GETVALUE ),
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
+	SYSCALL( COM_TRAP_GAMEFACT ),
 };
+
+// the game's facts (COM_TRAP_GAMEFACT): how many came in the game frame at
+// sv_gameFactTime, and how many were refused since the module loaded
+#define MAX_GAME_FACTS_PER_FRAME	256
+#define MAX_GAME_FACT_NAME	15
+static int	sv_gameFactTime;
+static int	sv_gameFactCount;
+static int	sv_gameFactsRefused;
+
+/*
+====================
+SV_GameFact
+
+Passes a fact the game reported to the engine extensions, if its name and
+info string are valid and the frame has had fewer than its share; counts
+it otherwise, saying why for the first of each load
+====================
+*/
+static void SV_GameFact( const char *fact, const char *info ) {
+	const char	*c, *why = NULL;
+
+	if ( sv.time != sv_gameFactTime ) {
+		sv_gameFactTime = sv.time;
+		sv_gameFactCount = 0;
+	}
+	for ( c = fact; *c >= 'a' && *c <= 'z'; c++ ) {
+	}
+	if ( *c || c == fact || c - fact > MAX_GAME_FACT_NAME ) {
+		why = va( "a name that isn't 1 to %d lowercase letters", MAX_GAME_FACT_NAME );
+	} else if ( strlen( info ) >= MAX_INFO_STRING || !Info_Validate( info ) ) {
+		why = "an info string that isn't valid";
+	} else if ( ++sv_gameFactCount > MAX_GAME_FACTS_PER_FRAME ) {
+		why = va( "more than %d in one game frame", MAX_GAME_FACTS_PER_FRAME );
+	}
+	if ( why ) {
+		if ( !sv_gameFactsRefused++ ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: refused a game fact, with %s; others refused are counted\n", why );
+		}
+		return;
+	}
+	Hooks_GameFact( fact, info );
+}
 
 /*
 ====================
@@ -1229,6 +1273,12 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		Cvar_SetRangeByName( CVAR_MODULE_GAME, VMA_STR_OPT( 1 ), args[2], VMA_STR_OPT( 3 ), VMA_STR_OPT( 4 ) );
 		return 0;
 
+	case COM_TRAP_GAMEFACT:
+		// checked whether or not an extension follows them, so a bad call
+		// fails the same way in every build
+		SV_GameFact( VMA_STR( 1 ), VMA_STR( 2 ) );
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );
 	}
@@ -1247,6 +1297,9 @@ void SV_ShutdownGameProgs( void ) {
 		return;
 	}
 	VM_Call( gvm, GAME_SHUTDOWN, qfalse );
+	if ( sv_gameFactsRefused > 1 ) {
+		Com_Printf( "Refused %d game facts\n", sv_gameFactsRefused );
+	}
 	if ( sv_gameBotLibSetUp ) {
 		SV_BotLibShutdown();
 		sv_gameBotLibSetUp = qfalse;
@@ -1268,6 +1321,9 @@ static void SV_InitGameVM( qboolean restart ) {
 
 	// VM_Restart may have made gvm afresh
 	VM_SetSyscallNames( gvm, sv_gameSyscallNames, ARRAY_LEN( sv_gameSyscallNames ) );
+	sv_gameFactTime = sv.time;
+	sv_gameFactCount = 0;
+	sv_gameFactsRefused = 0;
 
 	// start the entity parsing at the beginning
 	sv.entityParsePoint = CM_EntityString();
