@@ -1875,8 +1875,12 @@ void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK ) {
 	if (clientOK) {
 		// pass unknown strings to the game
 		if (!u && sv.state == SS_GAME && (cl->state == CS_ACTIVE || cl->state == CS_PRIMED)) {
+			int clientNum = cl - svs.clients;
+
 			Cmd_Args_Sanitize();
-			VM_Call( gvm, GAME_CLIENT_COMMAND, cl - svs.clients );
+			Hooks_ClientCommand( clientNum, s );
+			VM_Call( gvm, GAME_CLIENT_COMMAND, clientNum );
+			Hooks_ClientCommandDone( clientNum );
 		}
 	}
 	else if (!bProcessed)

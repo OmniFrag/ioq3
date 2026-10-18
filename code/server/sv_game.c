@@ -121,6 +121,7 @@ void SV_GameSendServerCommand( int clientNum, const char *text ) {
 		}
 		SV_SendServerCommand( svs.clients + clientNum, "%s", text );	
 	}
+	Hooks_ServerCommand( clientNum, text );
 }
 
 
