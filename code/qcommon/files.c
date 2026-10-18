@@ -1064,6 +1064,16 @@ void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe
 }
 
 /*
+===========
+FS_BaseDir_Remove_HomeData
+
+===========
+*/
+void FS_BaseDir_Remove_HomeData( const char *file ) {
+	FS_Remove( FS_BaseDir_BuildOSPath( fs_homedatapath->string, file ) );
+}
+
+/*
 =================
 FS_FailWrite
 
@@ -2550,32 +2560,26 @@ static void FS_FreePak(pack_t *thepak)
 
 /*
 =================
-FS_GetZipChecksum
+FS_CompareZipChecksum
 
-Compares whether the given pak file matches a referenced checksum
+Whether the given file is a pak with the checksum given, as the server
+lists those of its referenced paks
 =================
 */
-qboolean FS_CompareZipChecksum(const char *zipfile)
+qboolean FS_CompareZipChecksum(const char *zipfile, unsigned int checksum)
 {
 	pack_t *thepak;
-	int index;
-	unsigned int checksum;
+	qboolean matches;
 
 	thepak = FS_LoadZipFile(zipfile, "");
 
 	if(!thepak)
 		return qfalse;
 
-	checksum = thepak->checksum;
+	matches = thepak->checksum == checksum;
 	FS_FreePak(thepak);
 
-	for(index = 0; index < fs_numServerReferencedPaks; index++)
-	{
-		if(checksum == fs_serverReferencedPaks[index])
-			return qtrue;
-	}
-
-	return qfalse;
+	return matches;
 }
 
 /*
@@ -3599,7 +3603,9 @@ in the current gamedir and an FS_Restart will be fired up after we download them
 
 The string is the format:
 
-@remotename@localname [repeat]
+@remotename@localname@checksum [repeat]
+
+with the checksum the server listed for the pak, in hexadecimal.
 
 static int		fs_numServerReferencedPaks;
 static int		fs_serverReferencedPaks[MAX_SEARCH_PATHS];
@@ -3675,6 +3681,9 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 					Q_strcat( neededpaks, len, fs_serverReferencedPakNames[i] );
 					Q_strcat( neededpaks, len, ".pk3" );
 				}
+
+				// The checksum the download must have
+				Q_strcat( neededpaks, len, va( "@%08x", fs_serverReferencedPaks[i] ) );
 
 				// Find out whether it might have overflowed the buffer and don't add this file to the
 				// list if that is the case.
