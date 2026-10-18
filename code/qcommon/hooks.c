@@ -35,6 +35,8 @@ static int	hooks_idleMsec = -1;
 // call into the engine say, so a signal's exit doesn't call back into code
 // it interrupted
 static volatile int	hooks_depth[MAX_ENGINE_EXTENSIONS];
+// the print hooks are running, so what they print isn't passed to them
+static qboolean	hooks_printing;
 
 /*
 ===============
@@ -92,6 +94,7 @@ An error unwound the frame, out of any hook it ended in
 */
 void Hooks_FrameAborted( void ) {
 	Com_Memset( (void *)hooks_depth, 0, sizeof( hooks_depth ) );
+	hooks_printing = qfalse;
 }
 
 /*
@@ -203,4 +206,25 @@ void Hooks_Hibernation( qboolean asleep ) {
 
 void Hooks_GameFact( const char *fact, const char *info ) {
 	HOOKS_CALL( gameFact, ( fact, info ) );
+}
+
+void Hooks_ClientCommand( int clientNum, const char *text ) {
+	HOOKS_CALL( clientCommand, ( clientNum, text ) );
+}
+
+void Hooks_ClientCommandDone( int clientNum ) {
+	HOOKS_CALL( clientCommandDone, ( clientNum ) );
+}
+
+void Hooks_ServerCommand( int clientNum, const char *text ) {
+	HOOKS_CALL( serverCommand, ( clientNum, text ) );
+}
+
+// not what a print hook prints, which would call it again
+void Hooks_Print( const char *text ) {
+	if ( hooks_activeCount && !hooks_printing ) {
+		hooks_printing = qtrue;
+		HOOKS_CALL( print, ( text ) );
+		hooks_printing = qfalse;
+	}
 }

@@ -441,6 +441,8 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 		return;
 	}
 
+	Hooks_Print( msg );
+
 #ifndef DEDICATED
 	CL_ConsolePrint( msg );
 #endif

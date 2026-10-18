@@ -108,6 +108,28 @@ typedef struct {
 	// in. What the details mean is the game's: treat each value as
 	// untrusted. A game module that never calls it reports no facts
 	void		(*gameFact)( const char *fact, const char *info );
+	// A client's command that the engine passes to the game, a bot's too:
+	// called just before the game runs it, while Cmd_Argc and Cmd_Argv
+	// hold its words as the game will read them. text is the command as
+	// the client sent it, valid only during the call. The engine's own
+	// commands (userinfo, download, disconnect) aren't passed: the hooks
+	// above report what they do
+	void		(*clientCommand)( int clientNum, const char *text );
+	// The game has run that command, which may have dropped the client.
+	// What the game sent between the two calls (serverCommand), such as a
+	// say's chat lines, answered it. An error that ends the frame inside
+	// the game skips this call
+	void		(*clientCommandDone)( int clientNum );
+	// The game sent a command to a client, or to every client when
+	// clientNum is -1: a line to print, a chat line, the scores
+	void		(*serverCommand)( int clientNum, const char *text );
+	// The program printed text: part of a line, a line or several, color
+	// codes and all, but not what a redirect captures (rcon's replies).
+	// What a print hook prints reaches no print hook. Called on the
+	// thread that printed: the main thread, except when a Windows console
+	// stops the program (shutdown, above). Every print pays for it, so
+	// keep it cheap
+	void		(*print)( const char *text );
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -137,6 +159,10 @@ void	Hooks_ServerShutdown( const char *reason );
 void	Hooks_GameFrameDone( int levelTime );
 void	Hooks_Hibernation( qboolean asleep );
 void	Hooks_GameFact( const char *fact, const char *info );
+void	Hooks_ClientCommand( int clientNum, const char *text );
+void	Hooks_ClientCommandDone( int clientNum );
+void	Hooks_ServerCommand( int clientNum, const char *text );
+void	Hooks_Print( const char *text );
 
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or
