@@ -318,13 +318,14 @@ void CL_HTTP_BeginDownload( const char *remoteURL )
 	}
 }
 
-qboolean CL_HTTP_PerformDownload(void)
+qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
 {
 	CURLMcode res;
 	CURLMsg *msg;
 	int c;
 	int i = 0;
 
+	*error = '\0';
 	res = qcurl_multi_perform(downloadCURLM, &c);
 	while(res == CURLM_CALL_MULTI_PERFORM && i < 100) {
 		res = qcurl_multi_perform(downloadCURLM, &c);
@@ -341,7 +342,7 @@ qboolean CL_HTTP_PerformDownload(void)
 
 		qcurl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
 			&code);	
-		Com_Error(ERR_DROP, "Download Error: %s Code: %ld URL: %s",
+		Com_sprintf(error, errorSize, "%s (HTTP code %ld) from %s",
 			qcurl_easy_strerror(msg->data.result),
 			code, clc.downloadURL);
 	}
