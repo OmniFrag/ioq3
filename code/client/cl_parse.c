@@ -680,14 +680,6 @@ void CL_ParseDownload ( msg_t *msg ) {
 	Cvar_SetValue( "cl_downloadCount", clc.downloadCount );
 
 	if (!size) { // A zero length block means EOF
-		if (clc.download) {
-			FS_FCloseFile( clc.download );
-			clc.download = 0;
-
-			// rename the file
-			FS_BaseDir_Rename_HomeData ( clc.downloadTempName, clc.downloadName, qfalse );
-		}
-
 		// send intentions now
 		// We need this because without it, we would hold the last nextdl and then start
 		// loading right away.  If we take a while to load, the server is happily trying
