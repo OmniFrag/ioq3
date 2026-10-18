@@ -1187,7 +1187,8 @@ void Sys_FreeFileList( char **list )
 ==================
 Sys_Sleep
 
-Block execution for msec or until input is received.
+Block execution for msec or until input is received; with stdin not a
+terminal, 10 msec at most.
 ==================
 */
 void Sys_Sleep( int msec )
@@ -1218,8 +1219,9 @@ void Sys_Sleep( int msec )
 	{
 		struct timespec req;
 
-		// With nothing to select() on, we can't wait indefinitely
-		if( msec < 0 )
+		// With nothing to select() on, we can't wait indefinitely, so
+		// poll: no longer than that, whatever the caller allows
+		if( msec < 0 || msec > 10 )
 			msec = 10;
 
 		req.tv_sec = msec/1000;

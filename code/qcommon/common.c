@@ -565,6 +565,7 @@ static void Com_FatalShutdown( const char *how ) {
 	SV_Shutdown(va("Server %s: %s", how, com_errorMessage));
 	VM_Forced_Unload_Done();
 
+	Hooks_Shutdown( va( "%s: %s", how, com_errorMessage ) );
 	Com_Shutdown ();
 }
 
@@ -736,6 +737,7 @@ void Com_Quit( char *p ) {
 		SV_Shutdown(p[0] ? p : "Server quit");
 		CL_Shutdown(p[0] ? p : "Client quit", qtrue, qtrue);
 		VM_Forced_Unload_Done();
+		Hooks_Shutdown( p[0] ? p : "Quit" );
 		Com_Shutdown ();
 		FS_Shutdown(qtrue);
 	}
@@ -4767,6 +4769,22 @@ qboolean Com_FrameDue( void ) {
 
 /*
 =================
+Com_InitExtensions
+
+Starts the engine extensions (hooks.h) after Com_Init, with abortframe set,
+so that an error one raises as it starts stops the program, as one in
+Com_Init does, rather than unwind into Com_Init's frame, which is gone
+=================
+*/
+void Com_InitExtensions( void ) {
+	if ( setjmp (abortframe) ) {
+		Sys_Error( "Error starting the engine extensions" );
+	}
+	Hooks_Init();
+}
+
+/*
+=================
 Com_WaitFrame
 
 Sleeps toward the next frame, and returns whether it's due. The main loop
@@ -4784,6 +4802,7 @@ qboolean Com_WaitFrame( void ) {
 
 	if ( setjmp (abortframe) ) {
 		Cmd_EndRestricted();
+		Hooks_FrameAborted();
 		return qtrue;	// an ERR_DROP was thrown; the next frame shows it
 	}
 
@@ -4850,6 +4869,7 @@ void Com_Frame( void ) {
 
 	if ( setjmp (abortframe) ) {
 		Cmd_EndRestricted();
+		Hooks_FrameAborted();
 		return;			// an ERR_DROP was thrown
 	}
 
@@ -5006,6 +5026,9 @@ void Com_Frame( void ) {
 	}
 
 	Com_ReadFromPipe( );
+
+	// the extensions linked in (hooks.h)
+	Hooks_Frame( );
 
 	// a log compressed on its own thread
 	Log_Frame();

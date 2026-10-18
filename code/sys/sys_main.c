@@ -1039,6 +1039,10 @@ void Sys_SigHandler( int signal )
 #endif
 		SV_Shutdown(va("Received signal %d", signal) );
 		VM_Forced_Unload_Done();
+		// a stop that was asked for, not a crash, whose heap may be
+		// broken (hooks.h)
+		if( !crashed )
+			Hooks_Shutdown( va( "Received signal %d", signal ) );
 	}
 
 	// a stop that was asked for succeeds, so that service managers can tell
@@ -1175,6 +1179,12 @@ static void Sys_Start( int argc, char **argv )
 		Sys_InitPIDFile( FS_GetCurrentGameDir( ) );
 		Com_OpenPipeFile( );
 	}
+
+	// the extensions linked in (hooks.h), once the network is up and a
+	// dedicated server's port is its own; --check, which only reports,
+	// starts none
+	if( !com_check )
+		Com_InitExtensions( );
 
 #ifdef USE_PROTOCOL_REGISTRATION
 	{

@@ -1627,9 +1627,10 @@ void SV_Frame( int msec ) {
 
 #ifdef DEDICATED
 		// Block until something interesting happens, unless commands wait
-		// to run, a config's after a wait, say
+		// to run, a config's after a wait, say, or an extension wants
+		// its next frame sooner (hooks.h)
 		if ( Cbuf_Empty() )
-			Sys_Sleep(-1);
+			Sys_Sleep( Hooks_IdleMsec() );
 #endif
 
 		return;

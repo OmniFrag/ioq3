@@ -138,15 +138,19 @@ include(client)
 include(basegame)
 include(missionpack)
 
-# Game code kept outside this source tree, e.g. by a parent project
-foreach(GAME_DIRECTORY IN LISTS EXTRA_GAME_DIRECTORIES)
+# Game code and engine extensions kept outside this source tree, e.g. by a
+# parent project; an extension links itself in with add_engine_extension()
+# (code/qcommon/hooks.h)
+include(utils/engine_extension)
+foreach(EXTRA_DIRECTORY IN LISTS EXTRA_GAME_DIRECTORIES EXTRA_ENGINE_DIRECTORIES)
     # Normalize first so a trailing slash still yields a name
-    get_filename_component(GAME_DIRECTORY ${GAME_DIRECTORY} ABSOLUTE)
-    get_filename_component(GAME_DIRECTORY_NAME ${GAME_DIRECTORY} NAME)
-    add_subdirectory(${GAME_DIRECTORY} ${CMAKE_BINARY_DIR}/${GAME_DIRECTORY_NAME})
+    get_filename_component(EXTRA_DIRECTORY ${EXTRA_DIRECTORY} ABSOLUTE)
+    get_filename_component(EXTRA_DIRECTORY_NAME ${EXTRA_DIRECTORY} NAME)
+    add_subdirectory(${EXTRA_DIRECTORY} ${CMAKE_BINARY_DIR}/${EXTRA_DIRECTORY_NAME})
 endforeach()
 
 include(linked_game_modules)
+include(engine_extensions)
 
 include(post_configure)
 include(installer)
