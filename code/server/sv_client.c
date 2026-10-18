@@ -518,6 +518,9 @@ void SV_DirectConnect( netadr_t from ) {
 			newcl = cl;
 
 			if ( newcl->state >= CS_CONNECTED ) {
+				// the old connection leaves, though nobody is told
+				Hooks_ClientDropped( newcl - svs.clients, "reconnected" );
+
 				// disconnect the client from the game first so any flags the
 				// player might have are dropped, and the game doesn't keep
 				// the player if it refuses the connect
@@ -659,6 +662,8 @@ gotnewcl:
 	// gamestate message was not just sent, forcing a retransmit
 	newcl->gamestateMessageNum = -1;
 
+	Hooks_ClientConnected( clientNum );
+
 	// if this was the first client on the server, or the last client
 	// the server can hold, send a heartbeat to the master.
 	count = 0;
@@ -716,6 +721,8 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	if ( drop->state == CS_ZOMBIE ) {
 		return;		// already dropped
 	}
+
+	Hooks_ClientDropped( drop - svs.clients, reason );
 
 	if ( !isBot ) {
 		// see if we already have a challenge for this ip
@@ -1014,6 +1021,7 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 
 	// call the game begin function
 	VM_Call( gvm, GAME_CLIENT_BEGIN, client - svs.clients );
+	Hooks_ClientBegin( clientNum );
 }
 
 /*
@@ -1767,6 +1775,8 @@ static void SV_UpdateUserinfo_f( client_t *cl ) {
 	SV_UserinfoChanged( cl );
 	// call prog code to allow overrides
 	VM_Call( gvm, GAME_CLIENT_USERINFO_CHANGED, cl - svs.clients );
+	// as the game has it now
+	Hooks_ClientUserinfoChanged( cl - svs.clients );
 }
 
 

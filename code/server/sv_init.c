@@ -184,6 +184,7 @@ void SV_SetUserinfo( int index, const char *val ) {
 
 	Q_strncpyz( svs.clients[index].userinfo, val, sizeof( svs.clients[ index ].userinfo ) );
 	Q_strncpyz( svs.clients[index].name, Info_ValueForKey( val, "name" ), sizeof(svs.clients[index].name) );
+	Hooks_ClientUserinfoChanged( index );
 }
 
 
@@ -946,6 +947,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 					client->lastSnapshotTime = 0;	// generate a snapshot immediately
 
 					VM_Call( gvm, GAME_CLIENT_BEGIN, i );
+					Hooks_ClientBegin( i );
 				}
 			}
 		}
@@ -1012,6 +1014,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 #endif
 
 	SV_CheckRconPassword();
+
+	Hooks_MapSpawned();
 
 	Com_Printf ("-----------------------------------\n");
 }
@@ -1434,6 +1438,12 @@ void SV_Shutdown( char *finalmsg ) {
 	}
 
 	Com_Printf( "----- Server Shutdown (%s) -----\n", finalmsg );
+
+	// the hibernation ends with the server, which clears it below
+	if ( svs.hibernation == HIBERNATE_ASLEEP ) {
+		Hooks_Hibernation( qfalse );
+	}
+	Hooks_ServerShutdown( finalmsg );
 
 	NET_LeaveMulticast6();
 

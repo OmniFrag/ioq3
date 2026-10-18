@@ -55,12 +55,51 @@ typedef struct {
 
 	// Once, as the program exits: on quit, a fatal error, or SIGTERM or
 	// SIGINT. reason says why, as the server tells its players. The
-	// network is still up. Not called on an extension whose own frame the
-	// exit interrupts (a signal), since its state may be half changed.
-	// On Windows a console's Ctrl-C or close stops the program from the
-	// console's own thread, which calls this while the main thread may
-	// still run a frame.
+	// network is still up. Not called on an extension whose own hook the
+	// exit interrupts (a signal, or a quit the hook asks for), since its
+	// state may be half changed. On Windows a console's Ctrl-C or close
+	// stops the program from the console's own thread, which calls this
+	// and serverShutdown while the main thread may still run a frame.
 	void		(*shutdown)( const char *reason );
+
+	// What the server does, dedicated or a listen server's, each called
+	// once it has happened. clientNum runs from 0 to sv_maxclients - 1,
+	// and the SV_Ext* accessors below read the client's details.
+
+	// A client took a slot: a player the game let in, or a bot the game
+	// added, whose userinfo, and so its name, the game sets right after
+	void		(*clientConnected)( int clientNum );
+	// A player entered the game, having loaded the map; and each bot
+	// after a map change; and every client again on map_restart, before
+	// mapRestarted, one still loading the map too. A bot the game adds
+	// plays from the start
+	void		(*clientBegin)( int clientNum );
+	// A client's userinfo changed, its name with it, as the player sent
+	// it or the game set it
+	void		(*clientUserinfoChanged)( int clientNum );
+	// A client is leaving: called while its slot still holds it, before
+	// the game hears of it. reason is what the client and everyone are
+	// told: "disconnected" when it left, "timed out", "was kicked", the
+	// game's own reason or a fault's; "" for bots the game type's change
+	// removes, NULL when nobody is told, "reconnected" for a client whose
+	// new connection from the same address takes its slot, and "refused
+	// by the game" for a bot the game added but then freed
+	void		(*clientDropped)( int clientNum, const char *reason );
+
+	// A map loaded, and its game started with the clients still connected
+	void		(*mapSpawned)( void );
+	// map_restart restarted the map's game, with every client
+	void		(*mapRestarted)( void );
+	// The server is stopping its map, its clients still in their slots:
+	// a map that ended in an error (com_errorEntered is set), killserver,
+	// or the program's exit. reason is what the clients are told
+	void		(*serverShutdown)( const char *reason );
+	// The game ran its frames for this server frame, up to levelTime
+	void		(*gameFrameDone)( int levelTime );
+	// A dedicated server with nobody playing froze its game (qtrue), or a
+	// player, a map or an admin woke it, or it stopped asleep, just before
+	// serverShutdown (qfalse)
+	void		(*hibernation)( qboolean asleep );
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -74,8 +113,46 @@ void	Hooks_Frame( void );
 // an ERR_DROP ended the frame, in a hook perhaps
 void	Hooks_FrameAborted( void );
 void	Hooks_Shutdown( const char *reason );
+// a signal stops the program: before the server shuts down
+void	Hooks_Signal( qboolean crashed );
 // the longest a dedicated server with no map may wait, as the extensions
 // asked in their last frames: -1 for no limit
 int	Hooks_IdleMsec( void );
+
+void	Hooks_ClientConnected( int clientNum );
+void	Hooks_ClientBegin( int clientNum );
+void	Hooks_ClientUserinfoChanged( int clientNum );
+void	Hooks_ClientDropped( int clientNum, const char *reason );
+void	Hooks_MapSpawned( void );
+void	Hooks_MapRestarted( void );
+void	Hooks_ServerShutdown( const char *reason );
+void	Hooks_GameFrameDone( int levelTime );
+void	Hooks_Hibernation( qboolean asleep );
+
+// A client of the server, for extensions (server/sv_main.c, sv_game.c).
+// Each gives its "none" for a number out of range, a slot nobody holds or
+// one whose client has just left, and while no map runs.
+typedef enum {
+	EXT_CLIENT_FREE,		// nobody
+	EXT_CLIENT_CONNECTED,		// connected, loading the map
+	EXT_CLIENT_ACTIVE		// in the game
+} extClientState_t;
+
+extClientState_t	SV_ExtClientState( int clientNum );
+// the name its userinfo gives, color codes and all; "" for none
+const char	*SV_ExtClientName( int clientNum );
+// its IP address, without the port: "localhost" for the server's own
+// machine, "bot" for a bot, "" for none; NET_AdrToString's buffer, which
+// its next call, this one's too, overwrites
+const char	*SV_ExtClientAddress( int clientNum );
+qboolean	SV_ExtClientIsBot( int clientNum );
+// its ping in milliseconds, as status and getstatus give it; 999 while it
+// loads the map, 0 for a bot or none
+int		SV_ExtClientPing( int clientNum );
+// its score as getstatus reads it, the game's PERS_SCORE, which every mod
+// keeps for server browsers; qfalse with no game running. A bot's, in
+// clientConnected and the userinfo change the game makes right after, is
+// still the slot's last client's: the game sets the bot up after both
+qboolean	SV_ExtClientScore( int clientNum, int *score );
 
 #endif
