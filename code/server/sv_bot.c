@@ -59,6 +59,9 @@ int SV_BotAllocateClient(void) {
 	cl->lastPacketTime = svs.time;
 	cl->netchan.remoteAddress.type = NA_BOT;
 	cl->rate = 16384;
+	// a bot never negotiates, whoever had the slot before
+	cl->ofx = 0;
+	cl->contentKey = 0;
 
 	Hooks_ClientConnected( i );
 	return i;

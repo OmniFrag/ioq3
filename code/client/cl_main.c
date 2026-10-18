@@ -2763,6 +2763,7 @@ void CL_CheckForResend( void ) {
 	int		port;
 	char	info[MAX_INFO_STRING];
 	char	data[MAX_INFO_STRING + 10];
+	char	tokens[EXT_MAX_STRING];
 
 	// don't send anything if playing back a demo
 	if ( clc.demoplaying ) {
@@ -2792,8 +2793,13 @@ void CL_CheckForResend( void ) {
 
 		// The challenge request shall be followed by a client challenge so no malicious server can hijack this connection.
 		// Add the gamename so the server knows we're running the correct game or can reject the client
-		// with a meaningful message
-		Com_sprintf(data, sizeof(data), "getchallenge %d %s", clc.challenge, com_gamename->string);
+		// with a meaningful message, then the extensions this client has, which classic servers don't read.
+		// Without a game name the tokens would be read as one, so none are sent
+		tokens[0] = '\0';
+		if ( *com_gamename->string ) {
+			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", OFX_BUILD ) );
+		}
+		Com_sprintf(data, sizeof(data), "getchallenge %d %s%s", clc.challenge, com_gamename->string, tokens);
 
 		NET_OutOfBandPrint(NS_CLIENT, clc.serverAddress, "%s", data);
 		break;
@@ -3048,6 +3054,31 @@ static qboolean CL_RefusalEnds( netadr_t from, const char *message ) {
 
 /*
 =================
+CL_ServerExtensions
+
+The extension bits a server's tokens, the command's arguments from
+firstArg on, agree to; 0 when they agree to none. With key, they must also
+carry the connection's content key, which goes there. Malformed tokens, or
+bits this client never asked for, and the connection is classic
+=================
+*/
+static uint32_t CL_ServerExtensions( int firstArg, uint64_t *key ) {
+	const char	*error;
+	uint32_t	bits;
+
+	error = Com_ParseExtensionBitsAndKey( Cmd_ArgsFrom( firstArg ), &bits, key );
+	if ( !error && ( bits & ~OFX_BUILD ) ) {
+		error = "ofx bits this client never asked for";
+	}
+	if ( error ) {
+		Com_DPrintf( "Ignored the server's extension tokens: %s\n", error );
+		return 0;
+	}
+	return bits;
+}
+
+/*
+=================
 CL_ConnectionlessPacket
 
 Responses to broadcasts, etc
@@ -3140,6 +3171,13 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			}
 		}
 
+		// the extensions agreed, after the protocol; never with the legacy one
+		clc.ofx = 0;
+#ifdef LEGACY_PROTOCOL
+		if ( !clc.compat )
+#endif
+			clc.ofx = CL_ServerExtensions( 4, NULL );
+
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
 		clc.state = CA_CHALLENGING;
@@ -3155,6 +3193,9 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 	// server connection
 	if ( !Q_stricmp(c, "connectResponse") ) {
+		uint32_t	ofx;
+		uint64_t	key = 0;
+
 		if ( clc.state >= CA_CONNECTED ) {
 			Com_Printf ("Dup connect received. Ignored.\n");
 			return;
@@ -3187,7 +3228,23 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 				Com_Printf("ConnectResponse with bad challenge received. Ignored.\n");
 				return;
 			}
+
+			// the extensions agreed on challengeResponse, confirmed with
+			// the connection's content key
+			ofx = CL_ServerExtensions( 2, &key );
+			if ( ofx != clc.ofx ) {
+				Com_DPrintf( "Ignored the server's extension tokens: ofx %x after %x\n", ofx, clc.ofx );
+				clc.ofx = 0;
+			} else if ( ofx ) {
+				clc.contentKey = key;
+			}
 		}
+#ifdef LEGACY_PROTOCOL
+		else {
+			clc.ofx = 0;
+		}
+#endif
+		Com_DPrintf( "connectResponse: extensions %x\n", clc.ofx );
 
 #ifdef LEGACY_PROTOCOL
 		Netchan_Setup(NS_CLIENT, &clc.netchan, from, Cvar_VariableValue("net_qport"),
