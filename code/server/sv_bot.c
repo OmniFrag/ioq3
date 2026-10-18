@@ -60,6 +60,7 @@ int SV_BotAllocateClient(void) {
 	cl->netchan.remoteAddress.type = NA_BOT;
 	cl->rate = 16384;
 
+	Hooks_ClientConnected( i );
 	return i;
 }
 
