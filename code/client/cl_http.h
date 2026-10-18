@@ -30,5 +30,6 @@ qboolean CL_HTTP_Available( void );
 void CL_HTTP_Shutdown( void );
 void CL_HTTP_BeginDownload( const char *remoteURL );
 qboolean CL_HTTP_PerformDownload( void );
+void CL_HTTP_CancelDownload( void );
 
 #endif	// __CL_HTTP_H__
