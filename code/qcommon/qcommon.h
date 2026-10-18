@@ -1019,7 +1019,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 
 char	*FS_BaseDir_BuildOSPath( const char *base, const char *qpath );
 char	*FS_BuildOSPath( const char *base, const char *game, const char *qpath );
-qboolean FS_CompareZipChecksum(const char *zipfile);
+qboolean FS_CompareZipChecksum(const char *zipfile, unsigned int checksum);
 
 int		FS_LoadStack( void );
 
@@ -1072,6 +1072,7 @@ long		FS_ReadUncopiedConfig( const char *filename, void **buffer, char *ospath, 
 const char	*FS_LoadedGameDir( void );
 // the game directory loaded, which fs_game names before a restart loads it
 void	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
+void	FS_BaseDir_Remove_HomeData( const char *file );
 long		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE );
 // if uniqueFILE is true, then a new FILE will be fopened even if the file
 // is found in an already open pak file.  If uniqueFILE is false, you must call

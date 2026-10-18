@@ -201,6 +201,7 @@ typedef struct {
 	fileHandle_t download;
 	char		downloadTempName[MAX_OSPATH];
 	char		downloadName[MAX_OSPATH];
+	unsigned int	downloadChecksum;	// the server's checksum for the pak downloading
 #ifdef USE_HTTP
 	qboolean	httpUsed;
 	qboolean	disconnectedForHttpDownload;

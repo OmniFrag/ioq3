@@ -2284,8 +2284,9 @@ void CL_DownloadsComplete( void ) {
 CL_InitDownload
 =================
 */
-static void CL_InitDownload( const char *localName ) {
+static void CL_InitDownload( const char *localName, unsigned int checksum ) {
 	Q_strncpyz ( clc.downloadName, localName, sizeof(clc.downloadName) );
+	clc.downloadChecksum = checksum;
 	Com_sprintf( clc.downloadTempName, sizeof(clc.downloadTempName), "%s.tmp", localName );
 
 	// Set so UI gets access to it
@@ -2358,16 +2359,27 @@ A download completed or failed
 void CL_NextDownload(void)
 {
 	char *s;
-	char *remoteName, *localName;
+	char *remoteName, *localName, *checksum;
 	qboolean usedHTTP = qfalse;
 
-	// A download has finished, check whether this matches a referenced checksum
+	// A download has finished: keep it only if it's the pak the server
+	// listed, checked before it takes the pak's name
 	if(*clc.downloadName)
 	{
-		char *zippath = FS_BaseDir_BuildOSPath(Cvar_VariableString("fs_homedatapath"), clc.downloadName);
+		char *zippath = FS_BaseDir_BuildOSPath(Cvar_VariableString("fs_homedatapath"), clc.downloadTempName);
 
-		if(!FS_CompareZipChecksum(zippath))
+		if(clc.download) {
+			FS_FCloseFile(clc.download);
+			clc.download = 0;
+		}
+
+		if(!FS_CompareZipChecksum(zippath, clc.downloadChecksum)) {
+			FS_BaseDir_Remove_HomeData(clc.downloadTempName);
 			Com_Error(ERR_DROP, "Incorrect checksum for file: %s", clc.downloadName);
+		}
+
+		FS_BaseDir_Rename_HomeData(clc.downloadTempName, clc.downloadName, qfalse);
+		clc.downloadRestart = qtrue;
 	}
 
 	*clc.downloadTempName = *clc.downloadName = 0;
@@ -2378,7 +2390,7 @@ void CL_NextDownload(void)
 		s = clc.downloadList;
 
 		// format is:
-		//  @remotename@localname@remotename@localname, etc.
+		//  @remotename@localname@checksum@remotename@localname@checksum, etc.
 
 		if (*s == '@')
 			s++;
@@ -2391,10 +2403,17 @@ void CL_NextDownload(void)
 
 		*s++ = 0;
 		localName = s;
+		if ( (s = strchr(s, '@')) == NULL ) {
+			CL_DownloadsComplete();
+			return;
+		}
+
+		*s++ = 0;
+		checksum = s;
 		if ( (s = strchr(s, '@')) != NULL )
 			*s++ = 0;
 		else
-			s = localName + strlen(localName); // point at the nul byte
+			s = checksum + strlen(checksum); // point at the nul byte
 #ifdef USE_HTTP
 		if(!(cl_allowDownload->integer & DLF_NO_REDIRECT)) {
 			if(clc.sv_allowDownload & DLF_NO_REDIRECT) {
@@ -2409,7 +2428,7 @@ void CL_NextDownload(void)
 					"have sv_dlURL set\n");
 			}
 			else if(CL_HTTP_Available()) {
-				CL_InitDownload(localName);
+				CL_InitDownload(localName, strtoul(checksum, NULL, 16));
 				CL_BeginHttpDownload(va("%s/%s",
 					clc.sv_dlURL, remoteName));
 
@@ -2432,11 +2451,10 @@ void CL_NextDownload(void)
 				return;	
 			}
 			else {
-				CL_InitDownload( localName );
+				CL_InitDownload( localName, strtoul( checksum, NULL, 16 ) );
 				CL_BeginDownload( remoteName );
 			}
 		}
-		clc.downloadRestart = qtrue;
 
 		// move over the rest
 		memmove( clc.downloadList, s, strlen(s) + 1);
@@ -3174,13 +3192,6 @@ void CL_Frame ( int msec ) {
 		qboolean finished = CL_HTTP_PerformDownload();
 
 		if(finished) {
-			if(clc.download) {
-				FS_FCloseFile(clc.download);
-				clc.download = 0;
-			}
-
-			FS_BaseDir_Rename_HomeData(clc.downloadTempName, clc.downloadName, qfalse);
-			clc.downloadRestart = qtrue;
 			CL_NextDownload();
 		}
 
