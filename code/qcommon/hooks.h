@@ -100,6 +100,14 @@ typedef struct {
 	// player, a map or an admin woke it, or it stopped asleep, just before
 	// serverShutdown (qfalse)
 	void		(*hibernation)( qboolean asleep );
+	// The game module reported a fact through trap_GameFact (qcommon.h's
+	// COM_TRAP_GAMEFACT): its name, 1 to 15 lowercase letters, and an info
+	// string of its details, which passed Info_Validate. Called as the
+	// game makes the call, from its init, its frames or a client's
+	// command, so before the hooks above tell of the load or frame it came
+	// in. What the details mean is the game's: treat each value as
+	// untrusted. A game module that never calls it reports no facts
+	void		(*gameFact)( const char *fact, const char *info );
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -128,6 +136,7 @@ void	Hooks_MapRestarted( void );
 void	Hooks_ServerShutdown( const char *reason );
 void	Hooks_GameFrameDone( int levelTime );
 void	Hooks_Hibernation( qboolean asleep );
+void	Hooks_GameFact( const char *fact, const char *info );
 
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or
