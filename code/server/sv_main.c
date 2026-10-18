@@ -1471,6 +1471,69 @@ int SV_HumanCount( void ) {
 
 /*
 ==================
+SV_ExtClient
+
+A client, for the accessors extensions read (qcommon/hooks.h): NULL for a
+number out of range, a slot nobody holds or whose client has just left,
+and while no map runs
+==================
+*/
+static client_t *SV_ExtClient( int clientNum ) {
+	if ( !svs.clients || clientNum < 0 || clientNum >= sv_maxclients->integer ||
+		svs.clients[clientNum].state < CS_CONNECTED ) {
+		return NULL;
+	}
+	return &svs.clients[clientNum];
+}
+
+extClientState_t SV_ExtClientState( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	if ( !cl ) {
+		return EXT_CLIENT_FREE;
+	}
+	return cl->state == CS_ACTIVE ? EXT_CLIENT_ACTIVE : EXT_CLIENT_CONNECTED;
+}
+
+const char *SV_ExtClientName( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	return cl ? cl->name : "";
+}
+
+const char *SV_ExtClientAddress( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	if ( !cl ) {
+		return "";
+	}
+	// as the userinfo's ip key has it (SV_UserinfoChanged); NET_AdrToString
+	// gives "bot" for a bot
+	if ( NET_IsLocalAddress( cl->netchan.remoteAddress ) ) {
+		return "localhost";
+	}
+	return NET_AdrToString( cl->netchan.remoteAddress );
+}
+
+qboolean SV_ExtClientIsBot( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	return cl && cl->netchan.remoteAddress.type == NA_BOT;
+}
+
+int SV_ExtClientPing( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	// as SV_CalcPings sets it, which it may not have yet for a client that
+	// has just connected, or a bot the game hasn't connected yet
+	if ( !cl || cl->netchan.remoteAddress.type == NA_BOT ) {
+		return 0;
+	}
+	return cl->state == CS_ACTIVE ? cl->ping : 999;
+}
+
+/*
+==================
 SV_KeepAwake
 
 A dedicated server keeps its system from sleeping while people play on
@@ -1544,6 +1607,7 @@ void SV_Wake( const char *why ) {
 	if ( svs.hibernation == HIBERNATE_ASLEEP ) {
 		svs.hibernation = HIBERNATE_WAKING;
 		Com_Printf( "Waking from hibernation: %s\n", why );
+		Hooks_Hibernation( qfalse );
 	}
 }
 
@@ -1584,6 +1648,7 @@ static qboolean SV_Hibernate( void ) {
 		svs.hibernation = HIBERNATE_ASLEEP;
 		Com_Printf( "Hibernating: no players for %g seconds, so the game is frozen until one connects\n",
 			sv_hibernateTime->integer / 1000.0 );
+		Hooks_Hibernation( qtrue );
 	}
 	return qfalse;
 }
@@ -1600,6 +1665,7 @@ void SV_Frame( int msec ) {
 	int		frameMsec;
 	int		startTime;
 	qboolean	frozen;
+	qboolean	ran = qfalse;
 
 	// the menu kills the server with this cvar
 	if ( sv_killserver->integer ) {
@@ -1721,6 +1787,10 @@ void SV_Frame( int msec ) {
 
 		// let everything in the world think and move
 		VM_Call (gvm, GAME_RUN_FRAME, sv.time);
+		ran = qtrue;
+	}
+	if ( ran ) {
+		Hooks_GameFrameDone( sv.time );
 	}
 
 	if ( com_speeds->integer ) {

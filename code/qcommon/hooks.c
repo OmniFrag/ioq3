@@ -31,9 +31,10 @@ static qboolean	hooks_active[MAX_ENGINE_EXTENSIONS];
 // 0 before init and after shutdown, when no hook runs
 static int	hooks_activeCount;
 static int	hooks_idleMsec = -1;
-// 1 + the index of the extension whose frame runs, so a signal's exit
-// doesn't call back into code it interrupted
-static volatile int	hooks_inFrame;
+// how many of each extension's hooks are running, one inside another's
+// call into the engine say, so a signal's exit doesn't call back into code
+// it interrupted
+static volatile int	hooks_depth[MAX_ENGINE_EXTENSIONS];
 
 /*
 ===============
@@ -72,9 +73,9 @@ void Hooks_Frame( void ) {
 	}
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		if ( hooks_active[i] && engineExtensions[i]->frame ) {
-			hooks_inFrame = i + 1;
+			hooks_depth[i]++;
 			msec = engineExtensions[i]->frame();
-			hooks_inFrame = 0;
+			hooks_depth[i]--;
 			if ( msec >= 0 && ( hooks_idleMsec < 0 || msec < hooks_idleMsec ) ) {
 				hooks_idleMsec = msec;
 			}
@@ -90,7 +91,26 @@ An error unwound the frame, out of any hook it ended in
 ===============
 */
 void Hooks_FrameAborted( void ) {
-	hooks_inFrame = 0;
+	Com_Memset( (void *)hooks_depth, 0, sizeof( hooks_depth ) );
+}
+
+/*
+===============
+Hooks_Signal
+
+A signal stops the program: an extension it interrupted gets no more
+calls, since its state may be half changed, and after a crash, whose heap
+may be broken, no extension does
+===============
+*/
+void Hooks_Signal( qboolean crashed ) {
+	int	i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( crashed || hooks_depth[i] ) {
+			hooks_active[i] = qfalse;
+		}
+	}
 }
 
 /*
@@ -107,7 +127,8 @@ void Hooks_Shutdown( const char *reason ) {
 	hooks_activeCount = 0;
 	hooks_idleMsec = -1;
 	for ( i = 0; engineExtensions[i]; i++ ) {
-		if ( hooks_active[i] && engineExtensions[i]->shutdown && hooks_inFrame != i + 1 ) {
+		// not into one whose own hook is quitting
+		if ( hooks_active[i] && engineExtensions[i]->shutdown && !hooks_depth[i] ) {
 			engineExtensions[i]->shutdown( reason );
 		}
 	}
@@ -120,4 +141,62 @@ Hooks_IdleMsec
 */
 int Hooks_IdleMsec( void ) {
 	return hooks_idleMsec;
+}
+
+// calls hook, with its arguments in parentheses, on each active extension
+// that has it
+#define HOOKS_CALL( hook, args ) do { \
+		int	hook_i; \
+		if ( hooks_activeCount ) { \
+			for ( hook_i = 0; engineExtensions[hook_i]; hook_i++ ) { \
+				if ( hooks_active[hook_i] && engineExtensions[hook_i]->hook ) { \
+					hooks_depth[hook_i]++; \
+					engineExtensions[hook_i]->hook args; \
+					hooks_depth[hook_i]--; \
+				} \
+			} \
+		} \
+	} while ( 0 )
+
+void Hooks_ClientConnected( int clientNum ) {
+	HOOKS_CALL( clientConnected, ( clientNum ) );
+}
+
+void Hooks_ClientBegin( int clientNum ) {
+	HOOKS_CALL( clientBegin, ( clientNum ) );
+}
+
+// not for a slot nobody holds, as a dropped client's userinfo is cleared
+void Hooks_ClientUserinfoChanged( int clientNum ) {
+	if ( SV_ExtClientState( clientNum ) != EXT_CLIENT_FREE ) {
+		HOOKS_CALL( clientUserinfoChanged, ( clientNum ) );
+	}
+}
+
+// not for a slot nobody holds: a client still connecting was never
+// reported connected, and one the game dropped has gone already
+void Hooks_ClientDropped( int clientNum, const char *reason ) {
+	if ( SV_ExtClientState( clientNum ) != EXT_CLIENT_FREE ) {
+		HOOKS_CALL( clientDropped, ( clientNum, reason ) );
+	}
+}
+
+void Hooks_MapSpawned( void ) {
+	HOOKS_CALL( mapSpawned, () );
+}
+
+void Hooks_MapRestarted( void ) {
+	HOOKS_CALL( mapRestarted, () );
+}
+
+void Hooks_ServerShutdown( const char *reason ) {
+	HOOKS_CALL( serverShutdown, ( reason ) );
+}
+
+void Hooks_GameFrameDone( int levelTime ) {
+	HOOKS_CALL( gameFrameDone, ( levelTime ) );
+}
+
+void Hooks_Hibernation( qboolean asleep ) {
+	HOOKS_CALL( hibernation, ( asleep ) );
 }

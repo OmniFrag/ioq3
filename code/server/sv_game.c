@@ -74,6 +74,23 @@ playerState_t *SV_GameClientNum( int num ) {
 	return ps;
 }
 
+/*
+===============
+SV_ExtClientScore
+
+A client's score as getstatus reads it, for extensions (qcommon/hooks.h):
+qfalse for none, and while no game runs, as a map loads say
+===============
+*/
+qboolean SV_ExtClientScore( int clientNum, int *score ) {
+	if ( SV_ExtClientState( clientNum ) == EXT_CLIENT_FREE || clientNum >= sv_numGameClients ||
+		!sv.gameClients ) {
+		return qfalse;
+	}
+	*score = SV_GameClientNum( clientNum )->persistant[PERS_SCORE];
+	return qtrue;
+}
+
 svEntity_t	*SV_SvEntityForGentity( sharedEntity_t *gEnt ) {
 	if ( !gEnt || gEnt->s.number < 0 || gEnt->s.number >= MAX_GENTITIES ) {
 		Com_Error( ERR_DROP, "SV_SvEntityForGentity: bad gEnt" );
@@ -667,6 +684,8 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case G_BOT_ALLOCATE_CLIENT:
 		return SV_BotAllocateClient();
 	case G_BOT_FREE_CLIENT:
+		// a bot the game refused as it added it; SV_DropClient frees the others
+		Hooks_ClientDropped( VMV_CLIENT( 1 ), "refused by the game" );
 		SV_BotFreeClient( VMV_CLIENT( 1 ) );
 		return 0;
 
