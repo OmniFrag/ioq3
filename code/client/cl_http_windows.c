@@ -156,7 +156,22 @@ qboolean CL_HTTP_PerformDownload(void)
     }
 
     InternetCloseHandle(hUrl);
+    hUrl = NULL;
     return qtrue;
+}
+
+/*
+=================
+CL_HTTP_CancelDownload
+=================
+*/
+void CL_HTTP_CancelDownload(void)
+{
+    if (hUrl)
+    {
+        InternetCloseHandle(hUrl);
+        hUrl = NULL;
+    }
 }
 
 #endif /* USE_HTTP */
