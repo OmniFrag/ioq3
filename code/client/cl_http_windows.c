@@ -24,6 +24,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "client.h"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <wininet.h>
 
@@ -31,9 +33,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // thread of its own, which hands what it reads to the game's frame through
 // a buffer. A download that's stopped is left to its thread, which frees it
 // once its blocked call returns; closing its session ends that call early.
+//
+// The thread follows redirects itself, up to HTTP_MAX_REDIRECTS, checking
+// each URL's scheme and the addresses its host resolves to by the client's
+// rule (NET_AdrReachableFrom), and then the address WinINet connected to,
+// which its status callback reports. WinINet resolves the name again
+// itself, so a name that changes its address in between (DNS rebinding)
+// can reach a refused address. The request has been sent by then, but its
+// answer is never read.
 
 #define HTTP_BUFFER_SIZE	( 1024 * 1024 )	// read and not yet written
 #define HTTP_CHUNK_SIZE		( 64 * 1024 )	// one read's most
+#define HTTP_MAX_REDIRECTS	5
 
 typedef struct {
     LONG                refs;   // the frame's and the thread's
@@ -48,6 +59,8 @@ typedef struct {
     // the thread's own
     char                url[MAX_STRING_CHARS];
     char                headers[128];
+    netScope_t          serverScope;    // the network the server is on
+    char                refused[NI_MAXHOST + 128];  // why an address connected to isn't allowed
     byte                chunk[HTTP_CHUNK_SIZE];
 } httpDownload_t;
 
@@ -97,39 +110,219 @@ static Q_PRINTF_FUNC(2, 3) void CL_HTTP_Fail(httpDownload_t *d, const char *fmt,
 
 /*
 =================
+CL_HTTP_AddressAllowed
+
+On the thread: whether an address may be fetched from, with the server's
+network as it was when the download began. text gets the address
+=================
+*/
+static qboolean CL_HTTP_AddressAllowed(const httpDownload_t *d, const struct sockaddr *sa, size_t length,
+                                       char *text, int size)
+{
+    netadr_t adr;
+
+    // not NET_AdrToString, whose buffer the frame shares
+    if (getnameinfo(sa, (socklen_t)length, text, size, NULL, 0, NI_NUMERICHOST) != 0)
+        Q_strncpyz(text, "an address", size);
+
+    return NET_SockaddrToAdr(sa, length, &adr) && NET_AdrReachableFrom(&adr, d->serverScope);
+}
+
+/*
+=================
+CL_HTTP_Status
+
+WinINet's status callback, on the thread: notes an address connected to
+that isn't allowed. The address comes as a SOCKADDR, as the documentation
+has it, or as a string
+=================
+*/
+static void CALLBACK CL_HTTP_Status(HINTERNET handle, DWORD_PTR context, DWORD status, LPVOID info, DWORD length)
+{
+    httpDownload_t *d = (httpDownload_t *)context;
+    const struct sockaddr *sa = info;
+    struct addrinfo hints, *numeric = NULL;
+    char text[NI_MAXHOST], string[NI_MAXHOST], *address = string, *end;
+
+    if (!d || status != INTERNET_STATUS_CONNECTED_TO_SERVER || !info || length < 2)
+        return;
+
+    // a SOCKADDR may come in a larger SOCKADDR_STORAGE
+    if (!(sa->sa_family == AF_INET && length >= sizeof(struct sockaddr_in)) &&
+        !(sa->sa_family == AF_INET6 && length >= sizeof(struct sockaddr_in6)))
+    {
+        // a string, with or without its nul in the length given; one that
+        // isn't an address is refused, rather than left unchecked
+        Q_strncpyz(string, info, length < sizeof(string) ? length + 1 : sizeof(string));
+        // an IPv6 address may come in brackets
+        if (string[0] == '[' && (end = strchr(string, ']')) != NULL)
+        {
+            *end = '\0';
+            address = string + 1;
+        }
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_flags = AI_NUMERICHOST;
+        if (getaddrinfo(address, NULL, &hints, &numeric) != 0 || !numeric)
+        {
+            Q_strncpyz(d->refused, "an address WinINet reported in a form it couldn't check", sizeof(d->refused));
+            return;
+        }
+        sa = numeric->ai_addr;
+        length = (DWORD)numeric->ai_addrlen;
+    }
+
+    if (!CL_HTTP_AddressAllowed(d, sa, length, text, sizeof(text)))
+    {
+        // not Com_sprintf, which may print
+        Q_strncpyz(d->refused, text, sizeof(d->refused));
+        Q_strcat(d->refused, sizeof(d->refused), ", on a private network, and this server isn't on one");
+    }
+    if (numeric)
+        freeaddrinfo(numeric);
+}
+
+/*
+=================
+CL_HTTP_URLAllowed
+
+On the thread: whether a URL is http or https, to a host whose addresses
+may all be fetched from; if not, the download fails, saying why. A host
+that doesn't resolve is left to WinINet, which says so
+=================
+*/
+static qboolean CL_HTTP_URLAllowed(httpDownload_t *d, const char *url)
+{
+    URL_COMPONENTSA parts;
+    char host[INTERNET_MAX_HOST_NAME_LENGTH];
+    char text[NI_MAXHOST];
+    struct addrinfo hints, *addresses = NULL, *a;
+    qboolean allowed = qtrue;
+
+    memset(&parts, 0, sizeof(parts));
+    parts.dwStructSize = sizeof(parts);
+    parts.lpszHostName = host;
+    parts.dwHostNameLength = sizeof(host);
+    if (!InternetCrackUrlA(url, 0, 0, &parts) || !host[0])
+    {
+        CL_HTTP_Fail(d, "%s isn't a URL", url);
+        return qfalse;
+    }
+    if (parts.nScheme != INTERNET_SCHEME_HTTP && parts.nScheme != INTERNET_SCHEME_HTTPS)
+    {
+        CL_HTTP_Fail(d, "%s isn't an http or https URL", url);
+        return qfalse;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, NULL, &hints, &addresses) != 0)
+        return qtrue;
+    for (a = addresses; a && allowed; a = a->ai_next)
+    {
+        if (!CL_HTTP_AddressAllowed(d, a->ai_addr, a->ai_addrlen, text, sizeof(text)))
+        {
+            CL_HTTP_Fail(d, "refused %s, which leads to %s, on a private network, and this server "
+                         "isn't on one", host, text);
+            allowed = qfalse;
+        }
+    }
+    freeaddrinfo(addresses);
+    return allowed;
+}
+
+/*
+=================
 CL_HTTP_Open
 
-On the thread: requests the download's URL, and returns the response to
-read, with a status of 200; NULL if it failed, saying why
+On the thread: requests the download's URL, following its redirects, and
+returns the response to read, with a status of 200; NULL if it failed,
+saying why
 =================
 */
 static HINTERNET CL_HTTP_Open(httpDownload_t *d)
 {
-    HINTERNET hUrl;
-    DWORD httpCode, len = sizeof(httpCode), zero = 0;
+    HINTERNET hUrl, session;
+    DWORD httpCode, len, zero;
+    int redirects;
+    qboolean stopped;
+    char url[MAX_STRING_CHARS], location[MAX_STRING_CHARS];
 
-    hUrl = InternetOpenUrlA(d->session, d->url, d->headers, (DWORD)-1,
-                            INTERNET_FLAG_HYPERLINK |
-                                INTERNET_FLAG_NO_CACHE_WRITE |
-                                INTERNET_FLAG_NO_COOKIES |
-                                INTERNET_FLAG_NO_UI |
-                                INTERNET_FLAG_RESYNCHRONIZE |
-                                INTERNET_FLAG_RELOAD,
-                            0);
-    if (!hUrl)
+    Q_strncpyz(url, d->url, sizeof(url));
+    for (redirects = 0;; redirects++)
     {
-        CL_HTTP_Fail(d, "couldn't connect (WinINet error %lu)", GetLastError());
-        return NULL;
+        // the frame may have stopped it, and closed its session, since
+        EnterCriticalSection(&d->lock);
+        stopped = d->stopped;
+        session = d->session;
+        LeaveCriticalSection(&d->lock);
+        if (stopped || !session)
+            return NULL;
+
+        if (!CL_HTTP_URLAllowed(d, url))
+            return NULL;
+
+        hUrl = InternetOpenUrlA(session, url, d->headers, (DWORD)-1,
+                                INTERNET_FLAG_HYPERLINK |
+                                    INTERNET_FLAG_NO_AUTO_REDIRECT |
+                                    INTERNET_FLAG_NO_CACHE_WRITE |
+                                    INTERNET_FLAG_NO_COOKIES |
+                                    INTERNET_FLAG_NO_UI |
+                                    INTERNET_FLAG_RESYNCHRONIZE |
+                                    INTERNET_FLAG_RELOAD,
+                                (DWORD_PTR)d);
+        if (d->refused[0])
+        {
+            CL_HTTP_Fail(d, "refused to read from %s", d->refused);
+            break;
+        }
+        if (!hUrl)
+        {
+            CL_HTTP_Fail(d, "couldn't connect (WinINet error %lu)", GetLastError());
+            return NULL;
+        }
+
+        len = sizeof(httpCode);
+        zero = 0;
+        if (!HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &httpCode, &len, &zero))
+        {
+            CL_HTTP_Fail(d, "no HTTP status (WinINet error %lu)", GetLastError());
+            break;
+        }
+        if (httpCode == 200)
+            return hUrl;
+        if (httpCode != 301 && httpCode != 302 && httpCode != 303 && httpCode != 307 && httpCode != 308)
+        {
+            CL_HTTP_Fail(d, "HTTP code %lu", httpCode);
+            break;
+        }
+
+        if (redirects == HTTP_MAX_REDIRECTS)
+        {
+            CL_HTTP_Fail(d, "more than %d redirects", HTTP_MAX_REDIRECTS);
+            break;
+        }
+        len = sizeof(location);
+        zero = 0;
+        if (!HttpQueryInfoA(hUrl, HTTP_QUERY_LOCATION, location, &len, &zero))
+        {
+            CL_HTTP_Fail(d, "HTTP code %lu without a Location", httpCode);
+            break;
+        }
+        InternetCloseHandle(hUrl);
+
+        // a Location may be relative to the URL it came from
+        len = sizeof(d->chunk);
+        if (!InternetCombineUrlA(url, location, (char *)d->chunk, &len, ICU_NO_ENCODE) || len >= sizeof(url))
+        {
+            CL_HTTP_Fail(d, "a redirect to %s", location);
+            return NULL;
+        }
+        Q_strncpyz(url, (char *)d->chunk, sizeof(url));
     }
 
-    if (!HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &httpCode, &len, &zero))
-        CL_HTTP_Fail(d, "no HTTP status (WinINet error %lu)", GetLastError());
-    else if (httpCode == 200)
-        return hUrl;
-    else
-        CL_HTTP_Fail(d, "HTTP code %lu", httpCode);
-
-    InternetCloseHandle(hUrl);
+    if (hUrl)
+        InternetCloseHandle(hUrl);
     return NULL;
 }
 
@@ -264,6 +457,7 @@ void CL_HTTP_BeginDownload(const char *remoteURL)
     d->refs = 1;
     Q_strncpyz(d->url, remoteURL, sizeof(d->url));
     Com_sprintf(d->headers, sizeof(d->headers), "Referer: ioQ3://%s\r\n", NET_AdrToString(clc.serverAddress));
+    d->serverScope = NET_AdrScope(&clc.serverAddress);
     download = d;
 
     d->session = InternetOpenA(httpAgent, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
@@ -272,6 +466,7 @@ void CL_HTTP_BeginDownload(const char *remoteURL)
         CL_HTTP_Fail(d, "couldn't start (WinINet error %lu)", GetLastError());
         goto failed;
     }
+    InternetSetStatusCallbackA(d->session, CL_HTTP_Status);
 
     InterlockedIncrement(&d->refs);
     thread = CreateThread(NULL, 0, CL_HTTP_Thread, d, 0, NULL);

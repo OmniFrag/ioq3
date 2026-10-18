@@ -183,6 +183,16 @@ qboolean	NET_CompareAdr (netadr_t a, netadr_t b);
 qboolean	NET_CompareBaseAdrMask(netadr_t a, netadr_t b, int netmask);
 qboolean	NET_CompareBaseAdr (netadr_t a, netadr_t b);
 qboolean	NET_IsLocalAddress (netadr_t adr);
+
+// which network an address is on (net_scope.c)
+typedef enum {
+	NET_SCOPE_NONE,		// none to connect to: unspecified, multicast, broadcast
+	NET_SCOPE_PRIVATE,	// a LAN, loopback, link-local, or a carrier's or VPN's shared space
+	NET_SCOPE_PUBLIC
+} netScope_t;
+netScope_t	NET_AdrScope( const netadr_t *adr );
+qboolean	NET_AdrReachableFrom( const netadr_t *adr, netScope_t from );
+qboolean	NET_SockaddrToAdr( const void *sockaddr, size_t length, netadr_t *a );
 const char	*NET_TakeBroadcastFailure( void );
 // why a broadcast failed since the last call, or NULL
 const char	*NET_AdrToString (netadr_t a);

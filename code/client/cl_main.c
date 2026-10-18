@@ -2410,12 +2410,6 @@ Returns whether the download began; if not, it's noted as failed
 =================
 */
 static qboolean CL_BeginHttpDownload( const char *remoteURL ) {
-	if(Q_strncmp(remoteURL, "http://", strlen("http://")) != 0 &&
-		Q_strncmp(remoteURL, "https://", strlen("https://")) != 0) {
-		Com_Error(ERR_DROP, "Download Error: %s is a malformed/"
-			"unsupported URL", remoteURL);
-	}
-
 	clc.download = FS_BaseDir_FOpenFileWrite_HomeData(clc.downloadTempName);
 	if(!clc.download) {
 		CL_EndDownload(va("couldn't create %s", clc.downloadTempName));
@@ -2446,6 +2440,64 @@ static qboolean CL_BeginHttpDownload( const char *remoteURL ) {
 
 /*
 =================
+CL_DownloadAddressAllowed
+
+Whether the client may fetch a download from an address: one on the
+public internet, or one on a private network, such as a LAN or loopback,
+when the server it's connected to is on one too. So a server on the
+internet can't send its players' downloads to their own networks
+=================
+*/
+qboolean CL_DownloadAddressAllowed( const netadr_t *adr ) {
+	return NET_AdrReachableFrom( adr, NET_AdrScope( &clc.serverAddress ) );
+}
+
+/*
+=================
+CL_CheckDownloadURL
+
+Whether sv_dlURL may be used: an http or https URL whose host, as it
+resolves now, the client may fetch from. The HTTP backends check each
+address they connect to as well, at every redirect, since a name may
+resolve to another address by then. If not, why says why
+=================
+*/
+static qboolean CL_CheckDownloadURL( const char *url, char *why, int size ) {
+	char		host[MAX_OSPATH];
+	const char	*start, *end, *at;
+	netadr_t	adr;
+
+	if ( !Q_stricmpn( url, "http://", 7 ) ) {
+		start = url + 7;
+	} else if ( !Q_stricmpn( url, "https://", 8 ) ) {
+		start = url + 8;
+	} else {
+		Q_strncpyz( why, "it isn't an http or https URL", size );
+		return qfalse;
+	}
+	end = start + strcspn( start, "/?#" );
+	for ( at = start; at < end; at++ ) {
+		if ( *at == '@' ) {
+			start = at + 1;		// past a user name and password
+		}
+	}
+	if ( end <= start || end - start >= (int)sizeof( host ) ) {
+		Q_strncpyz( why, "it has no host", size );
+		return qfalse;
+	}
+	Q_strncpyz( host, start, end - start + 1 );
+
+	// a name that doesn't resolve fails in the backend, which says so
+	if ( NET_StringToAdr( host, &adr, NA_UNSPEC ) && !CL_DownloadAddressAllowed( &adr ) ) {
+		Com_sprintf( why, size, "it leads to %s, on a private network, and this server isn't on one",
+			NET_AdrToString( adr ) );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+=================
 CL_DownloadByHTTP
 
 Whether the next file comes from the server's sv_dlURL
@@ -2465,7 +2517,17 @@ static qboolean CL_DownloadByHTTP( void ) {
 				"have sv_dlURL set\n");
 		}
 		else if(CL_HTTP_Available()) {
-			return qtrue;
+			// once a connection, saying so once
+			if(!clc.downloadURLChecked) {
+				char why[MAX_STRING_CHARS];
+
+				clc.downloadURLChecked = CL_CheckDownloadURL(clc.sv_dlURL, why, sizeof(why)) ? 1 : -1;
+				if(clc.downloadURLChecked < 0) {
+					Com_Printf(S_COLOR_YELLOW "WARNING: not downloading from sv_dlURL %s: %s\n",
+						clc.sv_dlURL, why);
+				}
+			}
+			return clc.downloadURLChecked > 0;
 		}
 	}
 	else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT)) {
