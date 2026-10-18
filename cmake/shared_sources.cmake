@@ -21,6 +21,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cvar.c
     ${CVAR_DECLARATIONS_SOURCE}
     ${SOURCE_DIR}/qcommon/files.c
+    ${SOURCE_DIR}/qcommon/fs_name.c
     ${SOURCE_DIR}/qcommon/hooks.c
     ${SOURCE_DIR}/qcommon/logs.c
     ${SOURCE_DIR}/qcommon/md4.c

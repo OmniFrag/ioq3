@@ -1191,6 +1191,9 @@ void FS_PureServerSetLoadedPaks( const char *pakSums, const char *pakNames );
 
 qboolean FS_CheckDirTraversal(const char *checkdir);
 qboolean FS_InvalidGameDir(const char *gamedir);
+// names a server may give the files a client writes (fs_name.c)
+qboolean FS_EngineFolder( const char *name );
+qboolean FS_ValidDownloadName( const char *name );
 qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring );
 
 void FS_Remove( const char *osPath );
