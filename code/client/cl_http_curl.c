@@ -349,4 +349,9 @@ qboolean CL_HTTP_PerformDownload(void)
 	return qtrue;
 }
 
+void CL_HTTP_CancelDownload(void)
+{
+	CL_cURL_Cleanup();
+}
+
 #endif /* USE_HTTP */

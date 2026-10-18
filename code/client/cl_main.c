@@ -1500,9 +1500,16 @@ void CL_Disconnect( qboolean showMainMenu ) {
 		CL_StopRecord_f ();
 	}
 
+#ifdef USE_HTTP
+	CL_HTTP_CancelDownload();
+#endif
 	if (clc.download) {
 		FS_FCloseFile( clc.download );
 		clc.download = 0;
+	}
+	// classic downloads don't resume, so a part is of no use
+	if ( *clc.downloadTempName ) {
+		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
 	}
 	*clc.downloadTempName = *clc.downloadName = 0;
 	Cvar_Set( "cl_downloadName", "" );
