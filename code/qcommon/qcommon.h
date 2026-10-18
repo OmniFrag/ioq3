@@ -444,6 +444,14 @@ typedef struct {
 // nothing
 #define	COM_TRAP_TOGGLEFULLSCREEN	806
 
+// trap_GameFact( const char *fact, const char *info ) in game: something
+// happened in the game, for the server's tools (hooks.h's gameFact): a kill,
+// a team change, the match's end. fact is its name, 1 to 15 lowercase
+// letters; info is an info string of its details, so a fact can gain keys
+// without a new call. The engine passes on only facts with a valid name
+// and info string, and at most 256 a game frame; it counts the rest
+#define	COM_TRAP_GAMEFACT	807
+
 // trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colors,
 // are left unchecked
 #define	CVAR_RANGE_STRING	0	// no range

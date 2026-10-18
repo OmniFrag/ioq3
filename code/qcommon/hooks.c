@@ -200,3 +200,7 @@ void Hooks_GameFrameDone( int levelTime ) {
 void Hooks_Hibernation( qboolean asleep ) {
 	HOOKS_CALL( hibernation, ( asleep ) );
 }
+
+void Hooks_GameFact( const char *fact, const char *info ) {
+	HOOKS_CALL( gameFact, ( fact, info ) );
+}
