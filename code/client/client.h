@@ -177,6 +177,11 @@ typedef struct {
 	char		serverMessage[MAX_STRING_TOKENS];	// for display on connection dialog
 
 	int			challenge;					// from the server to use for connecting
+	// the extensions agreed for this connection (exttokens.h), 0 for a classic
+	// one, and with them its content key. Until connectResponse confirms
+	// them, the bits challengeResponse agreed
+	uint32_t	ofx;
+	uint64_t	contentKey;
 	int			checksumFeed;				// from the server for checksum calculations
 
 	// these are our reliable messages that go to the server

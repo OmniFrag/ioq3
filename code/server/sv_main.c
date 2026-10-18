@@ -871,6 +871,11 @@ void SVC_Info( netadr_t from ) {
 	}
 
 	Info_SetValueForKey( infostring, "draining", sv_drainReason );
+
+	// the extension bits, only for a client whose tokens ask for them
+	if ( SV_AskedExtensions( 2 ) ) {
+		Info_SetValueForKey( infostring, "ofx", va( "%x", OFX_BUILD ) );
+	}
 	NET_OutOfBandPrint( NS_SERVER, from, "infoResponse\n%s", infostring );
 }
 
