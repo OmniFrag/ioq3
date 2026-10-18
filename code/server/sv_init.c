@@ -1162,11 +1162,13 @@ void SV_Init (void)
 		"this; the server holds rate to 90000 anyway, so more changes nothing. A player uses about 7 KB/s "
 		"at sv_fps 40 in a busy match, so lower it only for a thin uplink. Players on the local network "
 		"are exempt (sv_lanForceRate)." );
-	sv_dlRate = Cvar_Get("sv_dlRate", "100", CVAR_ARCHIVE | CVAR_SERVERINFO);
+	// one player downloads at about 850 KB/s at best, as the protocol's
+	// window and acks allow; 500 is under half a 10 Mbit/s uplink
+	sv_dlRate = Cvar_Get("sv_dlRate", "500", CVAR_ARCHIVE | CVAR_SERVERINFO);
 	Cvar_SetDescription( sv_dlRate,
 		"Upload for all direct downloads together, in KB/s; 0 for no limit\n"
-		"Players downloading pak files (.pk3) from the server share it, so at 100 a 20 MB map takes over "
-		"3 minutes with one player downloading, and longer with more. Downloads from sv_dlURL's web "
+		"Players downloading pak files (.pk3) from the server share it, so at 500 a 20 MB map takes about "
+		"40 seconds with one player downloading, and longer with more. Downloads from sv_dlURL's web "
 		"server don't count, and the game's own updates to players aren't slowed by it." );
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_minPing,
@@ -1277,15 +1279,18 @@ void SV_Init (void)
 		"plain map command joins such a rotation at d1 after its first match. Tournament ignores it and "
 		"restarts the map, the loser out." );
 
-	sv_allowDownload = Cvar_Get ("sv_allowDownload", "0", CVAR_SERVERINFO);
+	// 9: the server sends files, and players stay connected for web
+	// downloads, so a stock client keeps its slot
+	sv_allowDownload = Cvar_Get ("sv_allowDownload", "9", CVAR_SERVERINFO);
 	// DLF_*'s four bits, as a number help and cvar_dump can show
 	Cvar_CheckRange( sv_allowDownload, 0, 15, qtrue );
 	Cvar_SetDescription( sv_allowDownload,
 		"Whether players may download missing pak files from the server\n"
 		"A player missing a map's or mod's pak files (.pk3) can fetch them from the server, if the player "
-		"has downloads on (cl_allowDownload, off by default). It's slow: all downloads together get 100 "
-		"KB/s by default (sv_dlRate), so a 20 MB map takes over 3 minutes. Players use a web server set "
-		"in sv_dlURL instead even when this is 0, and that's much faster; 2 stops them.\n"
+		"has downloads on (cl_allowDownload, off by default). All downloads together get 500 KB/s by "
+		"default (sv_dlRate), so a 20 MB map takes about 40 seconds; players use sv_dlURL's web server, "
+		"often faster, even with 0, and 2 stops them. The default, 9, sends files and keeps players "
+		"connected for web downloads.\n"
 		"1 = direct: the server sends files itself\n"
 		"2 = no web: players ignore sv_dlURL\n"
 		"4 = no direct: refuse to send files, even with 1\n"
