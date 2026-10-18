@@ -30,19 +30,25 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static HINTERNET hInternet = NULL;
 static HINTERNET hUrl = NULL;
 
-static Q_PRINTF_FUNC(2, 3) void DropIf(qboolean condition, const char *fmt, ...)
+void CL_HTTP_CancelDownload(void);
+
+// why the download failed, for CL_HTTP_PerformDownload to report
+static char httpError[1024];
+
+static Q_PRINTF_FUNC(2, 3) qboolean FailIf(qboolean condition, const char *fmt, ...)
 {
     char buffer[1024];
 
     if (!condition)
-        return;
+        return qfalse;
 
     va_list argptr;
     va_start(argptr, fmt);
     Q_vsnprintf(buffer, sizeof(buffer), fmt, argptr);
     va_end(argptr);
 
-    Com_Error(ERR_DROP, "Download Error: %s URL: %s", buffer, clc.downloadURL);
+    Com_sprintf(httpError, sizeof(httpError), "%s from %s", buffer, clc.downloadURL);
+    return qtrue;
 }
 
 /*
@@ -103,6 +109,7 @@ void CL_HTTP_BeginDownload(const char *remoteURL)
     DWORD zero = 0;
     BOOL success;
 
+    httpError[0] = '\0';
     hUrl = InternetOpenUrlA(hInternet, remoteURL,
                             va("Referer: ioQ3://%s\r\n", NET_AdrToString(clc.serverAddress)), (DWORD)-1,
                             INTERNET_FLAG_HYPERLINK |
@@ -113,16 +120,21 @@ void CL_HTTP_BeginDownload(const char *remoteURL)
                                 INTERNET_FLAG_RELOAD,
                             0);
 
-    DropIf(hUrl == NULL, "InternetOpenUrlA failed %lu", GetLastError());
+    if (FailIf(hUrl == NULL, "InternetOpenUrlA failed %lu", GetLastError()))
+        return;
 
     success = HttpQueryInfo(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &httpCode, &len, &zero);
-    DropIf(!success, "Get HTTP_QUERY_STATUS_CODE failed %lu", GetLastError());
+    if (FailIf(!success, "Get HTTP_QUERY_STATUS_CODE failed %lu", GetLastError()))
+        return;
 
-    DropIf(httpCode >= 400, "HTTP code %lu", httpCode);
-    DropIf(httpCode != 200, "Unhandled HTTP code %lu", httpCode);
+    if (FailIf(httpCode >= 400, "HTTP code %lu", httpCode))
+        return;
+    if (FailIf(httpCode != 200, "Unhandled HTTP code %lu", httpCode))
+        return;
 
     success = HttpQueryInfo(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &len, &zero);
-    DropIf(!success, "Get HTTP_QUERY_CONTENT_LENGTH failed %lu", GetLastError());
+    if (FailIf(!success, "Get HTTP_QUERY_CONTENT_LENGTH failed %lu", GetLastError()))
+        return;
 
     clc.downloadSize = (int)contentLength;
     Cvar_SetValue("cl_downloadSize", clc.downloadSize);
@@ -133,16 +145,25 @@ void CL_HTTP_BeginDownload(const char *remoteURL)
 CL_HTTP_PerformDownload
 =================
 */
-qboolean CL_HTTP_PerformDownload(void)
+qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
 {
     static BYTE readBuffer[256 * 1024];
     DWORD bytesRead = 0;
     BOOL success;
 
-    DropIf(hUrl == NULL, "hUrl is NULL");
+    if (!httpError[0])
+        FailIf(hUrl == NULL, "hUrl is NULL");
+    if (httpError[0])
+    {
+        Q_strncpyz(error, httpError, errorSize);
+        CL_HTTP_CancelDownload();
+        return qtrue;
+    }
+    *error = '\0';
 
     success = InternetReadFile(hUrl, readBuffer, sizeof(readBuffer), &bytesRead);
-    DropIf(!success, "InternetReadFile failed %lu", GetLastError());
+    if (FailIf(!success, "InternetReadFile failed %lu", GetLastError()))
+        return qfalse;
 
     if (bytesRead > 0)
     {
@@ -150,7 +171,7 @@ qboolean CL_HTTP_PerformDownload(void)
         Cvar_SetValue("cl_downloadCount", clc.downloadCount);
 
         DWORD bytesWritten = (DWORD)FS_Write(readBuffer, bytesRead, clc.download);
-        DropIf(bytesWritten != bytesRead, "bytesWritten != bytesRead");
+        FailIf(bytesWritten != bytesRead, "bytesWritten != bytesRead");
 
         return qfalse;
     }

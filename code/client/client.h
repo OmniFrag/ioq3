@@ -202,10 +202,15 @@ typedef struct {
 	char		downloadTempName[MAX_OSPATH];
 	char		downloadName[MAX_OSPATH];
 	unsigned int	downloadChecksum;	// the server's checksum for the pak downloading
+	char		downloadRemoteName[MAX_OSPATH];	// the server's name for it
+	char		downloadFailures[MAX_STRING_CHARS];	// the paks that couldn't be downloaded, a line each
+	int			downloadFailed;		// how many
+	int			downloadFailuresUnlisted;	// how many of them didn't fit
 #ifdef USE_HTTP
 	qboolean	httpUsed;
+	qboolean	downloadHTTP;	// the pak downloading comes from sv_dlURL
 	qboolean	disconnectedForHttpDownload;
-	char		downloadURL[MAX_OSPATH];
+	char		downloadURL[MAX_STRING_CHARS];
 #endif /* USE_HTTP */
 	int		sv_allowDownload;
 	char		sv_dlURL[MAX_CVAR_VALUE_STRING];
@@ -493,6 +498,7 @@ void CL_StopRecord_f(void);
 
 void CL_InitDownloads(void);
 void CL_NextDownload(void);
+void CL_DownloadFailed( const char *reason );
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );
