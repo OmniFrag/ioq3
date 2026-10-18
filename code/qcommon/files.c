@@ -3575,17 +3575,24 @@ qboolean FS_CheckDirTraversal(const char *checkdir)
 	return qfalse;
 }
 
+static size_t FS_NameLength( const char *name, size_t length );
+
 /*
 ================
 FS_InvalidGameDir
 
 return true if path is a reference to current directory or directory traversal
-or a sub-directory
+or a sub-directory, a hidden directory, or one of the engine's own folders
+(FS_EngineFolder), named as Windows would find it, without final dots and
+spaces
 ================
 */
 qboolean FS_InvalidGameDir( const char *gamedir ) {
-	if ( !strcmp( gamedir, "." ) || !strcmp( gamedir, ".." )
-		|| strchr( gamedir, '/' ) || strchr( gamedir, '\\' ) ) {
+	char	name[MAX_QPATH];
+
+	Q_strncpyz( name, gamedir, sizeof( name ) );
+	name[FS_NameLength( name, strlen( name ) )] = '\0';
+	if ( gamedir[0] == '.' || strchr( gamedir, '/' ) || strchr( gamedir, '\\' ) || FS_EngineFolder( name ) ) {
 		return qtrue;
 	}
 
@@ -3636,10 +3643,12 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 		// Ok, see if we have this pak file
 		havepak = qfalse;
 
-		// Make sure the server cannot make us write to non-quake3 directories.
-		if(FS_CheckDirTraversal(fs_serverReferencedPakNames[i]))
+		// Make sure the server cannot make us write anywhere but a game
+		// directory
+		if(!FS_ValidDownloadName(fs_serverReferencedPakNames[i]))
 		{
-			Com_Printf("WARNING: Invalid download name %s\n", fs_serverReferencedPakNames[i]);
+			Com_Printf(S_COLOR_YELLOW "WARNING: Invalid download name %s: a pak's name must be "
+				"<game directory>/<name>\n", fs_serverReferencedPakNames[i]);
 			continue;
 		}
 
