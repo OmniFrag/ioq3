@@ -528,6 +528,38 @@ static void SV_KickNum_f( void ) {
 	cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 }
 
+/*
+==================
+SV_MuteNum_f
+
+Mutes a client's chat and voice, for so many seconds or until it leaves,
+or lifts its mute
+==================
+*/
+static void SV_MuteNum_f( void ) {
+	qboolean	mute = !Q_stricmp( Cmd_Argv( 0 ), "clientmute" );
+	client_t	*cl;
+
+	if ( !com_sv_running->integer ) {
+		Com_Printf( "Server is not running.\n" );
+		return;
+	}
+	// seconds, if given, a whole number above 0
+	if ( Cmd_Argc() != 2 && !( mute && Cmd_Argc() == 3 && atoi( Cmd_Argv( 2 ) ) > 0 &&
+		strspn( Cmd_Argv( 2 ), "0123456789" ) == strlen( Cmd_Argv( 2 ) ) ) ) {
+		Com_Printf( mute ? "Usage: %s <client number> [seconds]\n" : "Usage: %s <client number>\n", Cmd_Argv( 0 ) );
+		return;
+	}
+	cl = SV_GetPlayerByNum();
+	if ( !cl ) {
+		return;
+	}
+	// SV_MuteClient says when it changes
+	if ( !SV_MuteClient( cl, mute, atoi( Cmd_Argv( 2 ) ) ) ) {
+		Com_Printf( "%s" S_COLOR_WHITE " %s\n", cl->name, mute ? "is still muted" : "isn't muted" );
+	}
+}
+
 #ifndef STANDALONE
 // these functions require the auth server which of course is not available anymore for stand-alone games.
 
@@ -1737,6 +1769,8 @@ void SV_AddOperatorCommands( void ) {
 	Cmd_AddCommand ("kickall", SV_KickAll_f);
 	Cmd_AddCommand ("kicknum", SV_KickNum_f);
 	Cmd_AddCommand ("clientkick", SV_KickNum_f); // Legacy command
+	Cmd_AddCommand ("clientmute", SV_MuteNum_f);
+	Cmd_AddCommand ("clientunmute", SV_MuteNum_f);
 	Cmd_AddCommand ("status", SV_Status_f);
 	Cmd_AddCommand ("serverinfo", SV_Serverinfo_f);
 	Cmd_AddCommand ("systeminfo", SV_Systeminfo_f);
@@ -1782,6 +1816,8 @@ void SV_RemoveOperatorCommands( void ) {
 	Cmd_RemoveCommand ("kick");
 	Cmd_RemoveCommand ("kicknum");
 	Cmd_RemoveCommand ("clientkick");
+	Cmd_RemoveCommand ("clientmute");
+	Cmd_RemoveCommand ("clientunmute");
 	Cmd_RemoveCommand ("kickall");
 	Cmd_RemoveCommand ("kickbots");
 	Cmd_RemoveCommand ("banUser");

@@ -1951,6 +1951,75 @@ static ucmd_t *SV_FindUcmd( const char *name ) {
 
 /*
 ==================
+SV_MuteClient
+
+Mutes a client's chat and voice for seconds, or with 0 until it leaves, or
+lifts the mute. A mute longer than EXT_MUTE_MAX_SECONDS lasts until the
+client leaves, which every mute does at the latest. The client is told
+when the mute begins and ends; everyone else is told nothing. Returns
+whether it began or ended
+==================
+*/
+qboolean SV_MuteClient( client_t *cl, qboolean mute, int seconds ) {
+	if ( mute ) {
+		cl->muteEndTime = 0;
+		if ( seconds > 0 && seconds <= EXT_MUTE_MAX_SECONDS ) {
+			// as SV_ClientMuted counts, past the clock's wrap; 0 is for
+			// the connection
+			cl->muteEndTime = (int)( (unsigned)Sys_Milliseconds() + seconds * 1000u );
+			if ( !cl->muteEndTime ) {
+				cl->muteEndTime = 1;
+			}
+		}
+	}
+	if ( mute == cl->muted ) {
+		return qfalse;
+	}
+	cl->muted = mute;
+	Com_Printf( "%s" S_COLOR_WHITE " %s\n", cl->name, mute ? "is muted" : "is no longer muted" );
+	SV_SendServerCommand( cl, "print \"%s\n\"", mute ?
+		"You have been muted: other players won't see your chat or hear your voice." : "You are no longer muted." );
+	return qtrue;
+}
+
+/*
+==================
+SV_ClientMuted
+
+Whether a client is muted: one whose mute's time has run out isn't, though
+SV_CheckTimeouts tells it so only in the next frame
+==================
+*/
+qboolean SV_ClientMuted( const client_t *cl ) {
+	return cl->muted && ( !cl->muteEndTime || (int)( (unsigned)Sys_Milliseconds() - (unsigned)cl->muteEndTime ) < 0 );
+}
+
+/*
+==================
+SV_IsChatCommand
+
+Whether a client command is one of the game's chat commands, which a mute
+holds back: what baseq3 and Team Arena call them, as their mods do
+==================
+*/
+static qboolean SV_IsChatCommand( const char *cmd ) {
+	static const char *const chat[] = {
+		"say", "say_team", "tell",
+		// voice chat, and the orders a player gives another (a tell)
+		"vsay", "vsay_team", "vtell", "vosay", "vosay_team", "votell", "vtaunt", "gc"
+	};
+	int		i;
+
+	for ( i = 0; i < ARRAY_LEN( chat ); i++ ) {
+		if ( !Q_stricmp( cmd, chat[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+==================
 SV_ExecuteClientCommand
 
 Also called by bot code
@@ -1973,6 +2042,12 @@ void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK ) {
 		// pass unknown strings to the game
 		if (!u && sv.state == SS_GAME && (cl->state == CS_ACTIVE || cl->state == CS_PRIMED)) {
 			int clientNum = cl - svs.clients;
+
+			// a muted client's chat reaches neither the game nor anyone
+			if ( SV_ClientMuted( cl ) && SV_IsChatCommand( Cmd_Argv(0) ) ) {
+				SV_SendServerCommand( cl, "print \"You are muted.\n\"" );
+				return;
+			}
 
 			Cmd_Args_Sanitize();
 			Hooks_ClientCommand( clientNum, s );
@@ -2210,8 +2285,8 @@ static qboolean SV_ShouldIgnoreVoipSender(const client_t *cl)
 		return qtrue;  // VoIP disabled on this server.
 	else if (!cl->hasVoip)  // client doesn't have VoIP support?!
 		return qtrue;
-    
-	// !!! FIXME: implement player blacklist.
+	else if (SV_ClientMuted(cl))  // an admin muted it
+		return qtrue;
 
 	return qfalse;  // don't ignore.
 }
