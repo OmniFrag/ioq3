@@ -4868,10 +4868,14 @@ the content keys as LAN_GetServerInfo gives them
 ===================
 */
 static void CL_SetPingContent( char *info ) {
-	uint64_t	required;
+	uint64_t	required = 0;
 	qboolean	ready;
+	qboolean	known;
 
-	CL_SetContentKeys( info, CL_ReadServerContent( info, &required, &ready ), required, ready );
+	// read the keys before passing them: the order a call's arguments
+	// are evaluated in is unspecified
+	known = CL_ReadServerContent( info, &required, &ready );
+	CL_SetContentKeys( info, known, required, ready );
 }
 
 static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
