@@ -158,9 +158,10 @@ THE CLIENT'S CONTENT CACHE
 
 <fs_homedatapath>/cache/content/: downloaded paks named by their SHA-256
 (<sha256>.pk3, <sha256>.part while partial), and index.dat, one record a
-hash, with the game directory, name and checksum it was first seen as.
-The paks a connected server references are mounted in their game
-directories, below that directory's installed paks; the least recently
+hash, with its checksum, which a classic server finds it by, and the game
+directory and name it was first seen as. The paks a connected server
+references are mounted in their game directories, under the server's
+names for them, below that directory's installed paks; the least recently
 used go when the cache is over cl_contentCacheMegs. Nothing a server
 sends is written under a name it chose
 
@@ -187,9 +188,10 @@ typedef struct {
 	int64_t			lastUsed;		// Unix seconds: when mounted or downloaded
 	unsigned int	pakChecksum;	// pack_t.checksum, as sv_referencedPaks lists it
 	cacheState_t	state;
-	// as it was first seen, or last downloaded from a classic server,
-	// without .pk3: one record a hash, which a content manifest may list
-	// under other names too
+	// as it was first seen, without .pk3: one record a hash, which servers
+	// may list in other game directories and under other names, each
+	// mounting it as it lists it. The name is only shown; the game
+	// directory also ranks two paks with one checksum (Content_Cache_Find)
 	char			gamedir[CACHE_GAMEDIR_SIZE];
 	char			name[CACHE_NAME_SIZE];
 	qboolean		mounted;		// not in the file: in the search path now, or stored for the next restart's
@@ -212,11 +214,11 @@ int		Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t ma
 void	Content_Cache_Init( void );
 void	Content_Cache_Shutdown( void );
 // the complete cached pak a classic server references by this checksum,
-// game directory and name, the only identity it gives, not mounted yet,
-// for the search path: its entry's number, and its OS path; -1 if there's
-// none
-int		Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, const char *name,
-			char *ospath, int ospathSize );
+// in this game directory or another, whatever name the server gives it,
+// not mounted yet, for the search path: its entry's number, and its OS
+// path; -1 if there's none. Of two, one first seen in this game directory,
+// then the most recently used
+int		Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, char *ospath, int ospathSize );
 // the same by hash alone, as a content manifest names a pak, mounted or
 // not, to be mounted under each name the manifest gives it
 int		Content_Cache_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE], char *ospath, int ospathSize );
@@ -224,14 +226,19 @@ int		Content_Cache_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE], char *ospa
 // it has mounted, and on the disk, leaving CACHE_DISK_RESERVE free; if not,
 // why, saying what's needed and what there is
 qboolean	Content_Cache_HasRoom( int64_t bytes, char *why, int whySize );
+// whether a pak of this size is within cl_contentCacheMegs at all: a larger
+// one would be evicted at the next start, and downloaded again each time.
+// If not, why, saying to raise it
+qboolean	Content_Cache_PakFits( int64_t size, char *why, int whySize );
 // whether the cache can index a pak as gamedir/name (without .pk3): the
 // content manifest's rule, within its fields' sizes
 qboolean	Content_Cache_ValidName( const char *gamedir, const char *name );
 // a pak just downloaded and checked, the file tmp: hashed, moved into the
 // cache as <sha256>.pk3 and indexed as gamedir/name with this checksum,
 // then the cache evicted down to its bound; one the cache has already is
-// used again, under this name. Either is held as mounted, so no eviction
-// takes it, until the filesystem restart that mounts it. If not, why
+// used again, its record as first seen. Either is held as mounted, so no
+// eviction takes it, until the filesystem restart that mounts it. One
+// larger than the bound isn't kept (Content_Cache_PakFits). If not, why
 qboolean	Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
 			char *why, int whySize );
 // a pak the search path took (it's used now), or one damaged, which goes
