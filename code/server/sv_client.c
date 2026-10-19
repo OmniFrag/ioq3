@@ -2347,14 +2347,12 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	// a packet from before a resync's gamestate, still to go
 	// (SV_SendClientMessages) or not yet acknowledged (SV_ResyncAwaitingAck),
 	// is ignored, as an old map's are, so the client doesn't enter the world
-	// before it has loaded, nor acknowledge commands: one MAX_RELIABLE_COMMANDS
-	// behind would be taken to have them all (below), and the gamestate
-	// wouldn't carry them. Once such packets have kept coming for
-	// SV_RESYNC_LOST after the gamestate had all gone, the client didn't get
-	// it, and it's sent again. (Not SV_ResendGameState's rate, which counts
-	// from when it began going: a slow one would go again before a client
-	// could acknowledge it, and with nothing sent after it, no later
-	// message's acknowledgement shows it lost)
+	// before it has loaded, nor acknowledge commands. Once such packets have
+	// kept coming for SV_RESYNC_LOST after the gamestate had all gone, the
+	// client didn't get it, and it's sent again. (Not SV_ResendGameState's
+	// rate, which counts from when it began going: a slow one would go again
+	// before a client could acknowledge it, and with nothing sent after it,
+	// no later message's acknowledgment shows it lost)
 	if ( cl->resync && cl->state == CS_ACTIVE ) {
 		return;
 	}
@@ -2367,6 +2365,16 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 			Com_Printf( "%s didn't get the gamestate\n", cl->name );
 			SV_ResyncClient( cl );
 		}
+		return;
+	}
+	// a client exactly MAX_RELIABLE_COMMANDS behind is still in step:
+	// SV_AddServerCommand keeps that many waiting and overflows at one more.
+	// But the slot of the command it last acknowledged now holds the newest,
+	// and that command is part of the key for this packet's usercmds (and
+	// for all of it from a protocol 68 client), so they can't be read.
+	// Ignore the packet and keep the commands: taking the client to have
+	// them all, as below, would lose them
+	if ( reliableAcknowledge == cl->reliableSequence - MAX_RELIABLE_COMMANDS ) {
 		return;
 	}
 	cl->reliableAcknowledge = reliableAcknowledge;
