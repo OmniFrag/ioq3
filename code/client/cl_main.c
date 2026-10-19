@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_main.c  -- client main loop
 
 #include "client.h"
+#include "../qcommon/content.h"
 #include <limits.h>
 
 #include "../sys/sys_local.h"
@@ -3482,6 +3483,11 @@ void CL_Frame ( int msec ) {
 	}
 #endif
 
+	// the content cache's paks go once the server that wanted them has
+	if ( clc.state == CA_DISCONNECTED ) {
+		FS_UnmountCachePaks();
+	}
+
 	// for the menus, which show the cap com_maxfps -1 and -2 hold there
 	if ( cl_movesByFrame->integer != CL_MovesByFrame() ) {
 		Cvar_SetValue( "cl_movesByFrame", CL_MovesByFrame() );
@@ -4406,6 +4412,9 @@ void CL_Init( void ) {
 	Cvar_Get( "cl_guid", "", CVAR_USERINFO | CVAR_ROM | CVAR_PRIVATE );
 	CL_UpdateGUID( NULL, 0 );
 
+	// once the configs have set its bound
+	Content_Cache_Init();
+
 	Com_Printf( "----- Client Initialization Complete -----\n" );
 }
 
@@ -4439,6 +4448,7 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	
 	CL_ClearMemory(qtrue);
 	CL_Snd_Shutdown();
+	Content_Cache_Shutdown();
 
 #ifdef USE_HTTP
 	CL_HTTP_Shutdown();

@@ -151,4 +151,84 @@ qboolean	Content_PakIndex_Frame( void );
 const pakRecord_t	*Content_PakIndex_Find( int root, const char *path, int64_t size, int64_t mtime );
 const pakRecord_t	*Content_PakIndex_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE] );
 
+/*
+==============================================================
+
+THE CLIENT'S CONTENT CACHE
+
+<fs_homedatapath>/cache/content/: downloaded paks named by their SHA-256
+(<sha256>.pk3, <sha256>.part while partial), and index.dat, one record a
+hash, with the game directory, name and checksum it was first seen as.
+The paks a connected server references are mounted in their game
+directories, below that directory's installed paks; the least recently
+used go when the cache is over cl_contentCacheMegs. Nothing a server
+sends is written under a name it chose
+
+==============================================================
+*/
+
+#define CACHE_INDEX_FILE		CONTENT_DIR "/index.dat"
+#define CACHE_INDEX_MAGIC		"OFCI"
+#define CACHE_INDEX_RECORD_SIZE	144
+#define CACHE_GAMEDIR_SIZE		OFCM_GAMEDIR_SIZE	// the content manifest's fields
+#define CACHE_NAME_SIZE			OFCM_NAME_SIZE
+#define CACHE_MIN_PAK_SIZE		OFCM_MIN_PAK
+#define CACHE_DISK_RESERVE		( 256 << 20 )	// left free on the disk
+
+typedef enum {
+	CACHE_COMPLETE = 1,
+	CACHE_PARTIAL = 2
+} cacheState_t;
+
+typedef struct {
+	byte			sha256[SHA256_DIGEST_SIZE];
+	int64_t			size;
+	int64_t			valid;			// the bytes a partial one has
+	int64_t			lastUsed;		// Unix seconds: when mounted or downloaded
+	unsigned int	pakChecksum;	// pack_t.checksum, as sv_referencedPaks lists it
+	cacheState_t	state;
+	// as it was first seen, without .pk3: one record a hash, which a
+	// content manifest may list under other names too
+	char			gamedir[CACHE_GAMEDIR_SIZE];
+	char			name[CACHE_NAME_SIZE];
+	qboolean		mounted;		// not in the file: in the search path now
+} cacheEntry_t;
+
+// as Content_ParsePakIndex, for index.dat; a record that breaks a rule
+// (its state, size, names by the content manifest's OFCM_ValidName, or a
+// hash listed twice) is damage too
+int		Content_ParseCacheIndex( const byte *data, int length, cacheEntry_t *entries, int maxEntries );
+int		Content_WriteCacheIndex( const cacheEntry_t *entries, int count, byte *out, int size );
+
+// which entries to evict, least recently used first, until what's kept is
+// within maxBytes (0 for no limit) and maxEntries; never a mounted one.
+// Sets evict[i] for each, and returns how many
+int		Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t maxBytes,
+			int maxEntries, qboolean *evict );
+
+// the client: at startup, reads index.dat, removes what it doesn't list,
+// and evicts down to the bound
+void	Content_Cache_Init( void );
+void	Content_Cache_Shutdown( void );
+// the complete cached pak a classic server references by this checksum,
+// game directory and name, the only identity it gives, not mounted yet,
+// for the search path: its entry's number, and its OS path; -1 if there's
+// none
+int		Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, const char *name,
+			char *ospath, int ospathSize );
+// the same by hash alone, as a content manifest names a pak, mounted or
+// not, to be mounted under each name the manifest gives it
+int		Content_Cache_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE], char *ospath, int ospathSize );
+// whether bytes more fit in the cache, within cl_contentCacheMegs less what
+// it has mounted, and on the disk, leaving CACHE_DISK_RESERVE free; if not,
+// why, saying what's needed and what there is
+qboolean	Content_Cache_HasRoom( int64_t bytes, char *why, int whySize );
+// a pak the search path took (it's used now), or one damaged, which goes
+void	Content_Cache_Mounted( int entry );
+void	Content_Cache_Remove( int entry );
+// as the search path is built again: nothing's mounted, then what was
+// changed is written
+void	Content_Cache_Unmounted( void );
+void	Content_Cache_Flush( void );
+
 #endif
