@@ -18,6 +18,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cmd.c
     ${SOURCE_DIR}/qcommon/common.c
     ${SOURCE_DIR}/qcommon/com_pacing.c
+    ${SOURCE_DIR}/qcommon/com_sha256.c
     ${SOURCE_DIR}/qcommon/cvar.c
     ${CVAR_DECLARATIONS_SOURCE}
     ${SOURCE_DIR}/qcommon/exttokens.c
@@ -35,6 +36,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/huffman.c
     ${SOURCE_DIR}/qcommon/q_math.c
     ${SOURCE_DIR}/qcommon/q_shared.c
+    ${SOURCE_DIR}/qcommon/sha256.c
     ${SOURCE_DIR}/qcommon/unzip.c
     ${SOURCE_DIR}/qcommon/ioapi.c
     ${SOURCE_DIR}/qcommon/vm.c
