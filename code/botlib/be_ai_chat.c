@@ -520,6 +520,8 @@ char *StringContainsWord(char *str1, char *str2, int casesensitive)
 			while(*str1 && *str1 != ' ' && *str1 != '.' && *str1 != ',' && *str1 != '!') str1++;
 			if (!*str1) break;
 			str1++;
+			//a separator ended the string: the loop's str1++ would pass its end
+			if (!*str1) break;
 		} //end for
 		//compare the word
 		for (j = 0; str2[j]; j++)
