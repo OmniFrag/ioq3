@@ -4744,25 +4744,69 @@ static qboolean CL_ContentReady( const byte sha256[SHA256_DIGEST_SIZE] ) {
 
 /*
 ===================
-CL_SetServerContent
+CL_ReadServerContent
 
 The content keys of an infoResponse, as OFD_ReadInfoContent takes them,
-from a server whose ofx has the content protocol
+from a server whose ofx has the content protocol: whether they hold, and
+then the required bytes and whether this client is ready for them
 ===================
 */
-static void CL_SetServerContent( serverInfo_t *server, const char *info ) {
+static qboolean CL_ReadServerContent( const char *info, uint64_t *required, qboolean *ready ) {
 	byte		sha256[SHA256_DIGEST_SIZE];
 	uint32_t	bits;
 
-	server->contentKnown = qfalse;
-	server->contentReady = qfalse;
+	*ready = qfalse;
 	if ( !Com_ParseExtensionBits( Info_ValueForKey( info, "ofx" ), &bits ) || !( bits & OFX_CONTENT )
 		|| !OFD_ReadInfoContent( Info_ValueForKey( info, "ofm" ), Info_ValueForKey( info, "ofr" ),
-		sha256, &server->contentRequired ) ) {
-		return;
+		sha256, required ) ) {
+		return qfalse;
 	}
-	server->contentKnown = qtrue;
-	server->contentReady = CL_ContentReady( sha256 );
+	*ready = CL_ContentReady( sha256 );
+	return qtrue;
+}
+
+/*
+===================
+CL_SetServerContent
+===================
+*/
+static void CL_SetServerContent( serverInfo_t *server, const char *info ) {
+	server->contentKnown = CL_ReadServerContent( info, &server->contentRequired, &server->contentReady );
+}
+
+/*
+===================
+CL_SetContentKeys
+
+The content keys the ui reads of a server (download-protocol.md section
+3.3): ofr, the bytes to fetch at most, and ofready, whether nothing is,
+both once its keys are known and checked, and neither otherwise, whatever
+the server gave
+===================
+*/
+void CL_SetContentKeys( char *info, qboolean known, uint64_t required, qboolean ready ) {
+	if ( known ) {
+		Info_SetValueForKey( info, "ofr", va( "%llu", (unsigned long long)required ) );
+		Info_SetValueForKey( info, "ofready", ready ? "1" : "0" );
+	} else {
+		Info_RemoveKey( info, "ofr" );
+		Info_RemoveKey( info, "ofready" );
+	}
+}
+
+/*
+===================
+CL_SetPingContent
+
+A ping's info, which q3_ui shows as it came (trap_LAN_GetPingInfo), with
+the content keys as LAN_GetServerInfo gives them
+===================
+*/
+static void CL_SetPingContent( char *info ) {
+	uint64_t	required;
+	qboolean	ready;
+
+	CL_SetContentKeys( info, CL_ReadServerContent( info, &required, &ready ), required, ready );
 }
 
 static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
@@ -4882,6 +4926,7 @@ void CL_ServerInfoPacket( netadr_t from, msg_t *msg ) {
 					break;
 			}
 			Info_SetValueForKey( cl_pinglist[i].info, "nettype", va("%d", type) );
+			CL_SetPingContent( cl_pinglist[i].info );
 			CL_SetServerInfoByAddress(from, infoString, cl_pinglist[i].time);
 
 			return;

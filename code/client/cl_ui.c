@@ -323,12 +323,7 @@ static void LAN_GetServerInfo( int source, int n, char *buf, int buflen ) {
 		Info_SetValueForKey( info, "punkbuster", va("%i", server->punkbuster));
 		Info_SetValueForKey( info, "g_needpass", va("%i", server->g_needpass));
 		Info_SetValueForKey( info, "g_humanplayers", va("%i", server->g_humanplayers));
-		// what the server list shows of its content (download-protocol.md
-		// section 3.3): the bytes to fetch at most, and whether nothing is
-		if ( server->contentKnown ) {
-			Info_SetValueForKey( info, "ofr", va( "%llu", (unsigned long long)server->contentRequired ) );
-			Info_SetValueForKey( info, "ofready", server->contentReady ? "1" : "0" );
-		}
+		CL_SetContentKeys( info, server->contentKnown, server->contentRequired, server->contentReady );
 		Q_strncpyz(buf, info, buflen);
 	} else {
 		if (buf) {
