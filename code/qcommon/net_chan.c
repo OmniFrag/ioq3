@@ -535,7 +535,14 @@ void NET_FlushPacketQueue(void)
 	}
 }
 
-void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) {
+/*
+===============
+NET_SendPacketChecked
+
+NET_SendPacket, but qfalse when the socket can't take the datagram now
+===============
+*/
+qboolean NET_SendPacketChecked( netsrc_t sock, int length, const void *data, netadr_t to ) {
 
 	// sequenced packets are shown in netchan, so just show oob
 	if ( showpackets->integer && *(int *)data == -1 )	{
@@ -544,13 +551,13 @@ void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) 
 
 	if ( to.type == NA_LOOPBACK ) {
 		NET_SendLoopPacket (sock, length, data, to);
-		return;
+		return qtrue;
 	}
 	if ( to.type == NA_BOT ) {
-		return;
+		return qtrue;
 	}
 	if ( to.type == NA_BAD ) {
-		return;
+		return qtrue;
 	}
 
 	if ( sock == NS_CLIENT && cl_packetdelay->integer > 0 ) {
@@ -560,8 +567,13 @@ void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) 
 		NET_QueuePacket( length, data, to, sv_packetdelay->integer );
 	}
 	else {
-		Sys_SendPacket( length, data, to );
+		return Sys_SendPacket( length, data, to );
 	}
+	return qtrue;
+}
+
+void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) {
+	NET_SendPacketChecked( sock, length, data, to );
 }
 
 /*
