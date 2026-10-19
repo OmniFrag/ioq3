@@ -62,6 +62,8 @@ int SV_BotAllocateClient(void) {
 	// a bot never negotiates, whoever had the slot before
 	cl->ofx = 0;
 	cl->contentKey = 0;
+	// nor is it muted: a player's connect clears it all
+	cl->muted = qfalse;
 
 	Hooks_ClientConnected( i );
 	return i;

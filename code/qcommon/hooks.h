@@ -193,6 +193,17 @@ qboolean	SV_ExtClientScore( int clientNum, int *score );
 // with "was kicked"; qfalse for none, or a listen server's own player,
 // whom clientkick won't drop either
 qboolean	SV_ExtDropClient( int clientNum, const char *reason );
+// mutes a client, as clientmute does: its chat (say, say_team, tell, the
+// voice chats and orders) reaches neither the game nor anyone, nor does
+// its voice, for seconds or, with 0, until it leaves; a mute longer than
+// EXT_MUTE_MAX_SECONDS lasts until it leaves. With mute qfalse, lifts the
+// mute. Muting a muted client sets its time anew. The client is told as
+// its mute begins and ends. qfalse for none
+#define EXT_MUTE_MAX_SECONDS	( 7 * 24 * 60 * 60 )	// a week: Sys_Milliseconds counts it
+qboolean	SV_ExtMuteClient( int clientNum, qboolean mute, int seconds );
+// whether it's muted now: by an extension or the console, its time not run
+// out
+qboolean	SV_ExtClientMuted( int clientNum );
 
 // The server's address bans and their exceptions (banaddr, exceptaddr),
 // which sv_banFile keeps. Indexes run from 0 to SV_ExtBanCount() - 1, and
