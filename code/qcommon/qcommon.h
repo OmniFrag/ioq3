@@ -1193,6 +1193,10 @@ void FS_HashPaks( void );
 const char *FS_ContentRootPath( int root );
 // a root of the search path, by the number the pak index keeps for it: its
 // directory, NULL if it has none now
+
+qboolean FS_HasInstalledPak( unsigned int checksum, int64_t size );
+// whether a pak with that checksum, and that size unless it's -1, is in the
+// search path, not from the content cache
 void FS_UnmountCachePaks( void );
 // once the client has left the server that referenced the content cache's
 // paks it mounted, restarts the filesystem without them
@@ -1217,6 +1221,9 @@ qboolean FS_InvalidGameDir(const char *gamedir);
 // names a server may give the files a client writes (fs_name.c)
 qboolean FS_EngineFolder( const char *name );
 qboolean FS_ValidDownloadName( const char *name );
+qboolean FS_ValidDownloadPak( const char *gameDir, const char *name );
+// FS_ValidDownloadName's rule for a pak's game directory and name apart, as
+// the content manifest gives them (ofd.h's ofcmValidName_t)
 qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring );
 
 void FS_Remove( const char *osPath );
@@ -1358,6 +1365,7 @@ typedef struct {
 void		Com_SHA256Init( sha256_t *ctx );
 void		Com_SHA256Update( sha256_t *ctx, const void *data, size_t len );
 void		Com_SHA256Final( sha256_t *ctx, byte digest[SHA256_DIGEST_SIZE] );
+void		Com_SHA256Buffer( const void *data, size_t len, byte digest[SHA256_DIGEST_SIZE] );
 void		Com_SHA256Hex( const byte digest[SHA256_DIGEST_SIZE], char hex[SHA256_HEX_SIZE] );
 // lowercase
 qboolean	Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] );
