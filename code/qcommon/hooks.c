@@ -220,6 +220,14 @@ void Hooks_ServerCommand( int clientNum, const char *text ) {
 	HOOKS_CALL( serverCommand, ( clientNum, text ) );
 }
 
+void Hooks_ClientStateChanged( connstate_t state ) {
+	HOOKS_CALL( clientStateChanged, ( state ) );
+}
+
+void Hooks_DemoPlayback( qboolean playing ) {
+	HOOKS_CALL( demoPlayback, ( playing ) );
+}
+
 // not what a print hook prints, which would call it again
 void Hooks_Print( const char *text ) {
 	if ( hooks_activeCount && !hooks_printing ) {

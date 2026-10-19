@@ -96,8 +96,11 @@ typedef struct {
 	// map_restart restarted the map's game, with every client
 	void		(*mapRestarted)( void );
 	// The server is stopping its map, its clients still in their slots:
-	// a map that ended in an error (com_errorEntered is set), killserver,
-	// or the program's exit. reason is what the clients are told
+	// a map that ended in an error, killserver, the program's exit, or a
+	// listen server's own player disconnecting. Com_Error sets
+	// com_errorEntered for the error and the disconnect alike, and the
+	// com_errorCode cvar to its errorParm_t, which tells them apart.
+	// reason is what the clients are told
 	void		(*serverShutdown)( const char *reason );
 	// The game ran its frames for this server frame, up to levelTime
 	void		(*gameFrameDone)( int levelTime );
@@ -137,6 +140,20 @@ typedef struct {
 	// stops the program (shutdown, above). Every print pays for it, so
 	// keep it cheap
 	void		(*print)( const char *text );
+
+	// What the client does, called in a client build only, at the start
+	// of the client's frame for what changed since the last: so a state
+	// the client passes within one frame, as CA_LOADING usually is, isn't
+	// reported. The CL_Ext* accessors below read the details.
+
+	// The connection's state changed: CA_DISCONNECTED on the menu,
+	// CA_CONNECTING to CA_CONNECTED while it connects, CA_LOADING and
+	// CA_PRIMED as the map loads, CA_ACTIVE in the game, CA_CINEMATIC
+	// for a cinematic. A demo plays through the same states
+	void		(*clientStateChanged)( connstate_t state );
+	// A demo started playing (qtrue) or stopped (qfalse): called before
+	// clientStateChanged when both changed
+	void		(*demoPlayback)( qboolean playing );
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -170,6 +187,35 @@ void	Hooks_ClientCommand( int clientNum, const char *text );
 void	Hooks_ClientCommandDone( int clientNum );
 void	Hooks_ServerCommand( int clientNum, const char *text );
 void	Hooks_Print( const char *text );
+void	Hooks_ClientStateChanged( connstate_t state );
+void	Hooks_DemoPlayback( qboolean playing );
+
+// The client, for extensions, in a client build only (client/cl_main.c).
+// Each reads the connection as it stands now.
+
+connstate_t	CL_ExtState( void );
+// the demo playing, by the name it was started with; "" while none plays
+const char	*CL_ExtDemoName( void );
+// the server's address and port, as NET_AdrToStringwPort gives it:
+// "localhost" for the listen server this program runs, as
+// SV_ExtClientAddress names its player; "" while disconnected or playing a
+// demo. NET_AdrToStringwPort's buffer, which its next call, this one's
+// too, overwrites
+const char	*CL_ExtServerAddress( void );
+// the server's info as the gamestate gave it (CS_SERVERINFO: mapname,
+// sv_hostname, sv_maxclients and the game's keys, such as g_needpass);
+// a demo's, as it was recorded; "" before a gamestate, and for one too
+// long for Info_ValueForKey, which would drop the game
+const char	*CL_ExtServerInfo( void );
+// the player's client number on the server, as the gamestate gave it; a
+// demo's recorder's; -1 before a gamestate
+int		CL_ExtClientNum( void );
+// the player state of the last snapshot, in the game (CA_ACTIVE): the
+// player's own, or that of the player they follow, which ps->clientNum
+// tells from CL_ExtClientNum. persistant[PERS_SCORE] is the score, which
+// every mod keeps for server browsers; what the rest means is the
+// game's. qfalse with none
+qboolean	CL_ExtPlayerState( playerState_t *ps );
 
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or
