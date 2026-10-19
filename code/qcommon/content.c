@@ -196,6 +196,19 @@ static const char *Content_HomeFile( const char *file ) {
 
 /*
 =================
+Content_MakeDirs
+
+The content folders, without FS_CreatePath's fatal error where the home
+can't take them: what's written there then fails, and says so
+=================
+*/
+static void Content_MakeDirs( void ) {
+	Sys_Mkdir( Content_HomeFile( "cache" ) );
+	Sys_Mkdir( Content_HomeFile( CONTENT_DIR ) );
+}
+
+/*
+=================
 Content_RemoveStaleTemps
 
 Deletes the temporary files of index writes that a process stopping
@@ -290,10 +303,7 @@ static qboolean Content_WriteFile( const char *ospath, const byte *data, int len
 	if ( Com_sprintf( tmp, sizeof( tmp ), CONTENT_TEMP_FORMAT, target, Sys_PID() ) >= (int)sizeof( tmp ) ) {
 		return qfalse;
 	}
-	// the cache's folders, without FS_CreatePath's fatal error where the
-	// home can't take them: then the file isn't written, and says so
-	Sys_Mkdir( Content_HomeFile( "cache" ) );
-	Sys_Mkdir( Content_HomeFile( CONTENT_DIR ) );
+	Content_MakeDirs();
 	f = Sys_FOpen( tmp, "wb" );
 	if ( !f ) {
 		return qfalse;
@@ -1006,15 +1016,16 @@ static void Content_Cache_RemoveStrays( void ) {
 =================
 Content_Cache_Evict
 
-Evicts the least recently used entries, down to cl_contentCacheMegs
+Evicts the least recently used entries, down to cl_contentCacheMegs and
+maxEntries
 =================
 */
-static void Content_Cache_Evict( void ) {
+static void Content_Cache_Evict( int maxEntries ) {
 	static qboolean	evict[CONTENT_MAX_RECORDS];
 	int				i, count;
 
 	count = Content_ChooseEvictions( cacheEntries, cacheCount, (int64_t)cl_contentCacheMegs->integer << 20,
-		CONTENT_MAX_RECORDS, evict );
+		maxEntries, evict );
 	if ( !count ) {
 		return;
 	}
@@ -1068,7 +1079,7 @@ void Content_Cache_Init( void ) {
 	Content_RemoveStaleTemps();
 	if ( !com_check ) {
 		Content_Cache_RemoveStrays();
-		Content_Cache_Evict();
+		Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	}
 	Content_Cache_Flush();
 }
@@ -1200,4 +1211,132 @@ void Content_Cache_Flush( void ) {
 	if ( cacheStarted && cacheChanged ) {
 		Content_Cache_Write();
 	}
+}
+
+/*
+=================
+Content_HashFile
+
+A whole file's SHA-256 and size, read here and now, as the hash job reads
+one; qfalse if it can't be read, or changes meanwhile
+=================
+*/
+static qboolean Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size ) {
+	hashJob_t	job;
+	hashItem_t	item;
+
+	memset( &item, 0, sizeof( item ) );
+	if ( !Content_FileStat( ospath, &item.pak.size, &item.pak.mtime ) ) {
+		return qfalse;
+	}
+	Q_strncpyz( item.ospath, ospath, sizeof( item.ospath ) );
+	memset( &job, 0, sizeof( job ) );
+	job.items = &item;
+	job.count = 1;
+	if ( !( job.buffer = malloc( HASH_BUFFER_SIZE ) ) ) {
+		return qfalse;
+	}
+	while ( Content_HashJob_Step( &job ) ) {
+	}
+	free( job.buffer );
+	memcpy( sha256, item.pak.sha256, SHA256_DIGEST_SIZE );
+	*size = item.pak.size;
+	return item.result == HASH_DONE;
+}
+
+/*
+=================
+Content_Cache_ValidName
+=================
+*/
+qboolean Content_Cache_ValidName( const char *gamedir, const char *name ) {
+	return strlen( gamedir ) < CACHE_GAMEDIR_SIZE && strlen( name ) < CACHE_NAME_SIZE &&
+		OFCM_ValidName( gamedir, name );
+}
+
+/*
+=================
+Content_Cache_Store
+=================
+*/
+qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
+	char *why, int whySize ) {
+	cacheEntry_t	*e;
+	byte			sha256[SHA256_DIGEST_SIZE];
+	int64_t			size;
+	char			target[MAX_OSPATH];
+	int				i;
+
+	if ( !cacheStarted ) {
+		Q_strncpyz( why, "the content cache isn't running", whySize );
+		return qfalse;
+	}
+	if ( !Content_Cache_ValidName( gamedir, name ) ) {
+		Com_sprintf( why, whySize, "%s/%s isn't a name the content cache keeps", gamedir, name );
+		return qfalse;
+	}
+	if ( !Content_HashFile( tmp, sha256, &size ) || size < CACHE_MIN_PAK_SIZE || size > CONTENT_MAX_PAK_SIZE ) {
+		Com_sprintf( why, whySize, "couldn't read %s", tmp );
+		return qfalse;
+	}
+
+	// a pak the cache has already is used again, under the name this server
+	// gave it, the one a classic server mounts it by (Content_Cache_Find).
+	// The new copy replaces the file, in case it's gone; held as in use, as
+	// below
+	if ( ( i = Content_Cache_FindSHA256( sha256, target, sizeof( target ) ) ) >= 0 ) {
+		Content_MakeDirs();
+		if ( !Sys_Rename( tmp, target ) ) {
+			remove( tmp );
+		}
+		e = &cacheEntries[i];
+		e->lastUsed = time( NULL );
+		e->pakChecksum = pakChecksum;
+		e->mounted = qtrue;
+		Q_strncpyz( e->gamedir, gamedir, sizeof( e->gamedir ) );
+		Q_strncpyz( e->name, name, sizeof( e->name ) );
+		cacheChanged = qtrue;
+		Content_Cache_Flush();
+		return qtrue;
+	}
+	// a partial copy gives way to the whole one: one record a hash
+	for ( i = cacheCount - 1; i >= 0; i-- ) {
+		if ( cacheEntries[i].state == CACHE_PARTIAL && !memcmp( cacheEntries[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			Content_Cache_Delete( i );
+		}
+	}
+	if ( cacheCount == CONTENT_MAX_RECORDS ) {
+		Content_Cache_Evict( CONTENT_MAX_RECORDS - 1 );		// room for one
+		if ( cacheCount == CONTENT_MAX_RECORDS ) {
+			Com_sprintf( why, whySize, "the content cache holds %d paks, all in use", CONTENT_MAX_RECORDS );
+			return qfalse;
+		}
+	}
+
+	e = &cacheEntries[cacheCount];
+	memset( e, 0, sizeof( *e ) );
+	memcpy( e->sha256, sha256, SHA256_DIGEST_SIZE );
+	e->size = e->valid = size;
+	e->lastUsed = time( NULL );
+	e->pakChecksum = pakChecksum;
+	e->state = CACHE_COMPLETE;
+	Q_strncpyz( e->gamedir, gamedir, sizeof( e->gamedir ) );
+	Q_strncpyz( e->name, name, sizeof( e->name ) );
+
+	Content_MakeDirs();
+	Q_strncpyz( target, Content_Cache_EntryFile( e ), sizeof( target ) );
+	if ( !Sys_Rename( tmp, target ) ) {
+		Com_sprintf( why, whySize, "couldn't move %s into the content cache", tmp );
+		return qfalse;
+	}
+	cacheCount++;
+	cacheChanged = qtrue;
+
+	// within the bound, never evicting the pak just stored, nor those stored
+	// before it in this set of downloads: each is held as in use until the
+	// filesystem restart that mounts them (Content_Cache_Unmounted)
+	e->mounted = qtrue;
+	Content_Cache_Evict( CONTENT_MAX_RECORDS );
+	Content_Cache_Flush();
+	return qtrue;
 }

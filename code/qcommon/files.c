@@ -3814,7 +3814,7 @@ FS_ComparePaks
 dlstring == qtrue
 
 Returns a list of pak files that we should download from the server. They all get stored
-in the current gamedir and an FS_Restart will be fired up after we download them all.
+in the content cache and an FS_Restart will be fired up after we download them all.
 
 The string is the format:
 
@@ -3882,22 +3882,12 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 				Q_strcat( neededpaks, len, fs_serverReferencedPakNames[i] );
 				Q_strcat( neededpaks, len, ".pk3" );
 
-				// Local name
+				// Local name: only its .tmp is written there, and the pak then
+				// goes into the content cache by its hash (CL_EndDownload), so
+				// one of the same name already there doesn't matter
 				Q_strcat( neededpaks, len, "@");
-				// Do we have one with the same name?
-				if ( FS_BaseDir_FileExists_HomeData( va( "%s.pk3", fs_serverReferencedPakNames[i] ) ) )
-				{
-					char st[MAX_ZPATH];
-					// We already have one called this, we need to download it to another name
-					// Make something up with the checksum in it
-					Com_sprintf( st, sizeof( st ), "%s.%08x.pk3", fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] );
-					Q_strcat( neededpaks, len, st );
-				}
-				else
-				{
-					Q_strcat( neededpaks, len, fs_serverReferencedPakNames[i] );
-					Q_strcat( neededpaks, len, ".pk3" );
-				}
+				Q_strcat( neededpaks, len, fs_serverReferencedPakNames[i] );
+				Q_strcat( neededpaks, len, ".pk3" );
 
 				// The checksum the download must have
 				Q_strcat( neededpaks, len, va( "@%08x", fs_serverReferencedPaks[i] ) );
