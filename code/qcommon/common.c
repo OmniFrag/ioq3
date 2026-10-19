@@ -4728,6 +4728,10 @@ static qboolean Com_WaitClientFrame( void ) {
 		if(com_sv_running->integer)
 			wait = MIN(wait, SV_SendQueuedPackets() * (int64_t)1000000);
 
+		// the fast download's acks don't wait for a frame, which a minimized
+		// client has only 20 times a second
+		wait = MIN(wait, CL_ContentService() - Sys_Nanoseconds());
+
 		if(left <= 0)
 		{
 			NET_Sleep(0);

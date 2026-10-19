@@ -227,6 +227,7 @@ typedef struct {
 	int			downloadSize;	// how many bytes we got
 	char		downloadList[MAX_INFO_STRING]; // list of paks we need to download
 	qboolean	downloadRestart;	// if true, we need to do another FS_Restart because we downloaded a pak
+	qboolean	downloadHeld;	// a download from the server on this gamestate, which waits for donedl
 
 	// demo information
 	char		demoName[MAX_QPATH];
@@ -514,6 +515,32 @@ void CL_NextDownload(void);
 void CL_DownloadFailed( const char *reason );
 qboolean CL_CheckDownloadSize( void );
 qboolean CL_DownloadAddressAllowed( const netadr_t *adr );
+void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason );
+void CL_ClearDownloadName( void );
+void CL_StartClassicDownloads( void );
+// the paks in clc.downloadList, the classic way: from sv_dlURL or the
+// server itself, then CL_DownloadsComplete
+qboolean CL_NextListedPak( char *remote, int remoteSize, char *local, int localSize, unsigned int *checksum );
+// the first pak of clc.downloadList, taken off it
+qboolean CL_DownloadsByHTTP( void );
+// whether the paks a server lacks come from its sv_dlURL first
+
+//
+// cl_content.c, the fast download (docs/design/download-protocol.md)
+//
+void CL_ContentInit( void );
+qboolean CL_ContentStart( void );
+// from CL_InitDownloads: whether the fast path takes clc.downloadList
+void CL_ContentPacket( netadr_t from, msg_t *msg );
+// a datagram whose first bytes are a content datagram's (OFD_IsContent)
+void CL_ContentFrame( void );
+int64_t CL_ContentService( void );
+// sends the requests, acks and cancels that are due, and says when the
+// next are, as CL_ContentNextDue does
+int64_t CL_ContentNextDue( void );
+// when they're next due, in Sys_Nanoseconds; INT64_MAX for never
+void CL_ContentReset( qboolean disconnect );
+void CL_ContentClearProgress( void );
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );
