@@ -798,6 +798,7 @@ void SV_FreeClient(client_t *client)
 
 	SV_Netchan_FreeQueue(client);
 	SV_CloseDownload(client);
+	SV_ContentFreeClient(client);
 }
 
 /*
@@ -912,6 +913,7 @@ static int SV_SendClientGameState( client_t *client ) {
  	Com_DPrintf ("SV_SendClientGameState() for %s\n", client->name);
 	Com_DPrintf( "Going from CS_CONNECTED to CS_PRIMED for %s\n", client->name );
 	client->state = CS_PRIMED;
+	client->contentGamestateDue = qfalse;
 	client->pureAuthentic = 0;
 	client->gotCP = qfalse;
 	// each load says if it skips what's said, or more (SV_AddServerCommand)
@@ -1093,6 +1095,7 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 
 	Com_DPrintf( "Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name );
 	client->state = CS_ACTIVE;
+	SV_ContentEnterWorld( client );
 
 	// resend all configstrings using the cs commands since these are
 	// no longer sent when the client is CS_PRIMED
@@ -1245,18 +1248,19 @@ static void SV_BeginDownload_f( client_t *cl ) {
 ==================
 SV_DownloadsFull
 
-Whether sv_maxDownloads clients are downloading already. Each download
-holds one of the file handles everything else shares.
+Whether sv_maxDownloads clients besides this one are downloading already,
+by either path. Each classic download holds one of the file handles
+everything else shares.
 ==================
 */
-static qboolean SV_DownloadsFull( void ) {
+qboolean SV_DownloadsFull( const client_t *cl ) {
 	int		i, count = 0;
 
 	if ( sv_maxDownloads->integer <= 0 ) {
 		return qfalse;
 	}
 	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
-		if ( svs.clients[i].download ) {
+		if ( &svs.clients[i] != cl && ( svs.clients[i].download || SV_ContentPaks( &svs.clients[i] ) ) ) {
 			count++;
 		}
 	}
@@ -1329,7 +1333,7 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
 			(sv_allowDownload->integer & DLF_NO_UDP) ||
 			unreferenced ||
 			( refused = sv_refuseRetailPaks->integer && FS_RetailPak( pakbuf, retail, sizeof( retail ) ) ) ||
-			( full = SV_DownloadsFull() ) ||
+			( full = SV_DownloadsFull( cl ) ) ||
 			( cl->downloadSize = FS_BaseDir_FOpenFileRead( cl->downloadName, &cl->download ) ) < 0 ) {
 			// cannot auto-download file
 			if(unreferenced)
@@ -2349,7 +2353,7 @@ void SV_UserVoip(client_t *cl, msg_t *msg, qboolean ignoreData)
 			continue;  // client is ignoring everyone.
 		else if (client->ignoreVoipFromClient[sender])
 			continue;  // client is ignoring this talker.
-		else if (*cl->downloadName)   // !!! FIXME: possible to DoS?
+		else if (SV_ClientDownloading(client))   // !!! FIXME: possible to DoS?
 			continue;  // no VoIP allowed if downloading, to save bandwidth.
 
 		if(Com_IsVoipTarget(recips, sizeof(recips), i))
@@ -2487,7 +2491,7 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 		}
 		// if we can tell that the client has dropped the last
 		// gamestate we sent them, resend it
-		if ( cl->state != CS_ACTIVE && cl->messageAcknowledge > cl->gamestateMessageNum ) {
+		if ( cl->state != CS_ACTIVE && ( cl->messageAcknowledge > cl->gamestateMessageNum || cl->contentGamestateDue ) ) {
 			Com_DPrintf( "%s : dropped gamestate, resending\n", cl->name );
 			SV_ResendGameState( cl );
 		}

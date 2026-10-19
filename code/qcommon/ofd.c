@@ -78,6 +78,15 @@ qboolean OFD_IsContent( const byte *data, int length ) {
 
 /*
 ================
+OFD_ReadKey
+================
+*/
+uint64_t OFD_ReadKey( const byte *data ) {
+	return Get64( data + 12 );
+}
+
+/*
+================
 OFD_ChunkSize
 ================
 */
@@ -490,7 +499,7 @@ qboolean OFD_Read( const byte *data, int length, ofdMessage_t *msg ) {
 	Com_Memset( msg, 0, sizeof( *msg ) );
 	msg->type = data[8];
 	msg->flags = data[9];
-	msg->key = Get64( data + 12 );
+	msg->key = OFD_ReadKey( data );
 	return OFD_ReadBody( data + OFD_HEADER_SIZE, bodyLength, msg ) && OFD_Check( msg );
 }
 

@@ -930,7 +930,13 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 			} else {
 				if( !isBot ) {
 					// when we get the next packet from a connected client,
-					// the new gamestate will be sent
+					// the new gamestate will be sent; one loading by the
+					// fast path has had no packet to acknowledge, nor one
+					// between its paks, still connected since a pak's OPEN
+					svs.clients[i].contentGamestateDue = SV_ContentLoading( &svs.clients[i] )
+						|| ( svs.clients[i].state == CS_CONNECTED && svs.clients[i].content
+							&& !*svs.clients[i].downloadName );
+					svs.clients[i].contentBadDatagrams = 0;	// 16 a map
 					svs.clients[i].state = CS_CONNECTED;
 				}
 				else {
@@ -1173,7 +1179,8 @@ void SV_Init (void)
 		"Upload for all direct downloads together, in KB/s; 0 for no limit\n"
 		"Players downloading pak files (.pk3) from the server share it, so at 500 a 20 MB map takes about "
 		"40 seconds with one player downloading, and longer with more. Downloads from sv_dlURL's web "
-		"server don't count, and the game's own updates to players aren't slowed by it." );
+		"server don't count, and the game's own updates to players aren't slowed by it. The fast "
+		"download has its own ceiling, sv_dlMaxRate." );
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_minPing,
 		"Lowest ping a player may join with, in ms; 0 for no limit\n"
@@ -1299,12 +1306,26 @@ void SV_Init (void)
 		"2 = no web: players ignore sv_dlURL\n"
 		"4 = no direct: refuse to send files, even with 1\n"
 		"8 = stay connected: players don't disconnect for web downloads" );
+	sv_dlMaxRate = Cvar_Get( "sv_dlMaxRate", "10000", CVAR_ARCHIVE );
+	Cvar_CheckRange( sv_dlMaxRate, 0, 1000000, qtrue );
+	Cvar_SetDescription( sv_dlMaxRate,
+		"Upload for all fast downloads together, in KB/s; 0 for no limit\n"
+		"Players whose game has the fast download fetch pak files from the server as fast as their "
+		"connection allows, yielding to the game's own traffic, so this is a ceiling, not a speed; 10000 "
+		"is about 80 Mbit/s. sv_allowDownload's 1 and 4 apply to it as to the classic download, whose "
+		"budget is sv_dlRate; to cap all of a server's downloads, set both." );
+	sv_showContent = Cvar_Get( "sv_showContent", "0", 0 );
+	Cvar_SetDescription( sv_showContent,
+		"Whether to print each fast download's progress once a second, for debugging\n"
+		"With 1, each downloading player's datagrams sent and sent again, rate, window and round trip, "
+		"and the content datagrams ignored." );
 	sv_maxDownloads = Cvar_Get ("sv_maxDownloads", "8", CVAR_ARCHIVE);
 	Cvar_SetDescription( sv_maxDownloads,
 		"Most players downloading from the server at once; 0 for no limit\n"
-		"A player who starts a download over the limit is disconnected, with a message to try again in a "
-		"moment. Each download holds one of the server's 64 open files, which logs and game files share. "
-		"Quake III has no such limit, and downloads from sv_dlURL don't count." );
+		"A player who starts a classic download over the limit is disconnected, with a message to try "
+		"again in a moment, and each holds one of the server's 64 open files, which logs and game files "
+		"share. Fast downloads count too, but wait for a turn instead, and at most 32 run at once, even "
+		"with 0. Quake III has no such limit, and downloads from sv_dlURL don't count." );
 	sv_refuseRetailPaks = Cvar_Get( "sv_refuseRetailPaks", "1", CVAR_ARCHIVE );
 	Cvar_SetDescription( sv_refuseRetailPaks,
 		"Whether the server refuses to send Quake III's own pak files\n"

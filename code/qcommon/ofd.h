@@ -201,6 +201,10 @@ typedef struct {
 // worth reading with OFD_Read rather than as a command
 qboolean	OFD_IsContent( const byte *data, int length );
 
+// the key in the header of a datagram OFD_IsContent accepted, whether or
+// not the rest reads, so a sender can be told by it
+uint64_t	OFD_ReadKey( const byte *data );
+
 // a whole datagram, from its 0xFFFFFFFF on; qfalse if any length, count or
 // field is out of range, and then msg is left unspecified
 qboolean	OFD_Read( const byte *data, int length, ofdMessage_t *msg );
