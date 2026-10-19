@@ -680,7 +680,7 @@ cumulative chunk, the open ones' first
 */
 static void CL_ContentWriteAcks( ofdControl_t *c, int64_t now ) {
 	int64_t	n = clContent.largest, oldest = MAX( 0, n - ( CLC_RECEIVED - 1 ) );
-	int		i;
+	int		i, j;
 
 	c->blocks |= OFD_BLOCK_ACKS;
 	c->largest = clContent.largest;
@@ -710,10 +710,13 @@ static void CL_ContentWriteAcks( ofdControl_t *c, int64_t now ) {
 			c->numTransfers++;
 		}
 	}
+	// a serial the server gave an open transfer since is acked as that one
 	for ( i = 0; i < (int)ARRAY_LEN( clContent.finished ) && c->numTransfers < OFD_MAX_ACK_TRANSFERS; i++ ) {
 		const clcSerial_t	*f = &clContent.finished[i];
 
-		if ( f->serial && f->until > now ) {
+		for ( j = 0; j < c->numTransfers && c->transfers[j].serial != f->serial; j++ ) {
+		}
+		if ( f->serial && f->until > now && j == c->numTransfers ) {
 			c->transfers[c->numTransfers].serial = f->serial;
 			c->transfers[c->numTransfers].cumulativeChunk = f->chunks;
 			c->numTransfers++;
