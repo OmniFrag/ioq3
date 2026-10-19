@@ -59,6 +59,7 @@ typedef unsigned short sa_family_t;
 #	undef EACCES
 #	undef ECONNRESET
 #	undef EHOSTUNREACH
+#	undef ENOBUFS
 
 #	define EAGAIN					WSAEWOULDBLOCK
 #	define EADDRNOTAVAIL	WSAEADDRNOTAVAIL
@@ -67,6 +68,7 @@ typedef unsigned short sa_family_t;
 #	define EACCES			WSAEACCES
 #	define ECONNRESET			WSAECONNRESET
 #	define EHOSTUNREACH		WSAEHOSTUNREACH
+#	define ENOBUFS			WSAENOBUFS
 typedef u_long	ioctlarg_t;
 #	define socketError		WSAGetLastError( )
 
@@ -736,26 +738,28 @@ const char *NET_TakeBroadcastFailure( void ) {
 /*
 ==================
 Sys_SendPacket
+
+qfalse when the socket can't take the datagram now
 ==================
 */
-void Sys_SendPacket( int length, const void *data, netadr_t to ) {
+qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
 
 	if( to.type != NA_BROADCAST && to.type != NA_IP && to.type != NA_IP6 && to.type != NA_MULTICAST6)
 	{
 		Com_Error( ERR_FATAL, "Sys_SendPacket: bad address type" );
-		return;
+		return qtrue;
 	}
 
 	if( (ip_socket == INVALID_SOCKET && to.type == NA_IP) ||
 		(ip_socket == INVALID_SOCKET && to.type == NA_BROADCAST) ||
 		(ip6_socket == INVALID_SOCKET && to.type == NA_IP6) ||
 		(ip6_socket == INVALID_SOCKET && to.type == NA_MULTICAST6) )
-		return;
+		return qtrue;
 
 	if(to.type == NA_MULTICAST6 && (net_enabled->integer & NET_DISABLEMCAST))
-		return;
+		return qtrue;
 
 	memset(&addr, 0, sizeof(addr));
 	NetadrToSockadr( &to, (struct sockaddr *) &addr );
@@ -779,14 +783,15 @@ void Sys_SendPacket( int length, const void *data, netadr_t to ) {
 	if( ret == SOCKET_ERROR ) {
 		int err = socketError;
 
-		// wouldblock is silent
-		if( err == EAGAIN ) {
-			return;
+		// wouldblock is silent, as is a full interface queue, which is
+		// how macOS, the BSDs and Windows say a burst outran the link
+		if( err == EAGAIN || err == ENOBUFS ) {
+			return qfalse;
 		}
 
 		// some PPP links do not allow broadcasts and return an error
 		if( ( err == EADDRNOTAVAIL ) && ( ( to.type == NA_BROADCAST ) ) ) {
-			return;
+			return qtrue;
 		}
 
 		// a local network scan says once why its broadcasts failed
@@ -799,22 +804,23 @@ void Sys_SendPacket( int length, const void *data, netadr_t to ) {
 					"%s; macOS may be blocking %s's access to the local network: "
 					"System Settings, Privacy & Security, Local Network",
 					NET_ErrorString(), PRODUCT_NAME );
-				return;
+				return qtrue;
 			}
 #endif
 			Q_strncpyz( net_broadcastFailure, NET_ErrorString(), sizeof( net_broadcastFailure ) );
-			return;
+			return qtrue;
 		}
 
 		// the scan's IPv6 multicast fails wherever IPv6 isn't routed, which
 		// is common, so it's only for developers
 		if( to.type == NA_MULTICAST6 ) {
 			Com_DPrintf( "Sys_SendPacket: %s\n", NET_ErrorString() );
-			return;
+			return qtrue;
 		}
 
 		Com_Printf( "Sys_SendPacket: %s\n", NET_ErrorString() );
 	}
+	return qtrue;
 }
 
 
@@ -926,6 +932,71 @@ void Sys_ShowIP(void) {
 
 //=============================================================================
 
+#define NET_SOCKET_BUFFER	( 2 * 1024 * 1024 )
+
+/*
+====================
+NET_SocketBuffer
+
+A socket's buffer as the OS gives it, or 0 if unknown. Linux reports
+twice what was asked, the half it adds for its own bookkeeping included
+====================
+*/
+static int NET_SocketBuffer( SOCKET s, int option ) {
+	int			size;
+	socklen_t	length = sizeof(size);
+
+	if( getsockopt( s, SOL_SOCKET, option, (char *) &size, &length ) == SOCKET_ERROR || size < 0 ) {
+		return 0;
+	}
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+	size /= 2;
+#endif
+	return size;
+}
+
+/*
+====================
+NET_SetSocketBuffers
+
+2 MiB each way, for the fast download's bursts (download-protocol.md
+section 7.6); less from the OS is said once
+====================
+*/
+static void NET_SetSocketBuffers( SOCKET s ) {
+	static qboolean	said;
+	static const int	options[] = { SO_RCVBUF, SO_SNDBUF };
+	int				i, size;
+
+	for( i = 0; i < (int)ARRAY_LEN( options ); i++ ) {
+		size = NET_SOCKET_BUFFER;
+		setsockopt( s, SOL_SOCKET, options[i], (char *) &size, sizeof(size) );
+		size = NET_SocketBuffer( s, options[i] );
+		if( size < NET_SOCKET_BUFFER && !said ) {
+			said = qtrue;
+			Com_Printf( "The OS gave a socket %s buffer of %d bytes, less than the %d asked for\n",
+				options[i] == SO_RCVBUF ? "receive" : "send", size, NET_SOCKET_BUFFER );
+		}
+	}
+}
+
+/*
+====================
+NET_ReceiveBufferSize
+
+The receive buffer of the socket that address type uses, as the OS gives
+it, or 0 if unknown
+====================
+*/
+int NET_ReceiveBufferSize( netadrtype_t type ) {
+	SOCKET		s = ( type == NA_IP6 || type == NA_MULTICAST6 ) ? ip6_socket : ip_socket;
+
+	if( ( type != NA_IP && type != NA_BROADCAST && type != NA_IP6 && type != NA_MULTICAST6 )
+		|| s == INVALID_SOCKET ) {
+		return 0;
+	}
+	return NET_SocketBuffer( s, SO_RCVBUF );
+}
 
 /*
 ====================
@@ -965,6 +1036,8 @@ SOCKET NET_IPSocket( char *net_interface, int port, int *err ) {
 	if( setsockopt( newsocket, SOL_SOCKET, SO_BROADCAST, (char *) &i, sizeof(i) ) == SOCKET_ERROR ) {
 		Com_Printf( "WARNING: NET_IPSocket: setsockopt SO_BROADCAST: %s\n", NET_ErrorString() );
 	}
+
+	NET_SetSocketBuffers( newsocket );
 
 	if( !net_interface || !net_interface[0]) {
 		address.sin_family = AF_INET;
@@ -1045,6 +1118,8 @@ SOCKET NET_IP6Socket( char *net_interface, int port, struct sockaddr_in6 *bindto
 		}
 	}
 #endif
+
+	NET_SetSocketBuffers( newsocket );
 
 	if( !net_interface || !net_interface[0]) {
 		address.sin6_family = AF_INET6;
