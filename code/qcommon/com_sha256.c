@@ -69,6 +69,21 @@ void Com_SHA256Final( sha256_t *ctx, byte digest[SHA256_DIGEST_SIZE] ) {
 
 /*
 =================
+Com_SHA256Buffer
+
+The digest of one buffer, whole
+=================
+*/
+void Com_SHA256Buffer( const void *data, size_t len, byte digest[SHA256_DIGEST_SIZE] ) {
+	sha256_t	ctx;
+
+	Com_SHA256Init( &ctx );
+	Com_SHA256Update( &ctx, data, len );
+	Com_SHA256Final( &ctx, digest );
+}
+
+/*
+=================
 Com_SHA256Hex
 
 A digest as 64 lowercase hexadecimal digits

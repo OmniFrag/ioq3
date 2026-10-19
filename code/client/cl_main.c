@@ -2947,6 +2947,9 @@ void CL_InitServerInfo( serverInfo_t *server, netadr_t *address ) {
 	server->punkbuster = 0;
 	server->g_humanplayers = 0;
 	server->g_needpass = 0;
+	server->contentKnown = qfalse;
+	server->contentRequired = 0;
+	server->contentReady = qfalse;
 }
 
 #define MAX_SERVERSPERPACKET	256
@@ -4561,6 +4564,100 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 
 }
 
+/*
+===================
+CL_GetInfoRequest
+
+getinfo, asking for the content protocol's keys too, which a classic
+server leaves out
+===================
+*/
+static const char *CL_GetInfoRequest( void ) {
+	return va( "getinfo xxx ofx=%x", OFX_BUILD );
+}
+
+/*
+===================
+CL_ContentReady
+
+Whether this client holds the content manifest with that hash, from an
+earlier visit, and every pak it requires: one of the game's own by its
+checksum, and the rest in the content cache or the pak index by hash, or
+installed with the same checksum and size (section 9.1). A server list
+asks again and again as it refreshes, so an answer stands for a few
+seconds. It holds more answers than there are pings out, since the ui
+asks about every ping each frame (CL_GetPing)
+===================
+*/
+#define READY_CACHE_SIZE	( MAX_PINGREQUESTS * 2 )
+#define READY_CACHE_MSEC	10000
+
+static qboolean CL_ContentReady( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	static struct {
+		byte		sha256[SHA256_DIGEST_SIZE];
+		int			time;
+		qboolean	ready;
+	} answers[READY_CACHE_SIZE];
+	static int		next;
+	byte			*data;
+	ofcmHeader_t	header;
+	ofcmEntry_t		entry;
+	char			ospath[MAX_OSPATH];
+	qboolean		ready;
+	int				i, length, now = Sys_Milliseconds();
+
+	for ( i = 0; i < READY_CACHE_SIZE; i++ ) {
+		if ( answers[i].time && now - answers[i].time < READY_CACHE_MSEC
+			&& !memcmp( answers[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			return answers[i].ready;
+		}
+	}
+
+	ready = qfalse;
+	if ( ( data = Content_Manifest_Load( sha256, FS_ValidDownloadPak, qfalse, &length, &header ) ) != NULL ) {
+		ready = qtrue;
+		for ( i = 0; ready && i < header.numRequired; i++ ) {
+			OFCM_ReadEntry( data, i, &entry );
+			if ( entry.flags & OFCM_FLAG_OWN ) {
+				ready = FS_HasInstalledPak( entry.checksum, -1 );
+			} else {
+				ready = Content_Cache_FindSHA256( entry.sha256, ospath, sizeof( ospath ) ) >= 0 ||
+					Content_PakIndex_FindSHA256( entry.sha256 ) || FS_HasInstalledPak( entry.checksum, entry.size );
+			}
+		}
+		free( data );
+	}
+
+	Com_Memcpy( answers[next].sha256, sha256, SHA256_DIGEST_SIZE );
+	answers[next].time = now ? now : 1;
+	answers[next].ready = ready;
+	next = ( next + 1 ) % READY_CACHE_SIZE;
+	return ready;
+}
+
+/*
+===================
+CL_SetServerContent
+
+The content keys of an infoResponse, as OFD_ReadInfoContent takes them,
+from a server whose ofx has the content protocol
+===================
+*/
+static void CL_SetServerContent( serverInfo_t *server, const char *info ) {
+	byte		sha256[SHA256_DIGEST_SIZE];
+	uint32_t	bits;
+
+	server->contentKnown = qfalse;
+	server->contentReady = qfalse;
+	if ( !Com_ParseExtensionBits( Info_ValueForKey( info, "ofx" ), &bits ) || !( bits & OFX_CONTENT )
+		|| !OFD_ReadInfoContent( Info_ValueForKey( info, "ofm" ), Info_ValueForKey( info, "ofr" ),
+		sha256, &server->contentRequired ) ) {
+		return;
+	}
+	server->contentKnown = qtrue;
+	server->contentReady = CL_ContentReady( sha256 );
+}
+
 static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
 	if (server) {
 		if (info) {
@@ -4576,6 +4673,7 @@ static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
 			server->punkbuster = atoi(Info_ValueForKey(info, "punkbuster"));
 			server->g_humanplayers = atoi(Info_ValueForKey(info, "g_humanplayers"));
 			server->g_needpass = atoi(Info_ValueForKey(info, "g_needpass"));
+			CL_SetServerContent( server, info );
 		}
 		server->ping = ping;
 	}
@@ -4909,7 +5007,7 @@ CL_LocalServers_f
 ==================
 */
 void CL_LocalServers_f( void ) {
-	char		*message;
+	char		message[64];
 	const char	*failure;
 	int			i, j;
 	netadr_t	to;
@@ -4930,7 +5028,7 @@ void CL_LocalServers_f( void ) {
 	// The 'xxx' in the message is a challenge that will be echoed back
 	// by the server.  We don't care about that here, but master servers
 	// can use that to prevent spoofed server responses from invalid ip
-	message = "\377\377\377\377getinfo xxx";
+	Com_sprintf( message, sizeof( message ), "\377\377\377\377%s", CL_GetInfoRequest() );
 
 	// an earlier failure isn't this scan's
 	NET_TakeBroadcastFailure();
@@ -5260,7 +5358,7 @@ void CL_Ping_f( void ) {
 
 	CL_SetServerInfoByAddress(pingptr->adr, NULL, 0);
 		
-	NET_OutOfBandPrint( NS_CLIENT, to, "getinfo xxx" );
+	NET_OutOfBandPrint( NS_CLIENT, to, "%s", CL_GetInfoRequest() );
 }
 
 /*
@@ -5328,7 +5426,7 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 						memcpy(&cl_pinglist[j].adr, &server[i].adr, sizeof(netadr_t));
 						cl_pinglist[j].start = Sys_Milliseconds();
 						cl_pinglist[j].time = 0;
-						NET_OutOfBandPrint( NS_CLIENT, cl_pinglist[j].adr, "getinfo xxx" );
+						NET_OutOfBandPrint( NS_CLIENT, cl_pinglist[j].adr, "%s", CL_GetInfoRequest() );
 						slots++;
 					}
 				}

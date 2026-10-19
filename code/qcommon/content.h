@@ -242,4 +242,82 @@ void	Content_Cache_Remove( int entry );
 void	Content_Cache_Unmounted( void );
 void	Content_Cache_Flush( void );
 
+/*
+==============================================================
+
+THE CONTENT MANIFEST
+
+The server's list of the paks a client may fetch from it, by SHA-256
+(ofd.h's format): the referenced paks required, its other hashed paks
+optional, and a refused game's own pak a required one listed "bring your
+own", with a zero hash. A pak not hashed yet, unreadable, with a name the
+download rule refuses, or found under its name after another, is left
+out; a client that needs it gets it the classic way
+
+==============================================================
+*/
+
+// a pak of the server's search path, the one a name finds first first; its
+// strings and hash are its pack_t's and its pak index record's, valid until
+// the search path or the index changes
+typedef struct {
+	const char		*gameDir;
+	const char		*name;			// without .pk3
+	const char		*ospath;
+	unsigned int	checksum;		// pack_t.checksum
+	int64_t			size;			// -1 if it couldn't be read
+	int64_t			mtime;
+	const byte		*sha256;		// NULL until the pak index has it, and always when refused
+	qboolean		referenced;		// clients must have it
+	qboolean		refused;		// one of the game's own, which the server doesn't send
+	qboolean		code;			// it holds vm/cgame.qvm or vm/ui.qvm
+} contentPak_t;
+
+// files.c: the search path's paks, as above; how many there are, though at
+// most max are filled, and none when paks is NULL
+int		FS_ContentPaks( contentPak_t *paks, int max );
+
+typedef enum {
+	MANIFEST_LISTED,
+	MANIFEST_REFUSED,		// a game's own pak, not required: not offered
+	MANIFEST_UNHASHED,		// not hashed yet
+	MANIFEST_UNREADABLE,	// its size couldn't be read, or is out of range
+	MANIFEST_BAD_NAME,		// a name no download may have
+	MANIFEST_SHADOWED,		// another pak higher in the search path has its name
+	MANIFEST_TOO_MANY		// optional, past the entries a content manifest holds
+} manifestListing_t;
+
+// The content manifest of the paks, with OFCM_Write: its length in out, and
+// its header, or 0 when it can't be written (*error says why), as with more
+// than 4,096 required paks. listing[i] says what became of paks[i]
+int		Content_BuildManifest( const contentPak_t *paks, int count, ofcmValidName_t validName,
+			manifestListing_t *listing, ofcmHeader_t *header, byte *out, int size, const char **error );
+
+/*
+==============================================================
+
+THE CLIENT'S CONTENT MANIFESTS
+
+<fs_homedatapath>/cache/content/manifests/<sha256>.ofcm: content manifests
+from earlier visits, at most MANIFEST_CACHE_MAX, the least recently used
+going first, so the server list can say a server's content is ready and
+a client asks for a content manifest only once
+
+==============================================================
+*/
+
+#define MANIFEST_CACHE_DIR		CONTENT_DIR "/manifests"
+#define MANIFEST_CACHE_MAX		64
+
+// keeps a content manifest that OFCM_Read accepts, under its hash, which
+// it gives; qfalse if it breaks a rule or can't be written
+qboolean	Content_Manifest_Store( const byte *data, int length, ofcmValidName_t validName,
+				byte sha256[SHA256_DIGEST_SIZE] );
+// the content manifest with that hash, in a malloc'd buffer, and its
+// header; NULL if it isn't kept, or its bytes don't match the hash or the
+// rules. With use, the cache counts it as used now, as connecting does and
+// a glance from the server list doesn't
+byte		*Content_Manifest_Load( const byte sha256[SHA256_DIGEST_SIZE], ofcmValidName_t validName,
+				qboolean use, int *length, ofcmHeader_t *header );
+
 #endif

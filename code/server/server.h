@@ -455,6 +455,16 @@ extern qboolean	sv_mapCheats;	// the last map command was a devmap, which sv_che
 
 
 //
+// sv_content.c
+//
+void SV_ContentBuildManifest( void );
+const byte *SV_ContentManifest( const byte *sha256, int *length );
+const char *SV_ContentFindPak( const byte sha256[SHA256_DIGEST_SIZE], int64_t *size, int64_t *mtime );
+void SV_ContentInfo( char *infostring );
+void SV_ContentFrame( void );
+void SV_ContentShutdown( void );
+
+//
 // sv_client.c
 //
 void SV_GetChallenge(netadr_t from);
