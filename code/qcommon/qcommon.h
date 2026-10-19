@@ -172,10 +172,12 @@ int			NET_Port( void );
 int			NET_ServerPort( void );
 int			NET_OpenPort( netadrtype_t type );
 qboolean	NET_LoopbackOnly( int port, int port6 );
+int			NET_ReceiveBufferSize( netadrtype_t type );
 void		NET_Config( qboolean enableNetworking );
 void		NET_ExitIfDisabled( const char *lead );
 void		NET_FlushPacketQueue(void);
 void		NET_SendPacket (netsrc_t sock, int length, const void *data, netadr_t to);
+qboolean	NET_SendPacketChecked( netsrc_t sock, int length, const void *data, netadr_t to );
 void		QDECL NET_OutOfBandPrint( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
 void		QDECL NET_OutOfBandData( netsrc_t sock, netadr_t adr, byte *format, int len );
 
@@ -1703,7 +1705,7 @@ cpuFeatures_t Sys_GetProcessorFeatures( void );
 
 void	Sys_SetErrorText( const char *text );
 
-void	Sys_SendPacket( int length, const void *data, netadr_t to );
+qboolean	Sys_SendPacket( int length, const void *data, netadr_t to );
 
 qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
 //Does NOT parse port numbers, only base addresses.
