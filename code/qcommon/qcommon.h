@@ -1193,6 +1193,9 @@ void FS_HashPaks( void );
 const char *FS_ContentRootPath( int root );
 // a root of the search path, by the number the pak index keeps for it: its
 // directory, NULL if it has none now
+void FS_UnmountCachePaks( void );
+// once the client has left the server that referenced the content cache's
+// paks it mounted, restarts the filesystem without them
 const char *FS_ReferencedPakChecksums( void );
 const char *FS_ReferencedPakPureChecksums( void );
 // Returns a space separated string containing the checksums of all loaded 
