@@ -265,6 +265,8 @@ typedef struct {
 	int				hashSize;					// hash table size (power of 2)
 	fileInPack_t*	*hashTable;					// hash table
 	fileInPack_t*	buildBuffer;				// buffer with the filenames etc.
+	qboolean		cached;						// a download, from the content cache
+	qboolean		defaultCfgNoted;			// its default.cfg read, and said so
 } pack_t;
 
 typedef struct {
@@ -405,6 +407,9 @@ static char			*fs_serverPakNames[MAX_SEARCH_PATHS];			// pk3 names
 static int			fs_numServerReferencedPaks;
 static unsigned int	fs_serverReferencedPaks[MAX_SEARCH_PATHS];			// checksums
 static char			*fs_serverReferencedPakNames[MAX_SEARCH_PATHS];		// pk3 names
+
+// the search path's paks from the content cache (FS_AddCachePaks)
+static int			fs_numCachePaks;
 
 // last valid game folder used
 char lastValidBase[MAX_OSPATH];
@@ -1436,6 +1441,42 @@ qboolean FS_IsDemoExt(const char *filename, int namelen)
 
 /*
 ===========
+FS_CachePakRefuses
+
+Whether a file is kept from being read in a pak from the content cache, a
+download: its configs, which a server could fill with commands, but for
+default.cfg, which a mod needs, and whose reading from this pak is said
+once a mount
+===========
+*/
+static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename, qboolean opening ) {
+	const fileInPack_t	*pakFile;
+
+	if ( !COM_CompareExtension( filename, ".cfg" ) ) {
+		return qfalse;
+	}
+	if ( Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) ) {
+		return qtrue;
+	}
+	if ( !opening || pak->defaultCfgNoted ) {
+		return qfalse;
+	}
+	// a search passes over every pak above the one that has it
+	for ( pakFile = pak->hashTable[FS_HashFileName( filename, pak->hashSize )]; pakFile; pakFile = pakFile->next ) {
+		if ( !FS_FilenameCompare( pakFile->name, filename ) ) {
+			break;
+		}
+	}
+	if ( pakFile ) {
+		pak->defaultCfgNoted = qtrue;
+		Com_Printf( "Reading default.cfg from %s/%s.pk3, downloaded to the content cache\n",
+			pak->pakGamename, pak->pakBasename );
+	}
+	return qfalse;
+}
+
+/*
+===========
 FS_FOpenFileReadDir
 
 Tries opening file "filename" in searchpath "search"
@@ -1479,6 +1520,15 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 	{
 		if(file == NULL)
 			return qfalse;
+
+		*file = 0;
+		return -1;
+	}
+
+	if(search->pack && search->pack->cached && FS_CachePakRefuses(search->pack, filename, file != NULL))
+	{
+		if(file == NULL)
+			return 0;
 
 		*file = 0;
 		return -1;
@@ -3325,6 +3375,9 @@ void FS_Path_f( void ) {
 	for (s = fs_searchpaths; s; s = s->next) {
 		if (s->pack) {
 			Com_Printf ("%s (%i files)\n", s->pack->pakFilename, s->pack->numfiles);
+			if ( s->pack->cached ) {
+				Com_Printf( "    from the content cache, as %s/%s.pk3\n", s->pack->pakGamename, s->pack->pakBasename );
+			}
 			if ( fs_numServerPaks ) {
 				if ( !FS_PakIsPure(s->pack) ) {
 					Com_Printf( "    not on the pure list\n" );
@@ -3594,11 +3647,108 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 
 /*
 ================
+FS_AddCachePaks
+
+The content cache's paks of a game directory that the server connected to
+references, by checksum, game directory and name, and that no pak in the search
+path has already, put after that directory's own entries, below, so each
+ranks under its installed paks and over any lower game directory. A
+download then never replaces an installed pak of its own directory, and a
+mod's still overrides the base game's. Only on a client connected to
+another's server (a demo sets no referenced paks)
+================
+*/
+static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
+{
+	searchpath_t	**link, *search;
+	pack_t			*pak;
+	const char		*refName, *slash;
+	char			ospath[MAX_OSPATH];
+	int				i, entry;
+
+	// (com_dedicated and com_sv_running are registered after the first startup)
+	if ( !fs_numServerReferencedPaks || ( com_dedicated && com_dedicated->integer ) ||
+		( com_sv_running && com_sv_running->integer ) ) {
+		return;
+	}
+
+	// each goes just over below, after those before it
+	for ( link = &fs_searchpaths; *link != below; link = &(*link)->next ) {
+	}
+
+	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
+		refName = fs_serverReferencedPakNames[i];
+		slash = refName ? strchr( refName, '/' ) : NULL;
+		if ( !slash || slash - refName != (int)strlen( dir ) || Q_stricmpn( refName, dir, slash - refName ) ) {
+			continue;
+		}
+		for ( search = fs_searchpaths; search; search = search->next ) {
+			if ( search->pack && search->pack->checksum == fs_serverReferencedPaks[i] ) {
+				break;
+			}
+		}
+		if ( search ) {
+			continue;
+		}
+		entry = Content_Cache_Find( fs_serverReferencedPaks[i], dir, slash + 1, ospath, sizeof( ospath ) );
+		if ( entry < 0 ) {
+			continue;
+		}
+
+		pak = FS_LoadZipFile( ospath, slash + 1 );
+		if ( !pak || pak->checksum != fs_serverReferencedPaks[i] ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s, cached as %s, is damaged, so it's removed\n",
+				ospath, refName );
+			if ( pak ) {
+				FS_FreePak( pak );
+			}
+			Content_Cache_Remove( entry );
+			continue;
+		}
+		// in the game directory's place, where a download used to go, so a
+		// QVM is looked for in one pak a directory (FS_FindVM)
+		Q_strncpyz( pak->pakPathname, FS_BaseDir_BuildOSPath( fs_homedatapath->string, dir ),
+			sizeof( pak->pakPathname ) );
+		Q_strncpyz( pak->pakGamename, dir, sizeof( pak->pakGamename ) );
+		pak->cached = qtrue;
+		fs_packFiles += pak->numfiles;
+
+		search = Z_Malloc( sizeof( searchpath_t ) );
+		search->pack = pak;
+		search->next = *link;
+		*link = search;
+		link = &search->next;
+		fs_numCachePaks++;
+		Content_Cache_Mounted( entry );
+	}
+}
+
+/*
+================
+FS_UnmountCachePaks
+
+Once the client has left the server that referenced them, restarts the
+filesystem without the content cache's paks, so the menus and a local game
+run on installed content only; the next server's gamestate mounts what it
+references. Until paks can be taken out of the search path in place
+================
+*/
+void FS_UnmountCachePaks( void )
+{
+	if ( fs_numCachePaks && !fs_numServerReferencedPaks ) {
+		FS_Restart( fs_checksumFeed );
+	}
+}
+
+/*
+================
 FS_AddGameDirectories
 ================
 */
 static void FS_AddGameDirectories(const char *dir)
 {
+	const searchpath_t	*below = fs_searchpaths;
+
 	// add search path elements in reverse priority order
 	for(int i = ARRAY_LEN(fs_pathVars) - 1; i >= 0; i--) {
 		const cvar_t *pathVar = fs_pathVars[i];
@@ -3611,6 +3761,8 @@ static void FS_AddGameDirectories(const char *dir)
 		FS_AddGameDirectory(pathVar->string, dir, FS_PathVarPaksOnly( pathVar ));
 		FS_SetContentRoot( fs_searchpaths, added, pathVar );
 	}
+
+	FS_AddCachePaks( dir, below );
 }
 
 /*
@@ -4089,6 +4241,10 @@ static void FS_Startup( const char *gameName )
 
 	FS_ImportPredecessorConfig(predConfigPath, gameName);
 
+	// the content cache's paks are mounted again as the directories are added
+	Content_Cache_Unmounted();
+	fs_numCachePaks = 0;
+
 	FS_AddGameDirectories(gameName);
 
 	// check for additional base game so mods can be based upon other mods
@@ -4120,6 +4276,9 @@ static void FS_Startup( const char *gameName )
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=506
 	// reorder the pure pk3 files according to server order
 	FS_ReorderPurePaks();
+
+	// when the cached paks mounted were last used
+	Content_Cache_Flush();
 
 	// print the current search paths
 	FS_Path_f();
@@ -4272,7 +4431,8 @@ static void FS_CheckPak0( void )
 
 	for( path = fs_searchpaths; path; path = path->next )
 	{
-		if(!path->pack)
+		// a download named pak0 isn't the game's
+		if(!path->pack || path->pack->cached)
 			continue;
 
 		curpack = path->pack;

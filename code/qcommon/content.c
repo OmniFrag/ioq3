@@ -20,7 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 // content.c -- paks known by their content: the pak index, which keeps
-// each installed pak's SHA-256, and the job that hashes them
+// each installed pak's SHA-256, the job that hashes them, and the client's
+// cache of downloaded paks, named by their hashes
 
 #include "content.h"
 
@@ -769,3 +770,434 @@ qboolean Content_PakIndex_Frame( void ) {
 	return hashed > 0;
 }
 
+/*
+==============================================================
+
+THE CLIENT'S CONTENT CACHE
+
+==============================================================
+*/
+
+/*
+=================
+Content_ParseCacheIndex
+=================
+*/
+int Content_ParseCacheIndex( const byte *data, int length, cacheEntry_t *entries, int maxEntries ) {
+	const byte		*p;
+	cacheEntry_t	*e;
+	int				count, i, j;
+
+	count = Content_ParseHeader( data, length, CACHE_INDEX_MAGIC, CACHE_INDEX_RECORD_SIZE, maxEntries );
+	for ( i = 0; i < count; i++ ) {
+		p = data + CONTENT_HEADER_SIZE + i * CACHE_INDEX_RECORD_SIZE;
+		e = &entries[i];
+		memset( e, 0, sizeof( *e ) );
+		memcpy( e->sha256, p, SHA256_DIGEST_SIZE );
+		e->size = Content_Get64( p + 32 );
+		e->valid = Content_Get64( p + 40 );
+		e->lastUsed = Content_Get64( p + 48 );
+		e->pakChecksum = Content_Get32( p + 56 );
+		e->state = p[60];
+		if ( ( e->state != CACHE_COMPLETE && e->state != CACHE_PARTIAL ) ||
+			e->size < CACHE_MIN_PAK_SIZE || e->size > CONTENT_MAX_PAK_SIZE || e->valid < 0 || e->valid > e->size ||
+			!memchr( p + 64, '\0', CACHE_GAMEDIR_SIZE ) || !memchr( p + 96, '\0', CACHE_NAME_SIZE ) ) {
+			return -1;
+		}
+		Q_strncpyz( e->gamedir, (const char *)p + 64, sizeof( e->gamedir ) );
+		Q_strncpyz( e->name, (const char *)p + 96, sizeof( e->name ) );
+		// the content manifest's rule, fields of the same sizes
+		if ( !OFCM_ValidName( e->gamedir, e->name ) ) {
+			return -1;
+		}
+		for ( j = 0; j < i; j++ ) {
+			if ( !memcmp( entries[j].sha256, e->sha256, SHA256_DIGEST_SIZE ) ) {
+				return -1;
+			}
+		}
+	}
+	return count;
+}
+
+/*
+=================
+Content_WriteCacheIndex
+=================
+*/
+int Content_WriteCacheIndex( const cacheEntry_t *entries, int count, byte *out, int size ) {
+	const cacheEntry_t	*e;
+	byte				*p;
+	int					i, length;
+
+	if ( count < 0 || count > CONTENT_MAX_RECORDS ) {
+		return -1;
+	}
+	length = CONTENT_HEADER_SIZE + count * CACHE_INDEX_RECORD_SIZE;
+	if ( length > size ) {
+		return -1;
+	}
+	Content_WriteHeader( out, CACHE_INDEX_MAGIC, CACHE_INDEX_RECORD_SIZE, count );
+	for ( i = 0; i < count; i++ ) {
+		p = out + CONTENT_HEADER_SIZE + i * CACHE_INDEX_RECORD_SIZE;
+		e = &entries[i];
+		memset( p, 0, CACHE_INDEX_RECORD_SIZE );
+		memcpy( p, e->sha256, SHA256_DIGEST_SIZE );
+		Content_Put64( p + 32, e->size );
+		Content_Put64( p + 40, e->valid );
+		Content_Put64( p + 48, e->lastUsed );
+		Content_Put32( p + 56, e->pakChecksum );
+		p[60] = e->state;
+		Q_strncpyz( (char *)p + 64, e->gamedir, CACHE_GAMEDIR_SIZE );
+		Q_strncpyz( (char *)p + 96, e->name, CACHE_NAME_SIZE );
+	}
+	return length;
+}
+
+// what an entry takes on the disk
+static int64_t Content_CacheBytes( const cacheEntry_t *e ) {
+	return e->state == CACHE_COMPLETE ? e->size : e->valid;
+}
+
+/*
+=================
+Content_ChooseEvictions
+=================
+*/
+int Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t maxBytes,
+	int maxEntries, qboolean *evict ) {
+	int64_t	total = 0;
+	int		i, oldest, kept = count, evicted = 0;
+
+	for ( i = 0; i < count; i++ ) {
+		evict[i] = qfalse;
+		total += Content_CacheBytes( &entries[i] );
+	}
+	while ( ( maxBytes > 0 && total > maxBytes ) || kept > maxEntries ) {
+		// the least recently used left, ties going by hash, so the choice
+		// doesn't depend on the index's order
+		oldest = -1;
+		for ( i = 0; i < count; i++ ) {
+			if ( evict[i] || entries[i].mounted ) {
+				continue;
+			}
+			if ( oldest < 0 || entries[i].lastUsed < entries[oldest].lastUsed ||
+				( entries[i].lastUsed == entries[oldest].lastUsed &&
+				memcmp( entries[i].sha256, entries[oldest].sha256, SHA256_DIGEST_SIZE ) < 0 ) ) {
+				oldest = i;
+			}
+		}
+		if ( oldest < 0 ) {
+			break;		// what's left is all in use
+		}
+		evict[oldest] = qtrue;
+		total -= Content_CacheBytes( &entries[oldest] );
+		kept--;
+		evicted++;
+	}
+	return evicted;
+}
+
+static cacheEntry_t	cacheEntries[CONTENT_MAX_RECORDS];
+static int			cacheCount;
+static qboolean		cacheStarted;		// a client's, once Content_Cache_Init has run
+static qboolean		cacheChanged;		// since index.dat was written
+static cvar_t		*cl_contentCacheMegs;
+
+/*
+=================
+Content_Cache_EntryFile
+
+An entry's file: <sha256>.pk3, or .part while partial
+=================
+*/
+static const char *Content_Cache_EntryFile( const cacheEntry_t *e ) {
+	char	hex[SHA256_HEX_SIZE];
+
+	Com_SHA256Hex( e->sha256, hex );
+	return Content_HomeFile( va( CONTENT_DIR "/%s.%s", hex, e->state == CACHE_COMPLETE ? "pk3" : "part" ) );
+}
+
+/*
+=================
+Content_Cache_Write
+=================
+*/
+static void Content_Cache_Write( void ) {
+	byte	*data;
+	int		length;
+
+	length = CONTENT_HEADER_SIZE + cacheCount * CACHE_INDEX_RECORD_SIZE;
+	data = malloc( length );
+	if ( !data ) {
+		return;
+	}
+	Content_WriteCacheIndex( cacheEntries, cacheCount, data, length );
+	if ( Content_WriteFile( Content_HomeFile( CACHE_INDEX_FILE ), data, length ) ) {
+		cacheChanged = qfalse;
+	} else if ( !com_check ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( CACHE_INDEX_FILE ) );
+	}
+	free( data );
+}
+
+/*
+=================
+Content_Cache_Delete
+
+Deletes entry i's file, and the entry
+=================
+*/
+static void Content_Cache_Delete( int i ) {
+	remove( Content_Cache_EntryFile( &cacheEntries[i] ) );
+	cacheEntries[i] = cacheEntries[--cacheCount];
+	cacheChanged = qtrue;
+}
+
+/*
+=================
+Content_Cache_RemoveStrays
+
+Deletes the cache's files index.dat doesn't list, which a run that
+stopped between writing a pak and the index, or a damaged index, leaves,
+and drops the entries whose files are gone or the wrong size
+=================
+*/
+static void Content_Cache_RemoveStrays( void ) {
+	static const char	*extensions[] = { ".pk3", ".part" };
+	char				dir[MAX_OSPATH], hex[SHA256_HEX_SIZE], **files;
+	byte				sha256[SHA256_DIGEST_SIZE];
+	int64_t				size, mtime;
+	int					i, j, x, count;
+
+	for ( i = cacheCount - 1; i >= 0; i-- ) {
+		if ( !Content_FileStat( Content_Cache_EntryFile( &cacheEntries[i] ), &size, &mtime ) ||
+			( cacheEntries[i].state == CACHE_COMPLETE ? size != cacheEntries[i].size : size < cacheEntries[i].valid ) ) {
+			Content_Cache_Delete( i );
+		}
+	}
+
+	Q_strncpyz( dir, Content_HomeFile( CONTENT_DIR ), sizeof( dir ) );
+	for ( x = 0; x < (int)ARRAY_LEN( extensions ); x++ ) {
+		files = Sys_ListFiles( dir, extensions[x], NULL, &count, qfalse );
+		for ( i = 0; i < count; i++ ) {
+			// only names the cache gives: 64 hex digits and the extension
+			if ( strlen( files[i] ) != SHA256_HEX_SIZE - 1 + strlen( extensions[x] ) ) {
+				continue;
+			}
+			Q_strncpyz( hex, files[i], sizeof( hex ) );
+			if ( !Com_SHA256FromHex( hex, sha256 ) ) {
+				continue;
+			}
+			for ( j = 0; j < cacheCount; j++ ) {
+				if ( !memcmp( cacheEntries[j].sha256, sha256, SHA256_DIGEST_SIZE ) &&
+					( cacheEntries[j].state == CACHE_COMPLETE ) == !x ) {
+					break;
+				}
+			}
+			if ( j == cacheCount ) {
+				remove( va( "%s%c%s", dir, PATH_SEP, files[i] ) );
+			}
+		}
+		Sys_FreeFileList( files );
+	}
+}
+
+/*
+=================
+Content_Cache_Evict
+
+Evicts the least recently used entries, down to cl_contentCacheMegs
+=================
+*/
+static void Content_Cache_Evict( void ) {
+	static qboolean	evict[CONTENT_MAX_RECORDS];
+	int				i, count;
+
+	count = Content_ChooseEvictions( cacheEntries, cacheCount, (int64_t)cl_contentCacheMegs->integer << 20,
+		CONTENT_MAX_RECORDS, evict );
+	if ( !count ) {
+		return;
+	}
+	// from the end, as each deletion moves the last entry into its place
+	for ( i = cacheCount - 1; i >= 0; i-- ) {
+		if ( evict[i] ) {
+			Content_Cache_Delete( i );
+		}
+	}
+	Com_Printf( "Removed %d of the content cache's least recently used paks, to keep it within "
+		"cl_contentCacheMegs %d\n", count, cl_contentCacheMegs->integer );
+}
+
+/*
+=================
+Content_Cache_Init
+=================
+*/
+void Content_Cache_Init( void ) {
+	byte	*data;
+	int		length;
+
+#ifdef __EMSCRIPTEN__
+	cl_contentCacheMegs = Cvar_Get( "cl_contentCacheMegs", "1024", CVAR_ARCHIVE_ND );
+#else
+	cl_contentCacheMegs = Cvar_Get( "cl_contentCacheMegs", "4096", CVAR_ARCHIVE_ND );
+#endif
+	Cvar_CheckRange( cl_contentCacheMegs, 0, 1048576, qtrue );
+	Cvar_SetDescription( cl_contentCacheMegs,
+		"Megabytes the paks downloaded from servers may take in the content cache. When it's over, the "
+		"least recently used go at the next start. 0 for no limit, though it keeps at most 4096 paks" );
+
+	if ( cacheStarted ) {
+		return;
+	}
+	cacheStarted = qtrue;
+	cacheCount = 0;
+	data = Content_ReadFile( Content_HomeFile( CACHE_INDEX_FILE ),
+		CONTENT_HEADER_SIZE + CONTENT_MAX_RECORDS * CACHE_INDEX_RECORD_SIZE, &length );
+	if ( data ) {
+		cacheCount = Content_ParseCacheIndex( data, length, cacheEntries, CONTENT_MAX_RECORDS );
+		if ( cacheCount < 0 ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s is damaged, so the content cache starts empty\n",
+				CACHE_INDEX_FILE );
+			cacheCount = 0;
+			cacheChanged = qtrue;
+		}
+		free( data );
+	}
+
+	Content_RemoveStaleTemps();
+	if ( !com_check ) {
+		Content_Cache_RemoveStrays();
+		Content_Cache_Evict();
+	}
+	Content_Cache_Flush();
+}
+
+/*
+=================
+Content_Cache_Shutdown
+=================
+*/
+void Content_Cache_Shutdown( void ) {
+	Content_Cache_Flush();
+}
+
+/*
+=================
+Content_Cache_Find
+=================
+*/
+int Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, const char *name,
+	char *ospath, int ospathSize ) {
+	int		i;
+
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( cacheEntries[i].state == CACHE_COMPLETE && !cacheEntries[i].mounted &&
+			cacheEntries[i].pakChecksum == pakChecksum && !Q_stricmp( cacheEntries[i].gamedir, gamedir ) &&
+			!Q_stricmp( cacheEntries[i].name, name ) ) {
+			Q_strncpyz( ospath, Content_Cache_EntryFile( &cacheEntries[i] ), ospathSize );
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+=================
+Content_Cache_FindSHA256
+=================
+*/
+int Content_Cache_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE], char *ospath, int ospathSize ) {
+	int		i;
+
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( cacheEntries[i].state == CACHE_COMPLETE && !memcmp( cacheEntries[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			Q_strncpyz( ospath, Content_Cache_EntryFile( &cacheEntries[i] ), ospathSize );
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+=================
+Content_Cache_HasRoom
+=================
+*/
+qboolean Content_Cache_HasRoom( int64_t bytes, char *why, int whySize ) {
+	unsigned long long	available, total;
+	int64_t				mounted = 0, room;
+	int					i;
+
+	if ( cl_contentCacheMegs && cl_contentCacheMegs->integer > 0 ) {
+		for ( i = 0; i < cacheCount; i++ ) {
+			if ( cacheEntries[i].mounted ) {
+				mounted += Content_CacheBytes( &cacheEntries[i] );
+			}
+		}
+		room = ( (int64_t)cl_contentCacheMegs->integer << 20 ) - mounted;
+		if ( bytes > room ) {
+			Com_sprintf( why, whySize, "the downloads need %.1f MB, and cl_contentCacheMegs leaves "
+				"%.1f MB for them", bytes / 1048576.0, MAX( room, 0 ) / 1048576.0 );
+			return qfalse;
+		}
+	}
+	// where the disk's room isn't known, as in a browser, the bound alone
+	// (the home itself: FS_BaseDir_BuildOSPath takes an empty path for the
+	// game directory, which may not be there)
+	if ( Sys_DiskSpace( Cvar_VariableString( "fs_homedatapath" ), &available, &total ) &&
+		(unsigned long long)bytes + CACHE_DISK_RESERVE > available ) {
+		Com_sprintf( why, whySize, "the downloads need %.1f MB, and the disk has %.1f MB free, "
+			"of which %d MB is left free", bytes / 1048576.0, available / 1048576.0, CACHE_DISK_RESERVE >> 20 );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+=================
+Content_Cache_Mounted
+=================
+*/
+void Content_Cache_Mounted( int entry ) {
+	if ( entry >= 0 && entry < cacheCount ) {
+		cacheEntries[entry].mounted = qtrue;
+		cacheEntries[entry].lastUsed = time( NULL );
+		cacheChanged = qtrue;
+	}
+}
+
+/*
+=================
+Content_Cache_Remove
+=================
+*/
+void Content_Cache_Remove( int entry ) {
+	if ( entry >= 0 && entry < cacheCount && !cacheEntries[entry].mounted ) {
+		Content_Cache_Delete( entry );
+	}
+}
+
+/*
+=================
+Content_Cache_Unmounted
+=================
+*/
+void Content_Cache_Unmounted( void ) {
+	int		i;
+
+	for ( i = 0; i < cacheCount; i++ ) {
+		cacheEntries[i].mounted = qfalse;
+	}
+}
+
+/*
+=================
+Content_Cache_Flush
+=================
+*/
+void Content_Cache_Flush( void ) {
+	if ( cacheStarted && cacheChanged ) {
+		Content_Cache_Write();
+	}
+}
