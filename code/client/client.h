@@ -536,9 +536,7 @@ void CL_ContentPacket( netadr_t from, msg_t *msg );
 void CL_ContentFrame( void );
 int64_t CL_ContentService( void );
 // sends the requests, acks and cancels that are due, and says when the
-// next are, as CL_ContentNextDue does
-int64_t CL_ContentNextDue( void );
-// when they're next due, in Sys_Nanoseconds; INT64_MAX for never
+// next are, in Sys_Nanoseconds; INT64_MAX for never
 void CL_ContentReset( qboolean disconnect );
 void CL_ContentClearProgress( void );
 

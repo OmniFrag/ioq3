@@ -884,15 +884,6 @@ static int64_t CL_ContentDue( int64_t now ) {
 
 /*
 =================
-CL_ContentNextDue
-=================
-*/
-int64_t CL_ContentNextDue( void ) {
-	return CL_ContentDue( Sys_Nanoseconds() );
-}
-
-/*
-=================
 CL_ContentService
 =================
 */
