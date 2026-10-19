@@ -3623,6 +3623,69 @@ void CL_CheckUserinfo( void ) {
 
 /*
 ==================
+CL_ReportState
+
+Tells the engine extensions (hooks.h) what changed since the last frame:
+whether a demo plays, then the connection's state
+==================
+*/
+static void CL_ReportState( void ) {
+	static connstate_t	reportedState = CA_UNINITIALIZED;
+	static qboolean		reportedDemo = qfalse;
+
+	if ( clc.demoplaying != reportedDemo ) {
+		reportedDemo = clc.demoplaying;
+		Hooks_DemoPlayback( reportedDemo );
+	}
+	if ( clc.state != reportedState ) {
+		reportedState = clc.state;
+		Hooks_ClientStateChanged( reportedState );
+	}
+}
+
+connstate_t CL_ExtState( void ) {
+	return clc.state;
+}
+
+const char *CL_ExtDemoName( void ) {
+	return clc.demoplaying ? clc.demoName : "";
+}
+
+const char *CL_ExtServerAddress( void ) {
+	if ( clc.state < CA_CONNECTING || clc.state == CA_CINEMATIC || clc.demoplaying ) {
+		return "";
+	}
+	if ( NET_IsLocalAddress( clc.serverAddress ) ) {
+		return "localhost";
+	}
+	return NET_AdrToStringwPort( clc.serverAddress );
+}
+
+// the gamestate's, which CL_ClearState empties as the client disconnects
+const char *CL_ExtServerInfo( void ) {
+	const char	*info;
+
+	if ( clc.state < CA_LOADING || clc.state == CA_CINEMATIC ) {
+		return "";
+	}
+	info = cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO];
+	return strlen( info ) < BIG_INFO_STRING ? info : "";
+}
+
+int CL_ExtClientNum( void ) {
+	return clc.state >= CA_LOADING && clc.state != CA_CINEMATIC ? clc.clientNum : -1;
+}
+
+qboolean CL_ExtPlayerState( playerState_t *ps ) {
+	if ( clc.state != CA_ACTIVE || !cl.snap.valid ) {
+		return qfalse;
+	}
+	*ps = cl.snap.ps;
+	return qtrue;
+}
+
+/*
+==================
 CL_Frame
 
 ==================
@@ -3632,6 +3695,8 @@ void CL_Frame ( int msec ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+	CL_ReportState();
 
 #ifdef __EMSCRIPTEN__
 	{
