@@ -578,6 +578,33 @@ void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) 
 
 /*
 ===============
+NET_SendPacketsChecked
+
+count datagrams to one address, laid end to end in data, each size bytes
+but the last, of length bytes in all: in one system call where it can
+(Sys_SendPackets), else as NET_SendPacketChecked sends them. How many went,
+stopping at the first the socket can't take now
+===============
+*/
+int NET_SendPacketsChecked( netsrc_t sock, int count, int size, int length, const void *data, netadr_t to ) {
+	int		i;
+
+	if ( ( to.type == NA_IP || to.type == NA_IP6 ) && !showpackets->integer &&
+		!( sock == NS_CLIENT && cl_packetdelay->integer > 0 ) && !( sock == NS_SERVER && sv_packetdelay->integer > 0 ) &&
+		( i = Sys_SendPackets( count, size, length, data, to ) ) >= 0 ) {
+		return i;
+	}
+	for ( i = 0; i < count; i++ ) {
+		if ( !NET_SendPacketChecked( sock, i < count - 1 ? size : length - size * ( count - 1 ),
+			(const byte *)data + i * size, to ) ) {
+			return i;
+		}
+	}
+	return count;
+}
+
+/*
+===============
 NET_OutOfBandPrint
 
 Sends a text message in an out-of-band datagram

@@ -1922,6 +1922,8 @@ Return the time in msec until we expect to be called next
 ====================
 */
 
+static qboolean	sv_queuedPrecise;
+
 int SV_SendQueuedPackets(void)
 {
 	int numBlocks;
@@ -1990,8 +1992,24 @@ int SV_SendQueuedPackets(void)
 	}
 
 	delayT = SV_ContentSend();
+	sv_queuedPrecise = timeVal <= delayT;
 	if(delayT < timeVal)
 		timeVal = delayT;
 
 	return timeVal;
+}
+
+/*
+==================
+SV_QueuedPacketsPrecise
+
+Whether what SV_SendQueuedPackets last waited for wants a precise wait:
+the classic download's rounds and the fragments, which time themselves to
+the millisecond, rather than the fast download, whose pacing takes a late
+wake in its stride
+==================
+*/
+qboolean SV_QueuedPacketsPrecise(void)
+{
+	return sv_queuedPrecise;
 }

@@ -104,6 +104,13 @@ static void NET_WaitShutdown( void );
 #		include <sys/filio.h>
 #	endif
 
+#	ifdef __linux__
+#		include <netinet/udp.h>
+#		ifndef UDP_SEGMENT
+#			define UDP_SEGMENT		103	// Linux 4.18's, where the C library lacks it
+#		endif
+#	endif
+
 typedef int SOCKET;
 #	define INVALID_SOCKET		-1
 #	define SOCKET_ERROR			-1
@@ -821,6 +828,89 @@ qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 		Com_Printf( "Sys_SendPacket: %s\n", NET_ErrorString() );
 	}
 	return qtrue;
+}
+
+/*
+==================
+Sys_SendPackets
+
+count datagrams to one address, laid end to end in data, each size bytes
+but the last, which may be shorter, in one call: UDP segmentation, on
+Linux. count, or 0 when the socket can't take them now, which it takes
+whole or not at all; -1 when the system can't send them so, and they go
+one at a time (a kernel or card that lacks it is asked no more, as when
+OMNIFRAG_TEST_UNSEGMENTED is set, for the tests of that path)
+==================
+*/
+int Sys_SendPackets( int count, int size, int length, const void *data, netadr_t to ) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+	static qboolean			unsegmented, checked, said;
+	SOCKET					sock = to.type == NA_IP ? ip_socket : to.type == NA_IP6 ? ip6_socket : INVALID_SOCKET;
+	struct sockaddr_storage	addr;
+	struct iovec			iov;
+	struct msghdr			msg;
+	struct cmsghdr			*cmsg;
+	union {
+		char			buf[CMSG_SPACE(sizeof(uint16_t))];
+		struct cmsghdr	align;
+	} control;
+
+	if( count < 2 || unsegmented || usingSocks || sock == INVALID_SOCKET )
+		return -1;
+
+	// a kernel before 4.18 ignores the option rather than refuse it, and
+	// would send the datagrams as one, so it's asked first whether it
+	// knows the option
+	if( !checked ) {
+		int			value;
+		socklen_t	valueLength = sizeof(value);
+
+		checked = qtrue;
+		if( getenv( "OMNIFRAG_TEST_UNSEGMENTED" ) ) {
+			Com_Printf( "No UDP segmentation (OMNIFRAG_TEST_UNSEGMENTED), so datagrams go one at a time\n" );
+			unsegmented = qtrue;
+			return -1;
+		}
+		if( getsockopt( sock, IPPROTO_UDP, UDP_SEGMENT, &value, &valueLength ) == SOCKET_ERROR ) {
+			Com_Printf( "No UDP segmentation (%s), so datagrams go one at a time\n", NET_ErrorString() );
+			unsegmented = qtrue;
+			return -1;
+		}
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	NetadrToSockadr( &to, (struct sockaddr *) &addr );
+	iov.iov_base = (void *)data;
+	iov.iov_len = length;
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_name = &addr;
+	msg.msg_namelen = to.type == NA_IP ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = control.buf;
+	msg.msg_controllen = sizeof(control.buf);
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_level = IPPROTO_UDP;
+	cmsg->cmsg_type = UDP_SEGMENT;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+	*(uint16_t *)CMSG_DATA(cmsg) = size;
+
+	if( sendmsg( sock, &msg, 0 ) != SOCKET_ERROR ) {
+		if( !said ) {
+			said = qtrue;
+			Com_DPrintf( "Datagrams go through UDP segmentation\n" );
+		}
+		return count;
+	}
+	if( socketError == EAGAIN || socketError == ENOBUFS )
+		return 0;
+	// what says the system can't, rather than this address
+	if( socketError == EINVAL || socketError == ENOPROTOOPT || socketError == EOPNOTSUPP || socketError == EIO ) {
+		Com_Printf( "No UDP segmentation (%s), so datagrams go one at a time\n", NET_ErrorString() );
+		unsegmented = qtrue;
+	}
+#endif
+	return -1;
 }
 
 
