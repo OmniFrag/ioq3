@@ -216,6 +216,9 @@ int			OFD_Write( const ofdMessage_t *msg, byte *out, int size );
 // the chunk size a request's largest datagram implies, or 0 when out of range
 int			OFD_ChunkSize( int largest );
 
+// whether every byte is 0, as no content's hash is
+qboolean	OFD_AllZero( const byte *p, int length );
+
 // The packet numbers an ack covers, from the largest down: range 0 is the
 // first range, then one for each of control->ranges. Every range lies at or
 // above packet 0, which OFD_Read checks.

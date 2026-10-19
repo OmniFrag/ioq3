@@ -195,6 +195,7 @@ typedef struct {
 	char			gamedir[CACHE_GAMEDIR_SIZE];
 	char			name[CACHE_NAME_SIZE];
 	qboolean		mounted;		// not in the file: in the search path now, or stored for the next restart's
+	qboolean		downloading;	// not in the file: a partial one being written
 } cacheEntry_t;
 
 // as Content_ParsePakIndex, for index.dat; a record that breaks a rule
@@ -204,7 +205,8 @@ int		Content_ParseCacheIndex( const byte *data, int length, cacheEntry_t *entrie
 int		Content_WriteCacheIndex( const cacheEntry_t *entries, int count, byte *out, int size );
 
 // which entries to evict, least recently used first, until what's kept is
-// within maxBytes (0 for no limit) and maxEntries; never a mounted one.
+// within maxBytes (0 for no limit) and maxEntries; never one mounted or
+// downloading.
 // Sets evict[i] for each, and returns how many
 int		Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t maxBytes,
 			int maxEntries, qboolean *evict );
@@ -241,6 +243,26 @@ qboolean	Content_Cache_ValidName( const char *gamedir, const char *name );
 // larger than the bound isn't kept (Content_Cache_PakFits). If not, why
 qboolean	Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
 			char *why, int whySize );
+// the same for a pak whose SHA-256 is known already, as a download hashed
+// as it arrived (NULL: hash it)
+qboolean	Content_Cache_StoreHashed( const char *tmp, const byte *sha256, const char *gamedir, const char *name,
+			unsigned int pakChecksum, char *why, int whySize );
+// the same for the installed pak the pak index has with that hash, copied
+qboolean	Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], const char *gamedir, const char *name,
+			unsigned int pakChecksum, char *why, int whySize );
+// A pak downloading by its hash into <sha256>.part, which a later download
+// resumes: its partial entry, made if there's none, is held as in use
+// until ReleasePartial. The .part's OS path, and the bytes at its start
+// that are valid, which UpdatePartial records once they're written and
+// flushed; -1 if the cache can't keep it. CompletePartial makes it the
+// complete pak once every byte is checked; DropPartial deletes it, as when
+// its hash didn't match
+int64_t		Content_Cache_BeginPartial( const byte sha256[SHA256_DIGEST_SIZE], int64_t size, unsigned int pakChecksum,
+			const char *gamedir, const char *name, char *ospath, int ospathSize );
+void		Content_Cache_UpdatePartial( const byte sha256[SHA256_DIGEST_SIZE], int64_t valid );
+void		Content_Cache_ReleasePartial( const byte sha256[SHA256_DIGEST_SIZE] );
+qboolean	Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], char *why, int whySize );
+void		Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] );
 // a pak the search path took (it's used now), or one damaged, which goes
 void	Content_Cache_Mounted( int entry );
 void	Content_Cache_Remove( int entry );

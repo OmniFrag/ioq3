@@ -906,7 +906,7 @@ int Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t max
 		// the least recently used left
 		oldest = -1;
 		for ( i = 0; i < count; i++ ) {
-			if ( evict[i] || entries[i].mounted ) {
+			if ( evict[i] || entries[i].mounted || entries[i].downloading ) {
 				continue;
 			}
 			if ( oldest < 0 || Content_UsedBefore( &entries[i], &entries[oldest] ) ) {
@@ -1310,9 +1310,45 @@ Content_Cache_Store
 */
 qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
 	char *why, int whySize ) {
+	return Content_Cache_StoreHashed( tmp, NULL, gamedir, name, pakChecksum, why, whySize );
+}
+
+/*
+=================
+Content_Cache_NewEntry
+
+A new record for this hash at the end of the index, zeroed, after evicting
+one if the index is full; NULL, and why, if every record is in use
+=================
+*/
+static cacheEntry_t *Content_Cache_NewEntry( const byte sha256[SHA256_DIGEST_SIZE], char *why, int whySize ) {
+	cacheEntry_t	*e;
+
+	if ( cacheCount == CONTENT_MAX_RECORDS ) {
+		Content_Cache_Evict( CONTENT_MAX_RECORDS - 1 );		// room for one
+		if ( cacheCount == CONTENT_MAX_RECORDS ) {
+			Com_sprintf( why, whySize, "the content cache holds %d paks, all in use", CONTENT_MAX_RECORDS );
+			return NULL;
+		}
+	}
+	e = &cacheEntries[cacheCount++];
+	memset( e, 0, sizeof( *e ) );
+	memcpy( e->sha256, sha256, SHA256_DIGEST_SIZE );
+	cacheChanged = qtrue;
+	return e;
+}
+
+/*
+=================
+Content_Cache_StoreHashed
+=================
+*/
+qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const char *gamedir, const char *name,
+	unsigned int pakChecksum, char *why, int whySize ) {
 	cacheEntry_t	*e;
 	byte			sha256[SHA256_DIGEST_SIZE];
-	int64_t			size, mtime;
+	int64_t			size = -1, mtime;
+	qboolean		statted;
 	char			target[MAX_OSPATH];
 	int				i;
 
@@ -1325,10 +1361,19 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 		return qfalse;
 	}
 	// where its size wasn't known before it came, before it's read
-	if ( Content_FileStat( tmp, &size, &mtime ) && !Content_Cache_PakFits( size, why, whySize ) ) {
+	statted = Content_FileStat( tmp, &size, &mtime );
+	if ( statted && !Content_Cache_PakFits( size, why, whySize ) ) {
 		return qfalse;
 	}
-	if ( !Content_HashFile( tmp, sha256, &size ) || size < CACHE_MIN_PAK_SIZE || size > CONTENT_MAX_PAK_SIZE ) {
+	if ( known ) {
+		memcpy( sha256, known, SHA256_DIGEST_SIZE );
+		if ( !statted ) {
+			size = -1;
+		}
+	} else if ( !Content_HashFile( tmp, sha256, &size ) ) {
+		size = -1;
+	}
+	if ( size < CACHE_MIN_PAK_SIZE || size > CONTENT_MAX_PAK_SIZE ) {
 		Com_sprintf( why, whySize, "couldn't read %s", tmp );
 		return qfalse;
 	}
@@ -1356,17 +1401,9 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 			Content_Cache_Delete( i );
 		}
 	}
-	if ( cacheCount == CONTENT_MAX_RECORDS ) {
-		Content_Cache_Evict( CONTENT_MAX_RECORDS - 1 );		// room for one
-		if ( cacheCount == CONTENT_MAX_RECORDS ) {
-			Com_sprintf( why, whySize, "the content cache holds %d paks, all in use", CONTENT_MAX_RECORDS );
-			return qfalse;
-		}
+	if ( !( e = Content_Cache_NewEntry( sha256, why, whySize ) ) ) {
+		return qfalse;
 	}
-
-	e = &cacheEntries[cacheCount];
-	memset( e, 0, sizeof( *e ) );
-	memcpy( e->sha256, sha256, SHA256_DIGEST_SIZE );
 	e->size = e->valid = size;
 	e->lastUsed = time( NULL );
 	e->pakChecksum = pakChecksum;
@@ -1377,11 +1414,10 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 	Content_MakeDirs();
 	Q_strncpyz( target, Content_Cache_EntryFile( e ), sizeof( target ) );
 	if ( !Sys_Rename( tmp, target ) ) {
+		cacheCount--;
 		Com_sprintf( why, whySize, "couldn't move %s into the content cache", tmp );
 		return qfalse;
 	}
-	cacheCount++;
-	cacheChanged = qtrue;
 
 	// within the bound, never evicting the pak just stored, nor those stored
 	// before it in this set of downloads: each is held as in use until the
@@ -1389,6 +1425,209 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 	e->mounted = qtrue;
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
+	return qtrue;
+}
+
+/*
+=================
+Content_Cache_FindPartial
+
+The partial entry with that hash, or -1
+=================
+*/
+static int Content_Cache_FindPartial( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	int		i;
+
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( cacheEntries[i].state == CACHE_PARTIAL && !memcmp( cacheEntries[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+=================
+Content_Cache_BeginPartial
+=================
+*/
+int64_t Content_Cache_BeginPartial( const byte sha256[SHA256_DIGEST_SIZE], int64_t size, unsigned int pakChecksum,
+	const char *gamedir, const char *name, char *ospath, int ospathSize ) {
+	cacheEntry_t	*e;
+	int64_t			fileSize, mtime;
+	char			why[MAX_STRING_CHARS];
+	int				i;
+
+	if ( !cacheStarted || !Content_Cache_ValidName( gamedir, name ) || size < CACHE_MIN_PAK_SIZE ||
+		size > CONTENT_MAX_PAK_SIZE ) {
+		return -1;
+	}
+	if ( ( i = Content_Cache_FindPartial( sha256 ) ) >= 0 ) {
+		e = &cacheEntries[i];
+	} else if ( ( e = Content_Cache_NewEntry( sha256, why, sizeof( why ) ) ) != NULL ) {
+		e->state = CACHE_PARTIAL;
+		e->size = size;
+	} else {
+		return -1;
+	}
+	Q_strncpyz( ospath, Content_Cache_EntryFile( e ), ospathSize );
+	// the bytes it had are valid only if it's the same file, and they're there
+	if ( e->size != size || !Content_FileStat( ospath, &fileSize, &mtime ) || fileSize < e->valid ) {
+		e->size = size;
+		e->valid = 0;
+	}
+	e->lastUsed = time( NULL );
+	e->pakChecksum = pakChecksum;
+	e->downloading = qtrue;		// no eviction takes it while it downloads
+	Q_strncpyz( e->gamedir, gamedir, sizeof( e->gamedir ) );
+	Q_strncpyz( e->name, name, sizeof( e->name ) );
+	cacheChanged = qtrue;
+	Content_MakeDirs();
+	Content_Cache_Flush();
+	return e->valid;
+}
+
+/*
+=================
+Content_Cache_UpdatePartial
+=================
+*/
+void Content_Cache_UpdatePartial( const byte sha256[SHA256_DIGEST_SIZE], int64_t valid ) {
+	int		i = Content_Cache_FindPartial( sha256 );
+
+	if ( i < 0 || valid < 0 || valid > cacheEntries[i].size ) {
+		return;
+	}
+	cacheEntries[i].valid = valid;
+	cacheChanged = qtrue;
+	Content_Cache_Flush();
+}
+
+/*
+=================
+Content_Cache_ReleasePartial
+=================
+*/
+void Content_Cache_ReleasePartial( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	int		i = Content_Cache_FindPartial( sha256 );
+
+	if ( i >= 0 ) {
+		cacheEntries[i].downloading = qfalse;
+	}
+}
+
+/*
+=================
+Content_Cache_CompletePartial
+
+The partial entry, all of its bytes there and checked, becomes the
+complete one in place: its .part renamed <sha256>.pk3, held as in use
+until the filesystem restart that mounts it, as Content_Cache_Store holds
+a pak it stores. It stays partial if the rename fails
+=================
+*/
+qboolean Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], char *why, int whySize ) {
+	cacheEntry_t	*e;
+	char			part[MAX_OSPATH], target[MAX_OSPATH];
+	int				i = Content_Cache_FindPartial( sha256 );
+
+	if ( i < 0 ) {
+		Q_strncpyz( why, "the content cache lost the download's record", whySize );
+		return qfalse;
+	}
+	e = &cacheEntries[i];
+	Q_strncpyz( part, Content_Cache_EntryFile( e ), sizeof( part ) );
+	e->state = CACHE_COMPLETE;
+	Q_strncpyz( target, Content_Cache_EntryFile( e ), sizeof( target ) );
+	if ( !Sys_Rename( part, target ) ) {
+		e->state = CACHE_PARTIAL;
+		Com_sprintf( why, whySize, "couldn't move %s into the content cache", part );
+		return qfalse;
+	}
+	e->valid = e->size;
+	e->lastUsed = time( NULL );
+	e->downloading = qfalse;
+	e->mounted = qtrue;
+	cacheChanged = qtrue;
+	Content_Cache_Evict( CONTENT_MAX_RECORDS );
+	Content_Cache_Flush();
+	return qtrue;
+}
+
+/*
+=================
+Content_Cache_DropPartial
+=================
+*/
+void Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	int		i = Content_Cache_FindPartial( sha256 );
+
+	if ( i >= 0 ) {
+		Content_Cache_Delete( i );
+		Content_Cache_Flush();
+	}
+}
+
+/*
+=================
+Content_Cache_StoreInstalled
+
+Copied, since the player's own file stays where it is, through a temporary
+file of this process's, which a stopped copy leaves for
+Content_RemoveStaleTemps
+=================
+*/
+qboolean Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], const char *gamedir, const char *name,
+	unsigned int pakChecksum, char *why, int whySize ) {
+	const pakRecord_t	*record = Content_PakIndex_FindSHA256( sha256 );
+	const char			*source;
+	char				from[MAX_OSPATH], tmp[MAX_OSPATH];
+	int64_t				size, mtime, total;
+	FILE				*in, *out;
+	byte				*buffer;
+	size_t				n;
+	qboolean			copied;
+
+	if ( !record || !( source = Content_PakOSPath( record ) ) ) {
+		Q_strncpyz( why, "the pak index has no installed pak with its hash", whySize );
+		return qfalse;
+	}
+	Q_strncpyz( from, source, sizeof( from ) );
+	// the index's hash holds only for the file as it was hashed
+	if ( !Content_FileStat( from, &size, &mtime ) || size != record->size || mtime != record->mtime ) {
+		Com_sprintf( why, whySize, "%s changed since it was hashed", from );
+		return qfalse;
+	}
+	Content_MakeDirs();
+	Q_strncpyz( tmp, Content_HomeFile( va( CONTENT_DIR "/" CONTENT_TEMP_FORMAT, "copy.dat", Sys_PID() ) ),
+		sizeof( tmp ) );
+	in = Sys_FOpen( from, "rb" );
+	out = in ? Sys_FOpen( tmp, "wb" ) : NULL;
+	buffer = out ? malloc( HASH_BUFFER_SIZE ) : NULL;
+	copied = buffer != NULL;
+	total = 0;
+	while ( copied && ( n = fread( buffer, 1, HASH_BUFFER_SIZE, in ) ) > 0 ) {
+		copied = fwrite( buffer, 1, n, out ) == n;
+		total += n;
+	}
+	// stored under the index's hash unread, so at least the size it hashed
+	copied = copied && !ferror( in ) && total == record->size;
+	free( buffer );
+	if ( out && fclose( out ) ) {
+		copied = qfalse;
+	}
+	if ( in ) {
+		fclose( in );
+	}
+	if ( !copied ) {
+		remove( tmp );
+		Com_sprintf( why, whySize, "couldn't copy %s into the content cache", from );
+		return qfalse;
+	}
+	if ( !Content_Cache_StoreHashed( tmp, sha256, gamedir, name, pakChecksum, why, whySize ) ) {
+		remove( tmp );
+		return qfalse;
+	}
 	return qtrue;
 }
 

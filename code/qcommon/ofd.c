@@ -56,7 +56,7 @@ static void Put64( byte *p, uint64_t v ) {
 	Put32( p + 4, (uint32_t)( v >> 32 ) );
 }
 
-static qboolean AllZero( const byte *p, int length ) {
+qboolean OFD_AllZero( const byte *p, int length ) {
 	int		i;
 
 	for ( i = 0; i < length; i++ ) {
@@ -128,7 +128,7 @@ static qboolean OFD_CheckOpen( const ofdOpen_t *open ) {
 	}
 	// the hash echoes the request's, or names the current content manifest:
 	// never all zero, which no content has
-	if ( !open->serial || !OFD_ValidChunk( open->chunkSize ) || AllZero( open->sha256, 32 ) ) {
+	if ( !open->serial || !OFD_ValidChunk( open->chunkSize ) || OFD_AllZero( open->sha256, 32 ) ) {
 		return qfalse;
 	}
 	if ( open->kind == OFD_KIND_PAK ) {
@@ -233,7 +233,7 @@ static qboolean OFD_CheckControl( const ofdControl_t *control ) {
 			// an offset below the largest pak's size, the most a file can
 			// have, and 0 for the content manifest
 			if ( request->requestClass > OFD_CLASS_PREFETCH || request->offset >= OFCM_MAX_PAK
-				|| ( request->offset && AllZero( request->sha256, 32 ) ) || !OFD_ChunkSize( request->largest ) ) {
+				|| ( request->offset && OFD_AllZero( request->sha256, 32 ) ) || !OFD_ChunkSize( request->largest ) ) {
 				return qfalse;
 			}
 			// and neither its ID nor its file another's
@@ -455,7 +455,7 @@ static qboolean OFD_ReadBody( const byte *body, int length, ofdMessage_t *msg ) 
 		return qtrue;
 
 	case OFD_TYPE_NOTICE:
-		if ( length != OFD_NOTICE_BODY || !AllZero( body + 44, 4 ) ) {
+		if ( length != OFD_NOTICE_BODY || !OFD_AllZero( body + 44, 4 ) ) {
 			return qfalse;
 		}
 		msg->u.notice.noticeId = Get32( body );
@@ -717,7 +717,7 @@ field or something follows its NUL
 static int PaddedLength( const byte *field, int size ) {
 	const byte	*nul = memchr( field, 0, size );
 
-	if ( !nul || !AllZero( nul, size - ( nul - field ) ) ) {
+	if ( !nul || !OFD_AllZero( nul, size - ( nul - field ) ) ) {
 		return -1;
 	}
 	return nul - field;
@@ -830,7 +830,7 @@ An entry's fields, and its names by OFCM_ValidName and the caller's rule
 static const char *OFCM_CheckEntry( const byte *entry, int role, ofcmValidName_t validName ) {
 	uint64_t	size = Get64( entry + ENTRY_SIZE );
 	byte		flags = entry[ENTRY_FLAGS];
-	qboolean	zeroHash = AllZero( entry + ENTRY_HASH, 32 );
+	qboolean	zeroHash = OFD_AllZero( entry + ENTRY_HASH, 32 );
 
 	if ( size < OFCM_MIN_PAK || size > OFCM_MAX_PAK ) {
 		return "a pak size out of range";
@@ -870,7 +870,7 @@ static const char *OFCM_CheckSource( const byte *source ) {
 	const char	*url = (const char *)source + SOURCE_URL;
 	int			length, i;
 
-	if ( source[0] < OFCM_SOURCE_HASH || source[0] > OFCM_SOURCE_BOTH || !AllZero( source + 1, SOURCE_URL - 1 ) ) {
+	if ( source[0] < OFCM_SOURCE_HASH || source[0] > OFCM_SOURCE_BOTH || !OFD_AllZero( source + 1, SOURCE_URL - 1 ) ) {
 		return "a source of an unknown kind";
 	}
 	length = PaddedLength( source + SOURCE_URL, OFCM_URL_SIZE );
@@ -914,7 +914,7 @@ const char *OFCM_Read( const byte *data, int length, ofcmHeader_t *header, ofcmV
 		|| Get16( data + 14 ) != OFCM_ENTRY_SIZE || Get16( data + 24 ) != OFCM_SOURCE_SIZE ) {
 		return "a version or record size other than version 1's";
 	}
-	if ( Get16( data + 26 ) || Get32( data + 52 ) || !AllZero( data + 56, 8 ) ) {
+	if ( Get16( data + 26 ) || Get32( data + 52 ) || !OFD_AllZero( data + 56, 8 ) ) {
 		return "flags or reserved bytes set";
 	}
 	numEntries = Get16( data + 12 );

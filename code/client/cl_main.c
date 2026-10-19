@@ -1486,7 +1486,7 @@ CL_ClearDownloadName
 No file is downloading, as the UI sees it too
 =====================
 */
-static void CL_ClearDownloadName( void ) {
+void CL_ClearDownloadName( void ) {
 	*clc.downloadTempName = *clc.downloadName = 0;
 	Cvar_Set( "cl_downloadName", "" );
 }
@@ -1525,6 +1525,8 @@ void CL_Disconnect( qboolean showMainMenu ) {
 		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
 	}
 	CL_ClearDownloadName();
+	// fast ones do: their .parts stay in the content cache
+	CL_ContentReset( qtrue );
 
 #ifdef USE_MUMBLE
 	if (cl_useMumble->integer && mumble_islinked()) {
@@ -2234,6 +2236,7 @@ Called when all downloading has been completed
 =================
 */
 void CL_DownloadsComplete( void ) {
+	CL_ContentClearProgress();
 
 	// a pak the server uses is still missing: say which, and why, all at
 	// once, keeping the ones that did arrive for the next connect
@@ -2268,7 +2271,12 @@ void CL_DownloadsComplete( void ) {
 		clc.downloadRestart = qfalse;
 
 		FS_Restart(clc.checksumFeed); // We possibly downloaded a pak, restart the file system to load it
+	}
 
+	// a download from the server holds the client until it says it's done,
+	// whether or not a pak came of it, while a pak copied from an installed
+	// one needs only the restart (download-protocol.md section 6.5)
+	if ( clc.downloadHeld ) {
 		// inform the server so we get new gamestate info
 		CL_AddReliableCommand("donedl", qfalse);
 
@@ -2319,7 +2327,7 @@ the server's name for it and why, on one line, or for one of the game's
 own paks, which to add
 =================
 */
-static void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason ) {
+void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason ) {
 	char		why[MAX_STRING_CHARS], retail[MAX_QPATH];
 	const char	*line;
 	int			length = 0;
@@ -2503,21 +2511,24 @@ static qboolean CL_CheckDownloadURL( const char *url, char *why, int size ) {
 =================
 CL_DownloadByHTTP
 
-Whether the next file comes from the server's sv_dlURL
+Whether the next file comes from the server's sv_dlURL; with quiet, without
+the warnings about the settings that rule it out
 =================
 */
-static qboolean CL_DownloadByHTTP( void ) {
+static qboolean CL_DownloadByHTTP( qboolean quiet ) {
 	if(!(cl_allowDownload->integer & DLF_NO_REDIRECT)) {
 		if(clc.sv_allowDownload & DLF_NO_REDIRECT) {
-			Com_Printf("WARNING: server does not "
-				"allow download redirection "
-				"(sv_allowDownload is %d)\n",
-				clc.sv_allowDownload);
+			if(!quiet)
+				Com_Printf("WARNING: server does not "
+					"allow download redirection "
+					"(sv_allowDownload is %d)\n",
+					clc.sv_allowDownload);
 		}
 		else if(!*clc.sv_dlURL) {
-			Com_Printf("WARNING: server allows "
-				"download redirection, but does not "
-				"have sv_dlURL set\n");
+			if(!quiet)
+				Com_Printf("WARNING: server allows "
+					"download redirection, but does not "
+					"have sv_dlURL set\n");
 		}
 		else if(CL_HTTP_Available()) {
 			// once a connection, saying so once
@@ -2533,7 +2544,7 @@ static qboolean CL_DownloadByHTTP( void ) {
 			return clc.downloadURLChecked > 0;
 		}
 	}
-	else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT)) {
+	else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT) && !quiet) {
 		Com_Printf("WARNING: server allows download "
 			"redirection, but it disabled by client "
 			"configuration (cl_allowDownload is %d)\n",
@@ -2561,10 +2572,12 @@ static qboolean CL_BeginPakDownload( const char *remoteName, const char *localNa
 		return qfalse;
 	}
 #ifdef USE_HTTP
-	if ( CL_DownloadByHTTP() ) {
+	if ( CL_DownloadByHTTP( qfalse ) ) {
+		Cvar_Set( "cl_downloadSource", "web" );
 		return CL_BeginHttpDownload( va( "%s/%s", clc.sv_dlURL, remoteName ) );
 	}
 #endif
+	Cvar_Set( "cl_downloadSource", "classic" );
 	if ( cl_allowDownload->integer & DLF_NO_UDP ) {
 		CL_EndDownload( va( "UDP downloads are disabled on your client (cl_allowDownload is %d)",
 			cl_allowDownload->integer ) );
@@ -2582,47 +2595,91 @@ Starts the next download in the list, passing over those that can't
 begin, or when there's none left, ends the downloads
 =================
 */
+/*
+=================
+CL_NextListedPak
+
+Takes the first pak off clc.downloadList, as FS_ComparePaks writes it:
+@remotename@localname@checksum@remotename@localname@checksum, and so on,
+the checksum in hex. What's left starts at its '@'. qfalse when there's
+none, or the list is malformed, which empties it
+=================
+*/
+qboolean CL_NextListedPak( char *remote, int remoteSize, char *local, int localSize, unsigned int *checksum ) {
+	char	*s = clc.downloadList, *r, *l, *c;
+
+	if ( *s == '@' )
+		s++;
+	r = s;
+	if ( !*r || (s = strchr( s, '@' )) == NULL ) {
+		*clc.downloadList = 0;
+		return qfalse;
+	}
+	*s++ = 0;
+	l = s;
+	if ( (s = strchr( s, '@' )) == NULL ) {
+		*clc.downloadList = 0;
+		return qfalse;
+	}
+	*s++ = 0;
+	c = s;
+	s = c + strcspn( c, "@" );
+
+	Q_strncpyz( remote, r, remoteSize );
+	Q_strncpyz( local, l, localSize );
+	*checksum = strtoul( c, NULL, 16 );
+
+	// move over the rest
+	memmove( clc.downloadList, s, strlen( s ) + 1 );
+	return qtrue;
+}
+
+/*
+=================
+CL_StartDownloads
+
+Starts the next download in the list, passing over those that can't
+begin, or when there's none left, ends the downloads
+=================
+*/
 static void CL_StartDownloads( void ) {
 	char			remoteName[MAX_OSPATH], localName[MAX_OSPATH];
-	char			*s, *remote, *local, *checksum;
 	unsigned int	sum;
 
-	while ( *clc.downloadList ) {
-		s = clc.downloadList;
-
-		// format is:
-		//  @remotename@localname@checksum@remotename@localname@checksum, etc.
-
-		if ( *s == '@' )
-			s++;
-		remote = s;
-		if ( (s = strchr( s, '@' )) == NULL )
-			break;
-		*s++ = 0;
-		local = s;
-		if ( (s = strchr( s, '@' )) == NULL )
-			break;
-		*s++ = 0;
-		checksum = s;
-		if ( (s = strchr( s, '@' )) != NULL )
-			*s++ = 0;
-		else
-			s = checksum + strlen( checksum ); // point at the nul byte
-
-		Q_strncpyz( remoteName, remote, sizeof( remoteName ) );
-		Q_strncpyz( localName, local, sizeof( localName ) );
-		sum = strtoul( checksum, NULL, 16 );
-
-		// move over the rest
-		memmove( clc.downloadList, s, strlen( s ) + 1 );
-
+	while ( CL_NextListedPak( remoteName, sizeof( remoteName ), localName, sizeof( localName ), &sum ) ) {
 		if ( CL_BeginPakDownload( remoteName, localName, sum ) ) {
 			return;
 		}
 	}
-	*clc.downloadList = 0;
 
 	CL_DownloadsComplete();
+}
+
+/*
+=================
+CL_StartClassicDownloads
+=================
+*/
+void CL_StartClassicDownloads( void ) {
+	if ( *clc.downloadList ) {
+		Cvar_Set( "cl_downloadState", "classic" );
+	}
+	CL_StartDownloads();
+}
+
+/*
+=================
+CL_DownloadsByHTTP
+
+As CL_DownloadByHTTP decides for each pak, quietly
+=================
+*/
+qboolean CL_DownloadsByHTTP( void ) {
+#ifdef USE_HTTP
+	return CL_DownloadByHTTP( qtrue );
+#else
+	return qfalse;
+#endif
 }
 
 /*
@@ -2713,6 +2770,7 @@ static qboolean CL_EndDownload( const char *failure ) {
 	}
 	if ( !failure ) {
 		clc.downloadRestart = qtrue;
+		clc.downloadHeld = qtrue;
 	} else {
 		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
 	}
@@ -2804,6 +2862,10 @@ and determine if we need to download them
 void CL_InitDownloads(void) {
   char missingfiles[1024];
 
+  // a new gamestate: what the last one's downloads did is done with
+  clc.downloadHeld = qfalse;
+  CL_ContentReset( qfalse );
+
   if ( !(cl_allowDownload->integer & DLF_ENABLE) )
   {
     // autodownload is disabled on the client
@@ -2834,7 +2896,10 @@ void CL_InitDownloads(void) {
 			*clc.downloadFailures = 0;
 			clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
 
-			CL_StartDownloads();
+			// by the fast path from an OmniFrag server, or the classic way
+			if ( !CL_ContentStart() ) {
+				CL_StartClassicDownloads();
+			}
 			return;
 		}
 
@@ -3437,6 +3502,12 @@ void CL_PacketEvent( netadr_t from, msg_t *msg ) {
 
 	clc.lastPacketTime = cls.realtime;
 
+	// the fast download's datagrams, which no command parser reads
+	if ( OFD_IsContent( msg->data, msg->cursize ) ) {
+		CL_ContentPacket( from, msg );
+		return;
+	}
+
 	if ( msg->cursize >= 4 && *(int *)msg->data == -1 ) {
 		CL_ConnectionlessPacket( from, msg );
 		return;
@@ -3580,6 +3651,9 @@ void CL_Frame ( int msec ) {
 	if ( clc.state == CA_DISCONNECTED ) {
 		FS_UnmountCachePaks();
 	}
+
+	// the fast download's decisions (SV_Frame polls the pak index's hashing)
+	CL_ContentFrame();
 
 	// for the menus, which show the cap com_maxfps -1 and -2 hold there
 	if ( cl_movesByFrame->integer != CL_MovesByFrame() ) {
@@ -4355,6 +4429,7 @@ void CL_Init( void ) {
 	Cvar_Get( "cl_downloadSize", "0", CVAR_ROM );
 	Cvar_Get( "cl_downloadCount", "0", CVAR_ROM );
 	Cvar_Get( "cl_downloadTime", "0", CVAR_ROM );
+	CL_ContentInit();
 	Cvar_Get( "cl_currentServerAddress", "", CVAR_ROM );
 	cl_movesByFrame = Cvar_Get( "cl_movesByFrame", "0", CVAR_ROM );
 	Cvar_SetDescription( cl_movesByFrame, "For the menus: 1 in a match on a server that moves the player "
