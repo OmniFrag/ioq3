@@ -723,6 +723,16 @@ cvar_t *Cvar_Get( const char *var_name, const char *value, int flags );
 // that allows variables to be unarchived without needing bitflags
 // if value is "", the value will not override a previously set value.
 
+cvar_t	*Cvar_FindVar( const char *var_name );
+// the cvar of that name, or NULL: unlike Cvar_Get, it never creates or
+// changes one. The pointer stays valid memory, so a holder checks the name
+// before using it again: a cvar unset since has none, or a newer cvar's
+
+qboolean	Cvar_HasMin( const cvar_t *var );
+qboolean	Cvar_HasMax( const cvar_t *var );
+// whether a cvar's range has that bound: an open end (an int's or a
+// float's own limit) is none
+
 void	Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultValue, int flags );
 // basically a slightly modified Cvar_Get for the interpreted modules
 
@@ -745,7 +755,9 @@ typedef enum {
 	CVAR_SOURCE_SCRIPT,	// what runs at every start (default.cfg, autoexec.cfg): not saved
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
 	CVAR_SOURCE_SERVER,	// a server's requirement, until Cvar_EndServerValues drops it
-	CVAR_SOURCE_SYSTEM	// the system's or browser's own change (fullscreen, a maximized window's size): for this run only
+	CVAR_SOURCE_SYSTEM,	// the system's or browser's own change (fullscreen, a maximized window's size): for this run only
+	CVAR_SOURCE_TOOL	// a tool managing the program through an engine extension (a hosting panel): saved if archived,
+				// as the console's, and its value runs restricted, as game code's (Cvar_RunsRestricted)
 } cvarSource_t;
 
 cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
@@ -806,7 +818,8 @@ int	Cvar_DeclaredScope( const char *var_name );
 // a name's declared scope, whether or not the cvar exists, or -1
 
 void	Cvar_NoteOrigin( cvar_t *var, const char *origin );
-// where a text set of a cvar came from, "server.cfg:12", for cvar_why
+// where the set that gave a cvar its player's value came from, for
+// cvar_why: a config's line, "server.cfg:12", or a tool, "the tool \"panel\""
 
 void	Cvar_WarnConfigs( void );
 // warns of config lines that set a cvar to no effect, once the game is up
