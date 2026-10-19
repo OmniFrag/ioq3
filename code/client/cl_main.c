@@ -2355,6 +2355,7 @@ static void CL_AddDownloadFailure( const char *name, unsigned int checksum, cons
 }
 
 static qboolean CL_EndDownload( const char *failure );
+static qboolean CL_CacheName( char *gamedir, char *name, char *why, int whySize );
 
 /*
 =================
@@ -2550,7 +2551,14 @@ began; if not, it's noted as failed
 =================
 */
 static qboolean CL_BeginPakDownload( const char *remoteName, const char *localName, unsigned int checksum ) {
+	char	gamedir[MAX_QPATH], name[MAX_QPATH], why[MAX_STRING_CHARS];
+
 	CL_InitDownload( remoteName, localName, checksum );
+	// one the content cache can't keep isn't downloaded
+	if ( !CL_CacheName( gamedir, name, why, sizeof( why ) ) ) {
+		CL_EndDownload( why );
+		return qfalse;
+	}
 #ifdef USE_HTTP
 	if ( CL_DownloadByHTTP() ) {
 		return CL_BeginHttpDownload( va( "%s/%s", clc.sv_dlURL, remoteName ) );
@@ -2618,17 +2626,60 @@ static void CL_StartDownloads( void ) {
 
 /*
 =================
+CL_CacheName
+
+The download's name in the content cache, from the server's for it
+("<game>/<name>.pk3"): its game directory and name, without .pk3; if the
+cache can't keep it, qfalse and why
+=================
+*/
+static qboolean CL_CacheName( char *gamedir, char *name, char *why, int whySize ) {
+	char	*slash;
+
+	Q_strncpyz( gamedir, clc.downloadRemoteName, MAX_QPATH );
+	slash = strchr( gamedir, '/' );
+	if ( !slash ) {
+		Com_sprintf( why, whySize, "%s names no game directory", clc.downloadRemoteName );
+		return qfalse;
+	}
+	*slash = '\0';
+	COM_StripExtension( slash + 1, name, MAX_QPATH );
+	if ( !Content_Cache_ValidName( gamedir, name ) ) {
+		Com_sprintf( why, whySize, "the content cache can't keep a pak named %s", clc.downloadRemoteName );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+=================
+CL_StoreDownload
+
+Puts the pak just downloaded, the file tmp, into the content cache, under
+the server's name for it and its checksum; if not, why
+=================
+*/
+static qboolean CL_StoreDownload( const char *tmp, char *why, int whySize ) {
+	char	gamedir[MAX_QPATH], name[MAX_QPATH];
+
+	return CL_CacheName( gamedir, name, why, whySize ) &&
+		Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum, why, whySize );
+}
+
+/*
+=================
 CL_EndDownload
 
 The file downloading has ended, failure NULL if it arrived whole. Keeps it
-if it's the pak the server listed, checked before it takes the pak's name,
-or deletes it and notes why. A failed web download is asked of the game
-server instead, where it sends files and the client is still connected.
-Returns whether that download is under way
+if it's the pak the server listed, checked, in the content cache, which
+mounts it for the servers that reference it, or deletes it and notes why.
+A failed web download is asked of the game server instead, where it sends
+files and the client is still connected, unless it arrived whole and the
+cache couldn't keep it. Returns whether that download is under way
 =================
 */
 static qboolean CL_EndDownload( const char *failure ) {
-	char	why[MAX_STRING_CHARS], remoteName[MAX_OSPATH], localName[MAX_OSPATH];
+	char	why[MAX_STRING_CHARS], remoteName[MAX_OSPATH], localName[MAX_OSPATH], tmp[MAX_OSPATH];
 
 	if ( !*clc.downloadName ) {
 		return qfalse;
@@ -2646,13 +2697,17 @@ static qboolean CL_EndDownload( const char *failure ) {
 		clc.download = 0;
 	}
 
-	if ( !failure && !FS_CompareZipChecksum( FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ),
-		clc.downloadTempName ), clc.downloadChecksum ) ) {
+	Q_strncpyz( tmp, FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), clc.downloadTempName ),
+		sizeof( tmp ) );
+	if ( !failure && !FS_CompareZipChecksum( tmp, clc.downloadChecksum ) ) {
 		failure = "the file isn't the pak the server has: its checksum doesn't match";
 	}
-	if ( !failure && !FS_BaseDir_Rename_HomeData( clc.downloadTempName, clc.downloadName, qfalse ) ) {
-		Com_sprintf( why, sizeof( why ), "couldn't rename %s to %s", clc.downloadTempName, clc.downloadName );
+	if ( !failure && !CL_StoreDownload( tmp, why, sizeof( why ) ) ) {
 		failure = why;
+#ifdef USE_HTTP
+		// the same again from the game server wouldn't be kept either
+		clc.downloadHTTP = qfalse;
+#endif
 	}
 	if ( !failure ) {
 		clc.downloadRestart = qtrue;
@@ -2737,6 +2792,11 @@ void CL_InitDownloads(void) {
     Com_Printf("Need paks: %s\n", clc.downloadList );
 
 		if ( *clc.downloadList ) {
+			// the content cache keeps them: none without the room
+			if ( !Content_Cache_HasRoom( 0, missingfiles, sizeof( missingfiles ) ) ) {
+				Com_Error( ERR_DROP, "Can't download the server's paks: %s", missingfiles );
+			}
+
 			// if autodownloading is not enabled on the server
 			clc.state = CA_CONNECTED;
 
