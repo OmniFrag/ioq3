@@ -4305,7 +4305,16 @@ void CL_Init( void ) {
 
 	cl_showMouseRate = Cvar_Get ("cl_showmouserate", "0", 0);
 
-	cl_allowDownload = Cvar_Get ("cl_allowDownload", "0", CVAR_ARCHIVE);
+	cl_allowDownload = Cvar_Get ("cl_allowDownload", "1", CVAR_ARCHIVE_ND);
+	Cvar_SetDescription( cl_allowDownload,
+		"Whether to download the pak files a server has and you don't\n"
+		"A map's or mod's pak files (.pk3) come from the server's web address (sv_dlURL) or from the "
+		"server itself. They go into the content cache, which keeps them within cl_contentCacheMegs and "
+		"loads them only while a server that uses them is connected. 0 joins without them, if the "
+		"server lets you.\n"
+		"1 = on\n"
+		"2 = no web, added to 1: only from the server itself\n"
+		"4 = no direct, added to 1: only from sv_dlURL" );
 	// what the client reports, which the menus read and only it writes
 	Cvar_Get( "cl_downloadName", "", CVAR_ROM );
 	Cvar_Get( "cl_downloadSize", "0", CVAR_ROM );
