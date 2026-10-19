@@ -1557,6 +1557,10 @@ void CL_JoystickEvent( int axis, int value, int time );
 
 void CL_PacketEvent( netadr_t from, msg_t *msg );
 
+int64_t CL_ContentService( void );
+// the fast download's acks and requests, sent when due; when they're next
+// due (Sys_Nanoseconds), for the wait between frames
+
 void CL_ConsolePrint( char *text );
 
 void CL_MapLoading( void );
