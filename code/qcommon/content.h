@@ -187,11 +187,12 @@ typedef struct {
 	int64_t			lastUsed;		// Unix seconds: when mounted or downloaded
 	unsigned int	pakChecksum;	// pack_t.checksum, as sv_referencedPaks lists it
 	cacheState_t	state;
-	// as it was first seen, without .pk3: one record a hash, which a
-	// content manifest may list under other names too
+	// as it was first seen, or last downloaded from a classic server,
+	// without .pk3: one record a hash, which a content manifest may list
+	// under other names too
 	char			gamedir[CACHE_GAMEDIR_SIZE];
 	char			name[CACHE_NAME_SIZE];
-	qboolean		mounted;		// not in the file: in the search path now
+	qboolean		mounted;		// not in the file: in the search path now, or stored for the next restart's
 } cacheEntry_t;
 
 // as Content_ParsePakIndex, for index.dat; a record that breaks a rule
@@ -223,6 +224,16 @@ int		Content_Cache_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE], char *ospa
 // it has mounted, and on the disk, leaving CACHE_DISK_RESERVE free; if not,
 // why, saying what's needed and what there is
 qboolean	Content_Cache_HasRoom( int64_t bytes, char *why, int whySize );
+// whether the cache can index a pak as gamedir/name (without .pk3): the
+// content manifest's rule, within its fields' sizes
+qboolean	Content_Cache_ValidName( const char *gamedir, const char *name );
+// a pak just downloaded and checked, the file tmp: hashed, moved into the
+// cache as <sha256>.pk3 and indexed as gamedir/name with this checksum,
+// then the cache evicted down to its bound; one the cache has already is
+// used again, under this name. Either is held as mounted, so no eviction
+// takes it, until the filesystem restart that mounts it. If not, why
+qboolean	Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
+			char *why, int whySize );
 // a pak the search path took (it's used now), or one damaged, which goes
 void	Content_Cache_Mounted( int entry );
 void	Content_Cache_Remove( int entry );
