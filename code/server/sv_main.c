@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/ofd.h"
 
 #ifdef USE_VOIP
 cvar_t *sv_voip;
@@ -56,6 +57,8 @@ cvar_t	*sv_serverid;
 cvar_t	*sv_minRate;
 cvar_t	*sv_maxRate;
 cvar_t	*sv_dlRate;
+cvar_t	*sv_dlMaxRate;		// fast downloads' upload together, KB/s, 0 for no limit
+cvar_t	*sv_showContent;
 cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;
 cvar_t	*sv_gametype;
@@ -1243,6 +1246,10 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 
 	// check for connectionless packet (0xffffffff) first
 	if ( *(int *)msg->data == -1) {
+		if ( OFD_IsContent( msg->data, msg->cursize ) ) {
+			SV_ContentPacket( from, msg );
+			return;
+		}
 		SV_ConnectionlessPacket( from, msg );
 		return;
 	}
@@ -1981,6 +1988,10 @@ int SV_SendQueuedPackets(void)
 		if(SV_SendDownloadMessages())
 			timeVal = 0;
 	}
+
+	delayT = SV_ContentSend();
+	if(delayT < timeVal)
+		timeVal = delayT;
 
 	return timeVal;
 }

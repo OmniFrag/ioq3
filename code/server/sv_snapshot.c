@@ -580,7 +580,7 @@ static void SV_WriteVoipToClient(client_t *cl, msg_t *msg)
 		{
 			packet = cl->voipPacket[(i + cl->queuedVoipIndex) % ARRAY_LEN(cl->voipPacket)];
 
-			if(!*cl->downloadName)
+			if(!SV_ClientDownloading(cl))
 			{
         			totalbytes += packet->len;
 	        		if (totalbytes > (msg->maxsize - msg->cursize) / 2)
@@ -719,7 +719,7 @@ void SV_SendClientMessages(void)
 		if(svs.time - c->lastSnapshotTime < c->snapshotMsec * com_timescale->value)
 			continue;		// It's not time yet
 
-		if(*c->downloadName)
+		if(SV_ClientDownloading(c))
 			continue;		// Client is downloading, don't send snapshots
 
 		if(c->netchan.unsentFragments || c->netchan_start_queue)
