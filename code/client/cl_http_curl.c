@@ -229,7 +229,8 @@ void CL_HTTP_Shutdown( void )
 static int CL_cURL_CallbackProgress(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
     curl_off_t ultotal, curl_off_t ulnow)
 {
-	clc.downloadSize = (int)dltotal;
+	// 2 GB and more, which no pak is, as the most an int holds
+	clc.downloadSize = dltotal > INT_MAX ? INT_MAX : (int)dltotal;
 	Cvar_SetValue( "cl_downloadSize", clc.downloadSize );
 	clc.downloadCount = (int)dlnow;
 	Cvar_SetValue( "cl_downloadCount", clc.downloadCount );

@@ -222,6 +222,7 @@ typedef struct {
 	char		sv_dlURL[MAX_CVAR_VALUE_STRING];
 	int			downloadNumber;
 	int			downloadBlock;	// block we are waiting for
+	int			downloadRequest;	// the reliable command that asked for it
 	int			downloadCount;	// how many bytes we got
 	int			downloadSize;	// how many bytes we got
 	char		downloadList[MAX_INFO_STRING]; // list of paks we need to download
@@ -511,6 +512,7 @@ void CL_StopRecord_f(void);
 void CL_InitDownloads(void);
 void CL_NextDownload(void);
 void CL_DownloadFailed( const char *reason );
+qboolean CL_CheckDownloadSize( void );
 qboolean CL_DownloadAddressAllowed( const netadr_t *adr );
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );

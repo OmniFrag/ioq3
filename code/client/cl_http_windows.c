@@ -351,7 +351,7 @@ static DWORD WINAPI CL_HTTP_Thread(LPVOID param)
     if (HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &len, &zero))
     {
         EnterCriticalSection(&d->lock);
-        d->size = (int)contentLength;
+        d->size = contentLength > INT_MAX ? INT_MAX : (int)contentLength;
         LeaveCriticalSection(&d->lock);
     }
 

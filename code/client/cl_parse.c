@@ -613,9 +613,11 @@ A download message has been received from the server
 =====================
 */
 void CL_ParseDownload ( msg_t *msg ) {
-	int		size;
+	int		size, fileSize = 0;
 	unsigned char data[MAX_MSGLEN];
 	uint16_t block;
+	qboolean	current;
+	const char	*reason;
 
 	if (!*clc.downloadTempName) {
 		Com_Printf("Server sending download, but no download was requested\n");
@@ -626,17 +628,28 @@ void CL_ParseDownload ( msg_t *msg ) {
 	// read the data
 	block = MSG_ReadShort ( msg );
 
+	// until the server has run this download's request, what comes is the
+	// one before, which the client stopped; and none is the server's while
+	// the download comes from sv_dlURL
+	current = clc.reliableAcknowledge - clc.downloadRequest >= 0;
+#ifdef USE_HTTP
+	if ( clc.downloadHTTP ) {
+		current = qfalse;
+	}
+#endif
+
 	if(!block && !clc.downloadBlock)
 	{
 		// block zero is special, contains file size
-		clc.downloadSize = MSG_ReadLong ( msg );
+		fileSize = MSG_ReadLong ( msg );
 
-		Cvar_SetValue( "cl_downloadSize", clc.downloadSize );
-
-		if (clc.downloadSize < 0)
+		if (fileSize < 0)
 		{
 			// the server refused it, saying why
-			CL_DownloadFailed( MSG_ReadString( msg ) );
+			reason = MSG_ReadString( msg );
+			if ( current ) {
+				CL_DownloadFailed( reason );
+			}
 			return;
 		}
 	}
@@ -650,10 +663,22 @@ void CL_ParseDownload ( msg_t *msg ) {
 	
 	MSG_ReadData(msg, data, size);
 
+	if ( !current ) {
+		return;
+	}
 	if((clc.downloadBlock & 0xFFFF) != block)
 	{
 		Com_DPrintf( "CL_ParseDownload: Expected block %d, got %d\n", (clc.downloadBlock & 0xFFFF), block);
 		return;
+	}
+
+	if ( !clc.downloadBlock ) {
+		clc.downloadSize = fileSize;
+		Cvar_SetValue( "cl_downloadSize", clc.downloadSize );
+		// one too large for the content cache stops here, before it's written
+		if ( !CL_CheckDownloadSize() ) {
+			return;
+		}
 	}
 
 	// open the file if not opened yet
