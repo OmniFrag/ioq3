@@ -1581,6 +1581,10 @@ qboolean SV_ExtClientMuted( int clientNum ) {
 	return cl && SV_ClientMuted( cl );
 }
 
+const char *SV_ExtDrainReason( void ) {
+	return sv_drainReason;
+}
+
 /*
 ==================
 SV_KeepAwake
