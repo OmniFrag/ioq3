@@ -35,6 +35,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef HOOKS_H
 #define HOOKS_H
 
+// the game's facts that reach the gameFact hook (server/sv_game.c's
+// SV_GameFact refuses the rest)
+#define MAX_GAME_FACT_NAME		15
+#define MAX_GAME_FACTS_PER_FRAME	256
+
 typedef struct {
 	const char	*name;
 
@@ -101,12 +106,14 @@ typedef struct {
 	// serverShutdown (qfalse)
 	void		(*hibernation)( qboolean asleep );
 	// The game module reported a fact through trap_GameFact (qcommon.h's
-	// COM_TRAP_GAMEFACT): its name, 1 to 15 lowercase letters, and an info
-	// string of its details, which passed Info_Validate. Called as the
-	// game makes the call, from its init, its frames or a client's
-	// command, so before the hooks above tell of the load or frame it came
-	// in. What the details mean is the game's: treat each value as
-	// untrusted. A game module that never calls it reports no facts
+	// COM_TRAP_GAMEFACT): its name, 1 to MAX_GAME_FACT_NAME lowercase
+	// letters, and an info string of its details, shorter than
+	// MAX_INFO_STRING, which passed Info_Validate; at most
+	// MAX_GAME_FACTS_PER_FRAME in one game frame. Called as the game makes
+	// the call, from its init, its frames or a client's command, so before
+	// the hooks above tell of the load or frame it came in. What the
+	// details mean is the game's: treat each value as untrusted. A game
+	// module that never calls it reports no facts
 	void		(*gameFact)( const char *fact, const char *info );
 	// A client's command that the engine passes to the game, a bot's too:
 	// called just before the game runs it, while Cmd_Argc and Cmd_Argv
@@ -204,6 +211,11 @@ qboolean	SV_ExtMuteClient( int clientNum, qboolean mute, int seconds );
 // whether it's muted now: by an extension or the console, its time not run
 // out
 qboolean	SV_ExtClientMuted( int clientNum );
+
+// the reason a draining dedicated server refuses new players with (drain),
+// or "" while it isn't draining. A drain ends in the program's exit once
+// its players have left or its map ends, or with undrain
+const char	*SV_ExtDrainReason( void );
 
 // The server's address bans and their exceptions (banaddr, exceptaddr),
 // which sv_banFile keeps. Indexes run from 0 to SV_ExtBanCount() - 1, and

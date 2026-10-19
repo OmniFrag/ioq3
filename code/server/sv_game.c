@@ -550,8 +550,7 @@ static const char * const sv_gameSyscallNames[] = {
 
 // the game's facts (COM_TRAP_GAMEFACT): how many came in the game frame at
 // sv_gameFactTime, and how many were refused since the module loaded
-#define MAX_GAME_FACTS_PER_FRAME	256
-#define MAX_GAME_FACT_NAME	15
+// (their limits are hooks.h's)
 static int	sv_gameFactTime;
 static int	sv_gameFactCount;
 static int	sv_gameFactsRefused;
