@@ -881,6 +881,13 @@ static int64_t Content_CacheBytes( const cacheEntry_t *e ) {
 	return e->state == CACHE_COMPLETE ? e->size : e->valid;
 }
 
+// whether a was used before b, ties going by hash, so an order between
+// entries doesn't depend on the index's
+static qboolean Content_UsedBefore( const cacheEntry_t *a, const cacheEntry_t *b ) {
+	return a->lastUsed < b->lastUsed ||
+		( a->lastUsed == b->lastUsed && memcmp( a->sha256, b->sha256, SHA256_DIGEST_SIZE ) < 0 );
+}
+
 /*
 =================
 Content_ChooseEvictions
@@ -896,16 +903,13 @@ int Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t max
 		total += Content_CacheBytes( &entries[i] );
 	}
 	while ( ( maxBytes > 0 && total > maxBytes ) || kept > maxEntries ) {
-		// the least recently used left, ties going by hash, so the choice
-		// doesn't depend on the index's order
+		// the least recently used left
 		oldest = -1;
 		for ( i = 0; i < count; i++ ) {
 			if ( evict[i] || entries[i].mounted ) {
 				continue;
 			}
-			if ( oldest < 0 || entries[i].lastUsed < entries[oldest].lastUsed ||
-				( entries[i].lastUsed == entries[oldest].lastUsed &&
-				memcmp( entries[i].sha256, entries[oldest].sha256, SHA256_DIGEST_SIZE ) < 0 ) ) {
+			if ( oldest < 0 || Content_UsedBefore( &entries[i], &entries[oldest] ) ) {
 				oldest = i;
 			}
 		}
@@ -925,6 +929,11 @@ static int			cacheCount;
 static qboolean		cacheStarted;		// a client's, once Content_Cache_Init has run
 static qboolean		cacheChanged;		// since index.dat was written
 static cvar_t		*cl_contentCacheMegs;
+
+// cl_contentCacheMegs in bytes, 0 for no limit
+static int64_t Content_Cache_MaxBytes( void ) {
+	return cl_contentCacheMegs && cl_contentCacheMegs->integer > 0 ? (int64_t)cl_contentCacheMegs->integer << 20 : 0;
+}
 
 /*
 =================
@@ -1037,8 +1046,7 @@ static void Content_Cache_Evict( int maxEntries ) {
 	static qboolean	evict[CONTENT_MAX_RECORDS];
 	int				i, count;
 
-	count = Content_ChooseEvictions( cacheEntries, cacheCount, (int64_t)cl_contentCacheMegs->integer << 20,
-		maxEntries, evict );
+	count = Content_ChooseEvictions( cacheEntries, cacheCount, Content_Cache_MaxBytes(), maxEntries, evict );
 	if ( !count ) {
 		return;
 	}
@@ -1069,7 +1077,8 @@ void Content_Cache_Init( void ) {
 	Cvar_CheckRange( cl_contentCacheMegs, 0, 1048576, qtrue );
 	Cvar_SetDescription( cl_contentCacheMegs,
 		"Megabytes the paks downloaded from servers may take in the content cache. When it's over, the "
-		"least recently used go at the next start. 0 for no limit, though it keeps at most 4096 paks" );
+		"least recently used go at the next start, and a pak larger than this isn't downloaded. 0 for no "
+		"limit, though it keeps at most 4096 paks" );
 
 	if ( cacheStarted ) {
 		return;
@@ -1111,19 +1120,30 @@ void Content_Cache_Shutdown( void ) {
 Content_Cache_Find
 =================
 */
-int Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, const char *name,
-	char *ospath, int ospathSize ) {
-	int		i;
+int Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, char *ospath, int ospathSize ) {
+	const cacheEntry_t	*e;
+	int					i, best = -1;
+	qboolean			here, bestHere = qfalse;
 
+	// by the checksum alone, in any game directory and under any name, as
+	// two servers may list one pak: a classic download is taken on that
+	// checksum too. Of two paks with one checksum (a collision, or a lie),
+	// the one first seen in this game directory, then the most recently used
 	for ( i = 0; i < cacheCount; i++ ) {
-		if ( cacheEntries[i].state == CACHE_COMPLETE && !cacheEntries[i].mounted &&
-			cacheEntries[i].pakChecksum == pakChecksum && !Q_stricmp( cacheEntries[i].gamedir, gamedir ) &&
-			!Q_stricmp( cacheEntries[i].name, name ) ) {
-			Q_strncpyz( ospath, Content_Cache_EntryFile( &cacheEntries[i] ), ospathSize );
-			return i;
+		e = &cacheEntries[i];
+		if ( e->state != CACHE_COMPLETE || e->mounted || e->pakChecksum != pakChecksum ) {
+			continue;
+		}
+		here = !Q_stricmp( e->gamedir, gamedir );
+		if ( best < 0 || here > bestHere || ( here == bestHere && Content_UsedBefore( &cacheEntries[best], e ) ) ) {
+			best = i;
+			bestHere = here;
 		}
 	}
-	return -1;
+	if ( best >= 0 ) {
+		Q_strncpyz( ospath, Content_Cache_EntryFile( &cacheEntries[best] ), ospathSize );
+	}
+	return best;
 }
 
 /*
@@ -1150,16 +1170,16 @@ Content_Cache_HasRoom
 */
 qboolean Content_Cache_HasRoom( int64_t bytes, char *why, int whySize ) {
 	unsigned long long	available, total;
-	int64_t				mounted = 0, room;
+	int64_t				mounted = 0, room, max = Content_Cache_MaxBytes();
 	int					i;
 
-	if ( cl_contentCacheMegs && cl_contentCacheMegs->integer > 0 ) {
+	if ( max ) {
 		for ( i = 0; i < cacheCount; i++ ) {
 			if ( cacheEntries[i].mounted ) {
 				mounted += Content_CacheBytes( &cacheEntries[i] );
 			}
 		}
-		room = ( (int64_t)cl_contentCacheMegs->integer << 20 ) - mounted;
+		room = max - mounted;
 		if ( bytes > room ) {
 			Com_sprintf( why, whySize, "the downloads need %.1f MB, and cl_contentCacheMegs leaves "
 				"%.1f MB for them", bytes / 1048576.0, MAX( room, 0 ) / 1048576.0 );
@@ -1176,6 +1196,22 @@ qboolean Content_Cache_HasRoom( int64_t bytes, char *why, int whySize ) {
 		return qfalse;
 	}
 	return qtrue;
+}
+
+/*
+=================
+Content_Cache_PakFits
+=================
+*/
+qboolean Content_Cache_PakFits( int64_t size, char *why, int whySize ) {
+	int64_t	max = Content_Cache_MaxBytes();
+
+	if ( !max || size <= max ) {
+		return qtrue;
+	}
+	Com_sprintf( why, whySize, "it's %.1f MB, more than the content cache keeps (cl_contentCacheMegs %d): "
+		"raise cl_contentCacheMegs to download it", size / 1048576.0, cl_contentCacheMegs->integer );
+	return qfalse;
 }
 
 /*
@@ -1276,7 +1312,7 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 	char *why, int whySize ) {
 	cacheEntry_t	*e;
 	byte			sha256[SHA256_DIGEST_SIZE];
-	int64_t			size;
+	int64_t			size, mtime;
 	char			target[MAX_OSPATH];
 	int				i;
 
@@ -1288,15 +1324,19 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 		Com_sprintf( why, whySize, "%s/%s isn't a name the content cache keeps", gamedir, name );
 		return qfalse;
 	}
+	// where its size wasn't known before it came, before it's read
+	if ( Content_FileStat( tmp, &size, &mtime ) && !Content_Cache_PakFits( size, why, whySize ) ) {
+		return qfalse;
+	}
 	if ( !Content_HashFile( tmp, sha256, &size ) || size < CACHE_MIN_PAK_SIZE || size > CONTENT_MAX_PAK_SIZE ) {
 		Com_sprintf( why, whySize, "couldn't read %s", tmp );
 		return qfalse;
 	}
 
-	// a pak the cache has already is used again, under the name this server
-	// gave it, the one a classic server mounts it by (Content_Cache_Find).
-	// The new copy replaces the file, in case it's gone; held as in use, as
-	// below
+	// a pak the cache has already is used again, its record as first seen:
+	// any server finds it by its checksum (Content_Cache_Find), and mounts
+	// it under its own name for it. The new copy replaces the file, in case
+	// it's gone; held as in use, as below
 	if ( ( i = Content_Cache_FindSHA256( sha256, target, sizeof( target ) ) ) >= 0 ) {
 		Content_MakeDirs();
 		if ( !Sys_Rename( tmp, target ) ) {
@@ -1306,8 +1346,6 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 		e->lastUsed = time( NULL );
 		e->pakChecksum = pakChecksum;
 		e->mounted = qtrue;
-		Q_strncpyz( e->gamedir, gamedir, sizeof( e->gamedir ) );
-		Q_strncpyz( e->name, name, sizeof( e->name ) );
 		cacheChanged = qtrue;
 		Content_Cache_Flush();
 		return qtrue;

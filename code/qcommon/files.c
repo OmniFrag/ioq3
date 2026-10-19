@@ -3660,9 +3660,10 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 FS_AddCachePaks
 
 The content cache's paks of a game directory that the server connected to
-references, by checksum, game directory and name, and that no pak in the search
-path has already, put after that directory's own entries, below, so each
-ranks under its installed paks and over any lower game directory. A
+references, found by checksum whatever game directory and name they were
+cached under and mounted as the server lists them, and that no pak in the
+search path has already, put after that directory's own entries, below,
+so each ranks under its installed paks and over any lower game directory. A
 download then never replaces an installed pak of its own directory, and a
 mod's still overrides the base game's. Only on a client connected to
 another's server (a demo sets no referenced paks)
@@ -3700,19 +3701,21 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 		if ( search ) {
 			continue;
 		}
-		entry = Content_Cache_Find( fs_serverReferencedPaks[i], dir, slash + 1, ospath, sizeof( ospath ) );
-		if ( entry < 0 ) {
-			continue;
-		}
-
-		pak = FS_LoadZipFile( ospath, slash + 1 );
-		if ( !pak || pak->checksum != fs_serverReferencedPaks[i] ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: %s, cached as %s, is damaged, so it's removed\n",
+		// in this directory under the server's name for it, wherever and
+		// however it was cached; if it's damaged, the next with that checksum
+		while ( ( entry = Content_Cache_Find( fs_serverReferencedPaks[i], dir, ospath, sizeof( ospath ) ) ) >= 0 ) {
+			pak = FS_LoadZipFile( ospath, slash + 1 );
+			if ( pak && pak->checksum == fs_serverReferencedPaks[i] ) {
+				break;
+			}
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s, cached for %s, is damaged, so it's removed\n",
 				ospath, refName );
 			if ( pak ) {
 				FS_FreePak( pak );
 			}
 			Content_Cache_Remove( entry );
+		}
+		if ( entry < 0 ) {
 			continue;
 		}
 		// in the game directory's place, where a download used to go, so a

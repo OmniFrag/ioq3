@@ -2389,6 +2389,7 @@ game directory.
 */
 static void CL_BeginDownload( const char *remoteName ) {
 	CL_AddReliableCommand(va("download %s", remoteName), qfalse);
+	clc.downloadRequest = clc.reliableSequence;
 }
 
 /*
@@ -2675,7 +2676,8 @@ if it's the pak the server listed, checked, in the content cache, which
 mounts it for the servers that reference it, or deletes it and notes why.
 A failed web download is asked of the game server instead, where it sends
 files and the client is still connected, unless it arrived whole and the
-cache couldn't keep it. Returns whether that download is under way
+cache couldn't keep it, or was too large for the cache
+(CL_CheckDownloadSize). Returns whether that download is under way
 =================
 */
 static qboolean CL_EndDownload( const char *failure ) {
@@ -2761,6 +2763,34 @@ void CL_DownloadFailed( const char *reason ) {
 	if ( !CL_EndDownload( reason ) ) {
 		CL_StartDownloads();
 	}
+}
+
+/*
+=================
+CL_CheckDownloadSize
+
+Once the server or sv_dlURL has given the download's size: a pak larger
+than the content cache keeps would go at the next start and be downloaded
+again each time, so it's stopped, the part received deleted, and the rest
+of the list downloaded. Returns whether it goes on
+=================
+*/
+qboolean CL_CheckDownloadSize( void ) {
+	char	why[MAX_STRING_CHARS];
+
+	if ( clc.downloadSize <= 0 || Content_Cache_PakFits( clc.downloadSize, why, sizeof( why ) ) ) {
+		return qtrue;
+	}
+#ifdef USE_HTTP
+	if ( clc.downloadHTTP ) {
+		clc.downloadHTTP = qfalse;		// the game server's copy is no smaller
+	} else
+#endif
+	{
+		CL_AddReliableCommand( "stopdl", qfalse );
+	}
+	CL_DownloadFailed( why );
+	return qfalse;
 }
 
 /*
@@ -3560,8 +3590,10 @@ void CL_Frame ( int msec ) {
 	if(clc.httpUsed) {
 		char error[MAX_STRING_CHARS];
 
-		if(clc.downloadHTTP && CL_HTTP_PerformDownload(error, sizeof(error))) {
-			if(*error)
+		if(clc.downloadHTTP) {
+			if(!CL_HTTP_PerformDownload(error, sizeof(error)))
+				CL_CheckDownloadSize();
+			else if(*error)
 				CL_DownloadFailed(error);
 			else
 				CL_NextDownload();
