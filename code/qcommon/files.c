@@ -32,6 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "unzip.h"
+#include "content.h"
 #include <errno.h>
 
 #ifdef __EMSCRIPTEN__
@@ -257,6 +258,7 @@ typedef struct {
 	char			pakGamename[MAX_OSPATH];	// baseq3
 	unzFile			handle;						// handle to zip file
 	unsigned int	checksum;					// regular checksum
+	int				contentRoot;				// the root it's under, for the pak index
 	int				pure_checksum;				// checksum for pure
 	int				numfiles;					// number of files in pk3
 	int				referenced;					// referenced file flags
@@ -309,6 +311,57 @@ static cvar_t *fs_pathVars[16];
 // for download), never its configs or other files
 static qboolean FS_PathVarPaksOnly( const cvar_t *pathVar ) {
 	return pathVar == fs_predecessorpath;
+}
+
+// the roots' numbers, which the pak index keeps: index 0 is none, and a
+// new root goes at the end. Each is one of FS_InitPathVars' path cvars
+static cvar_t **const fs_contentRoots[] = {
+	NULL, &fs_basepath, &fs_homedatapath, &fs_homeconfigpath, &fs_homestatepath, &fs_apppath,
+	&fs_predecessorpath, &fs_steampath, &fs_gogpath, &fs_microsoftstorepath
+};
+
+/*
+================
+FS_ContentRootPath
+================
+*/
+const char *FS_ContentRootPath( int root ) {
+	const cvar_t	*var;
+
+	if ( root <= 0 || root >= (int)ARRAY_LEN( fs_contentRoots ) ) {
+		return NULL;
+	}
+	var = *fs_contentRoots[root];
+	return var && var->string[0] ? var->string : NULL;
+}
+
+/*
+================
+FS_SetContentRoot
+
+The paks just added to the search path from a path cvar's directory, from
+up to the entries before (to), take its root's number: the lowest of the
+roots naming that directory, so where the homes are one, as fs_homepath
+makes them, their paks are fs_homedatapath's whichever cvar added them
+================
+*/
+static void FS_SetContentRoot( searchpath_t *from, const searchpath_t *to, const cvar_t *pathVar ) {
+	const char	*rootPath;
+	int			root;
+
+	for ( root = 1; root < (int)ARRAY_LEN( fs_contentRoots ); root++ ) {
+		if ( ( rootPath = FS_ContentRootPath( root ) ) != NULL && !Q_stricmp( rootPath, pathVar->string ) ) {
+			break;
+		}
+	}
+	if ( root == (int)ARRAY_LEN( fs_contentRoots ) ) {
+		root = 0;	// a path cvar the table lacks: not indexed
+	}
+	for ( ; from != to; from = from->next ) {
+		if ( from->pack ) {
+			from->pack->contentRoot = root;
+		}
+	}
 }
 
 static int fs_checksumFeed;
@@ -3554,7 +3607,9 @@ static void FS_AddGameDirectories(const char *dir)
 			continue;
 		}
 
+		searchpath_t *added = fs_searchpaths;
 		FS_AddGameDirectory(pathVar->string, dir, FS_PathVarPaksOnly( pathVar ));
+		FS_SetContentRoot( fs_searchpaths, added, pathVar );
 	}
 }
 
@@ -4449,6 +4504,18 @@ const char *FS_LoadedPakPureChecksums( void ) {
 
 /*
 =====================
+FS_PakIsReferenced
+
+Whether the server lists a pak among those clients must have: every pak
+outside the base game, and the base game's referenced ones
+=====================
+*/
+static qboolean FS_PakIsReferenced( const pack_t *pak ) {
+	return pak->referenced || Q_stricmpn( pak->pakGamename, com_basegame->string, strlen( com_basegame->string ) );
+}
+
+/*
+=====================
 FS_ReferencedPakChecksums
 
 Returns a space separated string containing the checksums of all referenced pk3 files.
@@ -4465,7 +4532,7 @@ const char *FS_ReferencedPakChecksums( void ) {
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
 		// is the element a pak file?
 		if ( search->pack ) {
-			if (search->pack->referenced || Q_stricmpn(search->pack->pakGamename, com_basegame->string, strlen(com_basegame->string))) {
+			if ( FS_PakIsReferenced( search->pack ) ) {
 				Q_strcat( info, sizeof( info ), va("%i ", search->pack->checksum ) );
 			}
 		}
@@ -4540,7 +4607,7 @@ const char *FS_ReferencedPakNames( void ) {
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
 		// is the element a pak file?
 		if ( search->pack ) {
-			if (search->pack->referenced || Q_stricmpn(search->pack->pakGamename, com_basegame->string, strlen(com_basegame->string))) {
+			if ( FS_PakIsReferenced( search->pack ) ) {
 				if (*info) {
 					Q_strcat(info, sizeof( info ), " " );
 				}
@@ -5230,4 +5297,80 @@ game directory: the name alone on a client
 const char *FS_ServerFile( const char *filename )
 {
 	return Com_IsClient() ? filename : va( "%s/%s", FS_ServerDir(), filename );
+}
+
+/*
+================
+FS_HashPaks
+
+At a map load, queues every pak of the search path the pak index lacks,
+the referenced ones first, for the hash job; the game's own paks, known
+by their checksums, only when sv_refuseRetailPaks 0 lets the server send
+them
+================
+*/
+void FS_HashPaks( void ) {
+	static qboolean	warned;
+	searchpath_t	*search;
+	const pack_t	*pak;
+	pakRecord_t		*paks, *p;
+	const char		*rootPath, *under;
+	char			relative[MAX_OSPATH], *c;
+	int				count, pass, index;
+	qboolean		refuseRetail;
+
+	refuseRetail = Cvar_VariableIntegerValue( "sv_refuseRetailPaks" ) != 0;
+	for ( count = 0, search = fs_searchpaths; search; search = search->next ) {
+		count += search->pack != NULL;
+	}
+	paks = count ? calloc( count, sizeof( *paks ) ) : NULL;
+	if ( !paks ) {
+		return;
+	}
+
+	count = 0;
+	for ( pass = 0; pass < 2; pass++ ) {
+		for ( search = fs_searchpaths; search; search = search->next ) {
+			if ( !( pak = search->pack ) ) {
+				continue;
+			}
+			// the referenced ones in the first pass, the rest in the second;
+			// the game's own paks only where the server sends them
+			if ( FS_PakIsReferenced( pak ) == pass || ( FS_RetailPakGame( pak->checksum, &index ) && refuseRetail ) ||
+				!( rootPath = FS_ContentRootPath( pak->contentRoot ) ) || strlen( pak->pakFilename ) <= strlen( rootPath ) ) {
+				continue;
+			}
+			// the path under its root (past the separator, two where the root
+			// ends in one), with the separators every platform reads; only
+			// PATH_SEP, as a ':' is a name's own on Unix
+			for ( under = pak->pakFilename + strlen( rootPath ); *under == PATH_SEP; under++ ) {
+			}
+			Q_strncpyz( relative, under, sizeof( relative ) );
+			for ( c = relative; *c; c++ ) {
+				if ( *c == PATH_SEP ) {
+					*c = '/';
+				}
+			}
+			if ( strlen( relative ) >= sizeof( p->path ) ) {
+				if ( !warned ) {
+					warned = qtrue;
+					Com_Printf( S_COLOR_YELLOW "WARNING: %s's path is too long for the pak index, so it's offered "
+						"by its name alone, as are any others like it\n", pak->pakFilename );
+				}
+				continue;
+			}
+			p = &paks[count];
+			if ( !Content_FileStat( pak->pakFilename, &p->size, &p->mtime ) ||
+				Content_PakIndex_Find( pak->contentRoot, relative, p->size, p->mtime ) ) {
+				continue;
+			}
+			p->root = pak->contentRoot;
+			Q_strncpyz( p->path, relative, sizeof( p->path ) );
+			p->pakChecksum = pak->checksum;
+			count++;
+		}
+	}
+
+	Content_PakIndex_Queue( paks, count );
+	free( paks );
 }

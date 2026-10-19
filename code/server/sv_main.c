@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/content.h"
 
 #ifdef USE_VOIP
 cvar_t *sv_voip;
@@ -1678,6 +1679,11 @@ void SV_Frame( int msec ) {
 		Cvar_Set( "sv_killserver", "0" );
 		return;
 	}
+
+	// what the hash job finished goes into the pak index, paused or not,
+	// and after the server has stopped, so the job it started is finished;
+	// qtrue when the index changed, for what's built from it
+	(void)Content_PakIndex_Frame();
 
 	if (!com_sv_running->integer)
 	{

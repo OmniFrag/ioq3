@@ -1188,6 +1188,11 @@ const char *FS_LoadedPakPureChecksums( void );
 // Servers with sv_pure set will get this string and pass it to clients.
 
 const char *FS_ReferencedPakNames( void );
+void FS_HashPaks( void );
+// at a map load, queues the paks the pak index lacks to be hashed (content.h)
+const char *FS_ContentRootPath( int root );
+// a root of the search path, by the number the pak index keeps for it: its
+// directory, NULL if it has none now
 const char *FS_ReferencedPakChecksums( void );
 const char *FS_ReferencedPakPureChecksums( void );
 // Returns a space separated string containing the checksums of all loaded 
@@ -1696,6 +1701,7 @@ qboolean	Sys_IsLANAddress (netadr_t adr);
 void		Sys_ShowIP(void);
 
 FILE	*Sys_FOpen( const char *ospath, const char *mode );
+int		Sys_PID( void );
 qboolean Sys_Mkdir( const char *path );
 qboolean Sys_Rename( const char *from, const char *to );
 qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total );
