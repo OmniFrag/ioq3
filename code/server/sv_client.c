@@ -351,6 +351,31 @@ static qboolean SV_IsBanned(netadr_t *from, qboolean isexception)
 
 /*
 ==================
+SV_ExtDropBanned
+
+Drop every client the bans would now refuse, for extensions
+(qcommon/hooks.h)
+==================
+*/
+int SV_ExtDropBanned( const char *reason ) {
+	client_t	*cl;
+	int		i, count = 0;
+
+	if ( !svs.clients ) {
+		return 0;
+	}
+	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+		if ( cl->state >= CS_CONNECTED && ( cl->netchan.remoteAddress.type == NA_IP ||
+			cl->netchan.remoteAddress.type == NA_IP6 ) && SV_IsBanned( &cl->netchan.remoteAddress, qfalse ) ) {
+			SV_DropClient( cl, reason );
+			count++;
+		}
+	}
+	return count;
+}
+
+/*
+==================
 SV_RefuseConnect
 
 Tell a client why its connect was refused; OmniFrag's client asks again

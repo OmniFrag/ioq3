@@ -642,6 +642,9 @@ static void SV_BanNum_f( void ) {
 }
 #endif
 
+// changes whenever the ban list does (SV_ExtBanListChanges)
+static int serverBansChanges;
+
 /*
 ==================
 SV_RehashBans_f
@@ -659,6 +662,7 @@ static void SV_RehashBans_f(void)
 	char filepath[MAX_OSPATH];
 
 	serverBansCount = 0;
+	serverBansChanges++;
 
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
@@ -735,7 +739,8 @@ static void SV_RehashBans_f(void)
 ==================
 SV_WriteBans
 
-Save bans to file, the server's own (FS_ServerFile).
+Save bans to file, the server's own (FS_ServerFile). Every change to the
+list ends here.
 ==================
 */
 static void SV_WriteBans(void)
@@ -743,6 +748,8 @@ static void SV_WriteBans(void)
 	int index;
 	fileHandle_t writeto;
 	char filepath[MAX_OSPATH];
+
+	serverBansChanges++;
 
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
@@ -837,6 +844,93 @@ qboolean SV_ParseCIDRNotation(netadr_t *dest, int *mask, char *adrstr)
 
 /*
 ==================
+SV_AddBan
+
+Add a ban or an exception of ip/mask, unless an entry already supersedes
+it, delete the entries the new one supersedes, and save the list. Returns
+the new entry's index, or -1 with why: *covering is then the index of the
+entry that supersedes it, or -1.
+==================
+*/
+
+static int SV_AddBan(netadr_t ip, int mask, qboolean isexception, int *covering, char *why, int whySize)
+{
+	char addy2[NET_ADDRSTRMAXLEN];
+	int index;
+	serverBan_t *curban;
+
+	*covering = -1;
+
+	if(ip.type != NA_IP && ip.type != NA_IP6)
+	{
+		Q_strncpyz(why, "Error: Can ban players connected via the internet only.", whySize);
+		return -1;
+	}
+
+	// first check whether a conflicting ban exists that would supersede the new one.
+	for(index = 0; index < serverBansCount; index++)
+	{
+		curban = &serverBans[index];
+
+		if(curban->subnet <= mask)
+		{
+			if((curban->isexception || !isexception) && NET_CompareBaseAdrMask(curban->ip, ip, curban->subnet))
+			{
+				Q_strncpyz(addy2, NET_AdrToString(ip), sizeof(addy2));
+
+				Com_sprintf(why, whySize, "Error: %s %s/%d supersedes %s %s/%d", curban->isexception ? "Exception" : "Ban",
+					   NET_AdrToString(curban->ip), curban->subnet,
+					   isexception ? "exception" : "ban", addy2, mask);
+				*covering = index;
+				return -1;
+			}
+		}
+		if(curban->subnet >= mask)
+		{
+			if(!curban->isexception && isexception && NET_CompareBaseAdrMask(curban->ip, ip, mask))
+			{
+				Q_strncpyz(addy2, NET_AdrToString(curban->ip), sizeof(addy2));
+
+				Com_sprintf(why, whySize, "Error: %s %s/%d supersedes already existing %s %s/%d", isexception ? "Exception" : "Ban",
+					   NET_AdrToString(ip), mask,
+					   curban->isexception ? "exception" : "ban", addy2, curban->subnet);
+				return -1;
+			}
+		}
+	}
+
+	// after the entry that covers it, so adding it again names that entry
+	// on a full list too (banaddr checks for a full list itself, first)
+	if(serverBansCount >= ARRAY_LEN(serverBans))
+	{
+		Q_strncpyz(why, "Error: Maximum number of bans/exceptions exceeded.", whySize);
+		return -1;
+	}
+
+	// now delete bans that are superseded by the new one
+	index = 0;
+	while(index < serverBansCount)
+	{
+		curban = &serverBans[index];
+
+		if(curban->subnet > mask && (!curban->isexception || isexception) && NET_CompareBaseAdrMask(curban->ip, ip, mask))
+			SV_DelBanEntryFromList(index);
+		else
+			index++;
+	}
+
+	index = serverBansCount++;
+	serverBans[index].ip = ip;
+	serverBans[index].subnet = mask;
+	serverBans[index].isexception = isexception;
+
+	SV_WriteBans();
+
+	return index;
+}
+
+/*
+==================
 SV_AddBanToList
 
 Ban a user from being able to play on this server based on his ip address.
@@ -846,10 +940,9 @@ Ban a user from being able to play on this server based on his ip address.
 static void SV_AddBanToList(qboolean isexception)
 {
 	char *banstring;
-	char addy2[NET_ADDRSTRMAXLEN];
+	char why[MAX_STRING_CHARS];
 	netadr_t ip;
-	int index, argc, mask;
-	serverBan_t *curban;
+	int argc, mask, covering;
 
 	// make sure server is running
 	if ( !com_sv_running->integer ) {
@@ -918,62 +1011,11 @@ static void SV_AddBanToList(qboolean isexception)
 			mask = (ip.type == NA_IP6) ? 128 : 32;
 	}
 
-	if(ip.type != NA_IP && ip.type != NA_IP6)
+	if(SV_AddBan(ip, mask, isexception, &covering, why, sizeof(why)) < 0)
 	{
-		Com_Printf("Error: Can ban players connected via the internet only.\n");
+		Com_Printf("%s\n", why);
 		return;
 	}
-
-	// first check whether a conflicting ban exists that would supersede the new one.
-	for(index = 0; index < serverBansCount; index++)
-	{
-		curban = &serverBans[index];
-		
-		if(curban->subnet <= mask)
-		{
-			if((curban->isexception || !isexception) && NET_CompareBaseAdrMask(curban->ip, ip, curban->subnet))
-			{
-				Q_strncpyz(addy2, NET_AdrToString(ip), sizeof(addy2));
-				
-				Com_Printf("Error: %s %s/%d supersedes %s %s/%d\n", curban->isexception ? "Exception" : "Ban",
-					   NET_AdrToString(curban->ip), curban->subnet,
-					   isexception ? "exception" : "ban", addy2, mask);
-				return;
-			}
-		}
-		if(curban->subnet >= mask)
-		{
-			if(!curban->isexception && isexception && NET_CompareBaseAdrMask(curban->ip, ip, mask))
-			{
-				Q_strncpyz(addy2, NET_AdrToString(curban->ip), sizeof(addy2));
-			
-				Com_Printf("Error: %s %s/%d supersedes already existing %s %s/%d\n", isexception ? "Exception" : "Ban",
-					   NET_AdrToString(ip), mask,
-					   curban->isexception ? "exception" : "ban", addy2, curban->subnet);
-				return;
-			}
-		}
-	}
-
-	// now delete bans that are superseded by the new one
-	index = 0;
-	while(index < serverBansCount)
-	{
-		curban = &serverBans[index];
-		
-		if(curban->subnet > mask && (!curban->isexception || isexception) && NET_CompareBaseAdrMask(curban->ip, ip, mask))
-			SV_DelBanEntryFromList(index);
-		else
-			index++;
-	}
-
-	serverBans[serverBansCount].ip = ip;
-	serverBans[serverBansCount].subnet = mask;
-	serverBans[serverBansCount].isexception = isexception;
-	
-	serverBansCount++;
-	
-	SV_WriteBans();
 
 	Com_Printf("Added %s: %s/%d\n", isexception ? "ban exception" : "ban",
 		   NET_AdrToString(ip), mask);
@@ -1138,6 +1180,92 @@ static void SV_FlushBans_f(void)
 	SV_WriteBans();
 	
 	Com_Printf("All bans and exceptions have been deleted.\n");
+}
+
+/*
+==================
+SV_ExtBanCount, SV_ExtGetBan, SV_ExtBanListChanges
+
+The ban list, for extensions (qcommon/hooks.h)
+==================
+*/
+int SV_ExtBanCount( void ) {
+	return serverBansCount;
+}
+
+qboolean SV_ExtGetBan( int index, extBan_t *ban ) {
+	if ( index < 0 || index >= serverBansCount ) {
+		return qfalse;
+	}
+	Q_strncpyz( ban->address, NET_AdrToString( serverBans[index].ip ), sizeof( ban->address ) );
+	ban->subnet = serverBans[index].subnet;
+	ban->exception = serverBans[index].isexception;
+	return qtrue;
+}
+
+int SV_ExtBanListChanges( void ) {
+	return serverBansChanges;
+}
+
+/*
+==================
+SV_ExtAddBan
+
+Add a ban or an exception for an extension (qcommon/hooks.h): a numeric
+address, or a range in CIDR notation whose prefix is in range, which
+banaddr would widen to one address
+==================
+*/
+int SV_ExtAddBan( const char *address, qboolean exception, int *covering, char *why, int whySize ) {
+	char		text[NET_ADDRSTRMAXLEN + 4];
+	char		*suffix;
+	netadr_t	ip;
+	int		bits, mask, index;
+
+	*covering = -1;
+	Q_strncpyz( text, address, sizeof( text ) );
+	suffix = strchr( text, '/' );
+	if ( suffix ) {
+		*suffix++ = '\0';
+	}
+	if ( strlen( address ) >= sizeof( text ) || !Sys_NumericToAdr( text, &ip ) ) {
+		goto invalid;
+	}
+
+	bits = ip.type == NA_IP6 ? 128 : 32;
+	mask = bits;
+	if ( suffix ) {
+		if ( !*suffix || strlen( suffix ) > 3 || strspn( suffix, "0123456789" ) != strlen( suffix ) ) {
+			goto invalid;
+		}
+		mask = atoi( suffix );
+	}
+	if ( mask < 1 || mask > bits ) {
+		goto invalid;
+	}
+
+	index = SV_AddBan( ip, mask, exception, covering, why, whySize );
+	return index >= 0 ? index : EXT_BAN_REFUSED;
+
+invalid:
+	Com_sprintf( why, whySize, "Error: Invalid address %s", address );
+	return EXT_BAN_INVALID;
+}
+
+/*
+==================
+SV_ExtRemoveBan
+
+Remove a ban or an exception for an extension (qcommon/hooks.h)
+==================
+*/
+qboolean SV_ExtRemoveBan( int index ) {
+	if ( index < 0 || index >= serverBansCount ) {
+		return qfalse;
+	}
+	SV_DelBanEntryFromList( index );
+	SV_WriteBans();
+	return qtrue;
 }
 
 static void SV_BanAddr_f(void)

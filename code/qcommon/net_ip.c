@@ -383,6 +383,33 @@ static qboolean Sys_StringToSockaddr(const char *s, struct sockaddr *sadr, int s
 
 /*
 =============
+Sys_NumericToAdr
+
+An IPv4 or IPv6 address written as numbers, which getaddrinfo reads
+without looking a name up
+=============
+*/
+qboolean Sys_NumericToAdr( const char *s, netadr_t *a ) {
+	struct addrinfo	hints;
+	struct addrinfo	*res = NULL;
+	qboolean	ok = qfalse;
+
+	Com_Memset( a, 0, sizeof( *a ) );
+	Com_Memset( &hints, 0, sizeof( hints ) );
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_NUMERICHOST;
+	if ( !getaddrinfo( s, NULL, &hints, &res ) && res ) {
+		ok = NET_SockaddrToAdr( res->ai_addr, res->ai_addrlen, a );
+	}
+	if ( res ) {
+		freeaddrinfo( res );
+	}
+	return ok;
+}
+
+/*
+=============
 Sys_SockaddrToString
 =============
 */

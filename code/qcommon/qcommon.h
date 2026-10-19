@@ -1699,6 +1699,8 @@ void	Sys_SendPacket( int length, const void *data, netadr_t to );
 
 qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
 //Does NOT parse port numbers, only base addresses.
+// an IPv4 or IPv6 address written as numbers, never a host name to look up
+qboolean	Sys_NumericToAdr( const char *s, netadr_t *a );
 
 qboolean	Sys_IsLANAddress (netadr_t adr);
 void		Sys_ShowIP(void);

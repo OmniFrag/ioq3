@@ -1538,6 +1538,16 @@ int SV_ExtClientPing( int clientNum ) {
 	return cl->state == CS_ACTIVE ? cl->ping : 999;
 }
 
+qboolean SV_ExtDropClient( int clientNum, const char *reason ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	if ( !cl || cl->netchan.remoteAddress.type == NA_LOOPBACK ) {
+		return qfalse;
+	}
+	SV_DropClient( cl, reason );
+	return qtrue;
+}
+
 /*
 ==================
 SV_KeepAwake
