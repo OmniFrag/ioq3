@@ -20,14 +20,20 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 // content.c -- paks known by their content: the pak index, which keeps
-// each installed pak's SHA-256, the job that hashes them, and the client's
-// cache of downloaded paks, named by their hashes
+// each installed pak's SHA-256, the job that hashes them, the client's
+// cache of downloaded paks, named by their hashes, and the content
+// manifest, built and kept
 
 #include "content.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifdef _WIN32
+#include <sys/utime.h>
+#else
+#include <utime.h>
+#endif
 
 /*
 ==============================================================
@@ -211,33 +217,31 @@ static void Content_MakeDirs( void ) {
 =================
 Content_RemoveStaleTemps
 
-Deletes the temporary files of index writes that a process stopping
-midway left (CONTENT_TEMP_FORMAT's), an hour or more old, so they can't
-pile up; once a run
+Deletes the temporary files of writes that a process stopping midway left
+in a folder (CONTENT_TEMP_FORMAT's), an hour or more old, so they can't
+pile up: the indexes' once a run
 =================
 */
-static void Content_RemoveStaleTemps( void ) {
-	static qboolean	done;
-	char			dir[MAX_OSPATH], **files;
-	const char		*name, *c, *ospath;
-	int64_t			size, mtime, now = time( NULL );
-	int				i, count;
+static void Content_RemoveStaleTempsIn( const char *folder, const char *kind ) {
+	char		dir[MAX_OSPATH], **files;
+	const char	*name, *c, *ospath;
+	int64_t		size, mtime, now = time( NULL );
+	int			i, count, length = strlen( kind );
 
-	if ( done || com_check ) {
+	if ( com_check ) {
 		return;
 	}
-	done = qtrue;
-	Q_strncpyz( dir, Content_HomeFile( CONTENT_DIR ), sizeof( dir ) );
+	Q_strncpyz( dir, Content_HomeFile( folder ), sizeof( dir ) );
 	files = Sys_ListFiles( dir, ".tmp", NULL, &count, qfalse );
 	for ( i = 0; i < count; i++ ) {
-		// <name>.dat.<pid>.tmp only
-		name = strstr( files[i], ".dat." );
+		// <name><kind><pid>.tmp only, such as installed.dat.123.tmp
+		name = strstr( files[i], kind );
 		if ( !name ) {
 			continue;
 		}
-		for ( c = name + 5; *c >= '0' && *c <= '9'; c++ ) {
+		for ( c = name + length; *c >= '0' && *c <= '9'; c++ ) {
 		}
-		if ( c == name + 5 || strcmp( c, ".tmp" ) ) {
+		if ( c == name + length || strcmp( c, ".tmp" ) ) {
 			continue;
 		}
 		ospath = va( "%s%c%s", dir, PATH_SEP, files[i] );
@@ -246,6 +250,15 @@ static void Content_RemoveStaleTemps( void ) {
 		}
 	}
 	Sys_FreeFileList( files );
+}
+
+static void Content_RemoveStaleTemps( void ) {
+	static qboolean	done;
+
+	if ( !done ) {
+		done = qtrue;
+		Content_RemoveStaleTempsIn( CONTENT_DIR, ".dat." );
+	}
 }
 
 /*
@@ -1339,4 +1352,245 @@ qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
 	return qtrue;
+}
+
+/*
+==============================================================
+
+THE CONTENT MANIFEST
+
+==============================================================
+*/
+
+static const contentPak_t	*manifestPaks;	// for Content_CompareNames
+
+// by game directory and name without case, then the one a name finds first
+static int Content_CompareNames( const void *a, const void *b ) {
+	int					ia = *(const int *)a, ib = *(const int *)b;
+	const contentPak_t	*pa = &manifestPaks[ia], *pb = &manifestPaks[ib];
+	int					order = Q_stricmp( pa->gameDir, pb->gameDir );
+
+	if ( !order ) {
+		order = Q_stricmp( pa->name, pb->name );
+	}
+	return order ? order : ia - ib;
+}
+
+/*
+=================
+Content_BuildManifest
+
+A name first: a pak whose game directory and name a higher one has is
+never offered, as a client asking by that name gets the higher one's
+bytes. Then its role, and whether it can be offered
+=================
+*/
+int Content_BuildManifest( const contentPak_t *paks, int count, ofcmValidName_t validName,
+	manifestListing_t *listing, ofcmHeader_t *header, byte *out, int size, const char **error ) {
+	const contentPak_t	*p;
+	ofcmEntry_t			*entries, *e;
+	int					*order, i, named = 0, numEntries = 0, numRequired = 0, kept, optionalRoom, length = 0;
+
+	order = malloc( ( count ? count : 1 ) * sizeof( *order ) );
+	entries = malloc( ( count ? count : 1 ) * sizeof( *entries ) );
+	if ( !order || !entries ) {
+		*error = "no memory for it";
+		goto done;
+	}
+
+	for ( i = 0; i < count; i++ ) {
+		p = &paks[i];
+		if ( strlen( p->gameDir ) >= OFCM_GAMEDIR_SIZE || strlen( p->name ) >= OFCM_NAME_SIZE
+			|| !OFCM_ValidName( p->gameDir, p->name ) || ( validName && !validName( p->gameDir, p->name ) ) ) {
+			listing[i] = MANIFEST_BAD_NAME;
+		} else {
+			listing[i] = MANIFEST_LISTED;
+			order[named++] = i;
+		}
+	}
+	manifestPaks = paks;
+	qsort( order, named, sizeof( *order ), Content_CompareNames );
+	for ( i = 1; i < named; i++ ) {
+		if ( !Q_stricmp( paks[order[i]].gameDir, paks[order[i - 1]].gameDir )
+			&& !Q_stricmp( paks[order[i]].name, paks[order[i - 1]].name ) ) {
+			listing[order[i]] = MANIFEST_SHADOWED;
+		}
+	}
+
+	// order now maps each entry to its pak
+	for ( i = 0; i < count; i++ ) {
+		p = &paks[i];
+		if ( listing[i] != MANIFEST_LISTED ) {
+			continue;
+		}
+		if ( p->refused && !p->referenced ) {
+			listing[i] = MANIFEST_REFUSED;
+			continue;
+		}
+		if ( p->size < OFCM_MIN_PAK || p->size > OFCM_MAX_PAK ) {
+			listing[i] = MANIFEST_UNREADABLE;
+			continue;
+		}
+		if ( !p->refused && !p->sha256 ) {
+			listing[i] = MANIFEST_UNHASHED;
+			continue;
+		}
+		e = &entries[numEntries];
+		memset( e, 0, sizeof( *e ) );
+		if ( !p->refused ) {
+			memcpy( e->sha256, p->sha256, SHA256_DIGEST_SIZE );
+		}
+		e->size = (uint32_t)p->size;
+		e->checksum = (int)p->checksum;
+		e->role = p->referenced ? OFCM_ROLE_REQUIRED : OFCM_ROLE_OPTIONAL;
+		e->flags = ( p->refused ? OFCM_FLAG_OWN : 0 ) | ( p->code ? OFCM_FLAG_CODE : 0 );
+		Q_strncpyz( e->gameDir, p->gameDir, sizeof( e->gameDir ) );
+		Q_strncpyz( e->name, p->name, sizeof( e->name ) );
+		numRequired += p->referenced;
+		order[numEntries++] = i;
+	}
+
+	// past what a content manifest holds, the lowest optional ones go
+	if ( numRequired > OFCM_MAX_ENTRIES ) {
+		*error = "more than 4,096 required paks";
+		goto done;
+	}
+	optionalRoom = OFCM_MAX_ENTRIES - numRequired;
+	memset( header, 0, sizeof( *header ) );
+	for ( i = 0, kept = 0; i < numEntries; i++ ) {
+		if ( entries[i].role == OFCM_ROLE_OPTIONAL ) {
+			if ( !optionalRoom ) {
+				listing[order[i]] = MANIFEST_TOO_MANY;
+				continue;
+			}
+			optionalRoom--;
+			header->numOptional++;
+			header->optionalBytes += entries[i].size;
+		} else {
+			header->numRequired++;
+			if ( !( entries[i].flags & OFCM_FLAG_OWN ) ) {
+				header->requiredBytes += entries[i].size;
+			}
+		}
+		entries[kept++] = entries[i];
+	}
+	header->numEntries = numEntries = kept;
+
+	length = OFCM_Write( entries, numEntries, NULL, 0, validName, out, size, error );
+
+done:
+	free( order );
+	free( entries );
+	return length;
+}
+
+/*
+==============================================================
+
+THE CLIENT'S CONTENT MANIFESTS
+
+==============================================================
+*/
+
+static const char *Content_Manifest_File( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	char	hex[SHA256_HEX_SIZE];
+
+	Com_SHA256Hex( sha256, hex );
+	return Content_HomeFile( va( "%s/%s.ofcm", MANIFEST_CACHE_DIR, hex ) );
+}
+
+typedef struct {
+	int		file;		// in Sys_ListFiles' list
+	int64_t	mtime;
+} manifestFile_t;
+
+static int Content_CompareAges( const void *a, const void *b ) {
+	int64_t	ta = ( (const manifestFile_t *)a )->mtime, tb = ( (const manifestFile_t *)b )->mtime;
+
+	return ta < tb ? -1 : ta > tb;
+}
+
+/*
+=================
+Content_Manifest_Evict
+
+Down to MANIFEST_CACHE_MAX content manifests, the least recently used
+going first, and without the temporary files of writes a stopped process
+left
+=================
+*/
+static void Content_Manifest_Evict( void ) {
+	char			dir[MAX_OSPATH], **files;
+	manifestFile_t	*kept;
+	int64_t			size;
+	int				i, count, numKept = 0;
+
+	Content_RemoveStaleTempsIn( MANIFEST_CACHE_DIR, ".ofcm." );
+	Q_strncpyz( dir, Content_HomeFile( MANIFEST_CACHE_DIR ), sizeof( dir ) );
+	files = Sys_ListFiles( dir, ".ofcm", NULL, &count, qfalse );
+	if ( count > MANIFEST_CACHE_MAX && ( kept = malloc( count * sizeof( *kept ) ) ) != NULL ) {
+		for ( i = 0; i < count; i++ ) {
+			kept[numKept].file = i;
+			if ( Content_FileStat( va( "%s%c%s", dir, PATH_SEP, files[i] ), &size, &kept[numKept].mtime ) ) {
+				numKept++;
+			}
+		}
+		qsort( kept, numKept, sizeof( *kept ), Content_CompareAges );
+		for ( i = 0; i < numKept - MANIFEST_CACHE_MAX; i++ ) {
+			remove( va( "%s%c%s", dir, PATH_SEP, files[kept[i].file] ) );
+		}
+		free( kept );
+	}
+	Sys_FreeFileList( files );
+}
+
+/*
+=================
+Content_Manifest_Store
+=================
+*/
+qboolean Content_Manifest_Store( const byte *data, int length, ofcmValidName_t validName,
+	byte sha256[SHA256_DIGEST_SIZE] ) {
+	ofcmHeader_t	header;
+
+	if ( OFCM_Read( data, length, &header, validName ) ) {
+		return qfalse;
+	}
+	Com_SHA256Buffer( data, length, sha256 );
+	Content_MakeDirs();
+	Sys_Mkdir( Content_HomeFile( MANIFEST_CACHE_DIR ) );
+	if ( !Content_WriteFile( Content_Manifest_File( sha256 ), data, length ) ) {
+		return qfalse;
+	}
+	Content_Manifest_Evict();
+	return qtrue;
+}
+
+/*
+=================
+Content_Manifest_Load
+
+One whose bytes don't match is deleted. One used is touched, so it's the
+last the cache lets go
+=================
+*/
+byte *Content_Manifest_Load( const byte sha256[SHA256_DIGEST_SIZE], ofcmValidName_t validName,
+	qboolean use, int *length, ofcmHeader_t *header ) {
+	char			ospath[MAX_OSPATH];
+	byte			*data, check[SHA256_DIGEST_SIZE];
+
+	Q_strncpyz( ospath, Content_Manifest_File( sha256 ), sizeof( ospath ) );
+	if ( !( data = Content_ReadFile( ospath, OFCM_MAX_SIZE, length ) ) ) {
+		return NULL;
+	}
+	Com_SHA256Buffer( data, *length, check );
+	if ( memcmp( check, sha256, SHA256_DIGEST_SIZE ) || OFCM_Read( data, *length, header, validName ) ) {
+		free( data );
+		remove( ospath );
+		return NULL;
+	}
+	if ( use ) {
+		utime( ospath, NULL );
+	}
+	return data;
 }

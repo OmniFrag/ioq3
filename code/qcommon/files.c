@@ -1440,6 +1440,22 @@ qboolean FS_IsDemoExt(const char *filename, int namelen)
 }
 
 /*
+================
+FS_PakHasFile
+================
+*/
+static qboolean FS_PakHasFile( const pack_t *pak, const char *name ) {
+	const fileInPack_t	*file;
+
+	for ( file = pak->hashTable[FS_HashFileName( name, pak->hashSize )]; file; file = file->next ) {
+		if ( !FS_FilenameCompare( file->name, name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
 ===========
 FS_CachePakRefuses
 
@@ -1450,7 +1466,6 @@ once a mount
 ===========
 */
 static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename, qboolean opening ) {
-	const fileInPack_t	*pakFile;
 
 	if ( !COM_CompareExtension( filename, ".cfg" ) ) {
 		return qfalse;
@@ -1462,12 +1477,7 @@ static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename, qboolean 
 		return qfalse;
 	}
 	// a search passes over every pak above the one that has it
-	for ( pakFile = pak->hashTable[FS_HashFileName( filename, pak->hashSize )]; pakFile; pakFile = pakFile->next ) {
-		if ( !FS_FilenameCompare( pakFile->name, filename ) ) {
-			break;
-		}
-	}
-	if ( pakFile ) {
+	if ( FS_PakHasFile( pak, filename ) ) {
 		pak->defaultCfgNoted = qtrue;
 		Com_Printf( "Reading default.cfg from %s/%s.pk3, downloaded to the content cache\n",
 			pak->pakGamename, pak->pakBasename );
@@ -5451,6 +5461,50 @@ const char *FS_ServerFile( const char *filename )
 
 /*
 ================
+FS_PakRefused
+
+Whether a pak is one of the game's own (FS_RetailPakChecksum, as the
+classic download refuses it) that sv_refuseRetailPaks keeps the server
+from sending: the pak index doesn't hash it, and the content manifest
+lists it "bring your own"
+================
+*/
+static qboolean FS_PakRefused( const pack_t *pak ) {
+	char	retail[MAX_QPATH];
+
+	return Cvar_VariableIntegerValue( "sv_refuseRetailPaks" ) &&
+		FS_RetailPakChecksum( va( "%s/%s.pk3", pak->pakGamename, pak->pakBasename ), pak->checksum, retail, sizeof( retail ) );
+}
+
+/*
+================
+FS_ContentRelativePath
+
+A pak's path under its root (past the separator, two where the root ends
+in one), with the separators every platform reads: only PATH_SEP, as a
+':' is a name's own on Unix. qfalse if it has no root
+================
+*/
+static qboolean FS_ContentRelativePath( const pack_t *pak, char *relative, int size ) {
+	const char	*rootPath, *under;
+	char		*c;
+
+	if ( !( rootPath = FS_ContentRootPath( pak->contentRoot ) ) || strlen( pak->pakFilename ) <= strlen( rootPath ) ) {
+		return qfalse;
+	}
+	for ( under = pak->pakFilename + strlen( rootPath ); *under == PATH_SEP; under++ ) {
+	}
+	Q_strncpyz( relative, under, size );
+	for ( c = relative; *c; c++ ) {
+		if ( *c == PATH_SEP ) {
+			*c = '/';
+		}
+	}
+	return qtrue;
+}
+
+/*
+================
 FS_HashPaks
 
 At a map load, queues every pak of the search path the pak index lacks,
@@ -5464,12 +5518,8 @@ void FS_HashPaks( void ) {
 	searchpath_t	*search;
 	const pack_t	*pak;
 	pakRecord_t		*paks, *p;
-	const char		*rootPath, *under;
-	char			relative[MAX_OSPATH], *c;
-	int				count, pass, index;
-	qboolean		refuseRetail;
-
-	refuseRetail = Cvar_VariableIntegerValue( "sv_refuseRetailPaks" ) != 0;
+	char			relative[MAX_OSPATH];
+	int				count, pass;
 	for ( count = 0, search = fs_searchpaths; search; search = search->next ) {
 		count += search->pack != NULL;
 	}
@@ -5486,20 +5536,9 @@ void FS_HashPaks( void ) {
 			}
 			// the referenced ones in the first pass, the rest in the second;
 			// the game's own paks only where the server sends them
-			if ( FS_PakIsReferenced( pak ) == pass || ( FS_RetailPakGame( pak->checksum, &index ) && refuseRetail ) ||
-				!( rootPath = FS_ContentRootPath( pak->contentRoot ) ) || strlen( pak->pakFilename ) <= strlen( rootPath ) ) {
+			if ( FS_PakIsReferenced( pak ) == pass || FS_PakRefused( pak ) ||
+				!FS_ContentRelativePath( pak, relative, sizeof( relative ) ) ) {
 				continue;
-			}
-			// the path under its root (past the separator, two where the root
-			// ends in one), with the separators every platform reads; only
-			// PATH_SEP, as a ':' is a name's own on Unix
-			for ( under = pak->pakFilename + strlen( rootPath ); *under == PATH_SEP; under++ ) {
-			}
-			Q_strncpyz( relative, under, sizeof( relative ) );
-			for ( c = relative; *c; c++ ) {
-				if ( *c == PATH_SEP ) {
-					*c = '/';
-				}
 			}
 			if ( strlen( relative ) >= sizeof( p->path ) ) {
 				if ( !warned ) {
@@ -5523,4 +5562,66 @@ void FS_HashPaks( void ) {
 
 	Content_PakIndex_Queue( paks, count );
 	free( paks );
+}
+
+/*
+================
+FS_ContentPaks
+================
+*/
+int FS_ContentPaks( contentPak_t *paks, int max ) {
+	const searchpath_t	*search;
+	const pack_t		*pak;
+	const pakRecord_t	*record;
+	contentPak_t		*p;
+	char				relative[MAX_OSPATH];
+	int					count = 0;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( !( pak = search->pack ) ) {
+			continue;
+		}
+		if ( paks && count < max ) {
+			p = &paks[count];
+			Com_Memset( p, 0, sizeof( *p ) );
+			p->gameDir = pak->pakGamename;
+			p->name = pak->pakBasename;
+			p->ospath = pak->pakFilename;
+			p->checksum = pak->checksum;
+			p->referenced = FS_PakIsReferenced( pak );
+			p->refused = FS_PakRefused( pak );
+			p->code = FS_PakHasFile( pak, "vm/cgame.qvm" ) || FS_PakHasFile( pak, "vm/ui.qvm" );
+			// a refused pak is known by its checksum alone, even where an
+			// earlier run or another process sharing the home hashed it, so
+			// nothing finds it by that hash to send; and a record another
+			// writer marked retail has no hash
+			if ( !Content_FileStat( pak->pakFilename, &p->size, &p->mtime ) ) {
+				p->size = -1;
+			} else if ( !p->refused && FS_ContentRelativePath( pak, relative, sizeof( relative ) ) &&
+				( record = Content_PakIndex_Find( pak->contentRoot, relative, p->size, p->mtime ) ) != NULL &&
+				!( record->flags & PAK_RECORD_RETAIL ) ) {
+				p->sha256 = record->sha256;
+			}
+		}
+		count++;
+	}
+	return count;
+}
+
+/*
+================
+FS_HasInstalledPak
+================
+*/
+qboolean FS_HasInstalledPak( unsigned int checksum, int64_t size ) {
+	const searchpath_t	*search;
+	int64_t				pakSize, mtime;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack && !search->pack->cached && search->pack->checksum == checksum &&
+			( size < 0 || ( Content_FileStat( search->pack->pakFilename, &pakSize, &mtime ) && pakSize == size ) ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }

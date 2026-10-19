@@ -319,6 +319,12 @@ typedef struct {
 	int			punkbuster;
 	int			g_humanplayers;
 	int			g_needpass;
+	// the content keys (download-protocol.md section 3.3): whether it gave
+	// them, the bytes of its required paks, and whether this client has its
+	// content manifest from an earlier visit and every required pak
+	qboolean	contentKnown;
+	uint64_t	contentRequired;
+	qboolean	contentReady;
 } serverInfo_t;
 
 typedef struct {

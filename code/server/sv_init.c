@@ -986,8 +986,10 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	Cvar_Set( "sv_referencedPaks", p );
 	p = FS_ReferencedPakNames();
 	Cvar_Set( "sv_referencedPakNames", p );
-	// and the pak index hashes those it lacks, on a thread of its own
+	// and the pak index hashes those it lacks, on a thread of its own;
+	// the content manifest offers those it has
 	FS_HashPaks();
+	SV_ContentBuildManifest();
 
 	// save systeminfo and serverinfo strings
 	Q_strncpyz( systemInfo, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( systemInfo ) );
@@ -1465,6 +1467,7 @@ void SV_Shutdown( char *finalmsg ) {
 
 	// free current level
 	SV_ClearServer();
+	SV_ContentShutdown();
 
 	// free server static data
 	if(svs.clients)

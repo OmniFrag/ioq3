@@ -121,3 +121,12 @@ qboolean FS_ValidDownloadName( const char *name ) {
 	Q_strncpyz( game, name, slash - name + 1 );
 	return !FS_EngineFolder( game );
 }
+
+/*
+================
+FS_ValidDownloadPak
+================
+*/
+qboolean FS_ValidDownloadPak( const char *gameDir, const char *name ) {
+	return FS_ValidDownloadName( va( "%s/%s", gameDir, name ) );
+}

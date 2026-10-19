@@ -21,7 +21,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
-#include "../qcommon/content.h"
 
 #ifdef USE_VOIP
 cvar_t *sv_voip;
@@ -789,6 +788,7 @@ void SVC_Info( netadr_t from ) {
 	int		i, count, humans;
 	char	*gamedir;
 	char	infostring[MAX_INFO_STRING];
+	uint32_t	asked;
 
 	// ignore if we are in single player
 	if ( Cvar_VariableValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
@@ -873,9 +873,15 @@ void SVC_Info( netadr_t from ) {
 
 	Info_SetValueForKey( infostring, "draining", sv_drainReason );
 
-	// the extension bits, only for a client whose tokens ask for them
-	if ( SV_AskedExtensions( 2 ) ) {
+	// the extension bits, only for a client whose tokens ask for them,
+	// and the content manifest's keys for one that asks for the content
+	// protocol
+	asked = SV_AskedExtensions( 2 );
+	if ( asked ) {
 		Info_SetValueForKey( infostring, "ofx", va( "%x", OFX_BUILD ) );
+	}
+	if ( asked & OFX_CONTENT ) {
+		SV_ContentInfo( infostring );
 	}
 	NET_OutOfBandPrint( NS_SERVER, from, "infoResponse\n%s", infostring );
 }
@@ -1710,10 +1716,8 @@ void SV_Frame( int msec ) {
 		return;
 	}
 
-	// what the hash job finished goes into the pak index, paused or not,
-	// and after the server has stopped, so the job it started is finished;
-	// qtrue when the index changed, for what's built from it
-	(void)Content_PakIndex_Frame();
+	// the pak index, and the content manifest built from it
+	SV_ContentFrame();
 
 	if (!com_sv_running->integer)
 	{
