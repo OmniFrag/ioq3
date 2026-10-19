@@ -1289,7 +1289,7 @@ void SV_Init (void)
 	Cvar_SetDescription( sv_allowDownload,
 		"Whether players may download missing pak files from the server\n"
 		"A player missing a map's or mod's pak files (.pk3) can fetch them from the server, if the player "
-		"has downloads on (cl_allowDownload, off by default). All downloads together get 500 KB/s by "
+		"has downloads on (cl_allowDownload, on by default). All downloads together get 500 KB/s by "
 		"default (sv_dlRate), so a 20 MB map takes about 40 seconds; players use sv_dlURL's web server, "
 		"often faster, even with 0, and 2 stops them. The default, 9, sends files and keeps players "
 		"connected for web downloads.\n"
