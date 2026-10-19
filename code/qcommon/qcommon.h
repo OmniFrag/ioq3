@@ -1337,6 +1337,23 @@ void		Com_QueueReload( void );
 int			Com_Milliseconds( void );	// will be journaled properly
 unsigned	Com_BlockChecksum( const void *buffer, int length );
 char		*Com_MD5File(const char *filename, int length, const char *prefix, int prefix_len);
+
+// SHA-256 (com_sha256.c, over sha256.c's public-domain code)
+#define	SHA256_DIGEST_SIZE	32
+#define	SHA256_HEX_SIZE		( SHA256_DIGEST_SIZE * 2 + 1 )
+typedef struct {
+	union {
+		byte				opaque[112];	// sha256.c's SHA256_CTX
+		unsigned long long	align;
+	} u;
+} sha256_t;
+void		Com_SHA256Init( sha256_t *ctx );
+void		Com_SHA256Update( sha256_t *ctx, const void *data, size_t len );
+void		Com_SHA256Final( sha256_t *ctx, byte digest[SHA256_DIGEST_SIZE] );
+void		Com_SHA256Hex( const byte digest[SHA256_DIGEST_SIZE], char hex[SHA256_HEX_SIZE] );
+// lowercase
+qboolean	Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] );
+// exactly 64 lowercase hexadecimal digits
 int			Com_Filter(char *filter, char *name, int casesensitive);
 int			Com_FilterPath(char *filter, char *name, int casesensitive);
 int			Com_RealTime(qtime_t *qtime);
