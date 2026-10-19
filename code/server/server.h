@@ -195,6 +195,8 @@ typedef struct client_s {
 	rateLimit_t		commandRate;		// limits commands for the game
 	rateLimit_t		gamestateRate;		// limits gamestate resends
 	rateLimit_t		floodNoticeRate;	// limits telling it commands were ignored
+	qboolean		muted;				// its chat and voice reach nobody (SV_MuteClient)
+	int				muteEndTime;		// Sys_Milliseconds when the mute ends; 0 for when the client leaves
 	int				lastPacketTime;		// svs.time when packet was last received
 	int				lastConnectTime;	// svs.time when connection started
 	int				lastDisconnectTime;	// svs.time it was last let go (SV_OldestFreeClient)
@@ -475,6 +477,8 @@ void SV_ResyncClient( client_t *client );
 qboolean SV_ResyncAwaitingAck( const client_t *client );
 void SV_FreeClient(client_t *client);
 void SV_DropClient( client_t *drop, const char *reason );
+qboolean SV_MuteClient( client_t *cl, qboolean mute, int seconds );
+qboolean SV_ClientMuted( const client_t *cl );
 
 void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK );
 void SV_ClientThink (client_t *cl, usercmd_t *cmd);

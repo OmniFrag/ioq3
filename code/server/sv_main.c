@@ -1377,6 +1377,10 @@ static void SV_CheckTimeouts( void ) {
 			cl->state = CS_FREE;	// can now be reused
 			continue;
 		}
+		// a mute whose time has run out ends, and the client is told
+		if ( cl->muted && cl->state >= CS_CONNECTED && !SV_ClientMuted( cl ) ) {
+			SV_MuteClient( cl, qfalse, 0 );
+		}
 		// a client sends packets from the moment it connects, so one
 		// that has sent none since is holding the slot without playing.
 		// Free it quietly, well before the timeout
@@ -1546,6 +1550,22 @@ qboolean SV_ExtDropClient( int clientNum, const char *reason ) {
 	}
 	SV_DropClient( cl, reason );
 	return qtrue;
+}
+
+qboolean SV_ExtMuteClient( int clientNum, qboolean mute, int seconds ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	if ( !cl ) {
+		return qfalse;
+	}
+	SV_MuteClient( cl, mute, seconds );
+	return qtrue;
+}
+
+qboolean SV_ExtClientMuted( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	return cl && SV_ClientMuted( cl );
 }
 
 /*
