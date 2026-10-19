@@ -380,6 +380,7 @@ FAST DOWNLOADS
 #define CONTENT_RETRY_LIMIT		1000
 #define CONTENT_SEND_MAX		64			// datagrams a call of SV_ContentSend
 #define CONTENT_SEND_TIME		1000000		// ns a call of SV_ContentSend, checked every 8 datagrams
+#define CONTENT_BATCH			16			// a client's datagrams sent in one call (NET_SendPacketsChecked)
 
 // an open transfer's file: a pak through its own FILE, read in blocks, or
 // a content manifest, from memory, by its hash
@@ -392,14 +393,22 @@ typedef struct {
 	int64_t		position;		// fp's
 } svContentFile_t;
 
+// a client's datagrams waiting to go together: each size bytes but the
+// last, which may be shorter, and then nothing more joins them
+typedef struct {
+	int			count, size, length;
+	byte		data[CONTENT_BATCH * OFD_MAX_DATAGRAM];
+} svContentBatch_t;
+
 struct svContent_s {
-	svTransfers_t	t;
-	svContentFile_t	files[SVT_TRANSFERS];	// by transfer slot
+	svTransfers_t		t;
+	svContentFile_t		files[SVT_TRANSFERS];	// by transfer slot
+	svContentBatch_t	batch;
 };
 
 static dlccBucket_t	svContentCap;		// sv_dlMaxRate's, every fast transfer's
 static int			svContentCapRate = -1;
-static qboolean		svContentSocketFull;
+static qboolean		svContentSocketFull;	// until a batch it refused has gone
 static qboolean		svContentIdle;		// no transfer open at the last SV_ContentSend, nor a CONTROL since
 static int			svContentNextClient;
 static int			svContentIgnored;	// datagrams not counted against a client, for sv_showContent
@@ -461,6 +470,33 @@ static void SV_ContentClose( void *arg, void *file ) {
 	Com_Memset( f, 0, sizeof( *f ) );
 }
 
+/*
+=================
+SV_ContentFlush
+
+A client's batched datagrams, sent; qfalse when the socket couldn't take
+them all, and then the rest wait for the next try
+=================
+*/
+static qboolean SV_ContentFlush( client_t *cl ) {
+	svContentBatch_t	*b = &cl->content->batch;
+	int					sent;
+
+	if ( !b->count ) {
+		return qtrue;
+	}
+	sent = NET_SendPacketsChecked( NS_SERVER, b->count, b->size, b->length, b->data, cl->netchan.remoteAddress );
+	if ( sent < b->count ) {
+		memmove( b->data, b->data + sent * b->size, b->length - sent * b->size );
+		b->length -= sent * b->size;
+		b->count -= sent;
+		svContentSocketFull = qtrue;
+		return qfalse;
+	}
+	b->count = b->length = 0;
+	return qtrue;
+}
+
 static qboolean SV_ContentSendDatagram( void *arg, const byte *data, int length ) {
 	const client_t	*cl = arg;
 
@@ -469,6 +505,39 @@ static qboolean SV_ContentSendDatagram( void *arg, const byte *data, int length 
 		return qfalse;
 	}
 	return qtrue;
+}
+
+// SV_ContentSend's loop's send: the datagram joins the client's batch,
+// which goes first when it can't take it (a shorter one, the last, closed
+// it), and the batches go at the loop's end. qfalse when the socket is full
+static qboolean SV_ContentBatchDatagram( void *arg, const byte *data, int length ) {
+	client_t			*cl = arg;
+	svContentBatch_t	*b = &cl->content->batch;
+
+	if ( b->count && ( b->length < b->count * b->size || length > b->size || b->count == CONTENT_BATCH )
+		&& !SV_ContentFlush( cl ) ) {
+		return qfalse;
+	}
+	if ( !b->count ) {
+		b->size = length;
+	}
+	Com_Memcpy( b->data + b->length, data, length );
+	b->length += length;
+	b->count++;
+	return qtrue;
+}
+
+// every client's batch sent, or what the socket refused kept for later
+static void SV_ContentFlushAll( void ) {
+	client_t	*cl;
+	int			i;
+
+	svContentSocketFull = qfalse;
+	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+		if ( cl->content ) {
+			SV_ContentFlush( cl );
+		}
+	}
 }
 
 static uint32_t SV_ContentRandom( void *arg ) {
@@ -849,7 +918,12 @@ int SV_ContentSend( void ) {
 	start = Sys_Nanoseconds();
 	now = start / 1000;
 	SV_ContentReport( now );
-	if ( svContentIdle ) {
+	// what the socket refused before goes first; while it still can't,
+	// only the timers run
+	if ( svContentSocketFull ) {
+		SV_ContentFlushAll();
+	}
+	if ( svContentIdle && !svContentSocketFull ) {
 		return INT_MAX;
 	}
 	if ( svContentCapRate != sv_dlMaxRate->integer ) {
@@ -876,13 +950,17 @@ int SV_ContentSend( void ) {
 	}
 	svContentNextClient = ( svContentNextClient + 1 ) % sv_maxclients->integer;
 	svContentIdle = !count;
+	// the socket refused what went before, or a timer's CLOSE
+	if ( svContentSocketFull ) {
+		svContentIdle = qfalse;
+		return 1;
+	}
 	for ( i = 0; i < count; i++ ) {
 		if ( SV_ContentLoadingClass( downloading[i] ) ) {
 			DLCC_SetFloorRate( &downloading[i]->content->t.cc, CONTENT_FLOOR / loading );
 		}
 	}
 
-	svContentSocketFull = qfalse;
 	do {
 		// prefetch only when no loading client sent this pass (section 7.1)
 		progress = qfalse;
@@ -904,6 +982,7 @@ int SV_ContentSend( void ) {
 				}
 				// held back only by the cap, the next isn't waiting on the path
 				env = SV_ContentEnv( cl );
+				env.send = SV_ContentBatchDatagram;
 				bytes = SVT_Send( &cl->content->t, now,
 					DLCC_BucketWait( &svContentCap, now, 2 * OFD_MAX_DATAGRAM ) == 0, &env );
 				if ( !bytes ) {
@@ -924,5 +1003,10 @@ int SV_ContentSend( void ) {
 		wait = 0;	// stopped by the limits, with more to send
 	}
 done:
+	for ( i = 0; i < count; i++ ) {
+		if ( !SV_ContentFlush( downloading[i] ) ) {
+			wait = MIN( wait, 1000 );
+		}
+	}
 	return wait == INT64_MAX ? INT_MAX : (int)( ( wait + 999 ) / 1000 );
 }

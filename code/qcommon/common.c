@@ -4804,7 +4804,7 @@ gone (on Windows, STATUS_BAD_STACK).
 =================
 */
 qboolean Com_WaitFrame( void ) {
-	int		minMsec, timeVal, timeValSV;
+	int		minMsec, timeVal, timeValSV, timeValFrame;
 
 	if ( setjmp (abortframe) ) {
 		Cmd_EndRestricted();
@@ -4821,20 +4821,25 @@ qboolean Com_WaitFrame( void ) {
 
 	do
 	{
-		if(com_sv_running->integer)
-		{
-			timeValSV = SV_SendQueuedPackets();
-
-			timeVal = Com_TimeVal(minMsec);
-
-			if(timeValSV < timeVal)
-				timeVal = timeValSV;
-		}
-		else
-			timeVal = Com_TimeVal(minMsec);
+		timeValSV = com_sv_running->integer ? SV_SendQueuedPackets() : INT_MAX;
+		timeValFrame = Com_TimeVal(minMsec);
+		timeVal = MIN(timeValSV, timeValFrame);
 
 		if(com_busyWait->integer || timeVal < 1)
 			NET_Sleep(0);
+		else if(timeValSV < timeValFrame - 1 && !SV_QueuedPacketsPrecise())
+		{
+			// the fast download's datagrams are due a millisecond or more
+			// before the frame: they need no precision, and the precise
+			// wait's polling at the end of each millisecond would spin
+			// while it paces them a millisecond or less apart. Closer to
+			// the frame, which is due as much as a millisecond before
+			// timeValFrame says, a whole millisecond's sleep could
+			// overshoot it, and the classic download and the fragments
+			// time themselves to the millisecond, so the precise wait
+			// takes over for those
+			NET_Sleep(timeVal);
+		}
 		else
 		{
 			// toward the end of timeVal's last millisecond, precisely
