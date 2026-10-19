@@ -542,6 +542,8 @@ int64_t CL_ContentNextDue( void );
 void CL_ContentReset( qboolean disconnect );
 void CL_ContentClearProgress( void );
 
+void CL_SetContentKeys( char *info, qboolean known, uint64_t required, qboolean ready );
+// a server's content keys, as the ui reads them
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );
 void CL_ClearPing( int n );
