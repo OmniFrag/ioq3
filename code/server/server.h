@@ -169,6 +169,11 @@ typedef struct client_s {
 	// one, and with them the connection's content key, sent on connectResponse
 	uint32_t		ofx;
 	uint64_t		contentKey;
+	// a map changed while it loaded by the fast path, which sends no
+	// netchan packets: the gamestate goes on its next packet
+	qboolean		contentGamestateDue;
+	struct svContent_s	*content;		// its fast downloads, from its first CONTROL
+	int				contentBadDatagrams;	// with its key, that couldn't be read
 
 	usercmd_t		lastUsercmd;
 	int				lastMessageNum;		// for delta compression
@@ -354,6 +359,8 @@ extern	cvar_t	*sv_serverid;
 extern	cvar_t	*sv_minRate;
 extern	cvar_t	*sv_maxRate;
 extern	cvar_t	*sv_dlRate;
+extern	cvar_t	*sv_dlMaxRate;
+extern	cvar_t	*sv_showContent;
 extern	cvar_t	*sv_minPing;
 extern	cvar_t	*sv_maxPing;
 extern	cvar_t	*sv_gametype;
@@ -463,6 +470,14 @@ const char *SV_ContentFindPak( const byte sha256[SHA256_DIGEST_SIZE], int64_t *s
 void SV_ContentInfo( char *infostring );
 void SV_ContentFrame( void );
 void SV_ContentShutdown( void );
+void SV_ContentPacket( netadr_t from, msg_t *msg );
+int SV_ContentSend( void );
+void SV_ContentFreeClient( client_t *cl );
+int SV_ContentPaks( const client_t *cl );
+void SV_ContentEnterWorld( client_t *cl );
+qboolean SV_ContentLoading( const client_t *cl );
+qboolean SV_ClientDownloading( const client_t *cl );
+qboolean SV_DownloadsFull( const client_t *cl );
 
 //
 // sv_client.c
