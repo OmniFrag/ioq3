@@ -105,9 +105,11 @@ static qboolean Cvar_ValidateString( const char *s ) {
 /*
 ============
 Cvar_FindVar
+
+The cvar of that name, or NULL; never creates one
 ============
 */
-static cvar_t *Cvar_FindVar( const char *var_name ) {
+cvar_t *Cvar_FindVar( const char *var_name ) {
 	cvar_t	*var;
 	long hash;
 
@@ -761,7 +763,8 @@ static const struct {
 	[CVAR_SOURCE_SCRIPT] = { "a script's", "script" },
 	[CVAR_SOURCE_SESSION] = { "the command line's", "command line" },
 	[CVAR_SOURCE_SERVER] = { "the server's", "server" },
-	[CVAR_SOURCE_SYSTEM] = { "the system's", "system" }
+	[CVAR_SOURCE_SYSTEM] = { "the system's", "system" },
+	[CVAR_SOURCE_TOOL] = { "a tool's", "tool" }
 };
 
 /*
@@ -1105,7 +1108,9 @@ cvar_t *Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t sour
 	}
 
 	var = Cvar_SetVar( var, value, source, force );
-	if ( source == CVAR_SOURCE_SERVER ) {
+	// a tool may hold less than the console's rights, so what it set runs
+	// restricted, as a server's does
+	if ( source == CVAR_SOURCE_SERVER || source == CVAR_SOURCE_TOOL ) {
 		var->untrusted = qtrue;
 	}
 	return var;
@@ -1565,9 +1570,10 @@ void Cvar_PrintSetLog( void ) {
 ============
 Cvar_NoteOrigin
 
-Where a text set of the cvar came from (Cmd_Origin), if it set the
-player's value: cvar_why says it, and a config's line that does nothing
-is warned of (Cvar_WarnConfigs)
+Where a set that gave the cvar its player's value came from: a text
+set's line (Cmd_Origin), or a tool, named by the extension that set it.
+cvar_why says it, and a config's line that does nothing is warned of
+(Cvar_WarnConfigs)
 ============
 */
 void Cvar_NoteOrigin( cvar_t *var, const char *origin ) {
@@ -1762,6 +1768,8 @@ void Cvar_Why_f( void ) {
 		Cvar_PlainPrintf( "  the command line set \"%s" S_COLOR_WHITE "\" for this run\n", var->userString );
 	} else if ( var->userString && var->userOrigin ) {
 		Cvar_PlainPrintf( "  %s set \"%s" S_COLOR_WHITE "\"\n", var->userOrigin, var->userString );
+	} else if ( var->userString && var->userSource == CVAR_SOURCE_TOOL ) {
+		Cvar_PlainPrintf( "  a tool set \"%s" S_COLOR_WHITE "\"\n", var->userString );
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
 		Cvar_PlainPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
@@ -2164,11 +2172,11 @@ Whether a cvar's range has that bound: one at the end of an int
 is, is none
 ============
 */
-static qboolean Cvar_HasMin( const cvar_t *var ) {
+qboolean Cvar_HasMin( const cvar_t *var ) {
 	return var->validate && var->min > ( var->integral ? CVAR_INT_MIN : -FLT_MAX );
 }
 
-static qboolean Cvar_HasMax( const cvar_t *var ) {
+qboolean Cvar_HasMax( const cvar_t *var ) {
 	return var->validate && var->max < ( var->integral ? CVAR_INT_MAX : FLT_MAX );
 }
 
