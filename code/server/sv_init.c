@@ -1293,8 +1293,8 @@ void SV_Init (void)
 	// 9: the server sends files, and players stay connected for web
 	// downloads, so a stock client keeps its slot
 	sv_allowDownload = Cvar_Get ("sv_allowDownload", "9", CVAR_SERVERINFO);
-	// DLF_*'s four bits, as a number help and cvar_dump can show
-	Cvar_CheckRange( sv_allowDownload, 0, 15, qtrue );
+	// DLF_*'s five bits, as a number help and cvar_dump can show
+	Cvar_CheckRange( sv_allowDownload, 0, 31, qtrue );
 	Cvar_SetDescription( sv_allowDownload,
 		"Whether players may download missing pak files from the server\n"
 		"A player missing a map's or mod's pak files (.pk3) can fetch them from the server, if the player "
@@ -1305,7 +1305,8 @@ void SV_Init (void)
 		"1 = direct: the server sends files itself\n"
 		"2 = no web: players ignore sv_dlURL\n"
 		"4 = no direct: refuse to send files, even with 1\n"
-		"8 = stay connected: players don't disconnect for web downloads" );
+		"8 = stay connected: players don't disconnect for web downloads\n"
+		"16 = no fast download: files come from sv_dlURL or the classic way" );
 	sv_dlMaxRate = Cvar_Get( "sv_dlMaxRate", "10000", CVAR_ARCHIVE );
 	Cvar_CheckRange( sv_dlMaxRate, 0, 1000000, qtrue );
 	Cvar_SetDescription( sv_dlMaxRate,
