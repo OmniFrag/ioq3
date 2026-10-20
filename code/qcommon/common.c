@@ -722,7 +722,12 @@ do the appropriate things. The reason, if any, is what the server tells
 its players
 =============
 */
-void Com_Quit( char *p ) {
+void Com_Quit( char *reason ) {
+	char	p[MAX_STRING_CHARS];
+
+	// a copy: the shutdown below uses va(), and the command's arguments,
+	// which may be what reason points to
+	Q_strncpyz( p, reason, sizeof( p ) );
 	// what the shutdown says goes to the log, though an rcon command
 	// (quit, or a map that ends a drain) is redirecting it
 	Com_EndRedirect();
@@ -3474,6 +3479,8 @@ void Com_ExecuteCfg(void)
 
 // a reload asked for by a signal, run in the next frame
 static volatile sig_atomic_t	com_reloadQueued;
+// a stop asked for by a signal, the next frame's quit
+static volatile sig_atomic_t	com_quitSignal;
 
 /*
 ==================
@@ -3529,6 +3536,21 @@ Com_QueueReload
 */
 void Com_QueueReload( void ) {
 	com_reloadQueued = 1;
+}
+
+/*
+==================
+Com_QueueQuit
+
+A stop asked for by a signal (SIGTERM, SIGINT, SIGHUP): the main loop
+quits, as the quit command does. Shutting down in the signal's handler
+would run the renderer's GL calls in the middle of whatever the signal
+interrupted, which may hold the driver's locks: some drivers then wait
+on themselves for good, or abort
+==================
+*/
+void Com_QueueQuit( int signal ) {
+	com_quitSignal = signal;
 }
 
 /*
@@ -4812,6 +4834,10 @@ qboolean Com_WaitFrame( void ) {
 		return qtrue;	// an ERR_DROP was thrown; the next frame shows it
 	}
 
+	// the next frame quits
+	if ( com_quitSignal )
+		return qtrue;
+
 #ifndef DEDICATED
 	if(Com_PacedFrames())
 		return Com_WaitClientFrame();
@@ -4882,6 +4908,10 @@ void Com_Frame( void ) {
 		Cmd_EndRestricted();
 		Hooks_FrameAborted();
 		return;			// an ERR_DROP was thrown
+	}
+
+	if ( com_quitSignal ) {
+		Com_Quit( va( "Received signal %d", (int)com_quitSignal ) );
 	}
 
 	timeBeforeFirstEvents =0;

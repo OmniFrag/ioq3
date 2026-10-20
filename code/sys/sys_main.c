@@ -1003,16 +1003,24 @@ char *Sys_ParseProtocolUri( const char *uri )
 /*
 =================
 Sys_SigHandler
+
+A stop that was asked for is left to the main loop (Com_QueueQuit).
+Fatal signals shut down here, as the main loop can't go on.
 =================
 */
 void Sys_SigHandler( int signal )
 {
 	static qboolean signalcaught = qfalse;
-	static qboolean crashed = qfalse;
 
-	// a stop asked for while a crash shuts down is still a crash
-	if( signal != SIGTERM && signal != SIGINT )
-		crashed = qtrue;
+	if( signal == SIGTERM || signal == SIGINT
+#ifdef SIGHUP
+		|| signal == SIGHUP
+#endif
+		)
+	{
+		Com_QueueQuit( signal );
+		return;
+	}
 
 	if( signalcaught )
 	{
@@ -1033,22 +1041,17 @@ void Sys_SigHandler( int signal )
 			)
 			Com_Printf( S_COLOR_RED "Signal %d may be a bounds check trapping: "
 				"an index past the end of an array, in code built to trap on one\n", signal );
-		// no extension is called back into code the signal interrupted,
-		// and none after a crash (hooks.h)
-		Hooks_Signal( crashed );
+		// no extension is called after a crash (hooks.h)
+		Hooks_Signal( );
 		VM_Forced_Unload_Start();
 #ifndef DEDICATED
 		CL_Shutdown(va("Received signal %d", signal), qtrue, qtrue);
 #endif
 		SV_Shutdown(va("Received signal %d", signal) );
 		VM_Forced_Unload_Done();
-		// none after a crash, as Hooks_Signal says
-		Hooks_Shutdown( va( "Received signal %d", signal ) );
 	}
 
-	// a stop that was asked for succeeds, so that service managers can tell
-	// it from a crash
-	Sys_Exit( crashed ? 2 : 0 );
+	Sys_Exit( 2 );
 }
 
 /*
@@ -1168,6 +1171,11 @@ static void Sys_Start( int argc, char **argv )
 	}
 #endif
 
+	// a stop asked for as the game starts waits for the main loop too,
+	// rather than end it by the signal, or by SDL's handler for it
+	signal( SIGTERM, Sys_SigHandler );
+	signal( SIGINT, Sys_SigHandler );
+
 	CON_Init( );
 	Com_Init( commandLine );
 	NET_Init( );
@@ -1203,8 +1211,6 @@ static void Sys_Start( int argc, char **argv )
 	signal( SIGILL, Sys_SigHandler );
 	signal( SIGFPE, Sys_SigHandler );
 	signal( SIGSEGV, Sys_SigHandler );
-	signal( SIGTERM, Sys_SigHandler );
-	signal( SIGINT, Sys_SigHandler );
 }
 
 #ifdef DEDICATED
