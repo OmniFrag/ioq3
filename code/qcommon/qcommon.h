@@ -1228,6 +1228,13 @@ qboolean FS_ValidDownloadPak( const char *gameDir, const char *name );
 // FS_ValidDownloadName's rule for a pak's game directory and name apart, as
 // the content manifest gives them (ofd.h's ofcmValidName_t)
 qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring );
+typedef struct {
+	char			name[MAX_QPATH];	// <game directory>/<name>.pk3
+	unsigned int	checksum;
+} missingPak_t;
+// the paks the server references that the client lacks, without a list's
+// length: up to max of them, and how many there are
+int FS_MissingPaks( missingPak_t *paks, int max );
 
 void FS_Remove( const char *osPath );
 void FS_Remove_HomeData( const char *homePath );

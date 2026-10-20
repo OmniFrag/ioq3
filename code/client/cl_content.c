@@ -175,6 +175,7 @@ static struct {
 
 	clcPak_t		paks[CLC_MAX_PAKS];
 	int				numPaks;
+	qboolean		morePaks;		// missing past CLC_MAX_PAKS, for the next round
 	clcFetch_t		fetches[CLC_MAX_PAKS];
 	int				numFetches;
 	clcSlot_t		slots[CLC_SLOTS];
@@ -1375,25 +1376,38 @@ CL_DownloadsComplete, as CL_StartClassicDownloads ends
 =================
 */
 static void CL_ContentFinish( void ) {
-	char	list[sizeof( clc.downloadList )] = "";
-	int		i, classic = 0;
+	const char	*entry;
+	qboolean	later = clContent.morePaks;
+	int			i, classic = 0;
 
 	clContent.finishing = qfalse;
 	clContent.phase = CLC_IDLE;
 	for ( i = 0; i < CLC_SLOTS; i++ ) {
 		CL_ContentFreeSlot( &clContent.slots[i], qtrue, qfalse );
 	}
-	// before any the fast path didn't take, past CLC_MAX_PAKS
+	// in place of the list the fast path took, whole entries, as
+	// FS_ComparePaks writes them: one cut short would name another file.
+	// Those that don't fit, and those past CLC_MAX_PAKS, come in the next
+	// gamestate's round, as for a classic client
+	*clc.downloadList = '\0';
 	for ( i = 0; i < clContent.numPaks; i++ ) {
 		const clcPak_t	*p = &clContent.paks[i];
 
 		if ( p->state != PAK_DONE ) {
-			Q_strcat( list, sizeof( list ), va( "@%s@%s@%08x", p->name, p->name, p->checksum ) );
-			classic++;
+			entry = va( "@%s@%s@%08x", p->name, p->name, p->checksum );
+			if ( strlen( clc.downloadList ) + strlen( entry ) < sizeof( clc.downloadList ) ) {
+				Q_strcat( clc.downloadList, sizeof( clc.downloadList ), entry );
+				classic++;
+			} else {
+				later = qtrue;
+			}
 		}
 	}
-	Q_strcat( list, sizeof( list ), clc.downloadList );
-	Q_strncpyz( clc.downloadList, list, sizeof( clc.downloadList ) );
+	// donedl asks for that round's gamestate, even when no pak of this one
+	// came from the server to hold the client
+	if ( later ) {
+		clc.downloadHeld = qtrue;
+	}
 	CL_ContentClearProgress();
 	CL_ClearDownloadName();
 	if ( classic ) {
@@ -1551,16 +1565,18 @@ void CL_ContentFrame( void ) {
 =================
 CL_ContentStart
 
-From CL_InitDownloads, with the paks the gamestate references that the
-client lacks in clc.downloadList: whether the fast path takes them. It
-doesn't on a classic server, one whose downloads or this client's leave
-out the server itself, when the paks come from sv_dlURL, or once it has
-given up on the connection
+From CL_InitDownloads, when the gamestate references paks the client
+lacks: whether the fast path takes them, all of them (FS_MissingPaks), not
+only those clc.downloadList's string holds. It doesn't on a classic
+server, one whose downloads or this client's leave out the server itself,
+when the paks come from sv_dlURL, or once it has given up on the
+connection
 =================
 */
 qboolean CL_ContentStart( void ) {
-	clcPak_t	*p;
-	char		local[MAX_OSPATH];
+	missingPak_t	missing[CLC_MAX_PAKS];
+	clcPak_t		*p;
+	int				i;
 
 	if ( !( clc.ofx & OFX_CONTENT ) || clContent.classicOnly ||
 		!( cl_allowDownload->integer & DLF_ENABLE ) || ( cl_allowDownload->integer & DLF_NO_UDP ) ||
@@ -1568,18 +1584,20 @@ qboolean CL_ContentStart( void ) {
 		return qfalse;
 	}
 
-	while ( clContent.numPaks < CLC_MAX_PAKS ) {
-		p = &clContent.paks[clContent.numPaks];
-		Com_Memset( p, 0, sizeof( *p ) );
-		if ( !CL_NextListedPak( p->name, sizeof( p->name ), local, sizeof( local ), &p->checksum ) ) {
-			break;
-		}
-		p->fetch = -1;
-		p->state = PAK_FAST;
-		clContent.numPaks++;
-	}
+	// those past CLC_MAX_PAKS come in the next gamestate's round
+	clContent.numPaks = FS_MissingPaks( missing, ARRAY_LEN( missing ) );
+	clContent.morePaks = clContent.numPaks > CLC_MAX_PAKS;
+	clContent.numPaks = MIN( clContent.numPaks, CLC_MAX_PAKS );
 	if ( !clContent.numPaks ) {
 		return qfalse;
+	}
+	for ( i = 0; i < clContent.numPaks; i++ ) {
+		p = &clContent.paks[i];
+		Com_Memset( p, 0, sizeof( *p ) );
+		Q_strncpyz( p->name, missing[i].name, sizeof( p->name ) );
+		p->checksum = missing[i].checksum;
+		p->fetch = -1;
+		p->state = PAK_FAST;
 	}
 
 	clContent.receiveWindow = CL_ContentReceiveWindow();
