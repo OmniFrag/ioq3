@@ -4510,7 +4510,8 @@ void CL_Init( void ) {
 		"server lets you.\n"
 		"1 = on\n"
 		"2 = no web, added to 1: only from the server itself\n"
-		"4 = no direct, added to 1: only from sv_dlURL" );
+		"4 = no direct, added to 1: only from sv_dlURL\n"
+		"16 = no fast download, added to 1: from sv_dlURL or the classic way" );
 	// what the client reports, which the menus read and only it writes
 	Cvar_Get( "cl_downloadName", "", CVAR_ROM );
 	Cvar_Get( "cl_downloadSize", "0", CVAR_ROM );

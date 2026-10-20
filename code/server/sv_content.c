@@ -686,6 +686,11 @@ static void SV_ContentAdmit( void *arg, const ofdRequest_t *request, int slot, s
 		size = manifest->length;
 		Com_Memcpy( out->sha256, manifest->sha256, SHA256_DIGEST_SIZE );
 	} else if ( !current && ( ospath = SV_ContentFindPak( request->sha256, &size, &mtime ) ) != NULL ) {
+		// no fast download stops the paks, not the small content manifest
+		if ( sv_allowDownload->integer & DLF_NO_FAST ) {
+			out->status = OFD_STATUS_DISABLED;
+			return;
+		}
 		out->kind = OFD_KIND_PAK;
 		Com_Memcpy( out->sha256, request->sha256, SHA256_DIGEST_SIZE );
 	} else {

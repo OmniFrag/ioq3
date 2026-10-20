@@ -1858,5 +1858,6 @@ extern huffman_t clientHuffTables;
 #define DLF_NO_REDIRECT 2
 #define DLF_NO_UDP 4
 #define DLF_NO_DISCONNECT 8
+#define DLF_NO_FAST 16		// no fast download (download-protocol.md section 9.1)
 
 #endif // _QCOMMON_H_
