@@ -30,11 +30,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // a window a round trip
 
 #include "sv_dlcc.h"
+#include "../qcommon/ofd.h"
 
 #define DLCC_SECOND				1000000
 #define DLCC_INIT_CWND			10		// datagrams
 #define DLCC_MIN_CWND			2
-#define DLCC_MAX_CWND			( 4 * 1024 * 1024 )
+#define DLCC_MAX_CWND			OFD_MAX_WINDOW
 #define DLCC_MAX_PACKETS		4000	// the server's ring holds 4,096, probes past the window too
 #define DLCC_PREFETCH_CWND		( 64 * 1024 )
 #define DLCC_TARGET_LOADING		4000

@@ -62,7 +62,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CLC_LIMIT_RETRIES	5
 #define CLC_FLUSH_BYTES		( 4 << 20 )		// the valid start recorded this often
 #define CLC_HASH_SLICE		( 2 * CLC_MSEC )	// reading back to hash, a frame
-#define CLC_RECEIVE_UNKNOWN	( 64 << 10 )	// the receive window, where the socket's isn't known
+#define CLC_RECEIVE_UNKNOWN	( 64 << 10 )	// the socket's buffer, where it isn't known
+#define CLC_OVERFLOW_RUN	4				// packet numbers missing in a row: an overflowed socket's loss
 
 typedef enum {
 	CLC_IDLE,
@@ -203,7 +204,11 @@ static struct {
 	int64_t			arrivals[CLC_ARRIVALS];
 	int				nextArrival;
 
-	uint32_t		receiveWindow;	// what the CONTROLs report, read at the set's start
+	uint32_t		receiveWindow;	// what the CONTROLs report, from the set's start
+	qboolean		anySeen;
+	uint32_t		largestSeen;	// the highest packet number arrived, acked or not
+	uint32_t		overflowUntil;	// sent before the server saw the last halving: none halves again
+	qboolean		overflowShown;	// the connection said a larger socket buffer helps
 
 	int				datagrams;
 	int				drops[DROP_COUNT];
@@ -727,21 +732,47 @@ static void CL_ContentWriteAcks( ofdControl_t *c, int64_t now ) {
 
 /*
 =================
-CL_ContentReceiveWindow
+CL_ContentSocketWindow
 
-The bytes the socket can hold (section 7.6), as NET_ReceiveBufferSize gives
-the buffer set, without Linux's bookkeeping. Never under the two datagrams
-the server's window keeps; where it isn't known, 64 KB, the smallest
-default buffer of the systems the client runs on
+The bytes the socket can hold, as NET_ReceiveBufferSize gives the buffer
+set, without Linux's bookkeeping: the least the receive window falls to.
+Never under the two datagrams the server's window keeps; where it isn't
+known, 64 KB, the smallest default buffer of the systems the client runs
+on
 =================
 */
-static uint32_t CL_ContentReceiveWindow( void ) {
+static uint32_t CL_ContentSocketWindow( void ) {
 	int		size = NET_ReceiveBufferSize( clc.netchan.remoteAddress.type );
 
 	if ( size <= 0 ) {
 		return CLC_RECEIVE_UNKNOWN;
 	}
 	return MAX( size, 2 * OFD_MAX_DATAGRAM );
+}
+
+/*
+=================
+CL_ContentOverflowed
+
+Datagrams lost in a row before pn, as a socket's buffer overflowing loses
+them (section 7.6): the window reported halves for the rest of the set,
+never under what the socket holds. Once a window's packets: those the
+server sent before it saw the halving overflow the same buffer
+=================
+*/
+static void CL_ContentOverflowed( uint32_t pn ) {
+	uint32_t	floor = CL_ContentSocketWindow();
+
+	if ( clContent.receiveWindow <= floor || pn <= clContent.overflowUntil ) {
+		return;
+	}
+	clContent.overflowUntil = pn + clContent.receiveWindow / OFD_MAX_DATAGRAM;
+	clContent.receiveWindow = MAX( clContent.receiveWindow / 2, floor );
+	if ( !clContent.overflowShown ) {
+		clContent.overflowShown = qtrue;
+		Com_Printf( "The fast download lost datagrams in a row, as when the socket's receive buffer overflows, "
+			"so it asks for less at once. A larger buffer helps: on Linux, raise net.core.rmem_max\n" );
+	}
 }
 
 /*
@@ -1056,6 +1087,18 @@ static void CL_ContentPacketNumber( uint32_t pn, int64_t now ) {
 	clContent.arrivals[clContent.nextArrival++ % CLC_ARRIVALS] = now;
 }
 
+// a DATA's packet number as it arrives, whether or not it's acked: one past
+// a run of missing ones, as an overflowed socket loses them
+static void CL_ContentArrived( uint32_t pn ) {
+	if ( clContent.anySeen && pn > clContent.largestSeen && pn - clContent.largestSeen > CLC_OVERFLOW_RUN ) {
+		CL_ContentOverflowed( pn );
+	}
+	if ( !clContent.anySeen || pn > clContent.largestSeen ) {
+		clContent.anySeen = qtrue;
+		clContent.largestSeen = pn;
+	}
+}
+
 // whether a DATA for no open transfer may be a request's whose OPEN was
 // lost: one has gone out and waits for its OPEN, and the serial isn't a
 // transfer the client finished or canceled
@@ -1121,6 +1164,7 @@ void CL_ContentPacket( netadr_t from, msg_t *msg ) {
 		break;
 	case OFD_TYPE_DATA:
 		now = Sys_Nanoseconds();
+		CL_ContentArrived( m.u.data.packetNumber );
 		if ( !( s = CL_ContentFindSlot( m.u.data.serial, 0 ) ) ) {
 			clContent.drops[DROP_STALE]++;
 			if ( CL_ContentAwaitingOpen( m.u.data.serial ) ) {
@@ -1628,7 +1672,8 @@ qboolean CL_ContentStart( void ) {
 		p->state = PAK_FAST;
 	}
 
-	clContent.receiveWindow = CL_ContentReceiveWindow();
+	clContent.receiveWindow = OFD_MAX_WINDOW;
+	clContent.overflowUntil = 0;
 
 	Com_Printf( "Asking the server for %d pak%s by the fast path\n", clContent.numPaks,
 		clContent.numPaks == 1 ? "" : "s" );
