@@ -324,19 +324,24 @@ typedef struct {
 // most max are filled, and none when paks is NULL
 int		FS_ContentPaks( contentPak_t *paks, int max );
 // the hashes the content manifest of the server connected to gives its
-// required paks, or none (NULL) as for a classic server, for the search
-// path: from the next restart, which FS_ConditionalRestart makes when they
-// changed, a pak with one of their checksums is mounted only with its hash
-// (download-protocol.md section 9.1, step 3)
+// paks, or none (NULL) as for a classic server, for the search path: from
+// the next restart, which FS_ConditionalRestart makes when they changed, a
+// pak one of its hashed entries matches (FS_ServerPakHash) is mounted only
+// with that entry's hash (download-protocol.md section 9.1, step 3)
 void	FS_SetServerPakHashes( const byte *manifest, const ofcmHeader_t *header,
 			const byte sha256[SHA256_DIGEST_SIZE] );
 // whether the search path's paks all match those hashes
 qboolean	FS_ServerPaksMatch( void );
-// the hash those give a pak with this checksum, or NULL
-const byte	*FS_ServerPakHash( unsigned int checksum );
-// the installed paks of the search path whose hash the server's content
-// manifest gives and the pak index lacks, as records for the hash job;
-// their count
+// whether a content manifest's required entries list every pak the server
+// references (FS_PureServerSetReferencedPaks, from systeminfo), by checksum
+// and name
+qboolean	FS_ServerPaksListed( const byte *manifest, const ofcmHeader_t *header );
+// the hash those give a pak with this game directory, name (without .pk3)
+// and checksum, or NULL
+const byte	*FS_ServerPakHash( const char *gameDir, const char *name, unsigned int checksum );
+// the installed paks of the search path with a checksum the gamestate
+// references, whose hash the server's content manifest gives and the pak
+// index lacks, as records for the hash job; their count
 int		FS_UnhashedServerPaks( pakRecord_t *paks, int max );
 
 typedef enum {

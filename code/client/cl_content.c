@@ -2277,40 +2277,6 @@ qboolean CL_ContentCheck( void ) {
 
 /*
 =================
-CL_ContentCovers
-
-Whether a content manifest lists every pak the gamestate references among
-its required entries, as the server's current one does; one kept from
-before a map change may not (open question 14)
-=================
-*/
-static qboolean CL_ContentCovers( const byte *manifest, const ofcmHeader_t *header ) {
-	const char	*s = Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[CS_SYSTEMINFO],
-		"sv_referencedPaks" );
-	ofcmEntry_t	entry;
-	char		*end;
-	long		checksum;
-	int			i;
-
-	for ( ;; s = end ) {
-		checksum = strtol( s, &end, 10 );
-		if ( end == s ) {
-			return qtrue;
-		}
-		for ( i = 0; i < header->numRequired; i++ ) {
-			OFCM_ReadEntry( manifest, i, &entry );
-			if ( (unsigned int)entry.checksum == (unsigned int)checksum ) {
-				break;
-			}
-		}
-		if ( i == header->numRequired ) {
-			return qfalse;
-		}
-	}
-}
-
-/*
-=================
 CL_ContentSetPakHashes
 
 Before the gamestate's file system restart: the hashes the server's
@@ -2328,7 +2294,7 @@ void CL_ContentSetPakHashes( void ) {
 	if ( ( clc.ofx & OFX_CONTENT ) && clc.contentManifestKnown ) {
 		data = Content_Manifest_Load( clc.contentManifest, FS_ValidDownloadPak, qtrue, &length, &header );
 	}
-	clContent.hashesKnown = data && CL_ContentCovers( data, &header );
+	clContent.hashesKnown = data && FS_ServerPaksListed( data, &header );
 	FS_SetServerPakHashes( clContent.hashesKnown ? data : NULL, &header, clc.contentManifest );
 	free( data );
 }
