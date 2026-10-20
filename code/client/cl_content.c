@@ -1640,9 +1640,9 @@ CL_ContentStart
 From CL_InitDownloads, when the gamestate references paks the client
 lacks: whether the fast path takes them, all of them (FS_MissingPaks), not
 only those clc.downloadList's string holds. It doesn't on a classic
-server, one whose downloads or this client's leave out the server itself,
-when the paks come from sv_dlURL, or once it has given up on the
-connection
+server, one whose downloads or this client's leave out the server itself
+or the fast download (DLF_NO_FAST), when the paks come from sv_dlURL, or
+once it has given up on the connection
 =================
 */
 qboolean CL_ContentStart( void ) {
@@ -1651,8 +1651,8 @@ qboolean CL_ContentStart( void ) {
 	int				i;
 
 	if ( !( clc.ofx & OFX_CONTENT ) || clContent.classicOnly ||
-		!( cl_allowDownload->integer & DLF_ENABLE ) || ( cl_allowDownload->integer & DLF_NO_UDP ) ||
-		!( clc.sv_allowDownload & DLF_ENABLE ) || ( clc.sv_allowDownload & DLF_NO_UDP ) || CL_DownloadsByHTTP() ) {
+		!( cl_allowDownload->integer & clc.sv_allowDownload & DLF_ENABLE ) ||
+		( ( cl_allowDownload->integer | clc.sv_allowDownload ) & ( DLF_NO_UDP | DLF_NO_FAST ) ) || CL_DownloadsByHTTP() ) {
 		return qfalse;
 	}
 
