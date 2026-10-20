@@ -867,8 +867,10 @@ void Sys_Sleep( int msec )
 		return;
 
 #ifdef DEDICATED
+	// a console's Ctrl-C or close, on a thread of its own, can't end the
+	// wait (CON_CtrlHandler): wake now and then for the main loop to quit
 	if( msec < 0 )
-		WaitForSingleObject( GetStdHandle( STD_INPUT_HANDLE ), INFINITE );
+		WaitForSingleObject( GetStdHandle( STD_INPUT_HANDLE ), 250 );
 	else
 		WaitForSingleObject( GetStdHandle( STD_INPUT_HANDLE ), msec );
 #else

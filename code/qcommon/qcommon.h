@@ -1358,6 +1358,8 @@ void		Com_GameRestart(int checksumFeed, qboolean disconnect);
 void		Com_QueueReload( void );
 // SIGHUP's: the next frame runs the command line's configs again (reload),
 // safe to call from a signal handler
+void		Com_QueueQuit( int signal );
+// a stop signal's: the next frame quits, safe to call from a signal handler
 
 int			Com_Milliseconds( void );	// will be journaled properly
 unsigned	Com_BlockChecksum( const void *buffer, int length );

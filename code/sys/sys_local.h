@@ -67,7 +67,7 @@ void Sys_GLimpSafeInit( void );
 void Sys_GLimpInit( void );
 void Sys_PlatformInit( void );
 void Sys_PlatformExit( void );
-void Sys_SigHandler( int signal ) Q_NO_RETURN;
+void Sys_SigHandler( int signal );
 void Sys_ErrorDialog( const char *error );
 dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title );
 void Sys_AnsiColorPrint( const char *msg );

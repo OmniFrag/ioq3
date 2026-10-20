@@ -32,9 +32,9 @@ static qboolean	hooks_active[MAX_ENGINE_EXTENSIONS];
 static int	hooks_activeCount;
 static int	hooks_idleMsec = -1;
 // how many of each extension's hooks are running, one inside another's
-// call into the engine say, so a signal's exit doesn't call back into code
-// it interrupted
-static volatile int	hooks_depth[MAX_ENGINE_EXTENSIONS];
+// call into the engine say, so a quit a hook asks for doesn't call back
+// into it
+static int	hooks_depth[MAX_ENGINE_EXTENSIONS];
 // the print hooks are running, so what they print isn't passed to them
 static qboolean	hooks_printing;
 
@@ -93,7 +93,7 @@ An error unwound the frame, out of any hook it ended in
 ===============
 */
 void Hooks_FrameAborted( void ) {
-	Com_Memset( (void *)hooks_depth, 0, sizeof( hooks_depth ) );
+	Com_Memset( hooks_depth, 0, sizeof( hooks_depth ) );
 	hooks_printing = qfalse;
 }
 
@@ -101,19 +101,13 @@ void Hooks_FrameAborted( void ) {
 ===============
 Hooks_Signal
 
-A signal stops the program: an extension it interrupted gets no more
-calls, since its state may be half changed, and after a crash, whose heap
-may be broken, no extension does
+A crash stops the program: no extension gets more calls, since its heap
+may be broken. A stop that was asked for quits from the main loop, which
+calls them as the quit command does
 ===============
 */
-void Hooks_Signal( qboolean crashed ) {
-	int	i;
-
-	for ( i = 0; engineExtensions[i]; i++ ) {
-		if ( crashed || hooks_depth[i] ) {
-			hooks_active[i] = qfalse;
-		}
-	}
+void Hooks_Signal( void ) {
+	hooks_activeCount = 0;
 }
 
 /*
