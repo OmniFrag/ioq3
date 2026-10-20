@@ -520,8 +520,6 @@ void CL_ClearDownloadName( void );
 void CL_StartClassicDownloads( void );
 // the paks in clc.downloadList, the classic way: from sv_dlURL or the
 // server itself, then CL_DownloadsComplete
-qboolean CL_NextListedPak( char *remote, int remoteSize, char *local, int localSize, unsigned int *checksum );
-// the first pak of clc.downloadList, taken off it
 qboolean CL_DownloadsByHTTP( void );
 // whether the paks a server lacks come from its sv_dlURL first
 
@@ -530,7 +528,8 @@ qboolean CL_DownloadsByHTTP( void );
 //
 void CL_ContentInit( void );
 qboolean CL_ContentStart( void );
-// from CL_InitDownloads: whether the fast path takes clc.downloadList
+// from CL_InitDownloads: whether the fast path takes the paks the gamestate
+// references that the client lacks
 void CL_ContentPacket( netadr_t from, msg_t *msg );
 // a datagram whose first bytes are a content datagram's (OFD_IsContent)
 void CL_ContentFrame( void );
