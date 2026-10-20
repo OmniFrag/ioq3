@@ -231,9 +231,13 @@ static int CL_cURL_CallbackProgress(void *clientp, curl_off_t dltotal, curl_off_
 {
 	// 2 GB and more, which no pak is, as the most an int holds
 	clc.downloadSize = dltotal > INT_MAX ? INT_MAX : (int)dltotal;
-	Cvar_SetValue( "cl_downloadSize", clc.downloadSize );
 	clc.downloadCount = (int)dlnow;
-	Cvar_SetValue( "cl_downloadCount", clc.downloadCount );
+	// the fast download's web lane: its progress shows the set's
+	// (CL_ContentSetProgress), whichever lane's file it names
+	if ( !clc.downloadLane ) {
+		Cvar_SetValue( "cl_downloadSize", clc.downloadSize );
+		Cvar_SetValue( "cl_downloadCount", clc.downloadCount );
+	}
 	return 0;
 }
 

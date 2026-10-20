@@ -64,6 +64,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CLC_HASH_SLICE		( 2 * CLC_MSEC )	// reading back to hash, a frame
 #define CLC_RECEIVE_UNKNOWN	( 64 << 10 )	// the socket's buffer, where it isn't known
 #define CLC_OVERFLOW_RUN	4				// packet numbers missing in a row: an overflowed socket's loss
+#define CLC_LANE_FAST		1				// the fast download's lane (section 9.1, step 5)
+#define CLC_LANE_WEB		2				// sv_dlURL's
+#define CLC_WEB_IDLE		( 2000 * CLC_MSEC )	// the web lane idle this long before the fast lane's rate is judged
+#define CLC_RATE_TIME		2.0				// the seconds the lanes' rates are smoothed over
 
 typedef enum {
 	CLC_IDLE,
@@ -93,13 +97,32 @@ typedef struct {
 	int				mismatches;		// of its hash
 	int				limits;			// "limit" answers
 	int64_t			valid;			// bytes of it at hand, for progress
+	int				order;			// its entry's in the content manifest: the web lane takes the
+									// first, the fast lane the last
+	byte			barred;			// the lanes (CLC_LANE_*) that failed it
+	qboolean		webByName;		// sv_dlURL is asked for it by name, its hash having failed
+	qboolean		takenOver;		// one lane took it from the other (the endgame)
 } clcFetch_t;
+
+// a lane's rate, for the endgame: bytes a second, smoothed over about
+// CLC_RATE_TIME
+typedef struct {
+	double			rate;
+	int64_t			at, count;		// the last sample's time, 0 for none, and byte count
+} clcRate_t;
 
 typedef enum {
 	PAK_FAST,
 	PAK_CLASSIC,
 	PAK_DONE
 } clcPakState_t;
+
+// how sv_dlURL lays its paks out, for the connection
+typedef enum {
+	WEB_ASK,			// not known yet: the first pak is asked for by hash
+	WEB_HASH,			// sha256/<hash>.pk3
+	WEB_NAME			// <gamedir>/<name>.pk3
+} clcWebLayout_t;
 
 // a pak the server references and the client lacks
 typedef struct {
@@ -216,13 +239,46 @@ static struct {
 	int64_t			lastShown;
 	int64_t			lastProgress;
 	uint32_t		shownRequest;	// the transfer whose file the ui's cvars show
+	int				shownTime;		// and when it began, for cl_downloadTime
 
 	// the file system has the hashes of the server's paks, from a content
 	// manifest that lists them all (section 9.1, step 3)
 	qboolean		hashesKnown;
 	int64_t			checkStart;		// when the check began waiting for hashes
 	int				checkJobs;		// the pak index's hash jobs then (Content_PakIndex_Jobs)
+
+	// the two lanes over the set (section 9.1, step 5): sv_dlURL's, a pak at
+	// a time, and the fast download's
+	struct {
+		qboolean	usable;			// for the set
+		int			fetch;			// downloading or hashing, -1 for none
+		qboolean	hashing;		// it arrived, and the hash job has it
+		char		temp[MAX_OSPATH];	// the file that arrived
+		int64_t		idleSince;		// when the lane last had nothing
+		clcRate_t	rate;
+	} web;
+	clcWebLayout_t	webLayout;		// sv_dlURL's, kept across gamestates
+	int64_t			fastReceived;	// the fast lane's DATA bytes, for its rate
+	clcRate_t		fastRate;
 } clContent;
+
+static qboolean CL_ContentFastAllowed( void );
+static qboolean CL_ContentLaneOpen( const clcFetch_t *f, int lane );
+
+// whether the web lane is downloading, not hashing what it downloaded
+static qboolean CL_ContentWebDownloading( void ) {
+	return clContent.web.fetch >= 0 && !clContent.web.hashing;
+}
+
+// whether a slot has a pak's transfer open
+static qboolean CL_ContentSlotSending( const clcSlot_t *s ) {
+	return s->used && s->fetch >= 0 && s->open;
+}
+
+// whether either lane may take paks
+static qboolean CL_ContentAnyLane( void ) {
+	return CL_ContentFastAllowed() || clContent.web.usable;
+}
 
 static cvar_t	*cl_showContent;
 
@@ -258,6 +314,8 @@ static void CL_ContentSetProgress( const char *state ) {
 	const clcSlot_t		*s, *current = NULL;
 	const clcFetch_t	*f;
 	int64_t				total = 0, count = 0;
+	qboolean			web;
+	uint32_t			shown;
 	int					i, done = 0;
 
 	for ( i = 0; i < clContent.numFetches; i++ ) {
@@ -267,7 +325,6 @@ static void CL_ContentSetProgress( const char *state ) {
 		done += f->state == FETCH_DONE;
 	}
 	Cvar_Set( "cl_downloadState", state );
-	Cvar_Set( "cl_downloadSource", "server" );
 	Cvar_Set( "cl_downloadFiles", va( "%d/%d", done, clContent.numFetches ) );
 	Cvar_Set( "cl_downloadTotal", va( "%lld", (long long)total ) );
 	Cvar_Set( "cl_downloadTotalCount", va( "%lld", (long long)count ) );
@@ -278,13 +335,20 @@ static void CL_ContentSetProgress( const char *state ) {
 			current = s;
 		}
 	}
-	if ( current ) {
-		f = &clContent.fetches[current->fetch];
-		// the time it's counted from, as its own transfer's start
-		if ( current->requestId != clContent.shownRequest ) {
-			clContent.shownRequest = current->requestId;
-			Cvar_Set( "cl_downloadTime", va( "%d", cls.realtime ) );
+	// which lanes are downloading: the fast download's, sv_dlURL's, or both
+	web = CL_ContentWebDownloading();
+	Cvar_Set( "cl_downloadSource", current && web ? "both" : web ? "web" : "server" );
+	if ( current || web ) {
+		f = &clContent.fetches[current ? current->fetch : clContent.web.fetch];
+		// the time it's counted from, as its own transfer's start: the fast
+		// transfer's request, or the web lane's fetch
+		shown = current ? current->requestId : 0x80000000u | (uint32_t)clContent.web.fetch;
+		if ( shown != clContent.shownRequest ) {
+			clContent.shownRequest = shown;
+			clContent.shownTime = cls.realtime;
 		}
+		// each time, as the web lane's download sets it as it begins
+		Cvar_Set( "cl_downloadTime", va( "%d", clContent.shownTime ) );
 		Cvar_Set( "cl_downloadName", va( "%s/%s.pk3", f->gameDir, f->name ) );
 		Cvar_Set( "cl_downloadSize", va( "%u", f->size ) );
 		Cvar_Set( "cl_downloadCount", va( "%lld", (long long)f->valid ) );
@@ -469,13 +533,26 @@ stall, or the server refusing
 =================
 */
 static void CL_ContentGiveUp( const char *why ) {
-	int		i;
+	clcFetch_t	*f;
+	qboolean	web = clContent.phase == CLC_FETCHING && clContent.web.usable;
+	int			i;
 
-	Com_Printf( S_COLOR_YELLOW "WARNING: the fast download stopped (%s), so the server's paks come the classic way\n",
-		why );
+	Com_Printf( S_COLOR_YELLOW "WARNING: the fast download stopped (%s), so the server's paks come %s\n", why,
+		web ? "from sv_dlURL" : "the classic way" );
 	clContent.classicOnly = qtrue;
 	for ( i = 0; i < CLC_SLOTS; i++ ) {
 		CL_ContentFreeSlot( &clContent.slots[i], qtrue, qfalse );
+	}
+	// the web lane takes the fast lane's fetches, the frame sending those it
+	// can't take the classic way
+	if ( web ) {
+		for ( i = 0; i < clContent.numFetches; i++ ) {
+			f = &clContent.fetches[i];
+			if ( ( f->state == FETCH_ACTIVE && i != clContent.web.fetch ) || f->state == FETCH_WAITING ) {
+				f->state = FETCH_QUEUED;
+			}
+		}
+		return;
 	}
 	for ( i = 0; i < clContent.numPaks; i++ ) {
 		if ( clContent.paks[i].state == PAK_FAST ) {
@@ -515,6 +592,50 @@ static void CL_ContentFetchEnded( int fetch, clcFetchState_t state, const char *
 			if ( state == FETCH_FAILED ) {
 				CL_AddDownloadFailure( p->name, p->checksum, why );
 			}
+		}
+	}
+}
+
+// whether a lane may take a fetch
+static qboolean CL_ContentLaneOpen( const clcFetch_t *f, int lane ) {
+	if ( f->barred & lane ) {
+		return qfalse;
+	}
+	return lane == CLC_LANE_FAST ? CL_ContentFastAllowed() : clContent.web.usable;
+}
+
+/*
+=================
+CL_ContentLaneFailed
+
+A lane failed a fetch, for why: the other lane takes it, if it may, or it
+goes the classic way (section 9.1, step 5)
+=================
+*/
+static void CL_ContentLaneFailed( int fetch, int lane, const char *why ) {
+	clcFetch_t	*f = &clContent.fetches[fetch];
+	int			other = lane == CLC_LANE_FAST ? CLC_LANE_WEB : CLC_LANE_FAST;
+
+	f->barred |= lane;
+	if ( CL_ContentLaneOpen( f, other ) ) {
+		Com_Printf( "%s/%s.pk3 comes %s instead: %s\n", f->gameDir, f->name,
+			other == CLC_LANE_FAST ? "by the fast path" : "from sv_dlURL", why );
+		f->state = FETCH_QUEUED;
+	} else {
+		CL_ContentFetchEnded( fetch, FETCH_CLASSIC, why );
+	}
+}
+
+// the fetches neither lane may take any more go the classic way
+static void CL_ContentSweep( void ) {
+	clcFetch_t	*f;
+	int			i;
+
+	for ( i = 0; i < clContent.numFetches; i++ ) {
+		f = &clContent.fetches[i];
+		if ( ( f->state == FETCH_QUEUED || f->state == FETCH_WAITING ) && !CL_ContentLaneOpen( f, CLC_LANE_FAST ) &&
+			!CL_ContentLaneOpen( f, CLC_LANE_WEB ) ) {
+			CL_ContentFetchEnded( i, FETCH_CLASSIC, "neither the fast download nor sv_dlURL could send it" );
 		}
 	}
 }
@@ -655,6 +776,7 @@ static qboolean CL_ContentData( clcSlot_t *s, const ofdData_t *data, byte flags,
 	s->chunks++;
 	if ( s->fetch >= 0 ) {
 		clContent.fetches[s->fetch].valid += data->length;
+		clContent.fastReceived += data->length;
 	}
 
 	// next in line for the hash: from the payload, not read back
@@ -1238,7 +1360,7 @@ static void CL_ContentFinishFetch( clcSlot_t *s ) {
 				"again\n", f->gameDir, f->name );
 			f->state = FETCH_QUEUED;
 		} else {
-			CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "it arrived with the wrong SHA-256 twice" );
+			CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "it arrived with the wrong SHA-256 twice" );
 		}
 		return;
 	}
@@ -1265,23 +1387,22 @@ static void CL_ContentFinishFetch( clcSlot_t *s ) {
 CL_ContentFindEntry
 
 The required entry for a missing pak: one with its checksum, by its name
-if more than one has it
+if more than one has it. Its index, or -1 for none
 =================
 */
-static qboolean CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *best ) {
+static int CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *best ) {
 	ofcmEntry_t	entry;
-	qboolean	found = qfalse;
-	int			i;
+	int			i, found = -1;
 
 	for ( i = 0; i < clContent.header.numRequired; i++ ) {
 		OFCM_ReadEntry( clContent.manifest, i, &entry );
 		if ( (unsigned int)entry.checksum != p->checksum ) {
 			continue;
 		}
-		if ( !found || !Q_stricmp( va( "%s/%s.pk3", entry.gameDir, entry.name ), p->name ) ) {
+		if ( found < 0 || !Q_stricmp( va( "%s/%s.pk3", entry.gameDir, entry.name ), p->name ) ) {
 			*best = entry;
+			found = i;
 		}
-		found = qtrue;
 	}
 	return found;
 }
@@ -1294,11 +1415,10 @@ static qboolean CL_ContentAllowed( void ) {
 }
 
 // whether the paks may come by the fast path: with downloads on at the
-// server, not with bit 4 or 16 on either side, nor when they come from
-// sv_dlURL
+// server, and not with bit 4 or 16 on either side
 static qboolean CL_ContentFastAllowed( void ) {
 	return CL_ContentAllowed() && ( clc.sv_allowDownload & DLF_ENABLE ) &&
-		!( ( cl_allowDownload->integer | clc.sv_allowDownload ) & ( DLF_NO_UDP | DLF_NO_FAST ) ) && !CL_DownloadsByHTTP();
+		!( ( cl_allowDownload->integer | clc.sv_allowDownload ) & ( DLF_NO_UDP | DLF_NO_FAST ) );
 }
 
 // the set starts with the content manifest
@@ -1312,6 +1432,293 @@ static void CL_ContentAskManifest( void ) {
 	CL_ContentService();
 }
 
+// the web lane's pak goes back on the list, or is over
+static void CL_ContentWebIdle( void ) {
+	clContent.web.fetch = -1;
+	clContent.web.hashing = qfalse;
+	clContent.web.idleSince = Sys_Nanoseconds();
+}
+
+/*
+=================
+CL_ContentLanes
+
+The lanes a set may use: whether either may (section 9.1, step 5)
+=================
+*/
+static qboolean CL_ContentLanes( void ) {
+	clContent.web.usable = CL_ContentAllowed() && CL_WebLaneUsable();
+	CL_ContentWebIdle();
+	return CL_ContentAnyLane();
+}
+
+// the set's missing paks, by the lanes it may use, starting with the
+// content manifest
+static void CL_ContentAskFor( void ) {
+	qboolean	fast = CL_ContentFastAllowed();
+
+	Com_Printf( "Asking the server for %d pak%s by %s\n", clContent.numPaks, clContent.numPaks == 1 ? "" : "s",
+		fast && clContent.web.usable ? "the fast path and sv_dlURL" : fast ? "the fast path" : "sv_dlURL" );
+	CL_ContentAskManifest();
+}
+
+// a slot without a transfer, or -1
+static int CL_ContentFreeSlotIndex( void ) {
+	int		i;
+
+	for ( i = 0; i < CLC_SLOTS; i++ ) {
+		if ( !clContent.slots[i].used ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// the next fetch a lane takes: the web lane's from the front of the content
+// manifest's order, the fast lane's from the back; -1 for none
+static int CL_ContentNextFetch( int lane ) {
+	const clcFetch_t	*f;
+	int					i, best = -1;
+
+	for ( i = 0; i < clContent.numFetches; i++ ) {
+		f = &clContent.fetches[i];
+		if ( f->state != FETCH_QUEUED || !CL_ContentLaneOpen( f, lane ) ) {
+			continue;
+		}
+		if ( best < 0 || ( lane == CLC_LANE_WEB ? f->order < clContent.fetches[best].order :
+			f->order > clContent.fetches[best].order ) ) {
+			best = i;
+		}
+	}
+	return best;
+}
+
+// a lane's rate from its bytes now: sampled every quarter second, and at
+// the end of a download however soon, as a fast site sends a small pak in
+// a few milliseconds
+static void CL_ContentSample( clcRate_t *r, int64_t now, int64_t count, qboolean end ) {
+	double	dt = ( now - r->at ) / 1e9, sample;
+
+	if ( r->at && dt < 0.25 && !( end && dt > 0 ) ) {
+		return;
+	}
+	if ( r->at ) {
+		sample = ( count - r->count ) / dt;
+		r->rate = r->rate ? r->rate + MIN( dt / CLC_RATE_TIME, 1.0 ) * ( sample - r->rate ) : sample;
+	}
+	r->at = now;
+	r->count = count;
+}
+
+// whether the web lane asks for a fetch by its hash
+static qboolean CL_ContentWebByHash( const clcFetch_t *f ) {
+	return clContent.webLayout != WEB_NAME && !f->webByName;
+}
+
+/*
+=================
+CL_ContentWebBegin
+
+The web lane takes a fetch: from sv_dlURL by its hash, unless the site
+lays its paks out by name, or this one wasn't there by hash
+=================
+*/
+static void CL_ContentWebBegin( int fetch ) {
+	clcFetch_t	*f = &clContent.fetches[fetch];
+	char		hex[SHA256_HEX_SIZE], url[MAX_STRING_CHARS];
+
+	if ( CL_ContentWebByHash( f ) ) {
+		Com_SHA256Hex( f->sha256, hex );
+		Com_sprintf( url, sizeof( url ), "%s/sha256/%s.pk3", clc.sv_dlURL, hex );
+	} else {
+		Com_sprintf( url, sizeof( url ), "%s/%s/%s.pk3", clc.sv_dlURL, f->gameDir, f->name );
+	}
+	if ( !CL_WebLaneBegin( url, f->gameDir, f->name, f->checksum ) ) {
+		clContent.web.usable = qfalse;
+		return;
+	}
+	f->state = FETCH_ACTIVE;
+	f->valid = 0;
+	clContent.web.fetch = fetch;
+	clContent.web.rate.at = Sys_Nanoseconds();
+	clContent.web.rate.count = 0;
+}
+
+/*
+=================
+CL_ContentWebEnded
+
+Failed by hash, with any HTTP status outside 2xx (the backends fail those)
+or none, the pak is asked for by name, and from then on every pak of the
+connection if it was the first; failed by name, the fast lane takes it, or
+it goes the classic way. Arrived whole with the pak's checksum, the hash
+job hashes it (CL_ContentWebHashed)
+=================
+*/
+void CL_ContentWebEnded( const char *failure ) {
+	int			fetch = clContent.web.fetch;
+	clcFetch_t	*f;
+	char		why[MAX_STRING_CHARS];
+
+	// a failure may be in va()'s buffers
+	Q_strncpyz( why, failure ? failure : "", sizeof( why ) );
+	CL_WebLaneEnd( !*why && fetch >= 0 ? clContent.web.temp : NULL, sizeof( clContent.web.temp ) );
+	if ( fetch < 0 ) {
+		return;
+	}
+	f = &clContent.fetches[fetch];
+	if ( *why ) {
+		CL_ContentWebIdle();
+		if ( CL_ContentWebByHash( f ) ) {
+			if ( clContent.webLayout == WEB_ASK ) {
+				clContent.webLayout = WEB_NAME;
+				Com_Printf( "sv_dlURL has no sha256/ layout (%s), so its paks are asked for by name\n", why );
+			}
+			f->webByName = qtrue;
+			f->state = FETCH_QUEUED;
+			return;
+		}
+		CL_ContentLaneFailed( fetch, CLC_LANE_WEB, va( "sv_dlURL's failed: %s", why ) );
+		return;
+	}
+	if ( CL_ContentWebByHash( f ) ) {
+		clContent.webLayout = WEB_HASH;
+	}
+	f->valid = f->size;
+	CL_ContentSample( &clContent.web.rate, Sys_Nanoseconds(), f->valid, qtrue );
+	if ( !FS_CompareZipChecksum( clContent.web.temp, f->checksum ) ) {
+		FS_Remove( clContent.web.temp );
+		CL_ContentWebIdle();
+		CL_ContentLaneFailed( fetch, CLC_LANE_WEB, "sv_dlURL's copy doesn't have the checksum the server gives" );
+		return;
+	}
+	Content_FileHash_Start( clContent.web.temp );
+	clContent.web.hashing = qtrue;
+}
+
+/*
+=================
+CL_ContentWebHashed
+
+The web lane's file hashed, sha256 NULL if it couldn't be read: kept in the
+content cache with the content manifest's hash, or failed
+=================
+*/
+static void CL_ContentWebHashed( const byte *sha256 ) {
+	int			fetch = clContent.web.fetch;
+	clcFetch_t	*f = &clContent.fetches[fetch];
+	char		why[MAX_STRING_CHARS];
+
+	CL_ContentWebIdle();
+	if ( !sha256 || memcmp( sha256, f->sha256, SHA256_DIGEST_SIZE ) ) {
+		FS_Remove( clContent.web.temp );
+		CL_ContentLaneFailed( fetch, CLC_LANE_WEB, sha256 ?
+			"sv_dlURL's copy has the server's checksum, but not the hash its content manifest gives" :
+			"sv_dlURL's copy couldn't be read" );
+		return;
+	}
+	if ( !Content_Cache_StoreHashed( clContent.web.temp, sha256, f->gameDir, f->name, f->checksum, why,
+		sizeof( why ) ) ) {
+		FS_Remove( clContent.web.temp );
+		CL_ContentFetchEnded( fetch, FETCH_FAILED, why );
+		return;
+	}
+	Com_Printf( "Downloaded %s/%s.pk3, %u bytes, from sv_dlURL\n", f->gameDir, f->name, f->size );
+	clc.downloadRestart = qtrue;
+	CL_ContentFetchEnded( fetch, FETCH_DONE, NULL );
+}
+
+// the web lane's file's hash, once the hash job has it
+static void CL_ContentWebHash( void ) {
+	byte	sha256[SHA256_DIGEST_SIZE];
+	int		result = Content_FileHash_Poll( sha256 );
+
+	if ( result ) {
+		CL_ContentWebHashed( result > 0 ? sha256 : NULL );
+	}
+}
+
+/*
+=================
+CL_ContentRates
+
+Each lane's rate while it has a transfer, for the endgame; the last when
+it hasn't
+=================
+*/
+static void CL_ContentRates( int64_t now ) {
+	int		i;
+
+	if ( CL_ContentWebDownloading() ) {
+		CL_ContentSample( &clContent.web.rate, now, clContent.fetches[clContent.web.fetch].valid, qfalse );
+	}
+	for ( i = 0; i < CLC_SLOTS && !CL_ContentSlotSending( &clContent.slots[i] ); i++ ) {
+	}
+	if ( i < CLC_SLOTS ) {
+		CL_ContentSample( &clContent.fastRate, now, clContent.fastReceived, qfalse );
+	} else {
+		clContent.fastRate.at = now;
+		clContent.fastRate.count = clContent.fastReceived;
+	}
+}
+
+/*
+=================
+CL_ContentEndgame
+
+A lane with nothing left to take takes the other's pak when, at the rates
+measured, it would download all of it before the other finishes the rest,
+and the slower transfer is canceled (section 9.1, step 5). The fast
+lane's rate counts once the web lane has been idle CLC_WEB_IDLE, as a
+site's TCP holds it down while it runs. A pak taken over isn't taken back
+=================
+*/
+static void CL_ContentEndgame( int64_t now ) {
+	double		web = clContent.web.rate.rate, fast = clContent.fastRate.rate;
+	clcSlot_t	*s;
+	clcFetch_t	*f;
+	int			i, fetch;
+
+	if ( web <= 0 || fast <= 0 ) {
+		return;
+	}
+	if ( clContent.web.usable && clContent.web.fetch < 0 && now - clContent.web.idleSince >= CLC_WEB_IDLE &&
+		CL_ContentNextFetch( CLC_LANE_WEB ) < 0 ) {
+		for ( i = 0; i < CLC_SLOTS; i++ ) {
+			s = &clContent.slots[i];
+			if ( !CL_ContentSlotSending( s ) ) {
+				continue;
+			}
+			fetch = s->fetch;
+			f = &clContent.fetches[fetch];
+			if ( f->takenOver || !CL_ContentLaneOpen( f, CLC_LANE_WEB ) ||
+				f->size / web >= ( f->size - CL_ContentWhole( s ) ) / fast ) {
+				continue;
+			}
+			Com_Printf( "%s/%s.pk3 comes from sv_dlURL instead, which would finish it sooner\n", f->gameDir, f->name );
+			CL_ContentFreeSlot( s, qtrue, qfalse );
+			f->takenOver = qtrue;
+			f->state = FETCH_QUEUED;
+			CL_ContentWebBegin( fetch );
+			return;
+		}
+	}
+	if ( CL_ContentWebDownloading() && ( i = CL_ContentFreeSlotIndex() ) >= 0 &&
+		CL_ContentNextFetch( CLC_LANE_FAST ) < 0 ) {
+		fetch = clContent.web.fetch;
+		f = &clContent.fetches[fetch];
+		if ( f->takenOver || !CL_ContentLaneOpen( f, CLC_LANE_FAST ) ||
+			f->size / fast >= ( f->size - f->valid ) / web ) {
+			return;
+		}
+		Com_Printf( "%s/%s.pk3 comes by the fast path instead, which would finish it sooner\n", f->gameDir, f->name );
+		CL_WebLaneEnd( NULL, 0 );
+		CL_ContentWebIdle();
+		f->takenOver = qtrue;
+		CL_ContentAsk( &clContent.slots[i], fetch );
+	}
+}
+
 /*
 =================
 CL_ContentListMissing
@@ -1323,7 +1730,7 @@ CLC_MAX_PAKS coming in the next gamestate's round
 static void CL_ContentListMissing( void ) {
 	missingPak_t	missing[CLC_MAX_PAKS];
 	clcPak_t		*p;
-	qboolean		fast = CL_ContentFastAllowed();
+	qboolean		lanes = CL_ContentAnyLane();
 	int				i;
 
 	clContent.numPaks = FS_MissingPaks( missing, ARRAY_LEN( missing ) );
@@ -1335,7 +1742,7 @@ static void CL_ContentListMissing( void ) {
 		Q_strncpyz( p->name, missing[i].name, sizeof( p->name ) );
 		p->checksum = missing[i].checksum;
 		p->fetch = -1;
-		p->state = fast ? PAK_FAST : PAK_CLASSIC;
+		p->state = lanes ? PAK_FAST : PAK_CLASSIC;
 	}
 }
 
@@ -1383,7 +1790,7 @@ static void CL_ContentUseManifest( void ) {
 	clcPak_t	*p;
 	clcFetch_t	*f;
 	int64_t		total;
-	int			i, j;
+	int			i, j, order;
 
 	*own = '\0';
 	for ( i = 0; i < clContent.numPaks; i++ ) {
@@ -1391,7 +1798,7 @@ static void CL_ContentUseManifest( void ) {
 		if ( p->state != PAK_FAST ) {
 			continue;
 		}
-		if ( !CL_ContentFindEntry( p, &entry ) ) {
+		if ( ( order = CL_ContentFindEntry( p, &entry ) ) < 0 ) {
 			Com_Printf( "%s comes the classic way: the server's content manifest doesn't list it\n", p->name );
 			p->state = PAK_CLASSIC;
 			continue;
@@ -1426,6 +1833,7 @@ static void CL_ContentUseManifest( void ) {
 			f->checksum = entry.checksum;
 			Q_strncpyz( f->gameDir, entry.gameDir, sizeof( f->gameDir ) );
 			Q_strncpyz( f->name, entry.name, sizeof( f->name ) );
+			f->order = order;
 		}
 		p->fetch = j;
 	}
@@ -1471,14 +1879,14 @@ static void CL_ContentChecked( void ) {
 	}
 	if ( !FS_ServerPaksMatch() ) {
 		FS_Restart( clc.checksumFeed );
+		// sv_dlURL resolved only now, a pak missing
+		CL_ContentLanes();
 		CL_ContentListMissing();
 	}
 	if ( clContent.manifest ) {
 		CL_ContentUseManifest();
-	} else if ( clContent.numPaks && CL_ContentFastAllowed() ) {
-		Com_Printf( "Asking the server for %d pak%s by the fast path\n", clContent.numPaks,
-			clContent.numPaks == 1 ? "" : "s" );
-		CL_ContentAskManifest();
+	} else if ( clContent.numPaks && CL_ContentAnyLane() ) {
+		CL_ContentAskFor();
 	} else {
 		CL_ContentFinish();
 	}
@@ -1556,7 +1964,7 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 	case ANSWER_STATUS | OFD_STATUS_LIMIT:
 		// one a finished transfer may cause doesn't count
 		if ( !CL_ContentAckingFinished() && ++f->limits >= CLC_LIMIT_RETRIES ) {
-			CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server's limit, five times" );
+			CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "the server's limit, five times" );
 			break;
 		}
 		// fall through: it waits, as for busy
@@ -1569,10 +1977,10 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 		break;
 	case ANSWER_STATUS | OFD_STATUS_BAD_REQUEST:
 		Com_Printf( "The server called the request for %s/%s.pk3 from byte %u bad\n", f->gameDir, f->name, offset );
-		CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server called the request bad" );
+		CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "the server called the request bad" );
 		break;
 	case ANSWER_STATUS | OFD_STATUS_NOT_FOUND:
-		CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server doesn't have it by its hash" );
+		CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "the server doesn't have it by its hash" );
 		break;
 	case ANSWER_CLOSE | OFD_CLOSE_STALLED:
 	case ANSWER_CLOSE | OFD_CLOSE_PREEMPTED:
@@ -1580,10 +1988,10 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 		break;
 	case ANSWER_STATUS | OFD_STATUS_READ_ERROR:
 	case ANSWER_CLOSE | OFD_CLOSE_READ_ERROR:
-		CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server couldn't read it" );
+		CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "the server couldn't read it" );
 		break;
 	default:	// gone from the content manifest, or canceled
-		CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server stopped sending it" );
+		CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "the server stopped sending it" );
 		break;
 	}
 }
@@ -1598,7 +2006,7 @@ CL_DownloadsComplete, as CL_StartClassicDownloads ends
 */
 static void CL_ContentFinish( void ) {
 	const char	*entry;
-	qboolean	later = clContent.morePaks;
+	qboolean	later = clContent.morePaks, udpOnly = clContent.web.usable;
 	int			i, classic = 0;
 
 	clContent.finishing = qfalse;
@@ -1615,6 +2023,10 @@ static void CL_ContentFinish( void ) {
 		const clcPak_t	*p = &clContent.paks[i];
 
 		if ( p->state != PAK_DONE ) {
+			// one the web lane never tried may still come from sv_dlURL
+			if ( p->fetch < 0 || !( clContent.fetches[p->fetch].barred & CLC_LANE_WEB ) ) {
+				udpOnly = qfalse;
+			}
 			entry = va( "@%s@%s@%08x", p->name, p->name, p->checksum );
 			if ( strlen( clc.downloadList ) + strlen( entry ) < sizeof( clc.downloadList ) ) {
 				Q_strcat( clc.downloadList, sizeof( clc.downloadList ), entry );
@@ -1634,6 +2046,8 @@ static void CL_ContentFinish( void ) {
 	if ( classic ) {
 		Com_Printf( "%d of the server's paks come the classic way\n", classic );
 	}
+	// sv_dlURL has had its chance at them, when the web lane failed them all
+	clc.downloadUDPOnly = udpOnly;
 	CL_StartClassicDownloads();
 }
 
@@ -1758,21 +2172,33 @@ void CL_ContentFrame( void ) {
 		return;
 	}
 
-	// the waits over, and the next fetches into the free slots
-	pending = 0;
-	active = verifying = qfalse;
+	// the waits over; the web lane takes from the front of the list, then
+	// the fast lane fills its free slots from the back (section 9.1, step
+	// 5), so a set no larger than the slots still uses both
 	for ( i = 0; i < clContent.numFetches; i++ ) {
 		f = &clContent.fetches[i];
 		if ( f->state == FETCH_WAITING && now >= f->retryAt ) {
 			f->state = FETCH_QUEUED;
 		}
-		if ( f->state == FETCH_QUEUED ) {
-			for ( j = 0; j < CLC_SLOTS && clContent.slots[j].used; j++ ) {
-			}
-			if ( j < CLC_SLOTS ) {
-				CL_ContentAsk( &clContent.slots[j], i );
-			}
-		}
+	}
+	if ( clContent.web.hashing ) {
+		CL_ContentWebHash();
+	} else if ( clContent.web.fetch >= 0 ) {
+		clContent.fetches[clContent.web.fetch].valid = clc.downloadCount;
+	} else if ( clContent.web.usable && ( i = CL_ContentNextFetch( CLC_LANE_WEB ) ) >= 0 ) {
+		CL_ContentWebBegin( i );
+	}
+	while ( ( j = CL_ContentFreeSlotIndex() ) >= 0 && ( i = CL_ContentNextFetch( CLC_LANE_FAST ) ) >= 0 ) {
+		CL_ContentAsk( &clContent.slots[j], i );
+	}
+	CL_ContentRates( now );
+	CL_ContentEndgame( now );
+	CL_ContentSweep();
+
+	pending = 0;
+	active = qfalse;
+	for ( i = 0; i < clContent.numFetches; i++ ) {
+		f = &clContent.fetches[i];
 		pending += f->state == FETCH_QUEUED || f->state == FETCH_ACTIVE || f->state == FETCH_WAITING;
 		active |= f->state == FETCH_ACTIVE;
 	}
@@ -1783,6 +2209,7 @@ void CL_ContentFrame( void ) {
 	// the progress ten times a second, which a bar or a rate needs no more
 	if ( now - clContent.lastProgress >= 100 * CLC_MSEC ) {
 		clContent.lastProgress = now;
+		verifying = clContent.web.hashing;
 		for ( i = 0; i < CLC_SLOTS; i++ ) {
 			s = &clContent.slots[i];
 			verifying |= s->used && s->fetch >= 0 && s->hashed < s->offset;
@@ -1797,15 +2224,16 @@ void CL_ContentFrame( void ) {
 CL_ContentStart
 
 From CL_InitDownloads, when the gamestate references paks the client
-lacks: whether the fast path takes them, all of them (FS_MissingPaks), not
-only those clc.downloadList's string holds. It doesn't on a classic
-server, one whose downloads or this client's leave out the server itself
-or the fast download (DLF_NO_FAST), when the paks come from sv_dlURL, or
-once it has given up on the connection
+lacks: whether the lanes take them, all of them (FS_MissingPaks), not
+only those clc.downloadList's string holds. They don't on a classic
+server, or when neither lane may run: the fast lane needs the server's
+downloads on and neither side's bits 4 or 16, the web lane a usable
+sv_dlURL on another address, and both the client's downloads on and a
+connection that hasn't given up on the fast path
 =================
 */
 qboolean CL_ContentStart( void ) {
-	if ( !CL_ContentFastAllowed() ) {
+	if ( !CL_ContentLanes() ) {
 		return qfalse;
 	}
 	CL_ContentListMissing();
@@ -1816,9 +2244,7 @@ qboolean CL_ContentStart( void ) {
 	if ( CL_ContentAwaitHashes() ) {
 		return qtrue;
 	}
-	Com_Printf( "Asking the server for %d pak%s by the fast path\n", clContent.numPaks,
-		clContent.numPaks == 1 ? "" : "s" );
-	CL_ContentAskManifest();
+	CL_ContentAskFor();
 	return qtrue;
 }
 
@@ -1922,6 +2348,14 @@ void CL_ContentReset( qboolean disconnect ) {
 	for ( i = 0; i < CLC_SLOTS; i++ ) {
 		CL_ContentFreeSlot( &clContent.slots[i], !disconnect, qfalse );
 	}
+	// the web lane's download, or the file it hashes
+	if ( clContent.web.hashing ) {
+		Content_FileHash_Cancel();
+		FS_Remove( clContent.web.temp );
+	} else if ( clContent.web.fetch >= 0 ) {
+		CL_WebLaneEnd( NULL, 0 );
+	}
+	CL_ContentWebIdle();
 	free( clContent.manifest );
 	clContent.manifest = NULL;
 	clContent.phase = CLC_IDLE;
@@ -1930,6 +2364,7 @@ void CL_ContentReset( qboolean disconnect ) {
 	clContent.morePaks = qfalse;
 	if ( disconnect ) {
 		Com_Memset( &clContent, 0, sizeof( clContent ) );
+		clContent.web.fetch = -1;
 		CL_ContentClearProgress();
 		FS_SetServerPakHashes( NULL, NULL, NULL );
 	}
@@ -1941,6 +2376,7 @@ CL_ContentInit
 =================
 */
 void CL_ContentInit( void ) {
+	clContent.web.fetch = -1;
 	cl_showContent = Cvar_Get( "cl_showContent", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_showContent, "Prints the fast download's datagrams once a second, with those "
 		"dropped and why" );
