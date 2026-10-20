@@ -503,6 +503,38 @@ qboolean Sys_Rename( const char *from, const char *to )
 
 /*
 ==================
+Sys_MkdirReadable
+
+As Sys_Mkdir: what others may read comes from the folder above
+==================
+*/
+qboolean Sys_MkdirReadable( const char *path )
+{
+	return Sys_Mkdir( path );
+}
+
+/*
+==================
+Sys_FCreateReadable
+==================
+*/
+FILE *Sys_FCreateReadable( const char *ospath )
+{
+	return Sys_FOpen( ospath, "wb" );
+}
+
+/*
+==================
+Sys_HardLink
+==================
+*/
+qboolean Sys_HardLink( const char *from, const char *to )
+{
+	return CreateHardLink( to, from, NULL ) != 0;
+}
+
+/*
+==================
 Sys_DiskSpace
 
 The bytes free to this user, and in all, on the disk holding path
