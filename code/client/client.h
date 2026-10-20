@@ -228,6 +228,7 @@ typedef struct {
 	char		downloadList[MAX_INFO_STRING]; // list of paks we need to download
 	qboolean	downloadRestart;	// if true, we need to do another FS_Restart because we downloaded a pak
 	qboolean	downloadHeld;	// a download from the server on this gamestate, which waits for donedl
+	int			doneDownloadTime;	// cls.realtime donedl last went, until a gamestate comes; 0 for none
 
 	// demo information
 	char		demoName[MAX_QPATH];

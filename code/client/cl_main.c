@@ -2279,6 +2279,7 @@ void CL_DownloadsComplete( void ) {
 	if ( clc.downloadHeld ) {
 		// inform the server so we get new gamestate info
 		CL_AddReliableCommand("donedl", qfalse);
+		clc.doneDownloadTime = cls.realtime;
 
 		// by sending the donedl command we request a new gamestate
 		// so we don't want to load stuff yet
@@ -2886,6 +2887,7 @@ void CL_InitDownloads(void) {
 
   // a new gamestate: what the last one's downloads did is done with
   clc.downloadHeld = qfalse;
+  clc.doneDownloadTime = 0;
   CL_ContentReset( qfalse );
 
   if ( !(cl_allowDownload->integer & DLF_ENABLE) )
@@ -2928,6 +2930,26 @@ void CL_InitDownloads(void) {
 	}
 
 	CL_DownloadsComplete();
+}
+
+/*
+=================
+CL_CheckDoneDownload
+
+donedl again when no gamestate has come for as long as a connect waits: a
+classic server sends a lost one again only on a map change. Ours, which
+agreed on extensions (clc.ofx), sends it again itself
+(SV_GamestateAwaitingAck), so it isn't asked twice
+=================
+*/
+static void CL_CheckDoneDownload( void ) {
+	if ( clc.state != CA_CONNECTED || !clc.doneDownloadTime || clc.ofx ||
+		cls.realtime - clc.doneDownloadTime < RETRANSMIT_TIMEOUT ) {
+		return;
+	}
+	Com_Printf( "No gamestate since donedl: asking again\n" );
+	CL_AddReliableCommand( "donedl", qfalse );
+	clc.doneDownloadTime = cls.realtime;
 }
 
 /*
@@ -3867,6 +3889,7 @@ void CL_Frame ( int msec ) {
 
 	// resend a connection request if necessary
 	CL_CheckForResend();
+	CL_CheckDoneDownload();
 
 	// decide on the serverTime to render
 	CL_SetCGameTime();
