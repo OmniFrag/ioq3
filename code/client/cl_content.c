@@ -68,6 +68,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CLC_LANE_WEB		2				// sv_dlURL's
 #define CLC_WEB_IDLE		( 2000 * CLC_MSEC )	// the web lane idle this long before the fast lane's rate is judged
 #define CLC_RATE_TIME		2.0				// the seconds the lanes' rates are smoothed over
+#define CLC_RACE_LEFT		10.0			// seconds the site has left of a pak, at its rate, for the race
+#define CLC_RACE_SOON		( 3000 * CLC_MSEC )	// or this long into the site's download...
+#define CLC_RACE_SLOW		( 1 << 20 )		// ...while it's slower than this, in bytes a second
 
 typedef enum {
 	CLC_IDLE,
@@ -101,7 +104,7 @@ typedef struct {
 									// first, the fast lane the last
 	byte			barred;			// the lanes (CLC_LANE_*) that failed it
 	qboolean		webByName;		// sv_dlURL is asked for it by name, its hash having failed
-	qboolean		takenOver;		// one lane took it from the other (the endgame)
+	qboolean		takenOver;		// one lane took it from the other, or raced it (the endgame)
 } clcFetch_t;
 
 // a lane's rate, for the endgame: bytes a second, smoothed over about
@@ -255,6 +258,7 @@ static struct {
 		qboolean	hashing;		// it arrived, and the hash job has it
 		char		temp[MAX_OSPATH];	// the file that arrived
 		int64_t		idleSince;		// when the lane last had nothing
+		int64_t		began;			// when its download began
 		clcRate_t	rate;
 	} web;
 	clcWebLayout_t	webLayout;		// sv_dlURL's, kept across gamestates
@@ -264,6 +268,7 @@ static struct {
 
 static qboolean CL_ContentFastAllowed( void );
 static qboolean CL_ContentLaneOpen( const clcFetch_t *f, int lane );
+static void CL_ContentWebIdle( void );
 
 // whether the web lane is downloading, not hashing what it downloaded
 static qboolean CL_ContentWebDownloading( void ) {
@@ -604,6 +609,81 @@ static qboolean CL_ContentLaneOpen( const clcFetch_t *f, int lane ) {
 	return lane == CLC_LANE_FAST ? CL_ContentFastAllowed() : clContent.web.usable;
 }
 
+// the slot with a fetch's transfer, or NULL
+static clcSlot_t *CL_ContentFetchSlot( int fetch ) {
+	int		i;
+
+	for ( i = 0; i < CLC_SLOTS; i++ ) {
+		if ( clContent.slots[i].used && clContent.slots[i].fetch == fetch ) {
+			return &clContent.slots[i];
+		}
+	}
+	return NULL;
+}
+
+// the web lane's download, or the file it hashes, given up
+static void CL_ContentWebCancel( void ) {
+	if ( clContent.web.hashing ) {
+		Content_FileHash_Cancel();
+		FS_Remove( clContent.web.temp );
+	} else if ( clContent.web.fetch >= 0 ) {
+		CL_WebLaneEnd( NULL, 0 );
+	}
+	CL_ContentWebIdle();
+}
+
+/*
+=================
+CL_ContentRaceOver
+
+A lane, done with a fetch it has let go of, won the race for it if the
+other lane still has it (CL_ContentEndgame): the other's transfer is
+canceled, the fast lane's .part with it
+=================
+*/
+static void CL_ContentRaceOver( int fetch, int winner ) {
+	clcFetch_t	*f = &clContent.fetches[fetch];
+	clcSlot_t	*s;
+
+	if ( winner == CLC_LANE_FAST && clContent.web.fetch == fetch ) {
+		CL_ContentWebCancel();
+	} else if ( winner == CLC_LANE_WEB && ( s = CL_ContentFetchSlot( fetch ) ) != NULL ) {
+		CL_ContentFreeSlot( s, qtrue, qtrue );
+	} else {
+		return;
+	}
+	Com_Printf( "%s/%s.pk3: %s finished it first\n", f->gameDir, f->name,
+		winner == CLC_LANE_FAST ? "the fast path" : "sv_dlURL" );
+}
+
+/*
+=================
+CL_ContentRaceDropped
+
+A lane out of the race for a fetch it has let go of, for why, when the
+other lane still has it: that one goes on alone, its bytes the ones
+shown. Whether there was a race
+=================
+*/
+static qboolean CL_ContentRaceDropped( int fetch, int lane, const char *why ) {
+	clcFetch_t	*f = &clContent.fetches[fetch];
+	clcSlot_t	*s = CL_ContentFetchSlot( fetch );
+
+	if ( lane == CLC_LANE_FAST ? clContent.web.fetch != fetch : !s ) {
+		return qfalse;
+	}
+	// every chunk the fast lane has, as CL_ContentData counts them
+	if ( lane == CLC_LANE_WEB ) {
+		f->valid = (int64_t)s->offset + (int64_t)s->chunks * CLC_CHUNK;
+		if ( s->chunks && CL_ContentHas( s->have, s->numChunks - 1 ) ) {
+			f->valid -= (int64_t)s->offset + (int64_t)s->numChunks * CLC_CHUNK - s->fileSize;
+		}
+	}
+	Com_Printf( "%s/%s.pk3 comes %s alone: %s\n", f->gameDir, f->name,
+		lane == CLC_LANE_FAST ? "from sv_dlURL" : "by the fast path", why );
+	return qtrue;
+}
+
 /*
 =================
 CL_ContentLaneFailed
@@ -617,6 +697,9 @@ static void CL_ContentLaneFailed( int fetch, int lane, const char *why ) {
 	int			other = lane == CLC_LANE_FAST ? CLC_LANE_WEB : CLC_LANE_FAST;
 
 	f->barred |= lane;
+	if ( CL_ContentRaceDropped( fetch, lane, why ) ) {
+		return;
+	}
 	if ( CL_ContentLaneOpen( f, other ) ) {
 		Com_Printf( "%s/%s.pk3 comes %s instead: %s\n", f->gameDir, f->name,
 			other == CLC_LANE_FAST ? "by the fast path" : "from sv_dlURL", why );
@@ -651,6 +734,7 @@ where its .part stopped; a .part already whole is hashed without asking
 static void CL_ContentAsk( clcSlot_t *s, int fetch ) {
 	clcFetch_t	*f;
 	int64_t		valid;
+	const char	*why;
 
 	Com_Memset( s, 0, sizeof( *s ) );
 	s->used = qtrue;
@@ -675,7 +759,13 @@ static void CL_ContentAsk( clcSlot_t *s, int fetch ) {
 			Content_Cache_ReleasePartial( f->sha256 );		// evictable again
 		}
 		Com_Memset( s, 0, sizeof( *s ) );
-		CL_ContentFetchEnded( fetch, FETCH_FAILED, "it couldn't be written into the content cache" );
+		why = "it couldn't be written into the content cache";
+		// in a race, the site's download goes on alone
+		if ( clContent.web.fetch == fetch ) {
+			CL_ContentLaneFailed( fetch, CLC_LANE_FAST, why );
+		} else {
+			CL_ContentFetchEnded( fetch, FETCH_FAILED, why );
+		}
 		return;
 	}
 	Com_SHA256Init( &s->sha );
@@ -683,7 +773,10 @@ static void CL_ContentAsk( clcSlot_t *s, int fetch ) {
 	s->offset = valid;
 	s->flushed = valid;
 	s->fileSize = f->size;
-	f->valid = valid;
+	// in a race, the site's bytes show
+	if ( clContent.web.fetch != fetch ) {
+		f->valid = valid;
+	}
 	if ( valid > 0 ) {
 		Com_Printf( "Resuming %s/%s.pk3 from byte %lld of %u\n", f->gameDir, f->name, (long long)valid, f->size );
 	}
@@ -775,7 +868,10 @@ static qboolean CL_ContentData( clcSlot_t *s, const ofdData_t *data, byte flags,
 	CL_ContentSetBit( s->have, data->chunkIndex, qtrue );
 	s->chunks++;
 	if ( s->fetch >= 0 ) {
-		clContent.fetches[s->fetch].valid += data->length;
+		// in a race, the site's bytes show
+		if ( clContent.web.fetch != s->fetch ) {
+			clContent.fetches[s->fetch].valid += data->length;
+		}
 		clContent.fastReceived += data->length;
 	}
 
@@ -1354,6 +1450,10 @@ static void CL_ContentFinishFetch( clcSlot_t *s ) {
 
 	if ( memcmp( digest, f->sha256, SHA256_DIGEST_SIZE ) ) {
 		CL_ContentFreeSlot( s, qfalse, qtrue );
+		if ( clContent.web.fetch == fetch ) {
+			CL_ContentLaneFailed( fetch, CLC_LANE_FAST, "it arrived with the wrong SHA-256" );
+			return;
+		}
 		f->valid = 0;
 		if ( ++f->mismatches < 2 ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: %s/%s.pk3 arrived with the wrong SHA-256, so it's asked for "
@@ -1369,17 +1469,20 @@ static void CL_ContentFinishFetch( clcSlot_t *s ) {
 	CL_ContentFreeSlot( s, qfalse, qfalse );
 	if ( !FS_CompareZipChecksum( path, f->checksum ) ) {
 		Content_Cache_DropPartial( f->sha256 );
-		CL_ContentFetchEnded( fetch, FETCH_FAILED,
-			"the server's own copy doesn't have the checksum the server gives for it" );
+		Q_strncpyz( why, "the server's own copy doesn't have the checksum the server gives for it", sizeof( why ) );
+	} else if ( Content_Cache_CompletePartial( f->sha256, why, sizeof( why ) ) ) {
+		CL_ContentRaceOver( fetch, CLC_LANE_FAST );
+		Com_Printf( "Downloaded %s/%s.pk3, %u bytes, from the server by the fast path\n", f->gameDir, f->name,
+			f->size );
+		clc.downloadRestart = qtrue;
+		CL_ContentFetchEnded( fetch, FETCH_DONE, NULL );
 		return;
 	}
-	if ( !Content_Cache_CompletePartial( f->sha256, why, sizeof( why ) ) ) {
+	if ( clContent.web.fetch == fetch ) {
+		CL_ContentLaneFailed( fetch, CLC_LANE_FAST, why );
+	} else {
 		CL_ContentFetchEnded( fetch, FETCH_FAILED, why );
-		return;
 	}
-	Com_Printf( "Downloaded %s/%s.pk3, %u bytes, from the server by the fast path\n", f->gameDir, f->name, f->size );
-	clc.downloadRestart = qtrue;
-	CL_ContentFetchEnded( fetch, FETCH_DONE, NULL );
 }
 
 /*
@@ -1540,7 +1643,7 @@ static void CL_ContentWebBegin( int fetch ) {
 	f->state = FETCH_ACTIVE;
 	f->valid = 0;
 	clContent.web.fetch = fetch;
-	clContent.web.rate.at = Sys_Nanoseconds();
+	clContent.web.began = clContent.web.rate.at = Sys_Nanoseconds();
 	clContent.web.rate.count = 0;
 }
 
@@ -1575,7 +1678,9 @@ void CL_ContentWebEnded( const char *failure ) {
 				Com_Printf( "sv_dlURL has no sha256/ layout (%s), so its paks are asked for by name\n", why );
 			}
 			f->webByName = qtrue;
-			f->state = FETCH_QUEUED;
+			if ( !CL_ContentRaceDropped( fetch, CLC_LANE_WEB, why ) ) {
+				f->state = FETCH_QUEUED;
+			}
 			return;
 		}
 		CL_ContentLaneFailed( fetch, CLC_LANE_WEB, va( "sv_dlURL's failed: %s", why ) );
@@ -1617,6 +1722,8 @@ static void CL_ContentWebHashed( const byte *sha256 ) {
 			"sv_dlURL's copy couldn't be read" );
 		return;
 	}
+	// the fast lane's .part goes before the store, which would drop it
+	CL_ContentRaceOver( fetch, CLC_LANE_WEB );
 	if ( !Content_Cache_StoreHashed( clContent.web.temp, sha256, f->gameDir, f->name, f->checksum, why,
 		sizeof( why ) ) ) {
 		FS_Remove( clContent.web.temp );
@@ -1670,20 +1777,23 @@ A lane with nothing left to take takes the other's pak when, at the rates
 measured, it would download all of it before the other finishes the rest,
 and the slower transfer is canceled (section 9.1, step 5). The fast
 lane's rate counts once the web lane has been idle CLC_WEB_IDLE, as a
-site's TCP holds it down while it runs. A pak taken over isn't taken back
+site's TCP holds it down while it runs. Without a rate of its own, as in a
+set of one or two paks, the fast lane races a slow site for its pak
+instead, downloading it too, from its .part if it has one: when,
+CLC_RACE_SOON into it, the site has more than CLC_RACE_LEFT to go at its
+rate, or is under CLC_RACE_SLOW with that long still to go or no rate
+yet. The first to finish it wins (CL_ContentRaceOver). A pak taken over
+or raced isn't again
 =================
 */
 static void CL_ContentEndgame( int64_t now ) {
-	double		web = clContent.web.rate.rate, fast = clContent.fastRate.rate;
+	double		web = clContent.web.rate.rate, fast = clContent.fastRate.rate, left;
 	clcSlot_t	*s;
 	clcFetch_t	*f;
 	int			i, fetch;
 
-	if ( web <= 0 || fast <= 0 ) {
-		return;
-	}
-	if ( clContent.web.usable && clContent.web.fetch < 0 && now - clContent.web.idleSince >= CLC_WEB_IDLE &&
-		CL_ContentNextFetch( CLC_LANE_WEB ) < 0 ) {
+	if ( web > 0 && fast > 0 && clContent.web.usable && clContent.web.fetch < 0 &&
+		now - clContent.web.idleSince >= CLC_WEB_IDLE && CL_ContentNextFetch( CLC_LANE_WEB ) < 0 ) {
 		for ( i = 0; i < CLC_SLOTS; i++ ) {
 			s = &clContent.slots[i];
 			if ( !CL_ContentSlotSending( s ) ) {
@@ -1703,20 +1813,32 @@ static void CL_ContentEndgame( int64_t now ) {
 			return;
 		}
 	}
-	if ( CL_ContentWebDownloading() && ( i = CL_ContentFreeSlotIndex() ) >= 0 &&
-		CL_ContentNextFetch( CLC_LANE_FAST ) < 0 ) {
-		fetch = clContent.web.fetch;
-		f = &clContent.fetches[fetch];
-		if ( f->takenOver || !CL_ContentLaneOpen( f, CLC_LANE_FAST ) ||
-			f->size / fast >= ( f->size - f->valid ) / web ) {
+	if ( !CL_ContentWebDownloading() || ( i = CL_ContentFreeSlotIndex() ) < 0 ||
+		CL_ContentNextFetch( CLC_LANE_FAST ) >= 0 ) {
+		return;
+	}
+	fetch = clContent.web.fetch;
+	f = &clContent.fetches[fetch];
+	if ( f->takenOver || !CL_ContentLaneOpen( f, CLC_LANE_FAST ) ) {
+		return;
+	}
+	// the seconds the site has to go
+	left = web > 0 ? ( f->size - f->valid ) / web : 0;
+	if ( fast > 0 ) {
+		if ( web <= 0 || f->size / fast >= left ) {
 			return;
 		}
 		Com_Printf( "%s/%s.pk3 comes by the fast path instead, which would finish it sooner\n", f->gameDir, f->name );
-		CL_WebLaneEnd( NULL, 0 );
-		CL_ContentWebIdle();
-		f->takenOver = qtrue;
-		CL_ContentAsk( &clContent.slots[i], fetch );
+		CL_ContentWebCancel();
+	} else if ( now - clContent.web.began >= CLC_RACE_SOON && ( left > CLC_RACE_LEFT ||
+		( web < CLC_RACE_SLOW && ( web <= 0 || left > CLC_RACE_SOON / 1e9 ) ) ) ) {
+		Com_Printf( "%s/%s.pk3 comes by the fast path too, as sv_dlURL is slow: the first to finish it wins\n",
+			f->gameDir, f->name );
+	} else {
+		return;
 	}
+	f->takenOver = qtrue;
+	CL_ContentAsk( &clContent.slots[i], fetch );
 }
 
 /*
@@ -1943,6 +2065,7 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 	int			answer = s->answer, retry = s->retryMsec, fetch = s->fetch;
 	uint32_t	offset = s->offset;
 	clcFetch_t	*f = fetch >= 0 ? &clContent.fetches[fetch] : NULL;
+	const char	*why;
 
 	CL_ContentFreeSlot( s, qfalse, qfalse );
 	if ( answer == ( ANSWER_STATUS | OFD_STATUS_DISABLED ) ) {
@@ -1956,6 +2079,18 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 		} else {
 			CL_ContentGiveUp( va( "the server answered the content manifest's request with %s %d",
 				answer & ANSWER_CLOSE ? "a CLOSE," : "status", answer & 0xff ) );
+		}
+		return;
+	}
+	// in a race, the site's download goes on alone; the fast lane may take
+	// the pak again if that fails, but for an answer it can't be sent
+	if ( clContent.web.fetch == fetch ) {
+		why = va( "the server answered with %s %d", answer & ANSWER_CLOSE ? "a CLOSE," : "status", answer & 0xff );
+		if ( answer == ( ANSWER_STATUS | OFD_STATUS_BUSY ) || answer == ( ANSWER_STATUS | OFD_STATUS_LIMIT ) ||
+			answer == ( ANSWER_CLOSE | OFD_CLOSE_STALLED ) || answer == ( ANSWER_CLOSE | OFD_CLOSE_PREEMPTED ) ) {
+			CL_ContentRaceDropped( fetch, CLC_LANE_FAST, why );
+		} else {
+			CL_ContentLaneFailed( fetch, CLC_LANE_FAST, why );
 		}
 		return;
 	}
@@ -2314,14 +2449,7 @@ void CL_ContentReset( qboolean disconnect ) {
 	for ( i = 0; i < CLC_SLOTS; i++ ) {
 		CL_ContentFreeSlot( &clContent.slots[i], !disconnect, qfalse );
 	}
-	// the web lane's download, or the file it hashes
-	if ( clContent.web.hashing ) {
-		Content_FileHash_Cancel();
-		FS_Remove( clContent.web.temp );
-	} else if ( clContent.web.fetch >= 0 ) {
-		CL_WebLaneEnd( NULL, 0 );
-	}
-	CL_ContentWebIdle();
+	CL_ContentWebCancel();
 	free( clContent.manifest );
 	clContent.manifest = NULL;
 	clContent.phase = CLC_IDLE;
