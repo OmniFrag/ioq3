@@ -474,6 +474,12 @@ void SV_ContentInfo( char *infostring );
 const byte *SV_ContentManifestHash( void );
 void SV_ContentFrame( void );
 void SV_ContentShutdown( void );
+
+//
+// sv_export.c
+//
+void SV_Content_f( void );
+void SV_ExportFrame( void );
 void SV_ContentPacket( netadr_t from, msg_t *msg );
 int SV_ContentSend( void );
 void SV_ContentFreeClient( client_t *cl );

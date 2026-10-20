@@ -1739,6 +1739,15 @@ FILE	*Sys_FOpen( const char *ospath, const char *mode );
 int		Sys_PID( void );
 qboolean Sys_Mkdir( const char *path );
 qboolean Sys_Rename( const char *from, const char *to );
+// a directory others can read, as a web server's files: the home's are
+// the user's alone (Sys_Mkdir)
+qboolean Sys_MkdirReadable( const char *path );
+// a new file, for writing, others can read; NULL if anything is there
+// already, so a link to elsewhere is never written through
+FILE	*Sys_FCreateReadable( const char *ospath );
+// to, a hard link to the file from on the same volume; qfalse where there
+// can't be one, and the caller copies instead
+qboolean Sys_HardLink( const char *from, const char *to );
 qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total );
 typedef struct sysThread_s sysThread_t;
 sysThread_t *Sys_StartThread( void (*func)( void *arg ), void *arg );

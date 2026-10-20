@@ -1491,10 +1491,12 @@ void	Cmd_ExecuteString( const char *text ) {
 	}
 
 	// game code's text can't run the commands that send or print secrets,
-	// or stop the process; nor can a pak's config on a dedicated server,
-	// which sets what it likes but writes no file either
+	// or stop the process, or write files where they're told (content);
+	// nor can a pak's config on a dedicated server, which sets what it
+	// likes but writes no file either
 	{
-		static const char *denied[] = { "rcon", "condump", "cvar_dump", "setenv", "error", "crash", "freeze" };
+		static const char *denied[] = { "rcon", "condump", "cvar_dump", "setenv", "error", "crash", "freeze",
+			"content" };
 		// and the ban list's, which writes the file sv_banFile names
 		static const char *writers[] = { "writeconfig", "settings_export", "settings_import",
 			"banaddr", "bandel", "exceptaddr", "exceptdel", "flushbans" };

@@ -70,6 +70,7 @@ set(SERVER_SOURCES
     ${SOURCE_DIR}/server/sv_check.c
     ${SOURCE_DIR}/server/sv_content.c
     ${SOURCE_DIR}/server/sv_dlcc.c
+    ${SOURCE_DIR}/server/sv_export.c
     ${SOURCE_DIR}/server/sv_game.c
     ${SOURCE_DIR}/server/sv_init.c
     ${SOURCE_DIR}/server/sv_main.c

@@ -352,13 +352,14 @@ SV_ContentFrame
 Once a server frame: what the hash job finished goes into the pak index,
 paused or not, and after the server has stopped, so the job it started is
 finished; the content manifest is built again when the index learned
-hashes
+hashes. Then how content export's job is doing (sv_export.c)
 =================
 */
 void SV_ContentFrame( void ) {
 	if ( Content_PakIndex_Frame() && com_sv_running->integer ) {
 		SV_ContentBuildManifest();
 	}
+	SV_ExportFrame();
 }
 
 /*

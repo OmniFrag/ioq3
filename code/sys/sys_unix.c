@@ -830,6 +830,54 @@ qboolean Sys_Rename( const char *from, const char *to )
 
 /*
 ==================
+Sys_MkdirReadable
+==================
+*/
+qboolean Sys_MkdirReadable( const char *path )
+{
+	if( mkdir( path, 0755 ) != 0 )
+		return errno == EEXIST;
+
+	// whatever the umask (the systemd unit's is 0027)
+	chmod( path, 0755 );
+	return qtrue;
+}
+
+/*
+==================
+Sys_FCreateReadable
+
+O_EXCL, so a link planted at ospath is never followed
+==================
+*/
+FILE *Sys_FCreateReadable( const char *ospath )
+{
+	int		fd = open( ospath, O_WRONLY | O_CREAT | O_EXCL, 0644 );
+	FILE	*f;
+
+	if( fd < 0 )
+		return NULL;
+
+	fchmod( fd, 0644 );
+	f = fdopen( fd, "wb" );
+	if( !f )
+		close( fd );
+
+	return f;
+}
+
+/*
+==================
+Sys_HardLink
+==================
+*/
+qboolean Sys_HardLink( const char *from, const char *to )
+{
+	return link( from, to ) == 0;
+}
+
+/*
+==================
 Sys_DiskSpace
 
 The bytes free to this user, and in all, on the disk holding path; not
