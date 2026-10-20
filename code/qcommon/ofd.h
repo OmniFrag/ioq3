@@ -61,6 +61,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // the largest datagram either side sends, a DATA with the largest chunk
 #define OFD_MAX_DATAGRAM		( OFD_HEADER_SIZE + OFD_DATA_HEADER + OFD_MAX_CHUNK )
 
+// bytes in flight, at most: the server's window's cap, and the receive
+// window a client reports (section 7.6)
+#define OFD_MAX_WINDOW			( 4 << 20 )
+
 // OPEN's status
 #define OFD_STATUS_OK			0
 #define OFD_STATUS_NOT_FOUND	1
