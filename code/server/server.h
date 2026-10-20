@@ -142,8 +142,9 @@ typedef struct netchan_buffer_s {
 // gamestate again, as a map change sends it, and plays on; a second time
 // within this long, it's dropped (SV_AddServerCommand)
 #define SV_RESYNC_WINDOW	( 5 * 60 * 1000 )
-// packets from before that gamestate for this long after it went, and the
-// client didn't get it: it's sent again (SV_ExecuteClientMessage)
+// packets from before that gamestate, or donedl's, for this long after it
+// went, and the client didn't get it: it's sent again
+// (SV_ExecuteClientMessage)
 #define SV_RESYNC_LOST		1000
 
 typedef struct client_s {
@@ -209,10 +210,12 @@ typedef struct client_s {
 	// after a server command overflow (SV_AddServerCommand), until the client
 	// enters the world again: while it's active, the gamestate is still to
 	// send (SV_SendClientMessages), and once it's sent, nothing more is until
-	// the client acknowledges it (SV_ResyncAwaitingAck)
+	// the client acknowledges it (SV_GamestateAwaitingAck)
 	qboolean		resync;
 	int				resyncServerId;		// sv.serverId when its gamestate went out (SV_ResyncClient), -1 until then: a map change or restart since needs ClientBegin
-	int				resyncLateTime;		// svs.time of the first packet from before its gamestate once that had all gone, 0 for none
+	int				lastServerId;		// the serverId its last packet carried, -1 for none
+	int				keptServerId;		// sv.serverId when a gamestate went out that kept the serverId its packets carried, -1 for none (SV_GamestateAwaitingAck)
+	int				gamestateLateTime;	// svs.time of the first packet from before a gamestate that kept the serverId, once that had all gone, 0 for none
 	qboolean		resyncSkipped;		// said in the log that its load is skipping commands (SV_AddServerCommand)
 	rateLimit_t		resyncRate;			// one resync in SV_RESYNC_WINDOW
 	int				lastSnapshotTime;	// svs.time of last sent snapshot
@@ -499,7 +502,7 @@ qboolean SV_IsUnlimitedRate( client_t *cl );
 
 void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd );
 void SV_ResyncClient( client_t *client );
-qboolean SV_ResyncAwaitingAck( const client_t *client );
+qboolean SV_GamestateAwaitingAck( const client_t *client );
 void SV_FreeClient(client_t *client);
 void SV_DropClient( client_t *drop, const char *reason );
 qboolean SV_MuteClient( client_t *cl, qboolean mute, int seconds );
