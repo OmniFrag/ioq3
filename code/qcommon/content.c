@@ -508,6 +508,7 @@ static int			pakIndexQueuedCount;
 // whether the job running is the index's: a client's checks of installed
 // paks share the job (P192)
 static qboolean		pakIndexHashing;
+static int				pakIndexJobs;		// the jobs merged, so a check knows when to look again
 
 /*
 =================
@@ -716,10 +717,10 @@ static void Content_PakIndex_StartQueued( void ) {
 =================
 Content_PakIndex_Append
 
-Adds items to the end of the queue
+Adds items to the end of the queue, or with first to its front
 =================
 */
-static void Content_PakIndex_Append( const pakRecord_t *paks, int count ) {
+static void Content_PakIndex_Append( const pakRecord_t *paks, int count, qboolean first ) {
 	pakRecord_t	*queue;
 
 	if ( count <= 0 ) {
@@ -729,7 +730,12 @@ static void Content_PakIndex_Append( const pakRecord_t *paks, int count ) {
 	if ( !queue ) {
 		return;
 	}
-	memcpy( queue + pakIndexQueuedCount, paks, count * sizeof( *paks ) );
+	if ( first ) {
+		memmove( queue + count, queue, pakIndexQueuedCount * sizeof( *paks ) );
+		memcpy( queue, paks, count * sizeof( *paks ) );
+	} else {
+		memcpy( queue + pakIndexQueuedCount, paks, count * sizeof( *paks ) );
+	}
 	pakIndexQueued = queue;
 	pakIndexQueuedCount += count;
 }
@@ -743,8 +749,50 @@ void Content_PakIndex_Queue( const pakRecord_t *paks, int count ) {
 	free( pakIndexQueued );
 	pakIndexQueued = NULL;
 	pakIndexQueuedCount = 0;
-	Content_PakIndex_Append( paks, count );
+	Content_PakIndex_Append( paks, count, qfalse );
 	Content_PakIndex_StartQueued();
+}
+
+/*
+=================
+Content_PakIndex_QueueFirst
+
+Before the paks queued already, which are taken out of their place
+further on; the job under way finishes first
+=================
+*/
+void Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count ) {
+	int		i, j, kept;
+
+	for ( i = kept = 0; i < pakIndexQueuedCount; i++ ) {
+		for ( j = 0; j < count && ( paks[j].root != pakIndexQueued[i].root ||
+			strcmp( paks[j].path, pakIndexQueued[i].path ) ); j++ ) {
+		}
+		if ( j == count ) {
+			pakIndexQueued[kept++] = pakIndexQueued[i];
+		}
+	}
+	pakIndexQueuedCount = kept;
+	Content_PakIndex_Append( paks, count, qtrue );
+	Content_PakIndex_StartQueued();
+}
+
+/*
+=================
+Content_PakIndex_Busy
+=================
+*/
+qboolean Content_PakIndex_Busy( void ) {
+	return pakIndexHashing || pakIndexQueuedCount > 0;
+}
+
+/*
+=================
+Content_PakIndex_Jobs
+=================
+*/
+int Content_PakIndex_Jobs( void ) {
+	return pakIndexJobs;
 }
 
 /*
@@ -767,6 +815,7 @@ qboolean Content_PakIndex_Frame( void ) {
 		return qfalse;
 	}
 	pakIndexHashing = qfalse;
+	pakIndexJobs++;
 
 	Content_PakIndex_Load();
 	now = time( NULL );
@@ -780,7 +829,7 @@ qboolean Content_PakIndex_Frame( void ) {
 		} else if ( items[i].result == HASH_CHANGED ) {
 			again = items[i].pak;
 			if ( Content_FileStat( items[i].ospath, &again.size, &again.mtime ) ) {
-				Content_PakIndex_Append( &again, 1 );
+				Content_PakIndex_Append( &again, 1, qfalse );
 			}
 		}
 	}
@@ -1270,7 +1319,7 @@ A whole file's SHA-256 and size, read here and now, as the hash job reads
 one; qfalse if it can't be read, or changes meanwhile
 =================
 */
-static qboolean Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size ) {
+qboolean Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size ) {
 	hashJob_t	job;
 	hashItem_t	item;
 

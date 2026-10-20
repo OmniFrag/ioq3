@@ -1380,6 +1380,7 @@ void		Com_SHA256Hex( const byte digest[SHA256_DIGEST_SIZE], char hex[SHA256_HEX_
 // lowercase
 qboolean	Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] );
 // exactly 64 lowercase hexadecimal digits
+
 int			Com_Filter(char *filter, char *name, int casesensitive);
 int			Com_FilterPath(char *filter, char *name, int casesensitive);
 int			Com_RealTime(qtime_t *qtime);

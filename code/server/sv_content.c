@@ -322,14 +322,27 @@ required paks
 =================
 */
 void SV_ContentInfo( char *infostring ) {
-	char	hex[SHA256_HEX_SIZE];
+	const byte	*sha256 = SV_ContentManifestHash();
+	char		hex[SHA256_HEX_SIZE];
 
-	if ( !svManifests[0].data ) {
+	if ( !sha256 ) {
 		return;
 	}
-	Com_SHA256Hex( svManifests[0].sha256, hex );
+	Com_SHA256Hex( sha256, hex );
 	Info_SetValueForKey( infostring, "ofm", hex );
 	Info_SetValueForKey( infostring, "ofr", va( "%llu", (unsigned long long)svManifests[0].requiredBytes ) );
+}
+
+/*
+=================
+SV_ContentManifestHash
+
+The current content manifest's hash, for getinfo's and connectResponse's
+ofm; NULL while there's none
+=================
+*/
+const byte *SV_ContentManifestHash( void ) {
+	return svManifests[0].data ? svManifests[0].sha256 : NULL;
 }
 
 /*

@@ -150,6 +150,12 @@ qboolean	Content_PakIndex_Frame( void );
 // these
 const pakRecord_t	*Content_PakIndex_Find( int root, const char *path, int64_t size, int64_t mtime );
 const pakRecord_t	*Content_PakIndex_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE] );
+// paks for the hash job before any queued, for a check that waits for them
+void				Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count );
+// whether the hash job runs, or has paks queued
+qboolean			Content_PakIndex_Busy( void );
+// how many jobs have finished, so a check can wait for the next
+int					Content_PakIndex_Jobs( void );
 
 /*
 ==============================================================
@@ -210,6 +216,10 @@ int		Content_WriteCacheIndex( const cacheEntry_t *entries, int count, byte *out,
 // Sets evict[i] for each, and returns how many
 int		Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t maxBytes,
 			int maxEntries, qboolean *evict );
+
+// a whole file's SHA-256 and size, read here and now; qfalse if it can't
+// be read, or changes meanwhile
+qboolean	Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size );
 
 // the client: at startup, reads index.dat, removes what it doesn't list,
 // and evicts down to the bound
@@ -305,6 +315,21 @@ typedef struct {
 // files.c: the search path's paks, as above; how many there are, though at
 // most max are filled, and none when paks is NULL
 int		FS_ContentPaks( contentPak_t *paks, int max );
+// the hashes the content manifest of the server connected to gives its
+// required paks, or none (NULL) as for a classic server, for the search
+// path: from the next restart, which FS_ConditionalRestart makes when they
+// changed, a pak with one of their checksums is mounted only with its hash
+// (download-protocol.md section 9.1, step 3)
+void	FS_SetServerPakHashes( const byte *manifest, const ofcmHeader_t *header,
+			const byte sha256[SHA256_DIGEST_SIZE] );
+// whether the search path's paks all match those hashes
+qboolean	FS_ServerPaksMatch( void );
+// the hash those give a pak with this checksum, or NULL
+const byte	*FS_ServerPakHash( unsigned int checksum );
+// the installed paks of the search path whose hash the server's content
+// manifest gives and the pak index lacks, as records for the hash job;
+// their count
+int		FS_UnhashedServerPaks( pakRecord_t *paks, int max );
 
 typedef enum {
 	MANIFEST_LISTED,
