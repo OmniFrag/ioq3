@@ -368,6 +368,21 @@ static void CL_ContentKeepFinished( const clcSlot_t *s ) {
 	}
 }
 
+// whether a finished transfer is still acked whole, its CLOSE not come: a
+// limit then may be that transfer holding the server's slot until the acks
+// close it (section 6.6)
+static qboolean CL_ContentAckingFinished( void ) {
+	int64_t	now = Sys_Nanoseconds();
+	int		i;
+
+	for ( i = 0; i < (int)ARRAY_LEN( clContent.finished ); i++ ) {
+		if ( clContent.finished[i].serial && clContent.finished[i].until > now ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 // a request waiting for its OPEN
 static qboolean CL_ContentAsking( const clcSlot_t *s ) {
 	return s->used && !s->open && !s->answer;
@@ -1406,7 +1421,8 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 
 	switch ( answer ) {
 	case ANSWER_STATUS | OFD_STATUS_LIMIT:
-		if ( ++f->limits >= CLC_LIMIT_RETRIES ) {
+		// one a finished transfer may cause doesn't count
+		if ( !CL_ContentAckingFinished() && ++f->limits >= CLC_LIMIT_RETRIES ) {
 			CL_ContentFetchEnded( fetch, FETCH_CLASSIC, "the server's limit, five times" );
 			break;
 		}

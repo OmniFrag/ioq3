@@ -90,6 +90,17 @@ static svtTransfer_t *SVT_Find( svTransfers_t *t, uint16_t serial ) {
 	return NULL;
 }
 
+// a record no longer in flight, acked or lost; its transfer, if still open
+static svtTransfer_t *SVT_Land( svTransfers_t *t, svtFlight_t *f ) {
+	svtTransfer_t	*transfer = SVT_Find( t, f->serial );
+
+	if ( transfer ) {
+		transfer->pending--;
+	}
+	f->bytes = 0;
+	return transfer;
+}
+
 // a closed transfer acked or canceled again: its CLOSE again, at most
 // every 100 ms
 static void SVT_RepeatClose( svTransfers_t *t, uint16_t serial, int64_t now, const svTransferEnv_t *env ) {
@@ -345,22 +356,37 @@ static void SVT_Request( svTransfers_t *t, const ofdRequest_t *request, qboolean
 
 // a lost chunk queued to go again; a probe goes to the front, past the
 // window
-static void SVT_Retransmit( svTransfers_t *t, uint16_t serial, uint32_t chunk, qboolean probe ) {
+static void SVT_Retransmit( svTransfers_t *t, svtTransfer_t *transfer, uint32_t chunk, qboolean probe ) {
 	svtRetransmit_t	*r;
 
 	if ( t->retransmitCount >= SVT_RETRANSMITS ) {
+		// a probe's chunk is still in flight, so nothing is lost
+		if ( !probe ) {
+			transfer->forgotten = qtrue;
+		}
 		return;
 	}
+	transfer->pending++;
 	if ( probe ) {
 		t->retransmitHead = ( t->retransmitHead + SVT_RETRANSMITS - 1 ) % SVT_RETRANSMITS;
 		r = &t->retransmits[t->retransmitHead];
 	} else {
 		r = &t->retransmits[( t->retransmitHead + t->retransmitCount ) % SVT_RETRANSMITS];
 	}
-	r->serial = serial;
+	r->serial = transfer->serial;
 	r->chunk = chunk;
 	r->probe = probe;
 	t->retransmitCount++;
+}
+
+// the queue's oldest entry gone, sent or passed over; transfer is its, if
+// still open
+static void SVT_PopRetransmit( svTransfers_t *t, svtTransfer_t *transfer ) {
+	if ( transfer ) {
+		transfer->pending--;
+	}
+	t->retransmitHead = ( t->retransmitHead + 1 ) % SVT_RETRANSMITS;
+	t->retransmitCount--;
 }
 
 /*
@@ -370,7 +396,10 @@ SVT_Acks
 Section 6.2: the RTT sample, the ranges, the cumulative chunks, then the
 records lost below the largest acknowledged. A range is walked only from
 the oldest record in flight, as nothing below it is; the skipped packet
-numbers are checked against it on their own
+numbers are checked against it on their own. A transfer closes once the
+cumulative chunk reaches its end, or once every chunk of it has gone and
+none is in flight or waiting to go again (section 6.6): each was acked,
+or is below the cumulative chunk
 =================
 */
 static const char *SVT_Acks( svTransfers_t *t, const ofdControl_t *control, int64_t now, const svTransferEnv_t *env ) {
@@ -411,7 +440,7 @@ static const char *SVT_Acks( svTransfers_t *t, const ofdControl_t *control, int6
 			f = &t->ring[p % SVT_RING];
 			if ( SVT_InFlight( f, p ) ) {
 				acked += f->bytes;
-				f->bytes = 0;
+				SVT_Land( t, f );
 			}
 		}
 	}
@@ -442,12 +471,19 @@ static const char *SVT_Acks( svTransfers_t *t, const ofdControl_t *control, int6
 		}
 		lost += f->bytes;
 		newestLostSent = MAX( newestLostSent, now - SVT_Age( f, now ) );
-		f->bytes = 0;
-		if ( ( transfer = SVT_Find( t, f->serial ) ) != NULL && f->chunk >= transfer->cumulative ) {
-			SVT_Retransmit( t, f->serial, f->chunk, qfalse );
+		if ( ( transfer = SVT_Land( t, f ) ) != NULL && f->chunk >= transfer->cumulative ) {
+			SVT_Retransmit( t, transfer, f->chunk, qfalse );
 		}
 	}
 	SVT_AdvanceOldest( t );
+
+	for ( i = 0; i < SVT_TRANSFERS; i++ ) {
+		transfer = &t->transfers[i];
+		if ( transfer->serial && transfer->nextChunk == transfer->numChunks && !transfer->pending
+			&& !transfer->forgotten ) {
+			SVT_Close( t, transfer, OFD_CLOSE_COMPLETE, now, env );
+		}
+	}
 
 	DLCC_OnAck( &t->cc, now, acked, lost, newestLostSent );
 	if ( acked ) {
@@ -515,8 +551,7 @@ static svtTransfer_t *SVT_Next( svTransfers_t *t, uint32_t *chunk, qboolean *ret
 			*retransmit = qtrue;
 			return transfer;
 		}
-		t->retransmitHead = ( t->retransmitHead + 1 ) % SVT_RETRANSMITS;
-		t->retransmitCount--;
+		SVT_PopRetransmit( t, transfer );
 	}
 	for ( i = 0; i < SVT_TRANSFERS; i++ ) {
 		transfer = &t->transfers[( t->turn + i ) % SVT_TRANSFERS];
@@ -625,8 +660,7 @@ int SVT_Send( svTransfers_t *t, int64_t now, qboolean capFree, const svTransferE
 	}
 
 	if ( retransmit ) {
-		t->retransmitHead = ( t->retransmitHead + 1 ) % SVT_RETRANSMITS;
-		t->retransmitCount--;
+		SVT_PopRetransmit( t, transfer );
 		t->datagramsResent++;
 	} else {
 		transfer->nextChunk++;
@@ -638,6 +672,7 @@ int SVT_Send( svTransfers_t *t, int64_t now, qboolean capFree, const svTransferE
 	f->serial = transfer->serial;
 	f->bytes = bytes;
 	f->sent = (uint32_t)now;
+	transfer->pending++;
 	t->nextPacket++;
 	t->datagramsSent++;
 
@@ -655,6 +690,7 @@ again, past the window; with nothing acked for 15 s, the transfers close
 */
 int64_t SVT_Timer( svTransfers_t *t, int64_t now, const svTransferEnv_t *env ) {
 	const svtFlight_t	*oldest[2];
+	svtTransfer_t		*transfers[2];
 	int64_t				due;
 	uint32_t			p;
 	int					i, probes = 0;
@@ -683,13 +719,13 @@ int64_t SVT_Timer( svTransfers_t *t, int64_t now, const svTransferEnv_t *env ) {
 	for ( p = MAX( t->oldestInFlight, SVT_RingLow( t ) ); p < t->nextPacket && probes < 2; p++ ) {
 		const svtFlight_t	*f = &t->ring[p % SVT_RING];
 
-		if ( SVT_InFlight( f, p ) && SVT_Find( t, f->serial ) ) {
+		if ( SVT_InFlight( f, p ) && ( transfers[probes] = SVT_Find( t, f->serial ) ) != NULL ) {
 			oldest[probes++] = f;
 		}
 	}
 	// to the front of the queue, the newer first, so the oldest goes first
 	for ( i = probes - 1; i >= 0; i-- ) {
-		SVT_Retransmit( t, oldest[i]->serial, oldest[i]->chunk, qtrue );
+		SVT_Retransmit( t, transfers[i], oldest[i]->chunk, qtrue );
 	}
 	return DLCC_ProbeTimeout( &t->cc );
 }

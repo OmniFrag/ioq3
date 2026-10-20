@@ -82,6 +82,8 @@ typedef struct {
 	uint32_t	numChunks;
 	uint32_t	nextChunk;		// the next never sent
 	uint32_t	cumulative;		// every chunk below it is the client's
+	int			pending;		// its records in flight and lost chunks waiting to go again
+	qboolean	forgotten;		// a lost chunk the full queue dropped
 	void		*file;
 } svtTransfer_t;
 
