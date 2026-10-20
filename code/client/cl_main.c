@@ -2821,13 +2821,14 @@ section 9.1, step 3)
 */
 static qboolean CL_StoreDownload( const char *tmp, char *why, int whySize ) {
 	char		gamedir[MAX_QPATH], name[MAX_QPATH];
-	const byte	*hash = FS_ServerPakHash( clc.downloadChecksum );
+	const byte	*hash;
 	byte		sha256[SHA256_DIGEST_SIZE];
 	int64_t		size;
 
 	if ( !CL_CacheName( gamedir, name, why, whySize ) ) {
 		return qfalse;
 	}
+	hash = FS_ServerPakHash( gamedir, name, clc.downloadChecksum );
 	if ( !hash ) {
 		return Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum, why, whySize );
 	}
