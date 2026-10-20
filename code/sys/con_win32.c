@@ -96,10 +96,11 @@ static WORD CON_ColorCharToAttrib( char color ) {
 CON_CtrlHandler
 
 The Windows Console doesn't use signals for Ctrl-C, closing the window,
-logging off or shutting down; it calls a handler routine instead. Ctrl-C
-and Ctrl-Break stop the program as SIGINT does, and closing the window or
-shutting down as SIGTERM does, so each exits as a requested stop. Only
-services see a log off, any user's, so a server run as one keeps running.
+logging off or shutting down; it calls a handler routine instead, on a
+thread of its own. Ctrl-C and Ctrl-Break stop the program as SIGINT does,
+and closing the window or shutting down as SIGTERM does, so each quits
+from the main loop as a requested stop. Only services see a log off, any
+user's, so a server run as one keeps running.
 ==================
 */
 static BOOL WINAPI CON_CtrlHandler( DWORD event )
@@ -113,7 +114,10 @@ static BOOL WINAPI CON_CtrlHandler( DWORD event )
 		case CTRL_LOGOFF_EVENT:
 			break;
 		default:
+			// Windows ends the program as this returns, or some seconds
+			// on: wait while the main loop quits
 			Sys_SigHandler( SIGTERM );
+			Sleep( INFINITE );
 			break;
 	}
 	return TRUE;

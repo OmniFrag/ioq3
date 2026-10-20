@@ -1187,8 +1187,8 @@ void Sys_FreeFileList( char **list )
 ==================
 Sys_Sleep
 
-Block execution for msec or until input is received; with stdin not a
-terminal, 10 msec at most.
+Block execution for msec or until input is received, 250 msec at most
+for no limit; with stdin not a terminal, 10 msec at most.
 ==================
 */
 void Sys_Sleep( int msec )
@@ -1199,21 +1199,19 @@ void Sys_Sleep( int msec )
 	if( stdinIsATTY )
 	{
 		fd_set fdset;
+		struct timeval timeout;
+
+		// a stop signal that comes before the select, or to another
+		// thread, can't end the wait (Com_QueueQuit): wake now and then
+		// for the main loop to quit
+		if( msec < 0 )
+			msec = 250;
 
 		FD_ZERO(&fdset);
 		FD_SET(STDIN_FILENO, &fdset);
-		if( msec < 0 )
-		{
-			select(STDIN_FILENO + 1, &fdset, NULL, NULL, NULL);
-		}
-		else
-		{
-			struct timeval timeout;
-
-			timeout.tv_sec = msec/1000;
-			timeout.tv_usec = (msec%1000)*1000;
-			select(STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout);
-		}
+		timeout.tv_sec = msec/1000;
+		timeout.tv_usec = (msec%1000)*1000;
+		select(STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout);
 	}
 	else
 	{

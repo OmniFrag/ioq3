@@ -58,13 +58,12 @@ typedef struct {
 	// at most anyway.)
 	int		(*frame)( void );
 
-	// Once, as the program exits: on quit, a fatal error, or SIGTERM or
-	// SIGINT. reason says why, as the server tells its players. The
-	// network is still up. Not called on an extension whose own hook the
-	// exit interrupts (a signal, or a quit the hook asks for), since its
-	// state may be half changed. On Windows a console's Ctrl-C or close
-	// stops the program from the console's own thread, which calls this
-	// and serverShutdown while the main thread may still run a frame.
+	// Once, as the program exits: on quit, a fatal error, or SIGTERM,
+	// SIGINT or SIGHUP (on Windows, a console's Ctrl-C or close), which
+	// quit from the main loop as quit does. reason says why, as the
+	// server tells its players. The network is still up. Not called on
+	// an extension whose own hook asks for the quit, since its state may
+	// be half changed, nor after a crash.
 	void		(*shutdown)( const char *reason );
 
 	// What the server does, dedicated or a listen server's, each called
@@ -167,8 +166,8 @@ void	Hooks_Frame( void );
 // an ERR_DROP ended the frame, in a hook perhaps
 void	Hooks_FrameAborted( void );
 void	Hooks_Shutdown( const char *reason );
-// a signal stops the program: before the server shuts down
-void	Hooks_Signal( qboolean crashed );
+// a crash stops the program: before the server shuts down
+void	Hooks_Signal( void );
 // the longest a dedicated server with no map may wait, as the extensions
 // asked in their last frames: -1 for no limit
 int	Hooks_IdleMsec( void );
