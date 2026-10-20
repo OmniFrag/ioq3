@@ -1337,9 +1337,10 @@ void SV_Init (void)
 	Cvar_SetDescription( Cvar_Get ("sv_dlURL", "", CVAR_SERVERINFO | CVAR_ARCHIVE),
 		"Web address players download missing pak files from\n"
 		"Point it at a web folder laid out like the game's: a player missing baseq3/mymap.pk3 fetches "
-		"<sv_dlURL>/baseq3/mymap.pk3. Write it without a trailing slash, such as http://example.com/q3. "
-		"It's much faster than downloads from the game server, and players reconnect when they're done "
-		"unless sv_allowDownload includes 8." );
+		"<sv_dlURL>/baseq3/mymap.pk3, and OmniFrag players first try <sv_dlURL>/sha256/<the pak's "
+		"SHA-256>.pk3. Write it without a trailing slash, such as http://example.com/q3. OmniFrag players "
+		"download from it and the game server at once and stay connected; others reconnect when they're "
+		"done unless sv_allowDownload includes 8." );
 	
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
 	Cvar_SetDescription( sv_master[0],

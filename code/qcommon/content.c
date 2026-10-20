@@ -508,6 +508,13 @@ static int			pakIndexQueuedCount;
 // whether the job running is the index's: a client's checks of installed
 // paks share the job (P192)
 static qboolean		pakIndexHashing;
+// a file the client hashes by the job (Content_FileHash_Start): it waits
+// its turn, holding the index's next job off, so one job reads the disk
+// at a time; and a job the client dropped, finished unread
+typedef enum { FILE_HASH_NONE, FILE_HASH_WAITING, FILE_HASH_RUNNING } fileHashState_t;
+static fileHashState_t	fileHashState;
+static char				fileHashPath[MAX_OSPATH];
+static qboolean			fileHashDropped;
 static int				pakIndexJobs;		// the jobs merged, so a check knows when to look again
 
 /*
@@ -689,7 +696,8 @@ static void Content_PakIndex_StartQueued( void ) {
 	const char	*ospath;
 	int			i, n, count = MIN( pakIndexQueuedCount, HASH_JOB_MAX );
 
-	if ( !count || Content_HashJob_Running() || !( items = malloc( count * sizeof( *items ) ) ) ) {
+	if ( !count || fileHashState == FILE_HASH_WAITING || Content_HashJob_Running() ||
+		!( items = malloc( count * sizeof( *items ) ) ) ) {
 		return;
 	}
 	for ( i = n = 0; i < count; i++ ) {
@@ -779,6 +787,68 @@ void Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count ) {
 
 /*
 =================
+Content_FileHash_Start
+=================
+*/
+void Content_FileHash_Start( const char *ospath ) {
+	Q_strncpyz( fileHashPath, ospath, sizeof( fileHashPath ) );
+	fileHashState = FILE_HASH_WAITING;
+}
+
+/*
+=================
+Content_FileHash_Poll
+
+The file's job begun once the job is free, or its result
+=================
+*/
+int Content_FileHash_Poll( byte sha256[SHA256_DIGEST_SIZE] ) {
+	hashItem_t			item;
+	const hashItem_t	*items;
+	int					count;
+
+	if ( fileHashState == FILE_HASH_WAITING ) {
+		if ( fileHashDropped || Content_HashJob_Running() ) {
+			return 0;
+		}
+		memset( &item, 0, sizeof( item ) );
+		Q_strncpyz( item.ospath, fileHashPath, sizeof( item.ospath ) );
+		if ( !Content_FileStat( fileHashPath, &item.pak.size, &item.pak.mtime ) || !Content_HashJob_Start( &item, 1 ) ) {
+			fileHashState = FILE_HASH_NONE;
+			return -1;
+		}
+		fileHashState = FILE_HASH_RUNNING;
+		return 0;
+	}
+	if ( fileHashState != FILE_HASH_RUNNING ) {
+		return -1;
+	}
+	if ( !( items = Content_HashJob_Poll( &count ) ) ) {
+		return 0;
+	}
+	fileHashState = FILE_HASH_NONE;
+	if ( count != 1 || items[0].result != HASH_DONE ) {
+		return -1;
+	}
+	memcpy( sha256, items[0].pak.sha256, SHA256_DIGEST_SIZE );
+	return 1;
+}
+
+/*
+=================
+Content_FileHash_Cancel
+
+The file isn't wanted: a job hashing it is dropped when it ends
+(Content_PakIndex_Frame)
+=================
+*/
+void Content_FileHash_Cancel( void ) {
+	fileHashDropped |= fileHashState == FILE_HASH_RUNNING;
+	fileHashState = FILE_HASH_NONE;
+}
+
+/*
+=================
 Content_PakIndex_Busy
 =================
 */
@@ -809,6 +879,13 @@ qboolean Content_PakIndex_Frame( void ) {
 	int64_t				now, bytes;
 	int					i, count, hashed;
 
+	// the client's file's job, or one it dropped, isn't the index's
+	if ( fileHashState == FILE_HASH_RUNNING || fileHashDropped ) {
+		if ( fileHashDropped && Content_HashJob_Poll( &count ) ) {
+			fileHashDropped = qfalse;
+		}
+		return qfalse;
+	}
 	items = pakIndexHashing ? Content_HashJob_Poll( &count ) : NULL;
 	if ( !items ) {
 		Content_PakIndex_StartQueued();

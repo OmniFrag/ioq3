@@ -220,9 +220,12 @@ typedef struct {
 	qboolean	httpUsed;
 	qboolean	downloadHTTP;	// the pak downloading comes from sv_dlURL
 	int			downloadURLChecked;	// CL_CheckDownloadURL's answer: 1 yes, -1 no, 0 not asked
+	qboolean	downloadURLOwn;		// and whether its host is the game server's address
 	qboolean	disconnectedForHttpDownload;
 	char		downloadURL[MAX_STRING_CHARS];
+	qboolean	downloadLane;	// the fast download's web lane has the download (cl_content.c)
 #endif /* USE_HTTP */
+	qboolean	downloadUDPOnly;	// the classic leftovers of a set the web lane tried
 	int		sv_allowDownload;
 	char		sv_dlURL[MAX_CVAR_VALUE_STRING];
 	int			downloadNumber;
@@ -526,8 +529,13 @@ void CL_ClearDownloadName( void );
 void CL_StartClassicDownloads( void );
 // the paks in clc.downloadList, the classic way: from sv_dlURL or the
 // server itself, then CL_DownloadsComplete
-qboolean CL_DownloadsByHTTP( void );
-// whether the paks a server lacks come from its sv_dlURL first
+qboolean CL_WebLaneUsable( void );
+qboolean CL_WebLaneBegin( const char *url, const char *gameDir, const char *name, unsigned int checksum );
+void CL_WebLaneEnd( char *temp, int tempSize );
+// the fast download's web lane (cl_content.c), on cl_main.c's HTTP
+// download; temp NULL removes the file
+void CL_ContentWebEnded( const char *failure );
+// the lane's download ended, failure NULL if it arrived whole
 
 //
 // cl_content.c, the fast download (docs/design/download-protocol.md)
