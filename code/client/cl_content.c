@@ -1287,18 +1287,18 @@ static qboolean CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *best ) {
 }
 
 // whether this connection may ask the server's fast download anything: its
-// content manifest, which bit 16 doesn't stop (section 9.1)
+// content manifest, which isn't a pak download, so the download bits but
+// the player's own 1 don't stop it (section 9.1)
 static qboolean CL_ContentAllowed( void ) {
-	return ( clc.ofx & OFX_CONTENT ) && !clContent.classicOnly &&
-		( cl_allowDownload->integer & clc.sv_allowDownload & DLF_ENABLE ) &&
-		!( ( cl_allowDownload->integer | clc.sv_allowDownload ) & DLF_NO_UDP );
+	return ( clc.ofx & OFX_CONTENT ) && !clContent.classicOnly && ( cl_allowDownload->integer & DLF_ENABLE );
 }
 
-// whether the paks may come by the fast path: not with bit 16 on either
-// side, nor when they come from sv_dlURL
+// whether the paks may come by the fast path: with downloads on at the
+// server, not with bit 4 or 16 on either side, nor when they come from
+// sv_dlURL
 static qboolean CL_ContentFastAllowed( void ) {
-	return CL_ContentAllowed() && !( ( cl_allowDownload->integer | clc.sv_allowDownload ) & DLF_NO_FAST ) &&
-		!CL_DownloadsByHTTP();
+	return CL_ContentAllowed() && ( clc.sv_allowDownload & DLF_ENABLE ) &&
+		!( ( cl_allowDownload->integer | clc.sv_allowDownload ) & ( DLF_NO_UDP | DLF_NO_FAST ) ) && !CL_DownloadsByHTTP();
 }
 
 // the set starts with the content manifest

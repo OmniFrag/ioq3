@@ -669,8 +669,9 @@ static qboolean SV_ContentBusy( const client_t *cl ) {
 =================
 SV_ContentAdmit
 
-Section 6.1's answer to a request: disabled, limit, what it names, then
-whether it may be sent now, then whether it can be read
+Section 6.1's answer to a request: limit, what it names, disabled for a pak
+sv_allowDownload doesn't send by the fast path, then whether it may be
+sent now, then whether it can be read
 =================
 */
 static void SV_ContentAdmit( void *arg, const ofdRequest_t *request, int slot, svtAdmission_t *out ) {
@@ -682,10 +683,6 @@ static void SV_ContentAdmit( void *arg, const ofdRequest_t *request, int slot, s
 	int64_t				size, mtime, nowSize, nowMtime;
 	qboolean			current = !memcmp( request->sha256, zero, sizeof( zero ) );
 
-	if ( !( sv_allowDownload->integer & DLF_ENABLE ) || ( sv_allowDownload->integer & DLF_NO_UDP ) ) {
-		out->status = OFD_STATUS_DISABLED;
-		return;
-	}
 	if ( slot < 0 ) {
 		out->status = OFD_STATUS_LIMIT;
 		out->retryAfter = CONTENT_RETRY_LIMIT;
@@ -699,8 +696,10 @@ static void SV_ContentAdmit( void *arg, const ofdRequest_t *request, int slot, s
 		size = manifest->length;
 		Com_Memcpy( out->sha256, manifest->sha256, SHA256_DIGEST_SIZE );
 	} else if ( !current && ( ospath = SV_ContentFindPak( request->sha256, &size, &mtime ) ) != NULL ) {
-		// no fast download stops the paks, not the small content manifest
-		if ( sv_allowDownload->integer & DLF_NO_FAST ) {
+		// downloads off, no UDP ones, or no fast download stop the paks, not
+		// the small content manifest a client checks its paks against
+		if ( !( sv_allowDownload->integer & DLF_ENABLE ) ||
+			( sv_allowDownload->integer & ( DLF_NO_UDP | DLF_NO_FAST ) ) ) {
 			out->status = OFD_STATUS_DISABLED;
 			return;
 		}
