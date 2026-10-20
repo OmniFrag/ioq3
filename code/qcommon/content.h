@@ -156,6 +156,14 @@ void				Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count );
 qboolean			Content_PakIndex_Busy( void );
 // how many jobs have finished, so a check can wait for the next
 int					Content_PakIndex_Jobs( void );
+// a file's SHA-256 by the hash job, so a large one doesn't hold up the
+// frame: it waits for the job, which then starts nothing else
+void				Content_FileHash_Start( const char *ospath );
+// 1 with the file's hash, 0 while it waits or is hashed, -1 if it
+// couldn't be read; each frame until it's 1 or -1
+int					Content_FileHash_Poll( byte sha256[SHA256_DIGEST_SIZE] );
+// the file isn't wanted any more
+void				Content_FileHash_Cancel( void );
 
 /*
 ==============================================================

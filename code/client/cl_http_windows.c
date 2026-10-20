@@ -509,7 +509,9 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
     if (d->length > 0)
     {
         clc.downloadCount += d->length;
-        Cvar_SetValue("cl_downloadCount", clc.downloadCount);
+        // the web lane's progress shows the set's (CL_ContentSetProgress)
+        if (!clc.downloadLane)
+            Cvar_SetValue("cl_downloadCount", clc.downloadCount);
         if (FS_Write(d->data, d->length, clc.download) != d->length && !d->error[0])
             Com_sprintf(d->error, sizeof(d->error), "couldn't write %s", clc.downloadTempName);
         d->length = 0;
@@ -517,7 +519,8 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
     if (d->size != clc.downloadSize)
     {
         clc.downloadSize = d->size;
-        Cvar_SetValue("cl_downloadSize", clc.downloadSize);
+        if (!clc.downloadLane)
+            Cvar_SetValue("cl_downloadSize", clc.downloadSize);
     }
     // the thread had read everything before it finished, and that's
     // written now

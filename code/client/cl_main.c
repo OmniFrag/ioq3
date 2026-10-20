@@ -2390,6 +2390,28 @@ static void CL_InitDownload( const char *remoteName, const char *localName, unsi
 
 /*
 =================
+CL_CloseDownload
+
+The download's transfer stopped and its file closed, tmp, if not NULL,
+getting the file's OS path
+=================
+*/
+static void CL_CloseDownload( char *tmp, int size ) {
+#ifdef USE_HTTP
+	CL_HTTP_CancelDownload();
+#endif
+	if ( clc.download ) {
+		FS_FCloseFile( clc.download );
+		clc.download = 0;
+	}
+	if ( tmp ) {
+		Q_strncpyz( tmp, FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), clc.downloadTempName ),
+			size );
+	}
+}
+
+/*
+=================
 CL_BeginDownload
 
 Requests a file to download from the server.  Stores it in the current
@@ -2416,6 +2438,24 @@ static qboolean CL_ServerSendsDownloads( void ) {
 #ifdef USE_HTTP
 /*
 =================
+CL_StartHttpDownload
+
+The HTTP transfer into clc.download, from remoteURL
+=================
+*/
+static void CL_StartHttpDownload( const char *remoteURL ) {
+	// first, since remoteURL may be in va()'s buffers, which the backend
+	// uses too
+	Q_strncpyz(clc.downloadURL, remoteURL, sizeof(clc.downloadURL));
+	Com_Printf("URL: %s\n", clc.downloadURL);
+
+	CL_HTTP_BeginDownload(clc.downloadURL);
+	clc.httpUsed = qtrue;
+	clc.downloadHTTP = qtrue;
+}
+
+/*
+=================
 CL_BeginHttpDownload
 
 Returns whether the download began; if not, it's noted as failed
@@ -2428,14 +2468,11 @@ static qboolean CL_BeginHttpDownload( const char *remoteURL ) {
 		return qfalse;
 	}
 
-	// first, since remoteURL may be in va()'s buffers, which the backend
-	// uses too
-	Q_strncpyz(clc.downloadURL, remoteURL, sizeof(clc.downloadURL));
-	Com_Printf("URL: %s\n", clc.downloadURL);
+	CL_StartHttpDownload(remoteURL);
 
-	CL_HTTP_BeginDownload(clc.downloadURL);
-
-	if(!(clc.sv_allowDownload & DLF_NO_DISCONNECT) &&
+	// a negotiated connection stays, whatever bit 8 says (download-protocol.md
+	// section 9.1, step 5)
+	if(!(clc.sv_allowDownload & DLF_NO_DISCONNECT) && !(clc.ofx & OFX_CONTENT) &&
 		!clc.disconnectedForHttpDownload) {
 
 		CL_AddReliableCommand("disconnect", qtrue);
@@ -2444,9 +2481,6 @@ static qboolean CL_BeginHttpDownload( const char *remoteURL ) {
 		CL_WritePacket();
 		clc.disconnectedForHttpDownload = qtrue;
 	}
-
-	clc.httpUsed = qtrue;
-	clc.downloadHTTP = qtrue;
 	return qtrue;
 }
 
@@ -2500,10 +2534,20 @@ static qboolean CL_CheckDownloadURL( const char *url, char *why, int size ) {
 	Q_strncpyz( host, start, end - start + 1 );
 
 	// a name that doesn't resolve fails in the backend, which says so
-	if ( NET_StringToAdr( host, &adr, NA_UNSPEC ) && !CL_DownloadAddressAllowed( &adr ) ) {
+	if ( !NET_StringToAdr( host, &adr, NA_UNSPEC ) ) {
+		return qtrue;
+	}
+	if ( !CL_DownloadAddressAllowed( &adr ) ) {
 		Com_sprintf( why, size, "it leads to %s, on a private network, and this server isn't on one",
 			NET_AdrToString( adr ) );
 		return qfalse;
+	}
+	// the fast download's web lane skips it (CL_WebLaneUsable), though
+	// what the fast download fails may still come from it by name
+	clc.downloadURLOwn = NET_CompareBaseAdr( adr, clc.serverAddress );
+	if ( clc.downloadURLOwn && ( clc.ofx & OFX_CONTENT ) ) {
+		Com_Printf( "Not downloading from sv_dlURL %s beside the fast download: it's the game server's own "
+			"address, whose uplink the fast download uses already\n", url );
 	}
 	return qtrue;
 }
@@ -2553,6 +2597,75 @@ static qboolean CL_DownloadByHTTP( qboolean quiet ) {
 	}
 	return qfalse;
 }
+
+/*
+=================
+CL_WebLaneUsable
+
+Whether the fast download's web lane may take paks from sv_dlURL: when the
+classic download would, but not from a host that resolves to the game
+server's own address, whose uplink the fast download uses already
+(download-protocol.md section 9.1, step 5)
+=================
+*/
+qboolean CL_WebLaneUsable( void ) {
+	return CL_DownloadByHTTP( qtrue ) && !clc.downloadURLOwn;
+}
+
+/*
+=================
+CL_WebLaneBegin
+
+The web lane's download of one pak from url, into the temporary file a
+classic download uses, connected whatever bit 8 says; whether it began
+=================
+*/
+qboolean CL_WebLaneBegin( const char *url, const char *gameDir, const char *name, unsigned int checksum ) {
+	char	remote[MAX_OSPATH];
+
+	Com_sprintf( remote, sizeof( remote ), "%s/%s.pk3", gameDir, name );
+	CL_InitDownload( remote, remote, checksum );
+	clc.download = FS_BaseDir_FOpenFileWrite_HomeData( clc.downloadTempName );
+	if ( !clc.download ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't create %s\n", clc.downloadTempName );
+		CL_ClearDownloadName();
+		return qfalse;
+	}
+	CL_StartHttpDownload( url );
+	clc.downloadLane = qtrue;
+	return qtrue;
+}
+
+/*
+=================
+CL_WebLaneEnd
+
+Ends the web lane's download: the transfer stopped and the file closed,
+temp getting its OS path, for the lane to check and store; with temp
+NULL, the file is removed
+=================
+*/
+void CL_WebLaneEnd( char *temp, int tempSize ) {
+	CL_CloseDownload( temp, tempSize );
+	// CL_Disconnect may have removed it and cleared its name
+	if ( !temp && *clc.downloadTempName ) {
+		FS_BaseDir_Remove_HomeData( clc.downloadTempName );
+	}
+	clc.downloadHTTP = qfalse;
+	clc.downloadLane = qfalse;
+	CL_ClearDownloadName();
+}
+#else
+qboolean CL_WebLaneUsable( void ) {
+	return qfalse;
+}
+
+qboolean CL_WebLaneBegin( const char *url, const char *gameDir, const char *name, unsigned int checksum ) {
+	return qfalse;
+}
+
+void CL_WebLaneEnd( char *temp, int tempSize ) {
+}
 #endif /* USE_HTTP */
 
 /*
@@ -2573,7 +2686,7 @@ static qboolean CL_BeginPakDownload( const char *remoteName, const char *localNa
 		return qfalse;
 	}
 #ifdef USE_HTTP
-	if ( CL_DownloadByHTTP( qfalse ) ) {
+	if ( !clc.downloadUDPOnly && CL_DownloadByHTTP( qfalse ) ) {
 		Cvar_Set( "cl_downloadSource", "web" );
 		return CL_BeginHttpDownload( va( "%s/%s", clc.sv_dlURL, remoteName ) );
 	}
@@ -2670,21 +2783,6 @@ void CL_StartClassicDownloads( void ) {
 
 /*
 =================
-CL_DownloadsByHTTP
-
-As CL_DownloadByHTTP decides for each pak, quietly
-=================
-*/
-qboolean CL_DownloadsByHTTP( void ) {
-#ifdef USE_HTTP
-	return CL_DownloadByHTTP( qtrue );
-#else
-	return qfalse;
-#endif
-}
-
-/*
-=================
 CL_CacheName
 
 The download's name in the content cache, from the server's for it
@@ -2769,16 +2867,7 @@ static qboolean CL_EndDownload( const char *failure ) {
 		Q_strncpyz( why, failure, sizeof( why ) );
 		failure = why;
 	}
-#ifdef USE_HTTP
-	CL_HTTP_CancelDownload();
-#endif
-	if ( clc.download ) {
-		FS_FCloseFile( clc.download );
-		clc.download = 0;
-	}
-
-	Q_strncpyz( tmp, FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), clc.downloadTempName ),
-		sizeof( tmp ) );
+	CL_CloseDownload( tmp, sizeof( tmp ) );
 	if ( !failure && !FS_CompareZipChecksum( tmp, clc.downloadChecksum ) ) {
 		failure = "the file isn't the pak the server has: its checksum doesn't match";
 	}
@@ -2825,6 +2914,12 @@ A download completed
 =================
 */
 void CL_NextDownload( void ) {
+#ifdef USE_HTTP
+	if ( clc.downloadLane ) {
+		CL_ContentWebEnded( NULL );
+		return;
+	}
+#endif
 	if ( !CL_EndDownload( NULL ) ) {
 		CL_StartDownloads();
 	}
@@ -2839,6 +2934,12 @@ rest of the list is downloaded still
 =================
 */
 void CL_DownloadFailed( const char *reason ) {
+#ifdef USE_HTTP
+	if ( clc.downloadLane ) {
+		CL_ContentWebEnded( reason );
+		return;
+	}
+#endif
 	if ( !CL_EndDownload( reason ) ) {
 		CL_StartDownloads();
 	}
@@ -2915,6 +3016,7 @@ void CL_InitDownloads(void) {
   // a new gamestate: what the last one's downloads did is done with
   clc.downloadHeld = qfalse;
   clc.doneDownloadTime = 0;
+  clc.downloadUDPOnly = qfalse;
   CL_ContentReset( qfalse );
 
   if ( !(cl_allowDownload->integer & DLF_ENABLE) )
