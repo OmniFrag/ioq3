@@ -758,6 +758,7 @@ gotnewcl:
 	// notice that it is from a different serverid and that the
 	// gamestate message was not just sent, forcing a retransmit
 	newcl->gamestateMessageNum = -1;
+	newcl->lastServerId = -1;
 
 	Hooks_ClientConnected( clientNum );
 
@@ -925,9 +926,11 @@ static int SV_SendClientGameState( client_t *client ) {
 	// gamestate message was not just sent, forcing a retransmit.
 	// It goes out after any message still being sent (SV_Netchan_Transmit)
 	client->gamestateMessageNum = SV_Netchan_NextSequence( client );
-	// a resync's packets from before it are counted from this one on
+	// one sent after donedl, again, or as a resync, keeps the serverId
+	client->keptServerId = client->lastServerId == sv.serverId ? sv.serverId : -1;
+	// packets from before it are counted from this one on
 	// (SV_ExecuteClientMessage)
-	client->resyncLateTime = 0;
+	client->gamestateLateTime = 0;
 
 	MSG_Init( &msg, msgBuffer, sizeof( msgBuffer ) );
 
@@ -1035,7 +1038,8 @@ Sends a player that fell behind on server commands (SV_AddServerCommand)
 the gamestate again, as a map change does. Its game loads the map again
 and the player plays on: the game itself isn't told, and the player
 enters the world again without the game's ClientBegin, which would
-respawn them
+respawn them. Also sends a gamestate that kept the serverId again when the
+client didn't get it (SV_ExecuteClientMessage)
 ================
 */
 void SV_ResyncClient( client_t *client ) {
@@ -1052,18 +1056,19 @@ void SV_ResyncClient( client_t *client ) {
 
 /*
 ================
-SV_ResyncAwaitingAck
+SV_GamestateAwaitingAck
 
-Whether a client sent the gamestate again (SV_ResyncClient) has yet to
-acknowledge it. That gamestate keeps the serverId, so only its message
-number tells a packet from before it, and it's the last message the client
-is sent until then (SV_SendClientMessages): a later one would carry the
-same commands, and the client would acknowledge them without it
+Whether a client sent a gamestate that kept the serverId its packets
+carry, as one after donedl, a resync's (SV_ResyncClient) or another sent
+again does, has yet to acknowledge it. Only its message number tells a
+packet from before it, and it's the last message the client is sent until
+then (SV_SendClientMessages): a later one would carry the same commands,
+and the client would acknowledge them without it
 ================
 */
-qboolean SV_ResyncAwaitingAck( const client_t *client ) {
-	return client->resync && client->state == CS_PRIMED && client->resyncServerId == sv.serverId &&
-		client->messageAcknowledge < client->gamestateMessageNum;
+qboolean SV_GamestateAwaitingAck( const client_t *client ) {
+	return client->state == CS_PRIMED && client->messageAcknowledge < client->gamestateMessageNum &&
+		client->keptServerId == sv.serverId;
 }
 
 
@@ -1177,7 +1182,9 @@ static void SV_StopDownload_f( client_t *cl ) {
 ==================
 SV_DoneDownload_f
 
-Downloads are finished
+Downloads are finished. The gamestate keeps the serverId the client has,
+so it waits for the client to acknowledge it, and goes again if it's lost
+(SV_GamestateAwaitingAck)
 ==================
 */
 static void SV_DoneDownload_f( client_t *cl ) {
@@ -2410,6 +2417,7 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	MSG_Bitstream(msg);
 
 	serverId = MSG_ReadLong( msg );
+	cl->lastServerId = serverId;
 	cl->messageAcknowledge = MSG_ReadLong( msg );
 
 	if (cl->messageAcknowledge < 0) {
@@ -2424,8 +2432,10 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	reliableAcknowledge = MSG_ReadLong( msg );
 
 	// a packet from before a resync's gamestate, still to go
-	// (SV_SendClientMessages) or not yet acknowledged (SV_ResyncAwaitingAck),
-	// is ignored, as an old map's are, so the client doesn't enter the world
+	// (SV_SendClientMessages), or from before a gamestate that kept the
+	// serverId, a resync's or donedl's, not yet acknowledged
+	// (SV_GamestateAwaitingAck), is ignored, as an old map's are, so the
+	// client doesn't enter the world
 	// before it has loaded, nor acknowledge commands. Once such packets have
 	// kept coming for SV_RESYNC_LOST after the gamestate had all gone, the
 	// client didn't get it, and it's sent again. (Not SV_ResendGameState's
@@ -2435,12 +2445,12 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	if ( cl->resync && cl->state == CS_ACTIVE ) {
 		return;
 	}
-	if ( SV_ResyncAwaitingAck( cl ) ) {
+	if ( SV_GamestateAwaitingAck( cl ) ) {
 		if ( cl->netchan.unsentFragments || cl->netchan_start_queue ) {
-			cl->resyncLateTime = 0;
-		} else if ( !cl->resyncLateTime ) {
-			cl->resyncLateTime = svs.time;
-		} else if ( svs.time - cl->resyncLateTime > SV_RESYNC_LOST ) {
+			cl->gamestateLateTime = 0;
+		} else if ( !cl->gamestateLateTime ) {
+			cl->gamestateLateTime = svs.time;
+		} else if ( svs.time - cl->gamestateLateTime > SV_RESYNC_LOST ) {
 			Com_Printf( "%s didn't get the gamestate\n", cl->name );
 			SV_ResyncClient( cl );
 		}
