@@ -641,9 +641,11 @@ void CL_ParseDownload ( msg_t *msg ) {
 	}
 #endif
 
-	if(!block && !clc.downloadBlock)
+	// block zero is special, contains file size. The server sends it
+	// again while it waits for its ack, within one window of blocks; the
+	// block numbers wrap, and its 65536th block, numbered zero too, has none
+	if(!block && clc.downloadBlock <= MAX_DOWNLOAD_WINDOW)
 	{
-		// block zero is special, contains file size
 		fileSize = MSG_ReadLong ( msg );
 
 		if (fileSize < 0)
