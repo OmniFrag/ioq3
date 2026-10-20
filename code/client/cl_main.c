@@ -2715,14 +2715,34 @@ static qboolean CL_CacheName( char *gamedir, char *name, char *why, int whySize 
 CL_StoreDownload
 
 Puts the pak just downloaded, the file tmp, into the content cache, under
-the server's name for it and its checksum; if not, why
+the server's name for it and its checksum; if not, why. One the server's
+content manifest gives a hash for must have that hash, or it would never
+be mounted, and come again at every gamestate (download-protocol.md
+section 9.1, step 3)
 =================
 */
 static qboolean CL_StoreDownload( const char *tmp, char *why, int whySize ) {
-	char	gamedir[MAX_QPATH], name[MAX_QPATH];
+	char		gamedir[MAX_QPATH], name[MAX_QPATH];
+	const byte	*hash = FS_ServerPakHash( clc.downloadChecksum );
+	byte		sha256[SHA256_DIGEST_SIZE];
+	int64_t		size;
 
-	return CL_CacheName( gamedir, name, why, whySize ) &&
-		Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum, why, whySize );
+	if ( !CL_CacheName( gamedir, name, why, whySize ) ) {
+		return qfalse;
+	}
+	if ( !hash ) {
+		return Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum, why, whySize );
+	}
+	if ( !Content_HashFile( tmp, sha256, &size ) ) {
+		Com_sprintf( why, whySize, "%s couldn't be read", clc.downloadRemoteName );
+		return qfalse;
+	}
+	if ( memcmp( sha256, hash, SHA256_DIGEST_SIZE ) ) {
+		Com_sprintf( why, whySize, "%s has the server's checksum, but not the hash its content manifest gives",
+			clc.downloadRemoteName );
+		return qfalse;
+	}
+	return Content_Cache_StoreHashed( tmp, sha256, gamedir, name, clc.downloadChecksum, why, whySize );
 }
 
 /*
@@ -2874,6 +2894,13 @@ static void CL_PrintNeededPaks( void ) {
 	Com_Printf( "\n" );
 }
 
+// a set of downloads starts with nothing failed and no file under way
+static void CL_StartDownloadSet( void ) {
+	CL_ClearDownloadName();
+	*clc.downloadFailures = 0;
+	clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
+}
+
 /*
 =================
 CL_InitDownloads
@@ -2916,9 +2943,7 @@ void CL_InitDownloads(void) {
 			// if autodownloading is not enabled on the server
 			clc.state = CA_CONNECTED;
 
-			CL_ClearDownloadName();
-			*clc.downloadFailures = 0;
-			clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
+			CL_StartDownloadSet();
 
 			// by the fast path from an OmniFrag server, or the classic way
 			if ( !CL_ContentStart() ) {
@@ -2927,6 +2952,15 @@ void CL_InitDownloads(void) {
 			return;
 		}
 
+	}
+
+	// none missing, but those mounted may wait to be checked against the
+	// server's content manifest, which can leave some missing
+	if ( CL_ContentCheck() ) {
+		// as for a download: a map change's gamestate comes while active
+		clc.state = CA_CONNECTED;
+		CL_StartDownloadSet();
+		return;
 	}
 
 	CL_DownloadsComplete();
@@ -3257,6 +3291,23 @@ static qboolean CL_RefusalEnds( netadr_t from, const char *message ) {
 
 /*
 =================
+CL_ServerManifest
+
+The content manifest connectResponse's tokens name; qfalse when they name
+none, or not as 64 lowercase hexadecimal digits, which leaves the
+connection as it is
+=================
+*/
+static qboolean CL_ServerManifest( byte sha256[SHA256_DIGEST_SIZE] ) {
+	extTokens_t	tokens;
+	const char	*value;
+
+	return !Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) &&
+		( value = Com_ExtensionValue( &tokens, "ofm" ) ) != NULL && Com_SHA256FromHex( value, sha256 );
+}
+
+/*
+=================
 CL_ServerExtensions
 
 The extension bits a server's tokens, the command's arguments from
@@ -3440,6 +3491,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 				clc.ofx = 0;
 			} else if ( ofx ) {
 				clc.contentKey = key;
+				clc.contentManifestKnown = CL_ServerManifest( clc.contentManifest );
 			}
 		}
 #ifdef LEGACY_PROTOCOL

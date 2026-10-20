@@ -67,6 +67,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 typedef enum {
 	CLC_IDLE,
+	CLC_CHECKING,		// waiting for the pak index to hash installed paks the check needs
 	CLC_MANIFEST,		// asking for the content manifest, or receiving it
 	CLC_FETCHING
 } clcPhase_t;
@@ -215,6 +216,12 @@ static struct {
 	int64_t			lastShown;
 	int64_t			lastProgress;
 	uint32_t		shownRequest;	// the transfer whose file the ui's cvars show
+
+	// the file system has the hashes of the server's paks, from a content
+	// manifest that lists them all (section 9.1, step 3)
+	qboolean		hashesKnown;
+	int64_t			checkStart;		// when the check began waiting for hashes
+	int				checkJobs;		// the pak index's hash jobs then (Content_PakIndex_Jobs)
 } clContent;
 
 static cvar_t	*cl_showContent;
@@ -1279,6 +1286,88 @@ static qboolean CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *best ) {
 	return found;
 }
 
+// whether this connection may ask the server's fast download anything: its
+// content manifest, which bit 16 doesn't stop (section 9.1)
+static qboolean CL_ContentAllowed( void ) {
+	return ( clc.ofx & OFX_CONTENT ) && !clContent.classicOnly &&
+		( cl_allowDownload->integer & clc.sv_allowDownload & DLF_ENABLE ) &&
+		!( ( cl_allowDownload->integer | clc.sv_allowDownload ) & DLF_NO_UDP );
+}
+
+// whether the paks may come by the fast path: not with bit 16 on either
+// side, nor when they come from sv_dlURL
+static qboolean CL_ContentFastAllowed( void ) {
+	return CL_ContentAllowed() && !( ( cl_allowDownload->integer | clc.sv_allowDownload ) & DLF_NO_FAST ) &&
+		!CL_DownloadsByHTTP();
+}
+
+// the set starts with the content manifest
+static void CL_ContentAskManifest( void ) {
+	clContent.receiveWindow = OFD_MAX_WINDOW;
+	clContent.overflowUntil = 0;
+	clContent.phase = CLC_MANIFEST;
+	CL_ContentAsk( &clContent.slots[0], -1 );
+	Cvar_Set( "cl_downloadState", "manifest" );
+	Cvar_Set( "cl_downloadSource", "server" );
+	CL_ContentService();
+}
+
+/*
+=================
+CL_ContentListMissing
+
+The paks to fetch: the referenced ones the file system lacks, those past
+CLC_MAX_PAKS coming in the next gamestate's round
+=================
+*/
+static void CL_ContentListMissing( void ) {
+	missingPak_t	missing[CLC_MAX_PAKS];
+	clcPak_t		*p;
+	qboolean		fast = CL_ContentFastAllowed();
+	int				i;
+
+	clContent.numPaks = FS_MissingPaks( missing, ARRAY_LEN( missing ) );
+	clContent.morePaks = clContent.numPaks > CLC_MAX_PAKS;
+	clContent.numPaks = MIN( clContent.numPaks, CLC_MAX_PAKS );
+	for ( i = 0; i < clContent.numPaks; i++ ) {
+		p = &clContent.paks[i];
+		Com_Memset( p, 0, sizeof( *p ) );
+		Q_strncpyz( p->name, missing[i].name, sizeof( p->name ) );
+		p->checksum = missing[i].checksum;
+		p->fetch = -1;
+		p->state = fast ? PAK_FAST : PAK_CLASSIC;
+	}
+}
+
+/*
+=================
+CL_ContentAwaitHashes
+
+The installed paks the check needs that the pak index hasn't hashed go to
+the front of its queue, and the set waits for them (CL_ContentChecked),
+the connect screen saying it checks the files. Whether it waits
+=================
+*/
+static qboolean CL_ContentAwaitHashes( void ) {
+	pakRecord_t	*paks;
+	int			count = FS_UnhashedServerPaks( NULL, 0 );
+
+	if ( !count ) {
+		return qfalse;
+	}
+	// all of them, so the index stays busy until the last is hashed
+	if ( ( paks = malloc( count * sizeof( *paks ) ) ) != NULL ) {
+		Content_PakIndex_QueueFirst( paks, MIN( FS_UnhashedServerPaks( paks, count ), count ) );
+		free( paks );
+	}
+	Com_Printf( "Checking %d installed pak%s against the server's content manifest\n", count, count == 1 ? "" : "s" );
+	clContent.phase = CLC_CHECKING;
+	clContent.checkStart = Sys_Nanoseconds();
+	clContent.checkJobs = Content_PakIndex_Jobs();
+	Cvar_Set( "cl_downloadState", "verifying" );
+	return qtrue;
+}
+
 /*
 =================
 CL_ContentUseManifest
@@ -1299,6 +1388,9 @@ static void CL_ContentUseManifest( void ) {
 	*own = '\0';
 	for ( i = 0; i < clContent.numPaks; i++ ) {
 		p = &clContent.paks[i];
+		if ( p->state != PAK_FAST ) {
+			continue;
+		}
 		if ( !CL_ContentFindEntry( p, &entry ) ) {
 			Com_Printf( "%s comes the classic way: the server's content manifest doesn't list it\n", p->name );
 			p->state = PAK_CLASSIC;
@@ -1359,6 +1451,39 @@ static void CL_ContentUseManifest( void ) {
 	clContent.phase = CLC_FETCHING;
 }
 
+static void CL_ContentFinish( void );
+
+/*
+=================
+CL_ContentChecked
+
+The paks mounted, their hashes known, or the pak index done trying: checked
+against those the server's content manifest gives, once more without those
+that don't match, which are then missing too (section 9.1, step 3); then on
+with the content manifest, or the set as it is
+=================
+*/
+static void CL_ContentChecked( void ) {
+	if ( clContent.phase == CLC_CHECKING ) {
+		Com_Printf( "Checked the paks in %.1f s\n", ( Sys_Nanoseconds() - clContent.checkStart ) / 1e9 );
+		clContent.phase = CLC_IDLE;
+		Cvar_Set( "cl_downloadState", "" );
+	}
+	if ( !FS_ServerPaksMatch() ) {
+		FS_Restart( clc.checksumFeed );
+		CL_ContentListMissing();
+	}
+	if ( clContent.manifest ) {
+		CL_ContentUseManifest();
+	} else if ( clContent.numPaks && CL_ContentFastAllowed() ) {
+		Com_Printf( "Asking the server for %d pak%s by the fast path\n", clContent.numPaks,
+			clContent.numPaks == 1 ? "" : "s" );
+		CL_ContentAskManifest();
+	} else {
+		CL_ContentFinish();
+	}
+}
+
 /*
 =================
 CL_ContentManifestArrived
@@ -1387,7 +1512,15 @@ static void CL_ContentManifestArrived( byte *data, int length, const byte sha256
 	}
 	free( clContent.manifest );
 	clContent.manifest = data;
-	CL_ContentUseManifest();
+	// the server's current one: the paks mounted are checked against it, now
+	// and at the next gamestate's restart (section 9.1, step 3)
+	Com_Memcpy( clc.contentManifest, digest, SHA256_DIGEST_SIZE );
+	clc.contentManifestKnown = qtrue;
+	FS_SetServerPakHashes( data, &clContent.header, digest );
+	clContent.hashesKnown = qtrue;
+	if ( !CL_ContentAwaitHashes() ) {
+		CL_ContentChecked();
+	}
 }
 
 /*
@@ -1580,6 +1713,16 @@ void CL_ContentFrame( void ) {
 	if ( clContent.phase == CLC_IDLE || clc.state != CA_CONNECTED ) {
 		return;
 	}
+	// looked at again once a hash job has finished
+	if ( clContent.phase == CLC_CHECKING ) {
+		if ( Content_PakIndex_Jobs() != clContent.checkJobs || !Content_PakIndex_Busy() ) {
+			clContent.checkJobs = Content_PakIndex_Jobs();
+			if ( !FS_UnhashedServerPaks( NULL, 0 ) || !Content_PakIndex_Busy() ) {
+				CL_ContentChecked();
+			}
+		}
+		return;
+	}
 
 	for ( i = 0; i < CLC_SLOTS && !clContent.finishing && clContent.phase != CLC_IDLE; i++ ) {
 		s = &clContent.slots[i];
@@ -1662,43 +1805,106 @@ once it has given up on the connection
 =================
 */
 qboolean CL_ContentStart( void ) {
-	missingPak_t	missing[CLC_MAX_PAKS];
-	clcPak_t		*p;
-	int				i;
-
-	if ( !( clc.ofx & OFX_CONTENT ) || clContent.classicOnly ||
-		!( cl_allowDownload->integer & clc.sv_allowDownload & DLF_ENABLE ) ||
-		( ( cl_allowDownload->integer | clc.sv_allowDownload ) & ( DLF_NO_UDP | DLF_NO_FAST ) ) || CL_DownloadsByHTTP() ) {
+	if ( !CL_ContentFastAllowed() ) {
 		return qfalse;
 	}
-
-	// those past CLC_MAX_PAKS come in the next gamestate's round
-	clContent.numPaks = FS_MissingPaks( missing, ARRAY_LEN( missing ) );
-	clContent.morePaks = clContent.numPaks > CLC_MAX_PAKS;
-	clContent.numPaks = MIN( clContent.numPaks, CLC_MAX_PAKS );
+	CL_ContentListMissing();
 	if ( !clContent.numPaks ) {
 		return qfalse;
 	}
-	for ( i = 0; i < clContent.numPaks; i++ ) {
-		p = &clContent.paks[i];
-		Com_Memset( p, 0, sizeof( *p ) );
-		Q_strncpyz( p->name, missing[i].name, sizeof( p->name ) );
-		p->checksum = missing[i].checksum;
-		p->fetch = -1;
-		p->state = PAK_FAST;
+	// installed paks the check needs, hashed first
+	if ( CL_ContentAwaitHashes() ) {
+		return qtrue;
 	}
-
-	clContent.receiveWindow = OFD_MAX_WINDOW;
-	clContent.overflowUntil = 0;
-
 	Com_Printf( "Asking the server for %d pak%s by the fast path\n", clContent.numPaks,
 		clContent.numPaks == 1 ? "" : "s" );
-	clContent.phase = CLC_MANIFEST;
-	CL_ContentAsk( &clContent.slots[0], -1 );
-	Cvar_Set( "cl_downloadState", "manifest" );
-	Cvar_Set( "cl_downloadSource", "server" );
-	CL_ContentService();
+	CL_ContentAskManifest();
 	return qtrue;
+}
+
+/*
+=================
+CL_ContentCheck
+
+From CL_InitDownloads, when no pak is missing: the installed paks the
+check needs hashed first; and on a server whose content manifest the
+client didn't keep, or one from before a map change, the current one is
+asked for, and the paks mounted are checked against it as it comes
+(CL_ContentManifestArrived), which bit 16 doesn't stop. Not on the
+client's own server. Whether it waits
+=================
+*/
+qboolean CL_ContentCheck( void ) {
+	if ( !CL_ContentAllowed() || com_sv_running->integer ) {
+		return qfalse;
+	}
+	if ( clContent.hashesKnown ) {
+		return CL_ContentAwaitHashes();
+	}
+	if ( !clc.contentManifestKnown ) {
+		return qfalse;
+	}
+	Com_Printf( "Asking the server for its content manifest, to check the paks against\n" );
+	CL_ContentAskManifest();
+	return qtrue;
+}
+
+/*
+=================
+CL_ContentCovers
+
+Whether a content manifest lists every pak the gamestate references among
+its required entries, as the server's current one does; one kept from
+before a map change may not (open question 14)
+=================
+*/
+static qboolean CL_ContentCovers( const byte *manifest, const ofcmHeader_t *header ) {
+	const char	*s = Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[CS_SYSTEMINFO],
+		"sv_referencedPaks" );
+	ofcmEntry_t	entry;
+	char		*end;
+	long		checksum;
+	int			i;
+
+	for ( ;; s = end ) {
+		checksum = strtol( s, &end, 10 );
+		if ( end == s ) {
+			return qtrue;
+		}
+		for ( i = 0; i < header->numRequired; i++ ) {
+			OFCM_ReadEntry( manifest, i, &entry );
+			if ( (unsigned int)entry.checksum == (unsigned int)checksum ) {
+				break;
+			}
+		}
+		if ( i == header->numRequired ) {
+			return qfalse;
+		}
+	}
+}
+
+/*
+=================
+CL_ContentSetPakHashes
+
+Before the gamestate's file system restart: the hashes the server's
+content manifest gives its paks, when the client keeps it and it lists
+them all, so a pak with the right checksum and the wrong hash isn't
+mounted (section 9.1, step 3); none on a classic server. Without them, the
+paks are checked once the current one comes (CL_ContentCheck)
+=================
+*/
+void CL_ContentSetPakHashes( void ) {
+	ofcmHeader_t	header;
+	byte			*data = NULL;
+	int				length;
+
+	if ( ( clc.ofx & OFX_CONTENT ) && clc.contentManifestKnown ) {
+		data = Content_Manifest_Load( clc.contentManifest, FS_ValidDownloadPak, qtrue, &length, &header );
+	}
+	clContent.hashesKnown = data && CL_ContentCovers( data, &header );
+	FS_SetServerPakHashes( clContent.hashesKnown ? data : NULL, &header, clc.contentManifest );
+	free( data );
 }
 
 /*
@@ -1721,9 +1927,11 @@ void CL_ContentReset( qboolean disconnect ) {
 	clContent.phase = CLC_IDLE;
 	clContent.finishing = qfalse;
 	clContent.numPaks = clContent.numFetches = 0;
+	clContent.morePaks = qfalse;
 	if ( disconnect ) {
 		Com_Memset( &clContent, 0, sizeof( clContent ) );
 		CL_ContentClearProgress();
+		FS_SetServerPakHashes( NULL, NULL, NULL );
 	}
 }
 

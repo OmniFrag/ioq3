@@ -410,6 +410,20 @@ static char			*fs_serverReferencedPakNames[MAX_SEARCH_PATHS];		// pk3 names
 
 // the search path's paks from the content cache (FS_AddCachePaks)
 static int			fs_numCachePaks;
+// the installed paks left out of it for their hashes (FS_RefuseHashedPaks)
+static int			fs_numRefusedPaks;
+
+// the hashes the content manifest of the server connected to gives paks,
+// by their checksums (FS_SetServerPakHashes): a pak with one of those is
+// mounted only with its hash
+static qboolean		fs_serverPakHashesSet;
+static byte			fs_serverPakHashesFrom[SHA256_DIGEST_SIZE];	// that content manifest's hash
+static int			fs_numServerPakHashes;
+static unsigned int	fs_serverPakHashChecksums[MAX_SEARCH_PATHS];
+static byte			fs_serverPakHashes[MAX_SEARCH_PATHS][SHA256_DIGEST_SIZE];
+static qboolean		fs_serverPakHashesChanged;	// since the search path was built (FS_ConditionalRestart)
+
+static qboolean FS_ContentRelativePath( const pack_t *pak, char *relative, int size );
 
 // last valid game folder used
 char lastValidBase[MAX_OSPATH];
@@ -3675,6 +3689,201 @@ static qboolean FS_HasPakChecksum( unsigned int checksum ) {
 
 /*
 ================
+FS_SetServerPakHashes
+================
+*/
+void FS_SetServerPakHashes( const byte *manifest, const ofcmHeader_t *header, const byte sha256[SHA256_DIGEST_SIZE] )
+{
+	ofcmEntry_t	entry;
+	int			i;
+
+	if ( manifest ? fs_serverPakHashesSet && !memcmp( sha256, fs_serverPakHashesFrom, SHA256_DIGEST_SIZE ) :
+		!fs_serverPakHashesSet ) {
+		return;
+	}
+	fs_serverPakHashesSet = manifest != NULL;
+	fs_numServerPakHashes = 0;
+	for ( i = 0; manifest && i < header->numRequired && fs_numServerPakHashes < MAX_SEARCH_PATHS; i++ ) {
+		OFCM_ReadEntry( manifest, i, &entry );
+		if ( !( entry.flags & OFCM_FLAG_OWN ) ) {
+			fs_serverPakHashChecksums[fs_numServerPakHashes] = (unsigned int)entry.checksum;
+			Com_Memcpy( fs_serverPakHashes[fs_numServerPakHashes++], entry.sha256, SHA256_DIGEST_SIZE );
+		}
+	}
+	if ( manifest ) {
+		Com_Memcpy( fs_serverPakHashesFrom, sha256, SHA256_DIGEST_SIZE );
+	}
+	fs_serverPakHashesChanged = qtrue;
+}
+
+// whether the server's pak hashes apply: on a client connected to another's
+// server, as the content cache's paks are (FS_AddCachePaks)
+static qboolean FS_ServerPakHashesApply( void )
+{
+	return fs_numServerPakHashes && fs_numServerReferencedPaks && !( com_sv_running && com_sv_running->integer );
+}
+
+/*
+================
+FS_ServerPakHash
+================
+*/
+const byte *FS_ServerPakHash( unsigned int checksum )
+{
+	int		i;
+
+	for ( i = 0; i < fs_numServerPakHashes && FS_ServerPakHashesApply(); i++ ) {
+		if ( fs_serverPakHashChecksums[i] == checksum ) {
+			return fs_serverPakHashes[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+================
+FS_PakIndexKey
+
+An installed pak's key in the pak index, as a record without its hash:
+qfalse when it has none, or its path is too long for one
+================
+*/
+static qboolean FS_PakIndexKey( const pack_t *pak, pakRecord_t *key )
+{
+	char	relative[MAX_OSPATH];
+
+	Com_Memset( key, 0, sizeof( *key ) );
+	if ( !FS_ContentRelativePath( pak, relative, sizeof( relative ) ) || strlen( relative ) >= sizeof( key->path ) ||
+		!Content_FileStat( pak->pakFilename, &key->size, &key->mtime ) ) {
+		return qfalse;
+	}
+	key->root = pak->contentRoot;
+	key->pakChecksum = pak->checksum;
+	Q_strncpyz( key->path, relative, sizeof( key->path ) );
+	return qtrue;
+}
+
+/*
+================
+FS_PakHashRefused
+
+Whether a pak has the checksum of one the server gives a hash for, but not
+that hash: a cached pak by its name, an installed one by the pak index. It
+isn't mounted for the server, and the right one is fetched by its hash. An
+installed one the index hasn't hashed passes until it has
+(FS_UnhashedServerPaks)
+================
+*/
+static qboolean FS_PakHashRefused( const pack_t *pak )
+{
+	const byte			*hash = FS_ServerPakHash( pak->checksum ), *have;
+	const pakRecord_t	*record;
+	pakRecord_t			key;
+	byte				sha256[SHA256_DIGEST_SIZE];
+	char				name[SHA256_HEX_SIZE];
+
+	if ( !hash ) {
+		return qfalse;
+	}
+	if ( pak->cached ) {
+		// a cached pak's name is its hash
+		Q_strncpyz( name, COM_SkipPath( (char *)pak->pakFilename ), sizeof( name ) );
+		if ( !Com_SHA256FromHex( name, sha256 ) ) {
+			return qfalse;
+		}
+		have = sha256;
+	} else if ( !FS_PakIndexKey( pak, &key ) ||
+		!( record = Content_PakIndex_Find( key.root, key.path, key.size, key.mtime ) ) ||
+		( record->flags & PAK_RECORD_RETAIL ) ) {
+		return qfalse;
+	} else {
+		have = record->sha256;
+	}
+	if ( !memcmp( have, hash, SHA256_DIGEST_SIZE ) ) {
+		return qfalse;
+	}
+	Com_Printf( S_COLOR_YELLOW "WARNING: %s has the checksum of the server's %s/%s.pk3, but not the hash its content "
+		"manifest gives, so it isn't used on this server\n", pak->pakFilename, pak->pakGamename, pak->pakBasename );
+	return qtrue;
+}
+
+/*
+================
+FS_RefuseHashedPaks
+
+Takes out of the search path, down to below, the installed paks whose hash
+the server's content manifest refuses (FS_PakHashRefused)
+================
+*/
+static void FS_RefuseHashedPaks( const searchpath_t *below )
+{
+	searchpath_t	**link, *search;
+
+	if ( !FS_ServerPakHashesApply() ) {
+		return;
+	}
+	for ( link = &fs_searchpaths; *link != below; ) {
+		search = *link;
+		if ( search->pack && FS_PakHashRefused( search->pack ) ) {
+			*link = search->next;
+			fs_packFiles -= search->pack->numfiles;
+			FS_FreePak( search->pack );
+			Z_Free( search );
+			fs_numRefusedPaks++;
+		} else {
+			link = &search->next;
+		}
+	}
+}
+
+/*
+================
+FS_ServerPaksMatch
+
+Whether every pak in the search path matches the hash the server's
+content manifest gives (FS_PakHashRefused), so a restart would mount the
+same: then the hashes needn't restart it (FS_ConditionalRestart)
+================
+*/
+qboolean FS_ServerPaksMatch( void )
+{
+	const searchpath_t	*search;
+
+	for ( search = fs_searchpaths; search && FS_ServerPakHashesApply(); search = search->next ) {
+		if ( search->pack && FS_PakHashRefused( search->pack ) ) {
+			return qfalse;
+		}
+	}
+	fs_serverPakHashesChanged = qfalse;
+	return qtrue;
+}
+
+/*
+================
+FS_UnhashedServerPaks
+================
+*/
+int FS_UnhashedServerPaks( pakRecord_t *paks, int max )
+{
+	const searchpath_t	*search;
+	pakRecord_t			key;
+	int					count = 0;
+
+	for ( search = fs_searchpaths; search && FS_ServerPakHashesApply(); search = search->next ) {
+		if ( !search->pack || search->pack->cached || !FS_ServerPakHash( search->pack->checksum ) ||
+			!FS_PakIndexKey( search->pack, &key ) || Content_PakIndex_Find( key.root, key.path, key.size, key.mtime ) ) {
+			continue;
+		}
+		if ( paks && count < max ) {
+			paks[count] = key;
+		}
+		count++;
+	}
+	return count;
+}
+
+/*
+================
 FS_AddCachePaks
 
 The content cache's paks of a game directory that the server connected to
@@ -3692,6 +3901,7 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 	searchpath_t	**link, *search;
 	pack_t			*pak;
 	const char		*refName, *slash;
+	const byte		*hash;
 	char			ospath[MAX_OSPATH];
 	int				i, entry;
 
@@ -3715,8 +3925,11 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 			continue;
 		}
 		// in this directory under the server's name for it, wherever and
-		// however it was cached; if it's damaged, the next with that checksum
-		while ( ( entry = Content_Cache_Find( fs_serverReferencedPaks[i], dir, ospath, sizeof( ospath ) ) ) >= 0 ) {
+		// however it was cached; if it's damaged, the next with that checksum.
+		// One the server gives a hash for, by that hash alone
+		hash = FS_ServerPakHash( fs_serverReferencedPaks[i] );
+		while ( ( entry = hash ? Content_Cache_FindSHA256( hash, ospath, sizeof( ospath ) ) :
+			Content_Cache_Find( fs_serverReferencedPaks[i], dir, ospath, sizeof( ospath ) ) ) >= 0 ) {
 			pak = FS_LoadZipFile( ospath, slash + 1 );
 			if ( pak && pak->checksum == fs_serverReferencedPaks[i] ) {
 				break;
@@ -3754,14 +3967,15 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 FS_UnmountCachePaks
 
 Once the client has left the server that referenced them, restarts the
-filesystem without the content cache's paks, so the menus and a local game
-run on installed content only; the next server's gamestate mounts what it
+filesystem without the content cache's paks, and with the installed ones
+the server's hashes left out, so the menus and a local game run on
+installed content only; the next server's gamestate mounts what it
 references. Until paks can be taken out of the search path in place
 ================
 */
 void FS_UnmountCachePaks( void )
 {
-	if ( fs_numCachePaks && !fs_numServerReferencedPaks ) {
+	if ( ( fs_numCachePaks || fs_numRefusedPaks ) && !fs_numServerReferencedPaks ) {
 		FS_Restart( fs_checksumFeed );
 	}
 }
@@ -3788,6 +4002,7 @@ static void FS_AddGameDirectories(const char *dir)
 		FS_SetContentRoot( fs_searchpaths, added, pathVar );
 	}
 
+	FS_RefuseHashedPaks( below );
 	FS_AddCachePaks( dir, below );
 }
 
@@ -4280,7 +4495,7 @@ static void FS_Startup( const char *gameName )
 
 	// the content cache's paks are mounted again as the directories are added
 	Content_Cache_Unmounted();
-	fs_numCachePaks = 0;
+	fs_numCachePaks = fs_numRefusedPaks = 0;
 
 	FS_AddGameDirectories(gameName);
 
@@ -5131,6 +5346,7 @@ void FS_Restart( int checksumFeed ) {
 
 	// set the checksum feed
 	fs_checksumFeed = checksumFeed;
+	fs_serverPakHashesChanged = qfalse;
 
 	// clear pak references
 	FS_ClearPakReferences(0);
@@ -5205,7 +5421,7 @@ qboolean FS_ConditionalRestart(int checksumFeed, qboolean disconnect)
 			fs_gamedirvar->modified = qfalse;
 	}
 
-	if(checksumFeed != fs_checksumFeed)
+	if(checksumFeed != fs_checksumFeed || fs_serverPakHashesChanged)
 		FS_Restart(checksumFeed);
 	else if(fs_numServerPaks && !fs_reordered)
 		FS_ReorderPurePaks();
