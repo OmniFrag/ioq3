@@ -2605,7 +2605,7 @@ the checksum in hex. What's left starts at its '@'. qfalse when there's
 none, or the list is malformed, which empties it
 =================
 */
-qboolean CL_NextListedPak( char *remote, int remoteSize, char *local, int localSize, unsigned int *checksum ) {
+static qboolean CL_NextListedPak( char *remote, int remoteSize, char *local, int localSize, unsigned int *checksum ) {
 	char	*s = clc.downloadList, *r, *l, *c;
 
 	if ( *s == '@' )
@@ -2853,6 +2853,28 @@ qboolean CL_CheckDownloadSize( void ) {
 
 /*
 =================
+CL_PrintNeededPaks
+
+Every pak the gamestate references that the client lacks, by name, as
+many as the fast path takes at once: clc.downloadList holds only about 20
+=================
+*/
+static void CL_PrintNeededPaks( void ) {
+	missingPak_t	missing[64];
+	int				count = FS_MissingPaks( missing, ARRAY_LEN( missing ) ), i;
+
+	Com_Printf( "Need paks:" );
+	for ( i = 0; i < MIN( count, (int)ARRAY_LEN( missing ) ); i++ ) {
+		Com_Printf( " %s", missing[i].name );
+	}
+	if ( count > (int)ARRAY_LEN( missing ) ) {
+		Com_Printf( " and %d more", count - (int)ARRAY_LEN( missing ) );
+	}
+	Com_Printf( "\n" );
+}
+
+/*
+=================
 CL_InitDownloads
 
 After receiving a valid game state, we valid the cgame and local zip files here
@@ -2881,7 +2903,7 @@ void CL_InitDownloads(void) {
   }
   else if ( FS_ComparePaks( clc.downloadList, sizeof( clc.downloadList ) , qtrue ) ) {
 
-    Com_Printf("Need paks: %s\n", clc.downloadList );
+    CL_PrintNeededPaks();
 
 		if ( *clc.downloadList ) {
 			// the content cache keeps them: none without the room

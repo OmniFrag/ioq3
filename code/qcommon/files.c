@@ -3657,6 +3657,24 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 
 /*
 ================
+FS_HasPakChecksum
+
+Whether the search path has a pak with the checksum
+================
+*/
+static qboolean FS_HasPakChecksum( unsigned int checksum ) {
+	searchpath_t	*sp;
+
+	for ( sp = fs_searchpaths ; sp ; sp = sp->next ) {
+		if ( sp->pack && sp->pack->checksum == checksum ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+================
 FS_AddCachePaks
 
 The content cache's paks of a game directory that the server connected to
@@ -3693,12 +3711,7 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 		if ( !slash || slash - refName != (int)strlen( dir ) || Q_stricmpn( refName, dir, slash - refName ) ) {
 			continue;
 		}
-		for ( search = fs_searchpaths; search; search = search->next ) {
-			if ( search->pack && search->pack->checksum == fs_serverReferencedPaks[i] ) {
-				break;
-			}
-		}
-		if ( search ) {
+		if ( FS_HasPakChecksum( fs_serverReferencedPaks[i] ) ) {
 			continue;
 		}
 		// in this directory under the server's name for it, wherever and
@@ -3848,7 +3861,6 @@ we are not interested in a download string format, we want something human-reada
 ================
 */
 qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
-	searchpath_t	*sp;
 	qboolean havepak;
 	char *origpos = neededpaks;
 	int i;
@@ -3860,9 +3872,6 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 
 	for ( i = 0 ; i < fs_numServerReferencedPaks ; i++ )
 	{
-		// Ok, see if we have this pak file
-		havepak = qfalse;
-
 		// Make sure the server cannot make us write anywhere but a game
 		// directory
 		if(!FS_ValidDownloadName(fs_serverReferencedPakNames[i]))
@@ -3872,12 +3881,8 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 			continue;
 		}
 
-		for ( sp = fs_searchpaths ; sp ; sp = sp->next ) {
-			if ( sp->pack && sp->pack->checksum == fs_serverReferencedPaks[i] ) {
-				havepak = qtrue; // This is it!
-				break;
-			}
-		}
+		// Ok, see if we have this pak file
+		havepak = FS_HasPakChecksum( fs_serverReferencedPaks[i] );
 
 		if ( !havepak && fs_serverReferencedPakNames[i] && *fs_serverReferencedPakNames[i] ) { 
 			// Don't got it
@@ -3932,6 +3937,35 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 	}
 
 	return qfalse; // We have them all
+}
+
+/*
+================
+FS_MissingPaks
+
+The paks the server references that the client lacks, as FS_ComparePaks
+finds them but with no string to fill: up to max of them into paks, their
+names <game directory>/<name>.pk3. How many there are, which may be more
+than max. A name too long for a missingPak_t's is left out: cut short, it
+would lose its .pk3 and name another file
+================
+*/
+int FS_MissingPaks( missingPak_t *paks, int max ) {
+	int		i, count = 0;
+
+	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
+		if ( !fs_serverReferencedPakNames[i] || !*fs_serverReferencedPakNames[i] ||
+			strlen( fs_serverReferencedPakNames[i] ) + 4 >= sizeof( paks->name ) ||
+			!FS_ValidDownloadName( fs_serverReferencedPakNames[i] ) || FS_HasPakChecksum( fs_serverReferencedPaks[i] ) ) {
+			continue;
+		}
+		if ( count < max ) {
+			Com_sprintf( paks[count].name, sizeof( paks[count].name ), "%s.pk3", fs_serverReferencedPakNames[i] );
+			paks[count].checksum = fs_serverReferencedPaks[i];
+		}
+		count++;
+	}
+	return count;
 }
 
 /*
