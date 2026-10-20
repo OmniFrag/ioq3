@@ -182,6 +182,11 @@ typedef struct {
 	// them, the bits challengeResponse agreed
 	uint32_t	ofx;
 	uint64_t	contentKey;
+	// the server's content manifest, as connectResponse names it (ofm) or
+	// the last received, which the paks are checked against
+	// (download-protocol.md section 9.1, step 3)
+	qboolean	contentManifestKnown;
+	byte		contentManifest[SHA256_DIGEST_SIZE];
 	int			checksumFeed;				// from the server for checksum calculations
 
 	// these are our reliable messages that go to the server
@@ -531,6 +536,12 @@ void CL_ContentInit( void );
 qboolean CL_ContentStart( void );
 // from CL_InitDownloads: whether the fast path takes the paks the gamestate
 // references that the client lacks
+qboolean CL_ContentCheck( void );
+// from CL_InitDownloads, with none missing: whether the paks mounted wait
+// to be checked against the server's content manifest
+void CL_ContentSetPakHashes( void );
+// before the gamestate's file system restart: the hashes it mounts the
+// server's paks by
 void CL_ContentPacket( netadr_t from, msg_t *msg );
 // a datagram whose first bytes are a content datagram's (OFD_IsContent)
 void CL_ContentFrame( void );

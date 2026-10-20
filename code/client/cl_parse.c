@@ -592,6 +592,9 @@ void CL_ParseGamestate( msg_t *msg ) {
 		Q_strncpyz(cl_oldGame, oldGame, sizeof(cl_oldGame));
 	}
 
+	// the hashes of the server's paks, when the client keeps its content
+	// manifest, which the restart mounts them by
+	CL_ContentSetPakHashes();
 	FS_ConditionalRestart(clc.checksumFeed, qfalse);
 
 	// This used to call CL_StartHunkUsers, but now we enter the download state before loading the

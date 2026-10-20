@@ -458,6 +458,8 @@ void SV_DirectConnect( netadr_t from ) {
 	uint64_t	contentKey = 0;
 	char		tokens[EXT_MAX_STRING];
 	char		key[OFK_DIGITS + 1];
+	char		hex[SHA256_HEX_SIZE];
+	const byte	*sha256;
 #ifdef LEGACY_PROTOCOL
 	qboolean	compat = qfalse;
 #endif
@@ -741,6 +743,11 @@ gotnewcl:
 		Com_ExtensionKeyString( newcl->contentKey, key );
 		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", ofx ) );
 		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofk", key );
+		// the content manifest the client checks its paks against
+		if ( ( ofx & OFX_CONTENT ) && ( sha256 = SV_ContentManifestHash() ) != NULL ) {
+			Com_SHA256Hex( sha256, hex );
+			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofm", hex );
+		}
 	}
 	Com_DPrintf( "Client %i: extensions %x\n", clientNum, ofx );
 

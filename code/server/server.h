@@ -471,6 +471,7 @@ void SV_ContentBuildManifest( void );
 const byte *SV_ContentManifest( const byte *sha256, int *length );
 const char *SV_ContentFindPak( const byte sha256[SHA256_DIGEST_SIZE], int64_t *size, int64_t *mtime );
 void SV_ContentInfo( char *infostring );
+const byte *SV_ContentManifestHash( void );
 void SV_ContentFrame( void );
 void SV_ContentShutdown( void );
 void SV_ContentPacket( netadr_t from, msg_t *msg );
