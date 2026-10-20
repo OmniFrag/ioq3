@@ -1027,7 +1027,8 @@ static void CL_ContentClose( const ofdClose_t *close ) {
 CL_ContentPacketNumber
 
 A DATA's packet number, for the acks, whichever transfer it's for, so the
-server sends none of them again; but not one whose chunk couldn't be written
+server sends none of them again; but not one whose chunk couldn't be
+written, nor one for no transfer while a request waits for its OPEN
 =================
 */
 static void CL_ContentPacketNumber( uint32_t pn, int64_t now ) {
@@ -1053,6 +1054,30 @@ static void CL_ContentPacketNumber( uint32_t pn, int64_t now ) {
 		clContent.firstUnacked = now;
 	}
 	clContent.arrivals[clContent.nextArrival++ % CLC_ARRIVALS] = now;
+}
+
+// whether a DATA for no open transfer may be a request's whose OPEN was
+// lost: one has gone out and waits for its OPEN, and the serial isn't a
+// transfer the client finished or canceled
+static qboolean CL_ContentAwaitingOpen( uint16_t serial ) {
+	int		i;
+
+	for ( i = 0; i < (int)ARRAY_LEN( clContent.finished ); i++ ) {
+		if ( clContent.finished[i].serial == serial ) {
+			return qfalse;
+		}
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( clContent.cancels ); i++ ) {
+		if ( clContent.cancels[i].serial == serial ) {
+			return qfalse;
+		}
+	}
+	for ( i = 0; i < CLC_SLOTS; i++ ) {
+		if ( CL_ContentAsking( &clContent.slots[i] ) && clContent.slots[i].lastSent ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -1098,6 +1123,9 @@ void CL_ContentPacket( netadr_t from, msg_t *msg ) {
 		now = Sys_Nanoseconds();
 		if ( !( s = CL_ContentFindSlot( m.u.data.serial, 0 ) ) ) {
 			clContent.drops[DROP_STALE]++;
+			if ( CL_ContentAwaitingOpen( m.u.data.serial ) ) {
+				break;		// perhaps that request's, its OPEN lost: unacked, so it comes again after it
+			}
 		} else if ( !CL_ContentData( s, &m.u.data, m.flags, now ) ) {
 			break;		// unacked, so sent again
 		}
