@@ -964,7 +964,8 @@ void Cmd_Exec_f( void ) {
 	// a config from a pk3 or pk3dir, which a download can bring, runs
 	// restricted in the client. On a dedicated server, where a mod's or a
 	// server pack's paks bring them, it sets what it likes, passwords
-	// among them, but can't reach past the paks: its frame is a pak's
+	// among them, but no protected cvar (Cvar_SetFromText, Cvar_Restart_f),
+	// and can't reach past the paks: its frame is a pak's
 	// (Cmd_IsPakConfig), named for the pak, which its lines' origin shows
 	restricted = cmd_restricted || ( Com_IsClient() && content[0] );
 	if ( !Com_IsClient() && content[0] ) {
