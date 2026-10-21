@@ -915,6 +915,7 @@ the wrong gamestate. Returns its size in bytes, 0 when it didn't fit.
 static int SV_SendClientGameState( client_t *client ) {
 	int			start;
 	entityState_t	*base, nullstate;
+	const byte	*manifest;
 	msg_t		msg;
 	byte		msgBuffer[MAX_MSGLEN];
 
@@ -977,6 +978,15 @@ static int SV_SendClientGameState( client_t *client ) {
 		}
 		MSG_WriteByte( &msg, svc_baseline );
 		MSG_WriteDeltaEntity( &msg, &nullstate, base, qtrue );
+	}
+
+	// the content manifest the client checks its paks against, before the
+	// file system restart this gamestate makes, so a map change needs no
+	// request for it (download-protocol.md section 9.1, step 3); a stock
+	// client would take it for a bad command byte
+	if ( ( client->ofx & OFX_CONTENT ) && ( manifest = SV_ContentManifestHash() ) != NULL ) {
+		MSG_WriteByte( &msg, svc_ofManifest );
+		MSG_WriteData( &msg, manifest, SHA256_DIGEST_SIZE );
 	}
 
 	MSG_WriteByte( &msg, svc_EOF );
