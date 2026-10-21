@@ -721,16 +721,15 @@ qboolean FS_CreatePath (const char *OSPath) {
 
 /*
 =================
-FS_IsCodeFile
+FS_IsNativeFile
 
-Whether a file name has the extension of a library, program or game
-module on any platform, or of a pk3, which can hold game modules. Files
-written on one platform can be copied to, or shared with, another.
+Whether a file name has the extension of a library or program on any
+platform, versioned Unix libraries included
 =================
 */
-static qboolean FS_IsCodeFile( const char *filename )
+static qboolean FS_IsNativeFile( const char *filename )
 {
-	static const char *extensions[] = { ".dll", ".exe", ".so", ".dylib", ".qvm", ".wasm", ".pk3" };
+	static const char *extensions[] = { ".dll", ".exe", ".so", ".dylib" };
 	const char *so;
 	int i;
 
@@ -755,6 +754,21 @@ static qboolean FS_IsCodeFile( const char *filename )
 		}
 	}
 	return qfalse;
+}
+
+/*
+=================
+FS_IsCodeFile
+
+Whether a file name has the extension of a library, program or game
+module on any platform, or of a pk3, which can hold game modules. Files
+written on one platform can be copied to, or shared with, another.
+=================
+*/
+static qboolean FS_IsCodeFile( const char *filename )
+{
+	return FS_IsNativeFile( filename ) || COM_CompareExtension( filename, ".qvm" )
+		|| COM_CompareExtension( filename, ".wasm" ) || COM_CompareExtension( filename, ".pk3" );
 }
 
 /*
@@ -2603,6 +2617,8 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 		if (err != UNZ_OK) {
 			break;
 		}
+		// unzip leaves a name that fills the buffer unterminated
+		filename_inzip[sizeof(filename_inzip) - 1] = '\0';
 		len += strlen(filename_inzip) + 1;
 		unzGoToNextFile(uf);
 	}
@@ -2645,6 +2661,8 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 		if (err != UNZ_OK) {
 			break;
 		}
+		// unzip leaves a name that fills the buffer unterminated
+		filename_inzip[sizeof(filename_inzip) - 1] = '\0';
 		if (file_info.uncompressed_size > 0) {
 			fs_headerLongs[fs_numHeaderLongs++] = LittleLong(file_info.crc);
 		}
@@ -2685,6 +2703,173 @@ static void FS_FreePak(pack_t *thepak)
 	unzClose(thepak->handle);
 	Z_Free(thepak->buildBuffer);
 	Z_Free(thepak);
+}
+
+#define PAK_ADD_OVERRIDES		20		// files of another pak one overrides before it's said
+
+/*
+=================
+FS_AddPakEntryRefused
+
+Why content add refuses a pak's entry by its name, or NULL: a name that
+could reach outside the game's directories, or native code
+=================
+*/
+static const char *FS_AddPakEntryRefused( const char *name ) {
+	size_t	length = strlen( name );
+
+	if ( name[0] == '/' || strchr( name, '\\' ) || strchr( name, ':' ) || !strcmp( name, ".." )
+		|| !Q_strncmp( name, "../", 3 ) || strstr( name, "/../" ) || ( length >= 3 && !strcmp( name + length - 3, "/.." ) ) ) {
+		return "a name that leaves the game's directories";
+	}
+	if ( FS_IsNativeFile( name ) ) {
+		return "native code";
+	}
+	return NULL;
+}
+
+/*
+=================
+FS_NativeMagic
+
+Whether a file's first bytes are an executable's: Windows' (MZ), ELF, or
+Mach-O, thin or fat
+=================
+*/
+static qboolean FS_NativeMagic( const byte *b, int length ) {
+	unsigned int	magic;
+
+	if ( length >= 2 && b[0] == 'M' && b[1] == 'Z' ) {
+		return qtrue;
+	}
+	if ( length < 4 ) {
+		return qfalse;
+	}
+	magic = ( (unsigned int)b[0] << 24 ) | ( b[1] << 16 ) | ( b[2] << 8 ) | b[3];
+	return magic == 0x7f454c46 || magic == 0xfeedface || magic == 0xfeedfacf || magic == 0xcefaedfe
+		|| magic == 0xcffaedfe || magic == 0xcafebabe || magic == 0xbebafeca || magic == 0xcafebabf
+		|| magic == 0xbfbafeca;
+}
+
+/*
+=================
+FS_CheckAddPak
+
+What content add checks of a pak an operator installs as gameDir/name.pk3:
+a zip that loads as a pak, none of whose entries could reach outside the
+game's directories, is encrypted or is native code, by its name or its
+first bytes, within CONTENT_MAX_PAK_SIZE unpacked; and not one of the
+game's own. NULL, with the pak's checksum, or why it's refused. In
+overrides, the paks of the search path it would take code (a QVM in vm/) or
+more than PAK_ADD_OVERRIDES files from, said as a warning, or ""
+=================
+*/
+const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
+	unsigned int *checksum, char *overrides, int overridesSize ) {
+	pack_t			*pak;
+	const searchpath_t	*search;
+	unz_file_info	info;
+	char			entry[MAX_ZPATH], retail[MAX_QPATH];
+	const char		*why = NULL, *code;
+	byte			first[4];
+	uint64_t		unpacked = 0;
+	int				i, got, count;
+
+	overrides[0] = '\0';
+	pak = FS_LoadZipFile( ospath, name );
+	if ( !pak ) {
+		return "it isn't a zip that loads as a pak";
+	}
+	unzGoToFirstFile( pak->handle );
+	for ( i = 0; i < pak->numfiles; i++, unzGoToNextFile( pak->handle ) ) {
+		if ( unzGetCurrentFileInfo( pak->handle, &info, entry, sizeof( entry ), NULL, 0, NULL, 0 ) != UNZ_OK ) {
+			why = "its directory can't be read";
+			break;
+		}
+		// a name the buffer cuts short, whose end could be anything
+		if ( info.size_filename >= sizeof( entry ) ) {
+			entry[sizeof( entry ) - 1] = '\0';
+			why = va( "%s... has a name longer than %d characters", entry, MAX_ZPATH - 1 );
+			break;
+		}
+		if ( ( why = FS_AddPakEntryRefused( entry ) ) != NULL ) {
+			why = va( "%s holds %s", entry, why );
+			break;
+		}
+		if ( info.flag & 1 ) {
+			why = va( "%s is encrypted", entry );
+			break;
+		}
+		unpacked += info.uncompressed_size;
+		if ( unpacked > CONTENT_MAX_PAK_SIZE ) {
+			why = va( "it unpacks to more than %d MB", CONTENT_MAX_PAK_SIZE >> 20 );
+			break;
+		}
+		if ( !info.uncompressed_size ) {
+			continue;
+		}
+		// what the engine can't read, another unzip may: compressed some
+		// other way, or damaged
+		if ( unzOpenCurrentFile( pak->handle ) != UNZ_OK ) {
+			why = va( "%s can't be read", entry );
+			break;
+		}
+		got = unzReadCurrentFile( pak->handle, first, sizeof( first ) );
+		unzCloseCurrentFile( pak->handle );
+		if ( got < (int)MIN( info.uncompressed_size, sizeof( first ) ) ) {
+			why = va( "%s can't be read", entry );
+			break;
+		}
+		if ( FS_NativeMagic( first, got ) ) {
+			why = va( "%s is native code", entry );
+			break;
+		}
+	}
+	*checksum = pak->checksum;
+	if ( !why && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), pak->checksum, retail, sizeof( retail ) ) ) {
+		why = va( "it's one of the game's own paks, %s, which players add from their own copies", retail );
+	}
+	// a pak of its name in another of the game's directories, as the base
+	// path's, with other contents: players know a pak by its name
+	for ( search = fs_searchpaths; search && !why; search = search->next ) {
+		const pack_t	*other = search->pack;
+
+		if ( other && !Q_stricmp( other->pakGamename, gameDir ) && !Q_stricmp( other->pakBasename, name )
+			&& other->checksum != pak->checksum ) {
+			why = va( "a pak named %s/%s.pk3 is already installed with different contents (%s); give the new "
+				"version its own name", gameDir, name, other->pakFilename );
+		}
+	}
+
+	// the paks it would override: the game's paks before it by name, and
+	// those of the base game under a mod
+	for ( search = fs_searchpaths; search && !why; search = search->next ) {
+		const pack_t	*other = search->pack;
+
+		if ( !other || !( ( !Q_stricmp( other->pakGamename, gameDir ) && Q_stricmp( other->pakBasename, name ) < 0 )
+			|| ( Q_stricmp( gameDir, com_basegame->string ) && !Q_stricmp( other->pakGamename, com_basegame->string ) ) ) ) {
+			continue;
+		}
+		// the files they share, looked up from the one with fewer
+		count = 0;
+		code = NULL;
+		for ( i = 0; i < MIN( pak->numfiles, other->numfiles ); i++ ) {
+			const char	*file = pak->numfiles <= other->numfiles ? pak->buildBuffer[i].name : other->buildBuffer[i].name;
+
+			if ( FS_PakHasFile( pak->numfiles <= other->numfiles ? other : pak, file ) ) {
+				count++;
+				if ( !code && !Q_strncmp( file, "vm/", 3 ) && COM_CompareExtension( file, ".qvm" ) ) {
+					code = file;
+				}
+			}
+		}
+		if ( code || count > PAK_ADD_OVERRIDES ) {
+			Q_strcat( overrides, overridesSize, va( "%s%s.pk3 overrides %d files of %s/%s.pk3%s%s", overrides[0] ? "; " : "",
+				name, count, other->pakGamename, other->pakBasename, code ? ", including " : "", code ? code : "" ) );
+		}
+	}
+	FS_FreePak( pak );
+	return why;
 }
 
 /*

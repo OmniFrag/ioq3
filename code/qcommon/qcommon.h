@@ -1186,6 +1186,9 @@ qboolean FS_RetailPak( const char *download, char *retail, int size );
 qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char *retail, int size );
 // whether a download's pak ("<game>/<name>") is one of the game's own, known
 // by checksum, and its own name
+const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
+	unsigned int *checksum, char *overrides, int overridesSize );
+// content add's checks of a pak (files.c)
 
 const char *FS_LoadedPakNames( void );
 const char *FS_LoadedPakChecksums( void );
