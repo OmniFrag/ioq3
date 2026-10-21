@@ -222,6 +222,7 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		void *v;
 	} buffer;
 	int len;
+	ui32_t levels;
 	ddsHeader_t *ddsHeader = NULL;
 	ddsHeaderDxt10_t *ddsHeaderDxt10 = NULL;
 	byte *data;
@@ -435,25 +436,27 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		}
 	}
 
-	// every level must be in the file, as each is uploaded; no OpenGL takes
-	// a texture larger than 16384, which keeps each level's size in an int
+	// every level must be in the file, as each is uploaded: at least the
+	// first, whatever the mipmap count, and none past 1x1, where uploads
+	// stop. No OpenGL takes a texture larger than 16384, which keeps each
+	// level's size in an int
 	{
-		unsigned int levels = (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT) ? ddsHeader->numMips : 1;
-		unsigned int level;
+		ui32_t wanted = (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT) ? ddsHeader->numMips : 1;
 		int mipWidth = ddsHeader->width, mipHeight = ddsHeader->height;
 		int64_t size = 0;
 
-		if (ddsHeader->width < 1 || ddsHeader->height < 1 || ddsHeader->width > 16384 || ddsHeader->height > 16384
-			|| levels > INT_MAX)
+		if (ddsHeader->width < 1 || ddsHeader->height < 1 || ddsHeader->width > 16384 || ddsHeader->height > 16384)
 		{
-			ri.Printf(PRINT_WARNING, "DDS File %s has an unsupported size or number of mipmaps.\n", filename);
+			ri.Printf(PRINT_WARNING, "DDS File %s has an unsupported size.\n", filename);
 			ri.FS_FreeFile(buffer.v);
 			return;
 		}
 
-		for (level = 0; level < levels && size <= len; level++)
+		for (levels = 1; ; levels++)
 		{
 			size += CalculateMipSize(mipWidth, mipHeight, *picFormat);
+			if (levels >= wanted || (mipWidth == 1 && mipHeight == 1))
+				break;
 			mipWidth = MAX(1, mipWidth >> 1);
 			mipHeight = MAX(1, mipHeight >> 1);
 		}
@@ -482,12 +485,7 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		*height = ddsHeader->height;
 
 	if (numMips)
-	{
-		if (ddsHeader->flags & _DDSFLAGS_MIPMAPCOUNT)
-			*numMips = ddsHeader->numMips;
-		else
-			*numMips = 1;
-	}
+		*numMips = levels;
 
 	*pic = ri.Malloc(len);
 	Com_Memcpy(*pic, data, len);
