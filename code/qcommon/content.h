@@ -328,8 +328,9 @@ int		FS_ContentPaks( contentPak_t *paks, int max );
 // the hashes the content manifest of the server connected to gives its
 // paks, or none (NULL) as for a classic server, for the search path: from
 // the next restart, which FS_ConditionalRestart makes when they changed, a
-// pak one of its hashed entries matches (FS_ServerPakHash) is mounted only
-// with that entry's hash (download-protocol.md section 9.1, step 3)
+// pak with a hashed entry's game directory, name and checksum
+// (FS_ServerPakHash) is mounted only with that entry's hash
+// (download-protocol.md section 9.1, step 3)
 void	FS_SetServerPakHashes( const byte *manifest, const ofcmHeader_t *header,
 			const byte sha256[SHA256_DIGEST_SIZE] );
 // whether the search path's paks all match those hashes
@@ -345,9 +346,10 @@ const byte	*FS_ServerPakHash( const char *gameDir, const char *name, unsigned in
 // for a content manifest entry: a "bring your own" one's by checksum, any
 // other's by checksum, size, game directory and name, and its hash if known
 qboolean	FS_HasInstalledPak( const ofcmEntry_t *e );
-// the installed paks of the search path with a checksum the gamestate
-// references, whose hash the server's content manifest gives and the pak
-// index lacks, as records for the hash job; their count
+// the installed paks of the search path, under any name, with the checksum
+// of a pak the gamestate references, whose own entry or that pak's the
+// server's content manifest gives a hash, that the pak index lacks, as
+// records for the hash job; their count
 int		FS_UnhashedServerPaks( pakRecord_t *paks, int max );
 
 typedef enum {

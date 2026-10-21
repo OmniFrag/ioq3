@@ -1489,25 +1489,22 @@ static void CL_ContentFinishFetch( clcSlot_t *s ) {
 =================
 CL_ContentFindEntry
 
-The required entry for a missing pak: one with its checksum, by its name
-if more than one has it. Its index, or -1 for none
+The required entry for a missing pak, with its checksum and name: another
+with its checksum may be a twin's, whose hash the pak wouldn't count by
+(FS_HasServerPak, P243). Its index, or -1 for none
 =================
 */
-static int CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *best ) {
-	ofcmEntry_t	entry;
-	int			i, found = -1;
+static int CL_ContentFindEntry( const clcPak_t *p, ofcmEntry_t *entry ) {
+	int		i;
 
 	for ( i = 0; i < clContent.header.numRequired; i++ ) {
-		OFCM_ReadEntry( clContent.manifest, i, &entry );
-		if ( (unsigned int)entry.checksum != p->checksum ) {
-			continue;
-		}
-		if ( found < 0 || !Q_stricmp( va( "%s/%s.pk3", entry.gameDir, entry.name ), p->name ) ) {
-			*best = entry;
-			found = i;
+		OFCM_ReadEntry( clContent.manifest, i, entry );
+		if ( (unsigned int)entry->checksum == p->checksum &&
+			!Q_stricmp( va( "%s/%s.pk3", entry->gameDir, entry->name ), p->name ) ) {
+			return i;
 		}
 	}
-	return found;
+	return -1;
 }
 
 // whether this connection may ask the server's fast download anything: its
