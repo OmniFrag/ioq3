@@ -2626,9 +2626,16 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 		}
 	}
 
-	// mipmapped uploads round to powers of two
+	// mipmapped uploads round to powers of two; an upscaled picture has only
+	// its first level, not a DDS file's mipmaps
 	if (picFormat == GL_RGBA8 || picFormat == GL_SRGB8_ALPHA8_EXT)
+	{
+		int loadedWidth = width;
+
 		R_Upscale2D( name, &pic, &width, &height, !!(flags & IMGFLAG_MIPMAP), (flags & IMGFLAG_PICMIP) && r_picmip->integer );
+		if (width != loadedWidth)
+			picNumMips = 1;
+	}
 
 	checkFlagsTrue = IMGFLAG_PICMIP | IMGFLAG_MIPMAP | IMGFLAG_GENNORMALMAP;
 	checkFlagsFalse = IMGFLAG_CUBEMAP;
