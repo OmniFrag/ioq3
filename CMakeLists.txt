@@ -101,6 +101,26 @@ if(DEFINED CLIENT_WINDOW_TITLE)
             code/sys/sys_main.c
         APPEND PROPERTY COMPILE_DEFINITIONS CLIENT_WINDOW_TITLE="${CLIENT_WINDOW_TITLE}")
 endif()
+
+# The collision map, player movement and the math they share compute
+# alike on every platform, so a client predicts its moves as the server
+# makes them: GCC and Clang fuse multiply-adds where the CPU has them
+# (arm64, x86-64 built for FMA). The renderers, which build q_math.c and
+# q_shared.c here too, get it as well.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set_property(SOURCE
+            code/game/bg_pmove.c
+            code/game/bg_slidemove.c
+            code/qcommon/cm_load.c
+            code/qcommon/cm_patch.c
+            code/qcommon/cm_polylib.c
+            code/qcommon/cm_test.c
+            code/qcommon/cm_trace.c
+            code/qcommon/q_math.c
+            code/qcommon/q_shared.c
+        APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
+endif()
+
 # The product's name and home directory seldom change, so every file gets
 # them, and a new use can't miss them
 foreach(NAME PRODUCT_NAME HOMEPATH_NAME HOMEPATH_NAME_PREDECESSOR HOMEPATH_NAME_PREDECESSOR_UNIX)
