@@ -1203,9 +1203,6 @@ const char *FS_ContentRootPath( int root );
 // a root of the search path, by the number the pak index keeps for it: its
 // directory, NULL if it has none now
 
-qboolean FS_HasInstalledPak( unsigned int checksum, int64_t size );
-// whether a pak with that checksum, and that size unless it's -1, is in the
-// search path, not from the content cache
 void FS_UnmountCachePaks( void );
 // once the client has left the server that referenced the content cache's
 // paks it mounted, restarts the filesystem without them

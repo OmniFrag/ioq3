@@ -6241,15 +6241,35 @@ int FS_ContentPaks( contentPak_t *paks, int max ) {
 /*
 ================
 FS_HasInstalledPak
+
+Whether the search path has an installed pak for a content manifest entry:
+a "bring your own" one's with its checksum, any other's with its checksum,
+size, game directory and name, and the entry's hash unless the pak index
+hasn't hashed it yet. Another pak of the same files under another name
+shares the checksum, and often the size, and the index hashes an installed
+pak only for a server whose content manifest lists its checksum, so a twin
+never used on one has no hash to tell it apart (P242). A copy under
+another name that the index has hashed is found by its hash instead
+(CL_ContentReady)
 ================
 */
-qboolean FS_HasInstalledPak( unsigned int checksum, int64_t size ) {
+qboolean FS_HasInstalledPak( const ofcmEntry_t *e ) {
 	const searchpath_t	*search;
+	const pack_t		*pak;
 	int64_t				pakSize, mtime;
+	byte				have[SHA256_DIGEST_SIZE];
 
 	for ( search = fs_searchpaths; search; search = search->next ) {
-		if ( search->pack && !search->pack->cached && search->pack->checksum == checksum &&
-			( size < 0 || ( Content_FileStat( search->pack->pakFilename, &pakSize, &mtime ) && pakSize == size ) ) ) {
+		pak = search->pack;
+		if ( !pak || pak->cached || pak->checksum != (unsigned int)e->checksum ) {
+			continue;
+		}
+		if ( e->flags & OFCM_FLAG_OWN ) {
+			return qtrue;
+		}
+		if ( !Q_stricmp( pak->pakGamename, e->gameDir ) && !Q_stricmp( pak->pakBasename, e->name ) &&
+			Content_FileStat( pak->pakFilename, &pakSize, &mtime ) && pakSize == e->size &&
+			( !FS_PakSHA256( pak, have ) || !memcmp( have, e->sha256, SHA256_DIGEST_SIZE ) ) ) {
 			return qtrue;
 		}
 	}
