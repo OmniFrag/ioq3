@@ -150,6 +150,8 @@ qboolean	Content_PakIndex_Frame( void );
 // these
 const pakRecord_t	*Content_PakIndex_Find( int root, const char *path, int64_t size, int64_t mtime );
 const pakRecord_t	*Content_PakIndex_FindSHA256( const byte sha256[SHA256_DIGEST_SIZE] );
+// a pak hashed already, as content add's copy is, into the index
+void				Content_PakIndex_Put( const pakRecord_t *pak );
 // paks for the hash job before any queued, for a check that waits for them
 void				Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count );
 // whether the hash job runs, or has paks queued

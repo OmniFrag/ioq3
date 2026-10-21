@@ -996,6 +996,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// the content manifest offers those it has
 	FS_HashPaks();
 	SV_ContentBuildManifest();
+	SV_ExportMapLoaded();
 
 	// save systeminfo and serverinfo strings
 	Q_strncpyz( systemInfo, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( systemInfo ) );

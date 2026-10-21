@@ -630,6 +630,8 @@ A record for a pak just hashed, replacing its path's; when the index is
 full, in place of the one used least recently
 =================
 */
+static void Content_PakIndex_Write( qboolean prune );
+
 static void Content_PakIndex_Add( const hashItem_t *item, int64_t now ) {
 	pakRecord_t	*r;
 	int			i, j;
@@ -649,6 +651,22 @@ static void Content_PakIndex_Add( const hashItem_t *item, int64_t now ) {
 	r->flags = 0;
 	r->lastUsed = now;
 	pakIndexHash[i] = Content_PathHash( r->root, r->path );
+}
+
+/*
+=================
+Content_PakIndex_Put
+
+A pak hashed already, as content add copied it, into installed.dat
+=================
+*/
+void Content_PakIndex_Put( const pakRecord_t *pak ) {
+	hashItem_t	item;
+
+	Content_PakIndex_Load();
+	item.pak = *pak;
+	Content_PakIndex_Add( &item, time( NULL ) );
+	Content_PakIndex_Write( qfalse );
 }
 
 /*
