@@ -333,6 +333,9 @@ enum svc_ops_e {
 // new commands, supported only by ioquake3 protocol but not legacy
 	svc_voipSpeex,     // not wrapped in USE_VOIP, so this value is reserved.
 	svc_voipOpus,      //
+
+// OmniFrag's, only to clients that negotiated it (ofx)
+	svc_ofManifest,		// [32 bytes] in a gamestate: the content manifest's SHA-256
 };
 
 
