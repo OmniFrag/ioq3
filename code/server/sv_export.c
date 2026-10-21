@@ -27,6 +27,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // frame; it reads the disk beside the pak index's hash job (content.h).
 // content add checks a pak an operator installs, and copies it into a
 // game directory on the same thread, for the next map (section 11).
+// What either is told to read or write is in sv_contentDir, which only
+// the command line sets, so rcon may run them; content add then installs
+// the pak in the home's game directory, as its name says.
 
 #include "server.h"
 #include "../qcommon/content.h"
@@ -72,6 +75,7 @@ typedef struct {
 	qboolean		add;			// content add's: its one pak by name alone
 	volatile int	done;			// items finished
 	volatile int64_t	bytes;		// bytes copied
+	char			root[MAX_OSPATH];	// sv_contentDir, its links resolved (SV_ContentRoot)
 
 	// the frame's
 	char			dir[MAX_OSPATH];
@@ -96,6 +100,52 @@ strings
 
 ==============================================================
 */
+
+/*
+=================
+SV_ContentUnder
+
+Whether a resolved path is root or in it
+=================
+*/
+static qboolean SV_ContentUnder( const char *root, const char *real ) {
+	size_t	length = strlen( root );
+
+#ifdef _WIN32
+	if ( Q_stricmpn( real, root, length ) ) {
+#else
+	if ( strncmp( real, root, length ) ) {
+#endif
+		return qfalse;
+	}
+	// a root of "/" or "C:\" ends in its separator
+	return !real[length] || real[length] == PATH_SEP || root[length - 1] == PATH_SEP;
+}
+
+/*
+=================
+SV_ContentInside
+
+Whether what's opened at ospath stays in root, with every link resolved:
+the directory it's in, and the file or directory itself if it's there.
+Checked before each is opened or made
+=================
+*/
+static qboolean SV_ContentInside( const char *root, const char *ospath ) {
+	char	path[MAX_OSPATH], real[MAX_OSPATH];
+	char	*sep;
+
+	if ( Sys_RealPath( ospath, real, sizeof( real ) ) && !SV_ContentUnder( root, real ) ) {
+		return qfalse;
+	}
+	Q_strncpyz( path, ospath, sizeof( path ) );
+	sep = strrchr( path, PATH_SEP );
+	if ( !sep ) {
+		return qfalse;
+	}
+	*sep = '\0';
+	return Sys_RealPath( path, real, sizeof( real ) ) && SV_ContentUnder( root, real );
+}
 
 /*
 =================
@@ -150,7 +200,16 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 	int64_t		read = 0;
 	size_t		got;
 	const char	*why = NULL;
+	char		dir[MAX_OSPATH];
+	unsigned long long	available, total;
 
+	// leaving the disk's last CACHE_DISK_RESERVE free, as downloads do,
+	// however often rcon exports
+	Q_strncpyz( dir, part, sizeof( dir ) );
+	*strrchr( dir, PATH_SEP ) = '\0';
+	if ( Sys_DiskSpace( dir, &available, &total ) && (unsigned long long)item->size + CACHE_DISK_RESERVE > available ) {
+		return "the disk is nearly full";
+	}
 	in = Sys_FOpen( item->source, "rb" );
 	if ( !in ) {
 		return "the pak can't be read";
@@ -218,6 +277,11 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 		}
 		return;
 	}
+	if ( !SV_ContentInside( job->root, target->ospath ) ) {
+		target->result = EXPORT_FAILED;
+		target->why = "a link there leads out of sv_contentDir";
+		return;
+	}
 	if ( t == EXPORT_BY_NAME && byHash->result != EXPORT_FAILED ) {
 		Content_FileStat( byHash->ospath, &size, &mtime );
 	}
@@ -265,6 +329,11 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	const char		*why;
 	int64_t			size, mtime;
 
+	if ( !SV_ContentInside( job->root, item->source ) ) {
+		target->result = EXPORT_FAILED;
+		target->why = "a link there leads out of sv_contentDir";
+		return;
+	}
 	if ( Content_FileStat( target->ospath, &size, &mtime ) ) {
 		if ( size != item->size ) {
 			target->result = EXPORT_DIFFERENT;
@@ -419,45 +488,34 @@ void SV_ExportFrame( void ) {
 =================
 SV_ExportMakeDirs
 
-Makes the directory of a file to be exported, and those above it, for
-the web server to read; qfalse if one can't be made. The one it made
-last is passed over, as the paks of a game come together
+Makes the directory of a file to be exported, and those above it in
+root, for the web server to read: each, made or found there, must be in
+root with its links resolved, so none on the way leads the next one
+elsewhere. qfalse if one can't be made. The one it made last is passed
+over, as the paks of a game come together
 =================
 */
-static qboolean SV_ExportMakeDirs( const char *ospath ) {
-	char		path[MAX_OSPATH];
+static qboolean SV_ExportMakeDirs( const char *root, const char *ospath ) {
+	char		path[MAX_OSPATH], real[MAX_OSPATH];
 	char		*s;
 
 	Q_strncpyz( path, ospath, sizeof( path ) );
 	*strrchr( path, PATH_SEP ) = '\0';
-	if ( !strcmp( path, exportMadeDir ) ) {
-		return qtrue;
+	if ( !strcmp( path, exportMadeDir ) || strlen( path ) <= strlen( root ) ) {
+		return qtrue;	// or root itself, made already
 	}
-	// from past the root, "/" or a drive's "C:\", or on Windows a share's
-	// "\\server\share\", which can't be made
-	s = path + ( path[1] == ':' ? 3 : 1 );
-#ifdef _WIN32
-	if ( ( path[0] == '/' || path[0] == '\\' ) && ( path[1] == '/' || path[1] == '\\' ) ) {
-		int		seps = 0;
-
-		for ( s = path + 2; *s && seps < 2; s++ ) {
-			if ( *s == '/' || *s == '\\' ) {
-				seps++;
-			}
-		}
-		if ( seps < 2 ) {
-			Q_strncpyz( exportMadeDir, path, sizeof( exportMadeDir ) );
-			return qtrue;	// the share itself
-		}
-	}
-#endif
-	for ( ; ; s++ ) {
+	for ( s = path + strlen( root ) + 1; ; s++ ) {
 		if ( *s == '/' || *s == '\\' || !*s ) {
 			char	c = *s;
 
 			*s = '\0';
 			if ( !Sys_MkdirReadable( path ) ) {
-				Com_Printf( "content export: can't make %s\n", path );
+				Com_Printf( "content: can't make %s\n", path );
+				exportMadeDir[0] = '\0';
+				return qfalse;
+			}
+			if ( !Sys_RealPath( path, real, sizeof( real ) ) || !SV_ContentUnder( root, real ) ) {
+				Com_Printf( "content: %s leads out of sv_contentDir, through a link\n", path );
 				exportMadeDir[0] = '\0';
 				return qfalse;
 			}
@@ -473,27 +531,31 @@ static qboolean SV_ExportMakeDirs( const char *ospath ) {
 
 /*
 =================
-SV_ExportAbsolute
+SV_ContentRoot
 
-Whether the directory the operator gave is a whole path, not one from
-wherever the server happened to start
+sv_contentDir, made the first time it's used, in a directory that's
+there, with its links resolved into the job's root, which all the
+content command opens must be in
 =================
 */
-static qboolean SV_ExportAbsolute( const char *dir ) {
-	const char	*s;
+static qboolean SV_ContentRoot( void ) {
+	const char	*dir = sv_contentDir->string;
 
-	// with no ".." in it, though "a..b" is a name
-	for ( s = dir; ( s = strstr( s, ".." ) ) != NULL; s += 2 ) {
-		if ( ( s == dir || s[-1] == '/' || s[-1] == '\\' ) && ( !s[2] || s[2] == '/' || s[2] == '\\' ) ) {
-			return qfalse;
-		}
-	}
+	// a whole path, not one from wherever the server happened to start
 #ifdef _WIN32
-	return dir[0] == '/' || dir[0] == '\\' || ( Q_isalpha( dir[0] ) && dir[1] == ':' && ( dir[2] == '/' || dir[2] == '\\' ) );
+	if ( dir[0] != '/' && dir[0] != '\\' && !( Q_isalpha( dir[0] ) && dir[1] == ':' && ( dir[2] == '/' || dir[2] == '\\' ) ) ) {
 #else
 	// "\dir" or "C:/dir" is a name in the current directory here
-	return dir[0] == '/';
+	if ( dir[0] != '/' ) {
 #endif
+		Com_Printf( "content: sv_contentDir, %s, must be a whole path\n", dir );
+		return qfalse;
+	}
+	if ( !Sys_MkdirReadable( dir ) || !Sys_RealPath( dir, exportJob.root, sizeof( exportJob.root ) ) ) {
+		Com_Printf( "content: can't make sv_contentDir, %s\n", dir );
+		return qfalse;
+	}
+	return qtrue;
 }
 
 // content add's pak
@@ -538,11 +600,12 @@ void SV_ExportMapLoaded( void ) {
 =================
 SV_ExportStart
 
-content export <dir> [copy]: every pak the current content manifest
-lists, required and optional, but the game's own, by hash and by name
+content export [name] [copy]: every pak the current content manifest
+lists, required and optional, but the game's own, by hash and by name,
+in sv_contentDir or the folder name in it
 =================
 */
-static void SV_ExportStart( const char *dir, qboolean copies ) {
+static void SV_ExportStart( const char *name, qboolean copies ) {
 	exportJob_t		*job = &exportJob;
 	const byte		*manifest;
 	ofcmHeader_t	header;
@@ -551,25 +614,21 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 	char			hex[SHA256_HEX_SIZE], retail[MAX_QPATH], refused[MAX_STRING_CHARS] = "";
 	const char		*source;
 	int				i, j, length, numRefused = 0, numGone = 0;
-	size_t			dirLength;
 
-	if ( SV_AddRunning() ) {
+	if ( SV_AddRunning() || !SV_ContentRoot() ) {
 		return;
 	}
-	if ( !SV_ExportAbsolute( dir ) ) {
-		Com_Printf( "content export: give a whole path to a directory, without \"..\"\n" );
+	// one folder's name, by the rule for a pak's names
+	if ( name && !OFCM_ValidName( name, name ) ) {
+		Com_Printf( "content export: %s isn't a name for a folder in sv_contentDir; give one name, with no "
+			"path, of the characters a pak's name can have\n", name );
 		return;
 	}
+	Q_strncpyz( job->dir, name ? va( "%s%c%s", job->root, PATH_SEP, name ) : job->root, sizeof( job->dir ) );
 	manifest = SV_ContentManifest( NULL, &length );
 	if ( !manifest || OFCM_Read( manifest, length, &header, NULL ) != NULL ) {
 		Com_Printf( "content export: there's no content manifest yet; load a map first\n" );
 		return;
-	}
-
-	Q_strncpyz( job->dir, dir, sizeof( job->dir ) );
-	dirLength = strlen( job->dir );
-	while ( dirLength > 1 && ( job->dir[dirLength - 1] == '/' || job->dir[dirLength - 1] == '\\' ) ) {
-		job->dir[--dirLength] = '\0';
 	}
 
 	free( job->items );
@@ -584,7 +643,7 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 	job->count = 0;
 	job->total = 0;
 	exportMadeDir[0] = '\0';
-	if ( !SV_ExportMakeDirs( va( "%s%csha256%cx", job->dir, PATH_SEP, PATH_SEP ) ) ) {
+	if ( !SV_ExportMakeDirs( job->root, va( "%s%csha256%cx", job->dir, PATH_SEP, PATH_SEP ) ) ) {
 		return;
 	}
 	exportMadeDir[0] = '\0';
@@ -620,7 +679,7 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 			Com_Printf( "content export: %s is too long a path for the files\n", job->dir );
 			return;
 		}
-		if ( !SV_ExportMakeDirs( item->targets[EXPORT_BY_NAME].ospath ) ) {
+		if ( !SV_ExportMakeDirs( job->root, item->targets[EXPORT_BY_NAME].ospath ) ) {
 			return;
 		}
 		job->total += item->size;
@@ -676,33 +735,29 @@ CONTENT ADD
 =================
 SV_AddStart
 
-content add <file> [gamedir]: checks the pak (FS_CheckAddPak), then
-copies it on the thread, hashing it as it goes
+content add <file> [gamedir]: checks the pak, a file in sv_contentDir
+(FS_CheckAddPak), then copies it on the thread, hashing it as it goes
 =================
 */
 static void SV_AddStart( const char *file, const char *gameDir ) {
 	exportJob_t		*job = &exportJob;
 	exportItem_t	*item;
-	char			name[MAX_OSPATH], overrides[MAX_STRING_CHARS];
-	const char		*refused, *base;
+	char			name[MAX_OSPATH], source[MAX_OSPATH], overrides[MAX_STRING_CHARS];
+	const char		*refused;
 	int64_t			size, mtime;
 
-	if ( SV_AddRunning() ) {
+	if ( SV_AddRunning() || !SV_ContentRoot() ) {
 		return;
 	}
 	if ( !gameDir ) {
 		gameDir = FS_GetCurrentGameDir();
 	}
-	base = COM_SkipPath( (char *)file );
-#ifdef _WIN32
-	// and Windows' own separators, or a drive's
-	for ( const char *c = base; *c; c++ ) {
-		if ( *c == '\\' || *c == ':' ) {
-			base = c + 1;
-		}
+	// to say so: OFCM_ValidName below refuses these too
+	if ( strpbrk( file, "/\\:" ) ) {
+		Com_Printf( "content add: give the name of a pak in sv_contentDir, %s, not a path\n", job->root );
+		return;
 	}
-#endif
-	Q_strncpyz( name, base, sizeof( name ) );
+	Q_strncpyz( name, file, sizeof( name ) );
 	if ( !COM_CompareExtension( name, ".pk3" ) ) {
 		Com_Printf( "content add: %s isn't a pak (.pk3)\n", file );
 		return;
@@ -712,8 +767,16 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 		Com_Printf( "content add: %s/%s.pk3 isn't a name a pak can have for downloads\n", gameDir, name );
 		return;
 	}
+	if ( !Sys_RealPath( va( "%s%c%s", job->root, PATH_SEP, file ), source, sizeof( source ) ) ) {
+		Com_Printf( "content add: there's no %s in sv_contentDir, %s\n", file, job->root );
+		return;
+	}
+	if ( !SV_ContentUnder( job->root, source ) ) {
+		Com_Printf( "content add: %s is a link out of sv_contentDir, which content add doesn't follow\n", file );
+		return;
+	}
 	// Content_FileStat refuses what's too large for a pak too
-	if ( !Content_FileStat( file, &size, &mtime ) ) {
+	if ( !Content_FileStat( source, &size, &mtime ) ) {
 		Com_Printf( "content add: %s can't be read, or is %d MB or larger, which no pak may be\n", file,
 			( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
 		return;
@@ -721,7 +784,7 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 	Com_sprintf( addPak.name, sizeof( addPak.name ), "%s/%s.pk3", gameDir, name );
 	Q_strncpyz( addPak.gameDir, gameDir, sizeof( addPak.gameDir ) );
 	Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
-	refused = FS_CheckAddPak( file, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ) );
+	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ) );
 	if ( refused ) {
 		Com_Printf( "content add: %s is refused: %s\n", addPak.name, refused );
 		return;
@@ -740,12 +803,17 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 		return;
 	}
 	item = &job->items[0];
-	Q_strncpyz( item->source, file, sizeof( item->source ) );
+	Q_strncpyz( item->source, source, sizeof( item->source ) );
 	Q_strncpyz( item->name, addPak.name, sizeof( item->name ) );
 	item->size = size;
 	item->mtime = mtime;
 	Q_strncpyz( item->targets[EXPORT_BY_NAME].ospath,
 		FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", name ) ), MAX_OSPATH );
+	// nor into sv_contentDir, by a game directory of its name
+	if ( SV_ContentInside( job->root, item->targets[EXPORT_BY_NAME].ospath ) ) {
+		Com_Printf( "content add: %s is sv_contentDir, %s, not a game directory\n", gameDir, job->root );
+		return;
+	}
 	FS_CreatePath( item->targets[EXPORT_BY_NAME].ospath );
 	job->count = 1;
 	job->add = qtrue;
@@ -831,31 +899,30 @@ static void SV_AddFinish( void ) {
 =================
 SV_Content_f
 
-The content command. It writes files where the operator says, so it runs
-only from the server's own console, not through rcon, whose password may
-be all a stranger needs; nor from game code or a pak's config, which
-Cmd_ExecuteString turns away
+The content command. What it's told to read or write is in sv_contentDir,
+which only the command line sets, so it runs through rcon too; though not
+from game code or a pak's config, which Cmd_ExecuteString turns away
 =================
 */
 void SV_Content_f( void ) {
 	const char	*sub = Cmd_Argv( 1 );
+	int			argc = Cmd_Argc();
 
-	if ( Com_IsRedirecting() ) {
-		Com_Printf( "content runs only from the server's console, not through rcon\n" );
-		return;
-	}
-	if ( !Q_stricmp( sub, "export" ) && ( Cmd_Argc() == 3 || ( Cmd_Argc() == 4 && !Q_stricmp( Cmd_Argv( 3 ), "copy" ) ) ) ) {
-		SV_ExportStart( Cmd_Argv( 2 ), Cmd_Argc() == 4 );
-		return;
-	}
-	if ( !Q_stricmp( sub, "add" ) && ( Cmd_Argc() == 3 || Cmd_Argc() == 4 ) ) {
-		SV_AddStart( Cmd_Argv( 2 ), Cmd_Argc() == 4 ? Cmd_Argv( 3 ) : NULL );
+	if ( !Q_stricmp( sub, "export" ) ) {
+		qboolean	copies = argc > 2 && !Q_stricmp( Cmd_Argv( argc - 1 ), "copy" );
+
+		if ( argc - copies <= 3 ) {
+			SV_ExportStart( argc - copies == 3 ? Cmd_Argv( 2 ) : NULL, copies );
+			return;
+		}
+	} else if ( !Q_stricmp( sub, "add" ) && ( argc == 3 || argc == 4 ) ) {
+		SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL );
 		return;
 	}
 	Com_Printf( "usage:\n"
-		"content export <directory> [copy]: puts the paks the server sends, but the game's own, in the "
-		"directory by hash (sha256/<hash>.pk3) and by name (<game>/<name>.pk3), for a web server that "
-		"sv_dlURL names; hard-linked where it can be, unless copy says to copy\n"
-		"content add <file> [game]: checks a pak and installs it in the game's directory (this one's, "
-		"or game) for the next map; a file on this machine, not a URL\n" );
+		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in sv_contentDir, "
+		"or a folder of that name in it, by hash (sha256/<hash>.pk3) and by name (<game>/<name>.pk3), for a "
+		"web server that sv_dlURL names; hard-linked where it can be, unless copy says to copy\n"
+		"content add <file> [game]: checks a pak, a file in sv_contentDir, and installs it in the game's "
+		"directory (this one's, or game) for the next map\n" );
 }

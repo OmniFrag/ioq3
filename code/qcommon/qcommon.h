@@ -1751,6 +1751,9 @@ FILE	*Sys_FCreateReadable( const char *ospath );
 // to, a hard link to the file from on the same volume; qfalse where there
 // can't be one, and the caller copies instead
 qboolean Sys_HardLink( const char *from, const char *to );
+// the path of the file or directory there, with every link on the way
+// resolved; qfalse if there's nothing there
+qboolean Sys_RealPath( const char *path, char *resolved, int size );
 qboolean Sys_DiskSpace( const char *path, unsigned long long *available, unsigned long long *total );
 typedef struct sysThread_s sysThread_t;
 sysThread_t *Sys_StartThread( void (*func)( void *arg ), void *arg );
