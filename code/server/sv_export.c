@@ -38,6 +38,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define EXPORT_REPORT_MSEC		10000		// between reports of how far it's got
 #define EXPORT_MAX_LISTED		8			// paks named in a line of the summary
 
+// sv_contentDir's two folders, apart so serving one never serves the
+// other: paks waiting for content add, and content export's, unless it's
+// given another
+#define CONTENT_INCOMING		"incoming"
+#define CONTENT_WWW				"www"
+
 typedef enum {
 	EXPORT_THERE,		// already there, with the pak's hash
 	EXPORT_LINKED,
@@ -75,10 +81,11 @@ typedef struct {
 	qboolean		add;			// content add's: its one pak by name alone
 	volatile int	done;			// items finished
 	volatile int64_t	bytes;		// bytes copied
-	char			root[MAX_OSPATH];	// sv_contentDir, its links resolved (SV_ContentRoot)
+	// its folder, links resolved, which all its paths must stay in: the
+	// export's, or content add's incoming
+	char			dir[MAX_OSPATH];
 
 	// the frame's
-	char			dir[MAX_OSPATH];
 	int64_t			total;			// the paks' bytes
 	int				started, nextReport;
 } exportJob_t;
@@ -86,6 +93,8 @@ typedef struct {
 static exportJob_t	exportJob;
 static sysThread_t	*exportThread;
 static char			exportMadeDir[MAX_OSPATH];	// the last directory SV_ExportMakeDirs made
+// sv_contentDir and its incoming folder, links resolved (SV_ContentRoot)
+static char			contentRoot[MAX_OSPATH], contentIncoming[MAX_OSPATH];
 
 static void SV_AddFinish( void );
 
@@ -277,9 +286,9 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 		}
 		return;
 	}
-	if ( !SV_ContentInside( job->root, target->ospath ) ) {
+	if ( !SV_ContentInside( job->dir, target->ospath ) ) {
 		target->result = EXPORT_FAILED;
-		target->why = "a link there leads out of sv_contentDir";
+		target->why = "a link there leads out of the export's folder";
 		return;
 	}
 	if ( t == EXPORT_BY_NAME && byHash->result != EXPORT_FAILED ) {
@@ -329,9 +338,9 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	const char		*why;
 	int64_t			size, mtime;
 
-	if ( !SV_ContentInside( job->root, item->source ) ) {
+	if ( !SV_ContentInside( job->dir, item->source ) ) {
 		target->result = EXPORT_FAILED;
-		target->why = "a link there leads out of sv_contentDir";
+		target->why = "a link there leads out of " CONTENT_INCOMING;
 		return;
 	}
 	if ( Content_FileStat( target->ospath, &size, &mtime ) ) {
@@ -501,8 +510,8 @@ static qboolean SV_ExportMakeDirs( const char *root, const char *ospath ) {
 
 	Q_strncpyz( path, ospath, sizeof( path ) );
 	*strrchr( path, PATH_SEP ) = '\0';
-	if ( !strcmp( path, exportMadeDir ) || strlen( path ) <= strlen( root ) ) {
-		return qtrue;	// or root itself, made already
+	if ( !strcmp( path, exportMadeDir ) ) {
+		return qtrue;
 	}
 	for ( s = path + strlen( root ) + 1; ; s++ ) {
 		if ( *s == '/' || *s == '\\' || !*s ) {
@@ -515,7 +524,7 @@ static qboolean SV_ExportMakeDirs( const char *root, const char *ospath ) {
 				return qfalse;
 			}
 			if ( !Sys_RealPath( path, real, sizeof( real ) ) || !SV_ContentUnder( root, real ) ) {
-				Com_Printf( "content: %s leads out of sv_contentDir, through a link\n", path );
+				Com_Printf( "content: %s leads out of %s, through a link\n", path, root );
 				exportMadeDir[0] = '\0';
 				return qfalse;
 			}
@@ -531,15 +540,43 @@ static qboolean SV_ExportMakeDirs( const char *root, const char *ospath ) {
 
 /*
 =================
+SV_ContentFolder
+
+A folder in sv_contentDir, made if it isn't there, and its path with its
+links resolved, which must be in sv_contentDir; qfalse, saying why, if
+it isn't
+=================
+*/
+static qboolean SV_ContentFolder( const char *name, char *real, int size ) {
+	char	path[MAX_OSPATH];
+
+	// cut short, it would name another folder
+	if ( Com_sprintf( path, sizeof( path ), "%s%c%s", contentRoot, PATH_SEP, name ) >= (int)sizeof( path )
+		|| !Sys_MkdirReadable( path ) || !Sys_RealPath( path, real, size ) ) {
+		Com_Printf( "content: can't make %s\n", path );
+		return qfalse;
+	}
+	if ( !SV_ContentUnder( contentRoot, real ) ) {
+		Com_Printf( "content: %s leads out of sv_contentDir, through a link\n", path );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+=================
 SV_ContentRoot
 
 sv_contentDir, made the first time it's used, in a directory that's
-there, with its links resolved into the job's root, which all the
-content command opens must be in
+there, with its links resolved, which all the content command opens must
+be in; and its incoming and www folders. Incoming is itself, not a link
+to another folder; www, which only an export uses, may be one, which the
+export checks
 =================
 */
 static qboolean SV_ContentRoot( void ) {
 	const char	*dir = sv_contentDir->string;
+	size_t		length;
 
 	// a whole path, not one from wherever the server happened to start
 #ifdef _WIN32
@@ -551,8 +588,21 @@ static qboolean SV_ContentRoot( void ) {
 		Com_Printf( "content: sv_contentDir, %s, must be a whole path\n", dir );
 		return qfalse;
 	}
-	if ( !Sys_MkdirReadable( dir ) || !Sys_RealPath( dir, exportJob.root, sizeof( exportJob.root ) ) ) {
+	if ( !Sys_MkdirReadable( dir ) || !Sys_RealPath( dir, contentRoot, sizeof( contentRoot ) ) ) {
 		Com_Printf( "content: can't make sv_contentDir, %s\n", dir );
+		return qfalse;
+	}
+	Sys_MkdirReadable( va( "%s%c" CONTENT_WWW, contentRoot, PATH_SEP ) );
+	if ( !SV_ContentFolder( CONTENT_INCOMING, contentIncoming, sizeof( contentIncoming ) ) ) {
+		return qfalse;
+	}
+	// in any case, as the disk may take it; a root of "/" or "C:\" ends
+	// in its separator
+	length = strlen( contentRoot );
+	if ( Q_stricmp( contentIncoming, va( contentRoot[length - 1] == PATH_SEP ? "%s" CONTENT_INCOMING
+		: "%s%c" CONTENT_INCOMING, contentRoot, PATH_SEP ) ) ) {
+		Com_Printf( "content: sv_contentDir's " CONTENT_INCOMING " is a link, %s; make it a folder of its own\n",
+			contentIncoming );
 		return qfalse;
 	}
 	return qtrue;
@@ -602,7 +652,7 @@ SV_ExportStart
 
 content export [name] [copy]: every pak the current content manifest
 lists, required and optional, but the game's own, by hash and by name,
-in sv_contentDir or the folder name in it
+in the folder name in sv_contentDir, www if it's not given
 =================
 */
 static void SV_ExportStart( const char *name, qboolean copies ) {
@@ -618,13 +668,23 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 	if ( SV_AddRunning() || !SV_ContentRoot() ) {
 		return;
 	}
-	// one folder's name, by the rule for a pak's names
-	if ( name && !OFCM_ValidName( name, name ) ) {
+	// one folder's name, by the rule for a pak's names, but not incoming's
+	if ( !name ) {
+		name = CONTENT_WWW;
+	}
+	if ( !OFCM_ValidName( name, name ) || !Q_stricmp( name, CONTENT_INCOMING ) ) {
 		Com_Printf( "content export: %s isn't a name for a folder in sv_contentDir; give one name, with no "
-			"path, of the characters a pak's name can have\n", name );
+			"path, of the characters a pak's name can have; not " CONTENT_INCOMING "\n", name );
 		return;
 	}
-	Q_strncpyz( job->dir, name ? va( "%s%c%s", job->root, PATH_SEP, name ) : job->root, sizeof( job->dir ) );
+	// which, through a link, mustn't be incoming, in it, or around it
+	if ( !SV_ContentFolder( name, job->dir, sizeof( job->dir ) ) ) {
+		return;
+	}
+	if ( SV_ContentUnder( contentIncoming, job->dir ) || SV_ContentUnder( job->dir, contentIncoming ) ) {
+		Com_Printf( "content export: %s leads to " CONTENT_INCOMING ", %s, through a link\n", name, job->dir );
+		return;
+	}
 	manifest = SV_ContentManifest( NULL, &length );
 	if ( !manifest || OFCM_Read( manifest, length, &header, NULL ) != NULL ) {
 		Com_Printf( "content export: there's no content manifest yet; load a map first\n" );
@@ -643,7 +703,7 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 	job->count = 0;
 	job->total = 0;
 	exportMadeDir[0] = '\0';
-	if ( !SV_ExportMakeDirs( job->root, va( "%s%csha256%cx", job->dir, PATH_SEP, PATH_SEP ) ) ) {
+	if ( !SV_ExportMakeDirs( job->dir, va( "%s%csha256%cx", job->dir, PATH_SEP, PATH_SEP ) ) ) {
 		return;
 	}
 	exportMadeDir[0] = '\0';
@@ -679,7 +739,7 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 			Com_Printf( "content export: %s is too long a path for the files\n", job->dir );
 			return;
 		}
-		if ( !SV_ExportMakeDirs( job->root, item->targets[EXPORT_BY_NAME].ospath ) ) {
+		if ( !SV_ExportMakeDirs( job->dir, item->targets[EXPORT_BY_NAME].ospath ) ) {
 			return;
 		}
 		job->total += item->size;
@@ -735,8 +795,9 @@ CONTENT ADD
 =================
 SV_AddStart
 
-content add <file> [gamedir]: checks the pak, a file in sv_contentDir
-(FS_CheckAddPak), then copies it on the thread, hashing it as it goes
+content add <file> [gamedir]: checks the pak, a file in sv_contentDir's
+incoming folder (FS_CheckAddPak), then copies it on the thread, hashing
+it as it goes
 =================
 */
 static void SV_AddStart( const char *file, const char *gameDir ) {
@@ -754,7 +815,7 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 	}
 	// to say so: OFCM_ValidName below refuses these too
 	if ( strpbrk( file, "/\\:" ) ) {
-		Com_Printf( "content add: give the name of a pak in sv_contentDir, %s, not a path\n", job->root );
+		Com_Printf( "content add: give the name of a pak in %s, not a path\n", contentIncoming );
 		return;
 	}
 	Q_strncpyz( name, file, sizeof( name ) );
@@ -767,12 +828,12 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 		Com_Printf( "content add: %s/%s.pk3 isn't a name a pak can have for downloads\n", gameDir, name );
 		return;
 	}
-	if ( !Sys_RealPath( va( "%s%c%s", job->root, PATH_SEP, file ), source, sizeof( source ) ) ) {
-		Com_Printf( "content add: there's no %s in sv_contentDir, %s\n", file, job->root );
+	if ( !Sys_RealPath( va( "%s%c%s", contentIncoming, PATH_SEP, file ), source, sizeof( source ) ) ) {
+		Com_Printf( "content add: there's no %s in %s\n", file, contentIncoming );
 		return;
 	}
-	if ( !SV_ContentUnder( job->root, source ) ) {
-		Com_Printf( "content add: %s is a link out of sv_contentDir, which content add doesn't follow\n", file );
+	if ( !SV_ContentUnder( contentIncoming, source ) ) {
+		Com_Printf( "content add: %s is a link out of %s, which content add doesn't follow\n", file, contentIncoming );
 		return;
 	}
 	// Content_FileStat refuses what's too large for a pak too
@@ -810,11 +871,13 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 	Q_strncpyz( item->targets[EXPORT_BY_NAME].ospath,
 		FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", name ) ), MAX_OSPATH );
 	// nor into sv_contentDir, by a game directory of its name
-	if ( SV_ContentInside( job->root, item->targets[EXPORT_BY_NAME].ospath ) ) {
-		Com_Printf( "content add: %s is sv_contentDir, %s, not a game directory\n", gameDir, job->root );
+	if ( SV_ContentInside( contentRoot, item->targets[EXPORT_BY_NAME].ospath ) ) {
+		Com_Printf( "content add: %s is sv_contentDir, %s, not a game directory\n", gameDir, contentRoot );
 		return;
 	}
 	FS_CreatePath( item->targets[EXPORT_BY_NAME].ospath );
+	// all the thread reads, which it checks again
+	Q_strncpyz( job->dir, contentIncoming, sizeof( job->dir ) );
 	job->count = 1;
 	job->add = qtrue;
 	job->copies = qtrue;
@@ -920,9 +983,10 @@ void SV_Content_f( void ) {
 		return;
 	}
 	Com_Printf( "usage:\n"
-		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in sv_contentDir, "
-		"or a folder of that name in it, by hash (sha256/<hash>.pk3) and by name (<game>/<name>.pk3), for a "
-		"web server that sv_dlURL names; hard-linked where it can be, unless copy says to copy\n"
-		"content add <file> [game]: checks a pak, a file in sv_contentDir, and installs it in the game's "
-		"directory (this one's, or game) for the next map\n" );
+		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in the folder "
+		"in sv_contentDir, " CONTENT_WWW " if it's not given, by hash (sha256/<hash>.pk3) and by name "
+		"(<game>/<name>.pk3), for a web server that sv_dlURL names; hard-linked where it can be, unless copy "
+		"says to copy\n"
+		"content add <file> [game]: checks a pak, a file in sv_contentDir's " CONTENT_INCOMING " folder, and "
+		"installs it in the game's directory (this one's, or game) for the next map\n" );
 }
