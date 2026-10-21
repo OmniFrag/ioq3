@@ -1342,6 +1342,16 @@ void SV_Init (void)
 		"SHA-256>.pk3. Write it without a trailing slash, such as http://example.com/q3. OmniFrag players "
 		"download from it and the game server at once and stay connected; others reconnect when they're "
 		"done unless sv_allowDownload includes 8." );
+	// set on the command line alone, so rcon, a config or a pak can't move
+	// what the content command reaches
+	sv_contentDir = Cvar_Get( "sv_contentDir",
+		va( "%s%ccontent", Cvar_VariableString( "fs_homedatapath" ), PATH_SEP ), CVAR_INIT | CVAR_PROTECTED );
+	Cvar_SetDescription( sv_contentDir,
+		"Folder content export writes to and content add reads from\n"
+		"content export puts pak files here, or in a folder inside it, for sv_dlURL's web server, and "
+		"content add takes paks from here; neither follows a path or link out of it, so rcon may run "
+		"both. Set it at startup, on the command line or in autoexec.cfg, as a whole path, and let only "
+		"the server's user write in it. By default it's the content folder in the server's home." );
 	
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
 	Cvar_SetDescription( sv_master[0],

@@ -516,11 +516,32 @@ qboolean Sys_MkdirReadable( const char *path )
 /*
 ==================
 Sys_FCreateReadable
+
+CREATE_NEW, so a link planted at ospath is never followed
 ==================
 */
 FILE *Sys_FCreateReadable( const char *ospath )
 {
-	return Sys_FOpen( ospath, "wb" );
+	HANDLE	handle = CreateFile( ospath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL );
+	int		fd;
+	FILE	*f;
+
+	if( handle == INVALID_HANDLE_VALUE )
+		return NULL;
+
+	fd = _open_osfhandle( (intptr_t)handle, _O_WRONLY | _O_BINARY );
+	if( fd < 0 )
+	{
+		CloseHandle( handle );
+		return NULL;
+	}
+
+	f = _fdopen( fd, "wb" );
+	if( !f )
+		_close( fd );
+
+	return f;
 }
 
 /*
@@ -531,6 +552,45 @@ Sys_HardLink
 qboolean Sys_HardLink( const char *from, const char *to )
 {
 	return CreateHardLink( to, from, NULL ) != 0;
+}
+
+/*
+==================
+Sys_RealPath
+
+The path GetFinalPathNameByHandle gives the file or folder, past links
+and junctions, without the "\\?\" it starts with
+==================
+*/
+qboolean Sys_RealPath( const char *path, char *resolved, int size )
+{
+	HANDLE	handle = CreateFile( path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+		OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL );
+	char	real[MAX_OSPATH + 8], *s = real;
+	DWORD	length;
+
+	if( handle == INVALID_HANDLE_VALUE )
+		return qfalse;
+
+	length = GetFinalPathNameByHandle( handle, real, sizeof( real ), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
+	CloseHandle( handle );
+	if( !length || length >= sizeof( real ) )
+		return qfalse;
+
+	// a share's "\\?\UNC\server\share" is "\\server\share"
+	if( !strncmp( real, "\\\\?\\UNC\\", 8 ) )
+	{
+		s = real + 6;
+		*s = '\\';
+	}
+	else if( !strncmp( real, "\\\\?\\", 4 ) )
+		s = real + 4;
+
+	if( strlen( s ) >= (size_t)size )
+		return qfalse;
+
+	Q_strncpyz( resolved, s, size );
+	return qtrue;
 }
 
 /*

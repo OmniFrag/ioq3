@@ -38,6 +38,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <libgen.h>
 #include <fcntl.h>
 #include <fenv.h>
+#include <limits.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <sys/resource.h>
@@ -874,6 +875,22 @@ Sys_HardLink
 qboolean Sys_HardLink( const char *from, const char *to )
 {
 	return link( from, to ) == 0;
+}
+
+/*
+==================
+Sys_RealPath
+==================
+*/
+qboolean Sys_RealPath( const char *path, char *resolved, int size )
+{
+	char	real[PATH_MAX];
+
+	if( !realpath( path, real ) || strlen( real ) >= (size_t)size )
+		return qfalse;
+
+	Q_strncpyz( resolved, real, size );
+	return qtrue;
 }
 
 /*
