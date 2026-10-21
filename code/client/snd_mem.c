@@ -33,6 +33,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "snd_codec.h"
 
 #define DEF_COMSOUNDMEGS "8"
+// the most com_soundMegs can be: the pool's size in bytes must fit an int
+#define MAX_COMSOUNDMEGS	( INT_MAX / ( 1536 * (int)sizeof( sndBuffer ) ) )
 
 /*
 ===============================================================================
@@ -99,6 +101,8 @@ void SND_setup(void) {
 #endif
 
 	cv = Cvar_Get( "com_soundMegs", DEF_COMSOUNDMEGS, CVAR_LATCH | CVAR_ARCHIVE );
+	// at least a meg, as the free list's setup writes into the buffers
+	Cvar_CheckRange( cv, 1, MAX_COMSOUNDMEGS, qtrue );
 
 	scs = (cv->integer*1536);
 	bufferCount = scs;
@@ -107,6 +111,9 @@ void SND_setup(void) {
 	// allocate the stack based hunk allocator
 	sfxScratchBuffer = malloc(SND_CHUNK_SIZE * sizeof(short) * 4);	//Hunk_Alloc(SND_CHUNK_SIZE * sizeof(short) * 4);
 	sfxScratchPointer = NULL;
+	if ( !buffer || !sfxScratchBuffer ) {
+		Com_Error( ERR_FATAL, "Sound memory failed to allocate %i megs (com_soundMegs)", cv->integer );
+	}
 
 	inUse = scs*sizeof(sndBuffer);
 	p = buffer;;
@@ -124,6 +131,8 @@ void SND_shutdown(void)
 {
 		free(sfxScratchBuffer);
 		free(buffer);
+		sfxScratchBuffer = NULL;
+		buffer = NULL;
 }
 
 /*
