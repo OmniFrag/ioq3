@@ -129,44 +129,55 @@ static void SV_ContentFree( svManifest_t *manifest ) {
 	Com_Memset( manifest, 0, sizeof( *manifest ) );
 }
 
-static int SV_ContentCompareChecksums( const void *a, const void *b ) {
-	unsigned int	ca = *(const unsigned int *)a, cb = *(const unsigned int *)b;
-
-	return ca < cb ? -1 : ca > cb;
-}
-
 /*
 =================
 SV_ContentReferenced
 
-Marks as required the paks whose checksums sv_referencedPaks lists, as
-the map load set it. The paks' own references grow after that as files
-are read (a listen server's client loading the map, a bot joining), and
-a content manifest built after a hashing job must still require what the
-clients were told to have, no more
+Marks as required the paks sv_referencedPaks lists, by checksum and by
+the name at the same place in sv_referencedPakNames, as the map load set
+them: another pak of the same files under another name, which shares the
+checksum, isn't required for it (P229), unless the names were cut short.
+The paks' own references grow after that as files are read (a listen
+server's client loading the map, a bot joining), and a content manifest
+built after a hashing job must still require what the clients were told
+to have, no more
 =================
 */
 static void SV_ContentReferenced( contentPak_t *paks, int count ) {
-	const char		*s = Cvar_VariableString( "sv_referencedPaks" );
-	unsigned int	*listed;
-	char			*end;
-	long			value;
-	int				i, numListed = 0;
+	char	*s = Cvar_VariableString( "sv_referencedPaks" ), *n = Cvar_VariableString( "sv_referencedPakNames" );
+	char	*end, *name;
+	char	pakName[MAX_OSPATH];
+	long	value;
+	int		i, named;
 
-	listed = Z_Malloc( ( strlen( s ) / 2 + 1 ) * sizeof( *listed ) );	// "%i " each
+	for ( i = 0; i < count; i++ ) {
+		paks[i].referenced = qfalse;
+	}
 	for ( ;; s = end ) {
 		value = strtol( s, &end, 10 );
 		if ( end == s ) {
 			break;
 		}
-		listed[numListed++] = (unsigned int)(int)value;
+		name = COM_ParseExt( &n, qfalse );
+		named = 0;
+		for ( i = 0; i < count; i++ ) {
+			if ( paks[i].checksum != (unsigned int)(int)value ) {
+				continue;
+			}
+			Com_sprintf( pakName, sizeof( pakName ), "%s/%s", paks[i].gameDir, paks[i].name );
+			if ( !Q_stricmp( name, pakName ) ) {
+				paks[i].referenced = qtrue;
+				named++;
+			}
+		}
+		// by the checksum alone when no pak has the name, as when the names
+		// were cut short, as one past BIG_INFO_STRING is (FS_ReferencedPakNames)
+		for ( i = 0; i < count && !named; i++ ) {
+			if ( paks[i].checksum == (unsigned int)(int)value ) {
+				paks[i].referenced = qtrue;
+			}
+		}
 	}
-	qsort( listed, numListed, sizeof( *listed ), SV_ContentCompareChecksums );
-	for ( i = 0; i < count; i++ ) {
-		paks[i].referenced = bsearch( &paks[i].checksum, listed, numListed, sizeof( *listed ),
-			SV_ContentCompareChecksums ) != NULL;
-	}
-	Z_Free( listed );
 }
 
 /*
