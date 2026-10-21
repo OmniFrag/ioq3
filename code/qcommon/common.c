@@ -176,7 +176,9 @@ void Com_BeginRedirect (char *buffer, int buffersize, void (*flush)( char *) )
 =============
 Com_IsRedirecting
 
-Whether what's printed goes back to rcon's sender, say
+Whether what's printed goes back to rcon's sender, say. Not where a
+command came from: text rcon queues with vstr or exec runs after the
+redirect ends
 =============
 */
 qboolean Com_IsRedirecting( void )
