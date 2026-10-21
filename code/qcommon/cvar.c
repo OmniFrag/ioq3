@@ -401,12 +401,13 @@ static void Cvar_SetLayer( char **layer, const char *value ) {
 ============
 Cvar_ClearUser
 
-Drops the player's value, and where it came from
+Drops the player's value, and where it came from, a pak's config included
 ============
 */
 static void Cvar_ClearUser( cvar_t *var ) {
 	Cvar_SetLayer( &var->userString, NULL );
 	Cvar_SetLayer( &var->userOrigin, NULL );
+	var->pakSet = qfalse;
 }
 
 /*
@@ -1109,9 +1110,16 @@ cvar_t *Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t sour
 
 	var = Cvar_SetVar( var, value, source, force );
 	// a tool may hold less than the console's rights, so what it set runs
-	// restricted, as a server's does
+	// restricted, as a server's does. The command line's, set again after
+	// the configs, is trusted once it holds, as an unrestricted config
+	// line's is (Cvar_SetFromText), and no longer a pak's, so a protected
+	// cvar keeps it when the engine registers the cvar after a pak's
+	// config set it
 	if ( source == CVAR_SOURCE_SERVER || source == CVAR_SOURCE_TOOL ) {
 		var->untrusted = qtrue;
+	} else if ( source == CVAR_SOURCE_SESSION && value && !strcmp( var->string, value ) ) {
+		var->untrusted = qfalse;
+		var->pakSet = qfalse;
 	}
 	return var;
 }
@@ -1600,7 +1608,18 @@ static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 	// (default.cfg from a pak), which runs restricted, nor a pak's config's
 	// on a dedicated server, a script of the pak's
 	qboolean	pak = Cmd_IsPakConfig();
-	cvar_t	*var = Cvar_SetFrom( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
+	cvar_t	*var;
+
+	// a pak's config sets what it likes but a protected cvar, which game
+	// code can't set either: where files go, what the server runs, what
+	// local programs may reach. One it set before the engine registered
+	// it takes the engine's value then (Cvar_Get), being untrusted
+	if ( pak && ( Cvar_Flags( var_name ) & CVAR_PROTECTED ) ) {
+		Com_Printf( "%s can't be set by a config in a pak (%s).\n", var_name, Cmd_Origin() );
+		return NULL;
+	}
+
+	var = Cvar_SetFrom( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
 		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
 
 	if ( var ) {
@@ -2889,12 +2908,13 @@ void Cvar_Restart(qboolean unsetVM)
 Cvar_Restart_f
 
 Resets all cvars to their hardcoded values; restricted text leaves the
-private and protected ones be
+private and protected ones be, and a pak's config the protected ones
 ============
 */
 void Cvar_Restart_f(void)
 {
-	Cvar_RestartKeeping( qfalse, Cmd_IsRestricted() ? CVAR_PRIVATE | CVAR_PROTECTED : 0 );
+	Cvar_RestartKeeping( qfalse, Cmd_IsRestricted() ? CVAR_PRIVATE | CVAR_PROTECTED :
+		Cmd_IsPakConfig() ? CVAR_PROTECTED : 0 );
 }
 
 /*
