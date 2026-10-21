@@ -3877,25 +3877,6 @@ static qboolean FS_HasPakChecksum( unsigned int checksum ) {
 
 /*
 ================
-FS_ServerReferencesPak
-
-Whether the server connected to references a pak with the checksum
-================
-*/
-static qboolean FS_ServerReferencesPak( unsigned int checksum )
-{
-	int		i;
-
-	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
-		if ( fs_serverReferencedPaks[i] == checksum ) {
-			return qtrue;
-		}
-	}
-	return qfalse;
-}
-
-/*
-================
 FS_SetServerPakHashes
 ================
 */
@@ -3961,37 +3942,59 @@ static const ofcmEntry_t *FS_ServerPakEntry( const char *gameDir, const char *na
 	return NULL;
 }
 
-// an entry's hash; a "bring your own" one has none
-static const byte *FS_ServerPakEntryHash( const ofcmEntry_t *e )
-{
-	return e && !( e->flags & OFCM_FLAG_OWN ) ? e->sha256 : NULL;
-}
-
 /*
 ================
 FS_ServerPakHash
 
-The hash of the entry with the pak's game directory, name and checksum;
-or, when none has all three, as for an installed copy under another name,
-of the first hashed one with its checksum, which the copy is checked
-against (FS_PakHashRefused). A "bring your own" entry has none
+The hash of the entry with the pak's game directory, name and checksum.
+None for a pak no entry has under its name, as an installed copy under
+another name, since another entry with its checksum may be a twin's: such
+a pak stands in for the server's only by that one's hash (FS_HasServerPak),
+and isn't refused (P243). A "bring your own" entry has none either
 ================
 */
 const byte *FS_ServerPakHash( const char *gameDir, const char *name, unsigned int checksum )
 {
 	const ofcmEntry_t	*e = FS_ServerPakEntry( gameDir, name, checksum );
-	int					i;
 
-	if ( e || !FS_ServerPakHashesApply() ) {
-		return FS_ServerPakEntryHash( e );
-	}
-	for ( i = 0; i < fs_numServerPakHashes; i++ ) {
-		e = &fs_serverPakHashes[i];
-		if ( (unsigned int)e->checksum == checksum && !( e->flags & OFCM_FLAG_OWN ) ) {
-			return e->sha256;
+	return e && !( e->flags & OFCM_FLAG_OWN ) ? e->sha256 : NULL;
+}
+
+/*
+================
+FS_ServerHashesReferencedPak
+
+Whether the server connected to references a pak with an installed pak's
+checksum, and its content manifest gives a hash the pak is checked
+against: the referenced pak's, which a pak under any name with the
+checksum counts by (FS_HasServerPak), or the pak's own entry's, which it's
+refused by (FS_PakHashRefused)
+================
+*/
+static qboolean FS_ServerHashesReferencedPak( const pack_t *pak )
+{
+	const char	*refName, *slash;
+	char		dir[MAX_QPATH];
+	int			i;
+
+	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
+		if ( fs_serverReferencedPaks[i] != pak->checksum ) {
+			continue;
+		}
+		if ( FS_ServerPakHash( pak->pakGamename, pak->pakBasename, pak->checksum ) ) {
+			return qtrue;
+		}
+		refName = fs_serverReferencedPakNames[i];
+		slash = refName ? strchr( refName, '/' ) : NULL;
+		if ( !slash || slash - refName >= (int)sizeof( dir ) ) {
+			continue;
+		}
+		Q_strncpyz( dir, refName, slash - refName + 1 );
+		if ( FS_ServerPakHash( dir, slash + 1, pak->checksum ) ) {
+			return qtrue;
 		}
 	}
-	return NULL;
+	return qfalse;
 }
 
 /*
@@ -4080,22 +4083,18 @@ static qboolean FS_PakSHA256( const pack_t *pak, byte sha256[SHA256_DIGEST_SIZE]
 ================
 FS_PakHashRefused
 
-Whether a pak has the checksum of one the server gives a hash for, but not
-that hash. It isn't mounted for the server, and the right one is fetched by
-its hash. One whose hash isn't known passes, as an installed one the index
-hasn't hashed does until it has (FS_UnhashedServerPaks). A cached pak,
-mounted under the server's name for it, by its own entry's hash alone, as
-FS_AddCachePaks found it: with no entry, it was found by its checksum, and
-another entry with that checksum may be a twin's
+Whether a pak has the game directory, name and checksum of one the server
+gives a hash for, but not that hash. It isn't mounted for the server, and
+the right one is fetched by its hash. One whose hash isn't known passes,
+as an installed one the index hasn't hashed does until it has
+(FS_UnhashedServerPaks). By its own entry alone (FS_ServerPakHash)
 ================
 */
 static qboolean FS_PakHashRefused( const pack_t *pak )
 {
-	const byte	*hash;
+	const byte	*hash = FS_ServerPakHash( pak->pakGamename, pak->pakBasename, pak->checksum );
 	byte		have[SHA256_DIGEST_SIZE];
 
-	hash = pak->cached ? FS_ServerPakEntryHash( FS_ServerPakEntry( pak->pakGamename, pak->pakBasename, pak->checksum ) ) :
-		FS_ServerPakHash( pak->pakGamename, pak->pakBasename, pak->checksum );
 	if ( !hash || !FS_PakSHA256( pak, have ) || !memcmp( have, hash, SHA256_DIGEST_SIZE ) ) {
 		return qfalse;
 	}
@@ -4239,8 +4238,7 @@ int FS_UnhashedServerPaks( pakRecord_t *paks, int max )
 	int					count = 0;
 
 	for ( search = fs_searchpaths; search && FS_ServerPakHashesApply(); search = search->next ) {
-		if ( !search->pack || search->pack->cached || !FS_ServerReferencesPak( search->pack->checksum ) ||
-			!FS_ServerPakHash( search->pack->pakGamename, search->pack->pakBasename, search->pack->checksum ) ||
+		if ( !search->pack || search->pack->cached || !FS_ServerHashesReferencedPak( search->pack ) ||
 			!FS_PakIndexKey( search->pack, &key ) || Content_PakIndex_Find( key.root, key.path, key.size, key.mtime ) ) {
 			continue;
 		}
@@ -4271,7 +4269,6 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 	searchpath_t		**link, *search;
 	pack_t				*pak;
 	const char			*refName, *slash;
-	const ofcmEntry_t	*e;
 	const byte			*hash;
 	char				ospath[MAX_OSPATH];
 	int					i, entry;
@@ -4297,10 +4294,8 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 		}
 		// in this directory under the server's name for it, wherever and
 		// however it was cached; if it's damaged, the next with that checksum.
-		// One the server gives a hash for, by that hash alone, its own entry's
-		// and never a twin's (FS_HasServerPak)
-		e = FS_ServerPakEntry( dir, slash + 1, fs_serverReferencedPaks[i] );
-		hash = FS_ServerPakEntryHash( e );
+		// One the server gives a hash for, by that hash alone (FS_ServerPakHash)
+		hash = FS_ServerPakHash( dir, slash + 1, fs_serverReferencedPaks[i] );
 		while ( ( entry = hash ? Content_Cache_FindSHA256( hash, ospath, sizeof( ospath ) ) :
 			Content_Cache_Find( fs_serverReferencedPaks[i], dir, ospath, sizeof( ospath ) ) ) >= 0 ) {
 			pak = FS_LoadZipFile( ospath, slash + 1 );
