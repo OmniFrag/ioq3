@@ -1575,16 +1575,14 @@ void Sys_RegisterProtocolHandler( void )
 	char exe[ MAX_OSPATH ], icon[ MAX_OSPATH ], apps[ MAX_OSPATH ], path[ MAX_OSPATH ], temp[ MAX_OSPATH ];
 	char entry[ 4096 ], current[ 4096 ];
 	char *slash;
-	ssize_t length = readlink( "/proc/self/exe", exe, sizeof( exe ) );
 	FILE *f;
 	qboolean ok;
 	pid_t pid;
 	char *argv[] = { "sh", "-c", "update-desktop-database \"$1\" > /dev/null 2>&1 &", "sh", apps, NULL };
 	extern char **environ;
 
-	if( length <= 0 || (size_t)length >= sizeof( exe ) )
+	if( !Sys_ExecutablePath( exe, sizeof( exe ) ) )
 		return;
-	exe[ length ] = '\0';
 
 	// Exec quotes the path, in which these would need escapes
 	if( strpbrk( exe, "\"`$\\%\n" ) )
@@ -1593,9 +1591,8 @@ void Sys_RegisterProtocolHandler( void )
 		return;
 	}
 
-	// dirname() changes what it's given
-	Q_strncpyz( temp, exe, sizeof( temp ) );
-	Com_sprintf( icon, sizeof( icon ), "%s/" APP_ID ".png", Sys_Dirname( temp ) );
+	// Sys_Start took the binary's directory from the same path
+	Com_sprintf( icon, sizeof( icon ), "%s/" APP_ID ".png", Sys_BinaryPath( ) );
 	if( access( icon, R_OK ) )
 		Q_strncpyz( icon, APP_ID, sizeof( icon ) );
 	Com_sprintf( entry, sizeof( entry ), DESKTOP_ENTRY_FORMAT, exe, icon );
