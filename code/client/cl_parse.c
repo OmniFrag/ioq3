@@ -36,6 +36,7 @@ char *svc_strings[256] = {
 	"svc_EOF",
 	"svc_voipSpeex",
 	"svc_voipOpus",
+	"svc_ofManifest",
 };
 
 void SHOWNET( msg_t *msg, char *s) {
@@ -517,6 +518,7 @@ void CL_ParseGamestate( msg_t *msg ) {
 	int				cmd;
 	char			*s;
 	char oldGame[MAX_QPATH];
+	qboolean		ofOps = qfalse;		// it carried OmniFrag's (svc_ofManifest)
 
 	Con_Close();
 
@@ -563,6 +565,12 @@ void CL_ParseGamestate( msg_t *msg ) {
 			Com_Memset (&nullstate, 0, sizeof(nullstate));
 			es = &cl.entityBaselines[ newnum ];
 			MSG_ReadDeltaEntity( msg, &nullstate, es, newnum );
+		} else if ( cmd == svc_ofManifest && ( clc.ofx & OFX_CONTENT ) ) {
+			// the content manifest to check the paks against, for this
+			// gamestate's file system restart (CL_ContentSetPakHashes)
+			MSG_ReadData( msg, clc.contentManifest, SHA256_DIGEST_SIZE );
+			clc.contentManifestKnown = qtrue;
+			ofOps = qtrue;
 		} else {
 			Com_Error( ERR_DROP, "CL_ParseGamestate: bad command byte" );
 		}
@@ -582,7 +590,11 @@ void CL_ParseGamestate( msg_t *msg ) {
 	CL_SystemInfoChanged();
 
 	// stop recording now so the demo won't have an unnecessary level load at the end.
-	if(cl_autoRecordDemo->integer && clc.demorecording)
+	// One with OmniFrag's ops stops it too. A recording ends at every map
+	// change anyway (CL_FlushMemory), but a client that waits first, for a
+	// download or the content manifest's check, records this gamestate by
+	// then, and stock players can't read its ops
+	if((cl_autoRecordDemo->integer || ofOps) && clc.demorecording)
 		CL_StopRecord_f();
 	
 	// reinitialize the filesystem if the game directory has changed
