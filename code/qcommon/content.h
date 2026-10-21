@@ -341,6 +341,10 @@ qboolean	FS_ServerPaksListed( const byte *manifest, const ofcmHeader_t *header )
 // the hash those give a pak with this game directory, name (without .pk3)
 // and checksum, or NULL
 const byte	*FS_ServerPakHash( const char *gameDir, const char *name, unsigned int checksum );
+// whether the search path has an installed pak, not from the content cache,
+// for a content manifest entry: a "bring your own" one's by checksum, any
+// other's by checksum, size, game directory and name, and its hash if known
+qboolean	FS_HasInstalledPak( const ofcmEntry_t *e );
 // the installed paks of the search path with a checksum the gamestate
 // references, whose hash the server's content manifest gives and the pak
 // index lacks, as records for the hash job; their count

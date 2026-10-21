@@ -4956,10 +4956,11 @@ CL_ContentReady
 Whether this client holds the content manifest with that hash, from an
 earlier visit, and every pak it requires: one of the game's own by its
 checksum, and the rest in the content cache or the pak index by hash, or
-installed with the same checksum and size (section 9.1). A server list
-asks again and again as it refreshes, so an answer stands for a few
-seconds. It holds more answers than there are pings out, since the ui
-asks about every ping each frame (CL_GetPing)
+installed with the same checksum, size and name (section 9.1,
+FS_HasInstalledPak). A server list asks again and again as it
+refreshes, so an answer stands for a few seconds. It holds more answers
+than there are pings out, since the ui asks about every ping each frame
+(CL_GetPing)
 ===================
 */
 #define READY_CACHE_SIZE	( MAX_PINGREQUESTS * 2 )
@@ -4992,10 +4993,10 @@ static qboolean CL_ContentReady( const byte sha256[SHA256_DIGEST_SIZE] ) {
 		for ( i = 0; ready && i < header.numRequired; i++ ) {
 			OFCM_ReadEntry( data, i, &entry );
 			if ( entry.flags & OFCM_FLAG_OWN ) {
-				ready = FS_HasInstalledPak( entry.checksum, -1 );
+				ready = FS_HasInstalledPak( &entry );
 			} else {
 				ready = Content_Cache_FindSHA256( entry.sha256, ospath, sizeof( ospath ) ) >= 0 ||
-					Content_PakIndex_FindSHA256( entry.sha256 ) || FS_HasInstalledPak( entry.checksum, entry.size );
+					Content_PakIndex_FindSHA256( entry.sha256 ) || FS_HasInstalledPak( &entry );
 			}
 		}
 		free( data );
