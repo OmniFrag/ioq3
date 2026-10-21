@@ -495,33 +495,18 @@ int Q_isnan(float x);
   // its address. It truncates toward zero, as the x86 versions do.
   long Q_ftolTruncate( float f );
   #define Q_ftol Q_ftolTruncate
+  // lrintf rounds halves to even, and a small negative to +0, as the x86
+  // versions do; they differ only past the range of an int, and for NaN
   #define Q_SnapVector(vec)\
 	do\
 	{\
 		vec3_t *temp = (vec);\
 		\
-		(*temp)[0] = round((*temp)[0]);\
-		(*temp)[1] = round((*temp)[1]);\
-		(*temp)[2] = round((*temp)[2]);\
+		(*temp)[0] = (float)lrintf((*temp)[0]);\
+		(*temp)[1] = (float)lrintf((*temp)[1]);\
+		(*temp)[2] = (float)lrintf((*temp)[2]);\
 	} while(0)
 #endif
-/*
-// if your system does not have lrintf() and round() you can try this block. Please also open a bug report at bugzilla.icculus.org
-// or write a mail to the ioq3 mailing list.
-#else
-  #define Q_ftol(v) ((long) (v))
-  #define Q_round(v) do { if((v) < 0) (v) -= 0.5f; else (v) += 0.5f; (v) = Q_ftol((v)); } while(0)
-  #define Q_SnapVector(vec) \
-	do\
-	{\
-		vec3_t *temp = (vec);\
-		\
-		Q_round((*temp)[0]);\
-		Q_round((*temp)[1]);\
-		Q_round((*temp)[2]);\
-	} while(0)
-#endif
-*/
 
 #if idppc
 
