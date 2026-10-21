@@ -480,6 +480,7 @@ void SV_ContentShutdown( void );
 //
 void SV_Content_f( void );
 void SV_ExportFrame( void );
+void SV_ExportMapLoaded( void );
 void SV_ContentPacket( netadr_t from, msg_t *msg );
 int SV_ContentSend( void );
 void SV_ContentFreeClient( client_t *cl );

@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // (downloads.md section 6). The files are copied, or hard-linked where
 // they can be, on a thread of their own, so a big set never holds up a
 // frame; it reads the disk beside the pak index's hash job (content.h).
+// content add checks a pak an operator installs, and copies it into a
+// game directory on the same thread, for the next map (section 11).
 
 #include "server.h"
 #include "../qcommon/content.h"
@@ -37,7 +39,8 @@ typedef enum {
 	EXPORT_THERE,		// already there, with the pak's hash
 	EXPORT_LINKED,
 	EXPORT_COPIED,
-	EXPORT_FAILED
+	EXPORT_FAILED,
+	EXPORT_DIFFERENT	// content add's: a pak of its name with other contents is there
 } exportResult_t;
 
 // where a pak goes: by hash, then by name
@@ -66,6 +69,7 @@ typedef struct {
 	int				count;
 	byte			*buffer;
 	qboolean		copies;			// never hard links
+	qboolean		add;			// content add's: its one pak by name alone
 	volatile int	done;			// items finished
 	volatile int64_t	bytes;		// bytes copied
 
@@ -78,6 +82,8 @@ typedef struct {
 static exportJob_t	exportJob;
 static sysThread_t	*exportThread;
 static char			exportMadeDir[MAX_OSPATH];	// the last directory SV_ExportMakeDirs made
+
+static void SV_AddFinish( void );
 
 /*
 ==============================================================
@@ -133,10 +139,11 @@ static qboolean SV_ExportUnchanged( const exportItem_t *item ) {
 SV_ExportCopy
 
 Copies the item's pak to part, hashing what it reads, which must be the
-pak's hash; NULL, or why it failed
+pak's hash; content add's item takes it as its hash. NULL, or why it
+failed
 =================
 */
-static const char *SV_ExportCopy( exportJob_t *job, const exportItem_t *item, const char *part ) {
+static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const char *part ) {
 	FILE		*in, *out;
 	sha256_t	sha;
 	byte		digest[SHA256_DIGEST_SIZE];
@@ -171,10 +178,18 @@ static const char *SV_ExportCopy( exportJob_t *job, const exportItem_t *item, co
 	}
 	fclose( in );
 	Com_SHA256Final( &sha, digest );
-	if ( !why && ( read != item->size || memcmp( digest, item->sha256, SHA256_DIGEST_SIZE ) ) ) {
-		why = "the pak changed since it was hashed";
+	if ( why ) {
+		return why;
 	}
-	return why;
+	if ( read != item->size ) {
+		return "the pak changed since it was hashed";
+	}
+	if ( job->add ) {
+		memcpy( item->sha256, digest, SHA256_DIGEST_SIZE );
+	} else if ( memcmp( digest, item->sha256, SHA256_DIGEST_SIZE ) ) {
+		return "the pak changed since it was hashed";
+	}
+	return NULL;
 }
 
 /*
@@ -233,10 +248,56 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 	}
 }
 
+/*
+=================
+SV_AddTarget
+
+content add's pak, beside its place in its game directory as a .part, a
+copy hashed as it's made, which the frame checks again and renames into
+place (SV_AddFinish); unless a pak of its name is there already, which is
+the same file (its size, then its hash) or refused
+=================
+*/
+static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
+	exportTarget_t	*target = &item->targets[EXPORT_BY_NAME];
+	char			part[MAX_OSPATH + 8];
+	byte			digest[SHA256_DIGEST_SIZE];
+	const char		*why;
+	int64_t			size, mtime;
+
+	if ( Content_FileStat( target->ospath, &size, &mtime ) ) {
+		if ( size != item->size ) {
+			target->result = EXPORT_DIFFERENT;
+		} else if ( !Content_HashFile( item->source, item->sha256, &size ) || size != item->size ) {
+			target->result = EXPORT_FAILED;
+			target->why = "the pak can't be read";
+		} else {
+			target->result = Content_HashFile( target->ospath, digest, &size ) && size == item->size
+				&& !memcmp( digest, item->sha256, SHA256_DIGEST_SIZE ) ? EXPORT_THERE : EXPORT_DIFFERENT;
+		}
+		return;
+	}
+	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
+	remove( part );
+	why = SV_ExportCopy( job, item, part );
+	if ( why ) {
+		remove( part );
+		target->result = EXPORT_FAILED;
+		target->why = why;
+	} else {
+		target->result = EXPORT_COPIED;
+	}
+}
+
 static void SV_ExportThread( void *arg ) {
 	exportJob_t	*job = arg;
 	int			i;
 
+	if ( job->add ) {
+		SV_AddTarget( job, &job->items[0] );
+		job->done = 1;
+		return;
+	}
 	for ( i = 0; i < job->count; i++ ) {
 		SV_ExportTarget( job, &job->items[i], EXPORT_BY_HASH );
 		SV_ExportTarget( job, &job->items[i], EXPORT_BY_NAME );
@@ -336,13 +397,22 @@ void SV_ExportFrame( void ) {
 	if ( !Sys_ThreadFinished( exportThread ) ) {
 		if ( Sys_Milliseconds() - job->nextReport >= 0 ) {
 			job->nextReport = Sys_Milliseconds() + EXPORT_REPORT_MSEC;
-			Com_Printf( "content export: %d of %d paks, %lld of %lld MB copied at most\n", job->done,
-				job->count, (long long)( job->bytes >> 20 ), (long long)( job->total >> 20 ) );
+			if ( job->add ) {
+				Com_Printf( "content add: %lld of %lld MB copied\n", (long long)( job->bytes >> 20 ),
+					(long long)( job->total >> 20 ) );
+			} else {
+				Com_Printf( "content export: %d of %d paks, %lld of %lld MB copied at most\n", job->done,
+					job->count, (long long)( job->bytes >> 20 ), (long long)( job->total >> 20 ) );
+			}
 		}
 		return;
 	}
 	exportThread = NULL;
-	SV_ExportFinish();
+	if ( job->add ) {
+		SV_AddFinish();
+	} else {
+		SV_ExportFinish();
+	}
 }
 
 /*
@@ -426,6 +496,44 @@ static qboolean SV_ExportAbsolute( const char *dir ) {
 #endif
 }
 
+// content add's pak
+static struct {
+	char			name[OFCM_GAMEDIR_SIZE + OFCM_NAME_SIZE + 8];	// "<gamedir>/<name>.pk3"
+	char			gameDir[OFCM_GAMEDIR_SIZE], base[OFCM_NAME_SIZE];	// its parts, for the check again
+	unsigned int	checksum;
+	qboolean		added;			// one was added since the map loaded (SV_ExportMapLoaded)
+} addPak;
+
+/*
+=================
+SV_AddRunning
+
+Whether an export or an add runs, saying so: one at a time
+=================
+*/
+static qboolean SV_AddRunning( void ) {
+	if ( !exportThread ) {
+		return qfalse;
+	}
+	if ( exportJob.add ) {
+		Com_Printf( "content add is adding %s\n", addPak.name );
+	} else {
+		Com_Printf( "An export is running: %d of %d paks done\n", exportJob.done, exportJob.count );
+	}
+	return qtrue;
+}
+
+/*
+=================
+SV_ExportMapLoaded
+
+A map loaded, and its content manifest lists the paks added before
+=================
+*/
+void SV_ExportMapLoaded( void ) {
+	addPak.added = qfalse;
+}
+
 /*
 =================
 SV_ExportStart
@@ -445,8 +553,7 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 	int				i, j, length, numRefused = 0, numGone = 0;
 	size_t			dirLength;
 
-	if ( exportThread ) {
-		Com_Printf( "An export is running: %d of %d paks done\n", job->done, job->count );
+	if ( SV_AddRunning() ) {
 		return;
 	}
 	if ( !SV_ExportAbsolute( dir ) ) {
@@ -529,6 +636,10 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 	}
 	// what isn't in the content manifest isn't exported: a pak still
 	// waiting to be hashed, or one added since the map loaded
+	if ( addPak.added ) {
+		Com_Printf( "content export: paks added since the map loaded aren't in the content manifest "
+			"until the next map, and aren't exported\n" );
+	}
 	if ( Content_PakIndex_Busy() ) {
 		Com_Printf( "content export: some paks are still being hashed and aren't in the content manifest yet; "
 			"export again once \"Content manifest\" says none are left\n" );
@@ -539,6 +650,7 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 	}
 
 	job->copies = copies;
+	job->add = qfalse;
 	job->done = 0;
 	job->bytes = 0;
 	exportThread = Sys_StartThread( SV_ExportThread, job );
@@ -553,6 +665,169 @@ static void SV_ExportStart( const char *dir, qboolean copies ) {
 }
 
 /*
+==============================================================
+
+CONTENT ADD
+
+==============================================================
+*/
+
+/*
+=================
+SV_AddStart
+
+content add <file> [gamedir]: checks the pak (FS_CheckAddPak), then
+copies it on the thread, hashing it as it goes
+=================
+*/
+static void SV_AddStart( const char *file, const char *gameDir ) {
+	exportJob_t		*job = &exportJob;
+	exportItem_t	*item;
+	char			name[MAX_OSPATH], overrides[MAX_STRING_CHARS];
+	const char		*refused, *base;
+	int64_t			size, mtime;
+
+	if ( SV_AddRunning() ) {
+		return;
+	}
+	if ( !gameDir ) {
+		gameDir = FS_GetCurrentGameDir();
+	}
+	base = COM_SkipPath( (char *)file );
+#ifdef _WIN32
+	// and Windows' own separators, or a drive's
+	for ( const char *c = base; *c; c++ ) {
+		if ( *c == '\\' || *c == ':' ) {
+			base = c + 1;
+		}
+	}
+#endif
+	Q_strncpyz( name, base, sizeof( name ) );
+	if ( !COM_CompareExtension( name, ".pk3" ) ) {
+		Com_Printf( "content add: %s isn't a pak (.pk3)\n", file );
+		return;
+	}
+	name[strlen( name ) - 4] = '\0';
+	if ( !FS_ValidDownloadPak( gameDir, name ) || !OFCM_ValidName( gameDir, name ) ) {
+		Com_Printf( "content add: %s/%s.pk3 isn't a name a pak can have for downloads\n", gameDir, name );
+		return;
+	}
+	// Content_FileStat refuses what's too large for a pak too
+	if ( !Content_FileStat( file, &size, &mtime ) ) {
+		Com_Printf( "content add: %s can't be read, or is %d MB or larger, which no pak may be\n", file,
+			( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
+		return;
+	}
+	Com_sprintf( addPak.name, sizeof( addPak.name ), "%s/%s.pk3", gameDir, name );
+	Q_strncpyz( addPak.gameDir, gameDir, sizeof( addPak.gameDir ) );
+	Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
+	refused = FS_CheckAddPak( file, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ) );
+	if ( refused ) {
+		Com_Printf( "content add: %s is refused: %s\n", addPak.name, refused );
+		return;
+	}
+	if ( overrides[0] ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s\n", overrides );
+	}
+
+	free( job->items );
+	job->items = calloc( 1, sizeof( *job->items ) );
+	if ( !job->buffer ) {
+		job->buffer = malloc( EXPORT_BUFFER_SIZE );
+	}
+	if ( !job->items || !job->buffer ) {
+		Com_Printf( "content add: out of memory\n" );
+		return;
+	}
+	item = &job->items[0];
+	Q_strncpyz( item->source, file, sizeof( item->source ) );
+	Q_strncpyz( item->name, addPak.name, sizeof( item->name ) );
+	item->size = size;
+	item->mtime = mtime;
+	Q_strncpyz( item->targets[EXPORT_BY_NAME].ospath,
+		FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", name ) ), MAX_OSPATH );
+	FS_CreatePath( item->targets[EXPORT_BY_NAME].ospath );
+	job->count = 1;
+	job->add = qtrue;
+	job->copies = qtrue;
+	job->total = size;
+	job->done = 0;
+	job->bytes = 0;
+	exportThread = Sys_StartThread( SV_ExportThread, job );
+	if ( !exportThread ) {
+		Com_Printf( "content add: this build has no threads to copy with\n" );
+		return;
+	}
+	job->started = Sys_Milliseconds();
+	job->nextReport = job->started + EXPORT_REPORT_MSEC;
+}
+
+/*
+=================
+SV_AddFinish
+
+The copy's done: checked again, as the source could have changed since
+its check, it's renamed into place, and goes into the pak index with the
+hash it was copied with, for the next map's content manifest
+=================
+*/
+static void SV_AddFinish( void ) {
+	const exportItem_t		*item = &exportJob.items[0];
+	const exportTarget_t	*target = &item->targets[EXPORT_BY_NAME];
+	const char				*home = Cvar_VariableString( "fs_homedatapath" ), *root, *refused;
+	char					part[MAX_OSPATH + 8], overrides[MAX_STRING_CHARS];
+	unsigned int			checksum;
+	pakRecord_t				record;
+
+	switch ( target->result ) {
+	case EXPORT_THERE:
+		Com_Printf( "%s is installed already, the same file\n", addPak.name );
+		return;
+	case EXPORT_DIFFERENT:
+		Com_Printf( "content add: a pak named %s is already installed with different contents; give the new "
+			"version its own name so players who have the old one aren't confused\n", addPak.name );
+		return;
+	case EXPORT_COPIED:
+		break;
+	default:
+		Com_Printf( "content add: %s: %s\n", addPak.name, target->why );
+		return;
+	}
+
+	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
+	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, overrides, sizeof( overrides ) );
+	if ( !refused && checksum != addPak.checksum ) {
+		refused = "it changed while it was copied";
+	}
+	if ( !refused && !Sys_Rename( part, target->ospath ) ) {
+		refused = "the file can't be renamed into place";
+	}
+	if ( refused ) {
+		remove( part );
+		Com_Printf( "content add: %s is refused: %s\n", addPak.name, refused );
+		return;
+	}
+
+	// the home's root number, as the search path gives it its paks
+	// (download-protocol.md section 4.2)
+	Com_Memset( &record, 0, sizeof( record ) );
+	for ( record.root = 1; record.root <= 255; record.root++ ) {
+		root = FS_ContentRootPath( record.root );
+		if ( root && !Q_stricmp( root, home ) ) {
+			break;
+		}
+	}
+	if ( record.root <= 255 && Content_FileStat( target->ospath, &record.size, &record.mtime ) ) {
+		Com_Memcpy( record.sha256, item->sha256, SHA256_DIGEST_SIZE );
+		record.pakChecksum = addPak.checksum;
+		Q_strncpyz( record.path, addPak.name, sizeof( record.path ) );
+		Content_PakIndex_Put( &record );
+	}
+	addPak.added = qtrue;
+	Com_Printf( "%s added; it's served from the next map change\n", addPak.name );
+}
+
+/*
 =================
 SV_Content_f
 
@@ -563,16 +838,24 @@ Cmd_ExecuteString turns away
 =================
 */
 void SV_Content_f( void ) {
+	const char	*sub = Cmd_Argv( 1 );
+
 	if ( Com_IsRedirecting() ) {
 		Com_Printf( "content runs only from the server's console, not through rcon\n" );
 		return;
 	}
-	if ( ( Cmd_Argc() == 3 || ( Cmd_Argc() == 4 && !Q_stricmp( Cmd_Argv( 3 ), "copy" ) ) )
-		&& !Q_stricmp( Cmd_Argv( 1 ), "export" ) ) {
+	if ( !Q_stricmp( sub, "export" ) && ( Cmd_Argc() == 3 || ( Cmd_Argc() == 4 && !Q_stricmp( Cmd_Argv( 3 ), "copy" ) ) ) ) {
 		SV_ExportStart( Cmd_Argv( 2 ), Cmd_Argc() == 4 );
 		return;
 	}
-	Com_Printf( "usage: content export <directory> [copy]: puts the paks the server sends, but the game's own, "
-		"in the directory by hash (sha256/<hash>.pk3) and by name (<game>/<name>.pk3), for a web server "
-		"that sv_dlURL names; hard-linked where it can be, unless copy says to copy\n" );
+	if ( !Q_stricmp( sub, "add" ) && ( Cmd_Argc() == 3 || Cmd_Argc() == 4 ) ) {
+		SV_AddStart( Cmd_Argv( 2 ), Cmd_Argc() == 4 ? Cmd_Argv( 3 ) : NULL );
+		return;
+	}
+	Com_Printf( "usage:\n"
+		"content export <directory> [copy]: puts the paks the server sends, but the game's own, in the "
+		"directory by hash (sha256/<hash>.pk3) and by name (<game>/<name>.pk3), for a web server that "
+		"sv_dlURL names; hard-linked where it can be, unless copy says to copy\n"
+		"content add <file> [game]: checks a pak and installs it in the game's directory (this one's, "
+		"or game) for the next map; a file on this machine, not a URL\n" );
 }
