@@ -74,6 +74,7 @@ static GLsync previousFrameFence;
 
 int qglMajorVersion, qglMinorVersion;
 int qglesMajorVersion, qglesMinorVersion;
+qboolean qglTimerQuery;
 
 typedef void (APIENTRYP qglActiveTextureARB_t) (GLenum texture);
 typedef void (APIENTRYP qglClientActiveTextureARB_t) (GLenum texture);
@@ -409,21 +410,39 @@ static qboolean GLimp_GetProcAddresses( qboolean fixedFunction ) {
 
 #undef GLE
 
-	// optional: without them, GLimp_EndFrame doesn't limit the frames the
-	// driver queues
-	if ( QGL_VERSION_ATLEAST( 3, 2 ) || QGLES_VERSION_ATLEAST( 3, 0 ) || SDL_GL_ExtensionSupported( "GL_ARB_sync" ) ) {
+	// optional ones, which may be missing
 #ifdef __SDL_NOGETPROCADDR__
 #define GLE( ret, name, ... ) qgl##name = gl#name;
 #else
 #define GLE( ret, name, ... ) qgl##name = (name##proc *) SDL_GL_GetProcAddress( "gl" #name );
 #endif
+
+	// without them, GLimp_EndFrame doesn't limit the frames the driver
+	// queues
+	if ( QGL_VERSION_ATLEAST( 3, 2 ) || QGLES_VERSION_ATLEAST( 3, 0 ) || SDL_GL_ExtensionSupported( "GL_ARB_sync" ) ) {
 		QGL_ARB_sync_PROCS;
-#undef GLE
 
 		if ( !qglFenceSync || !qglDeleteSync || !qglClientWaitSync ) {
 			qglFenceSync = NULL;
 		}
 	}
+
+	// ui_speeds times the 2D on the GPU with them. WebGL 2 has them from
+	// its own extension alone: WebGL 1's, which a browser may list on
+	// WebGL 2 too, doesn't let the core queries time
+	qglTimerQuery = qfalse;
+#ifdef __EMSCRIPTEN__
+#define TIMER_QUERY_ES_EXTENSION "GL_EXT_disjoint_timer_query_webgl2"
+#else
+#define TIMER_QUERY_ES_EXTENSION "GL_EXT_disjoint_timer_query"
+#endif
+	if ( qglesMajorVersion ? QGLES_VERSION_ATLEAST( 3, 0 ) && SDL_GL_ExtensionSupported( TIMER_QUERY_ES_EXTENSION )
+			: QGL_VERSION_ATLEAST( 3, 3 ) || SDL_GL_ExtensionSupported( "GL_ARB_timer_query" ) ) {
+		QGL_ARB_occlusion_query_PROCS;
+		qglTimerQuery = qglGenQueries && qglDeleteQueries && qglBeginQuery && qglEndQuery && qglGetQueryObjectuiv;
+	}
+#undef TIMER_QUERY_ES_EXTENSION
+#undef GLE
 
 	return success;
 }
@@ -442,6 +461,7 @@ static void GLimp_ClearProcAddresses( void ) {
 	qglMinorVersion = 0;
 	qglesMajorVersion = 0;
 	qglesMinorVersion = 0;
+	qglTimerQuery = qfalse;
 
 	QGL_1_1_PROCS;
 	QGL_1_1_FIXED_FUNCTION_PROCS;

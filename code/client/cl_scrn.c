@@ -746,6 +746,27 @@ void SCR_Init( void ) {
 
 /*
 ==================
+SCR_DrawUI
+
+The ui's drawing, which ui_speeds times: its refresh, then the connect
+screen when connect is set, over the loading screen when loading is
+==================
+*/
+static void SCR_DrawUI( qboolean connect, qboolean loading ) {
+	if ( cl_uiSpeeds ) {
+		CL_UISpeedsUI( qtrue );
+	}
+	VM_Call( uivm, UI_REFRESH, cls.realtime );
+	if ( connect ) {
+		VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, loading );
+	}
+	if ( cl_uiSpeeds ) {
+		CL_UISpeedsUI( qfalse );
+	}
+}
+
+/*
+==================
 SCR_DrawScreenField
 
 This will be called twice if rendering in stereo mode
@@ -788,8 +809,7 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		case CA_CONNECTED:
 			// connecting clients will only show the connection dialog
 			// refresh to update the time
-			VM_Call( uivm, UI_REFRESH, cls.realtime );
-			VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, qfalse );
+			SCR_DrawUI( qtrue, qfalse );
 			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_LOADING:
@@ -800,8 +820,7 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			// also draw the connection information, so it doesn't
 			// flash away too briefly on local or lan games
 			// refresh to update the time
-			VM_Call( uivm, UI_REFRESH, cls.realtime );
-			VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, qtrue );
+			SCR_DrawUI( qtrue, qtrue );
 			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_ACTIVE:
@@ -819,7 +838,7 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 
 	// the menu draws next
 	if ( Key_GetCatcher( ) & KEYCATCH_UI && uivm ) {
-		VM_Call( uivm, UI_REFRESH, cls.realtime );
+		SCR_DrawUI( qfalse, qfalse );
 	}
 	Hooks_Draw( EXT_DRAW_MENU, stereoFrame );
 
@@ -858,6 +877,8 @@ void SCR_UpdateScreen( void ) {
 	// that case.
 	if( uivm || com_dedicated->integer )
 	{
+		CL_UISpeedsFrame();
+
 		// XXX
 		int in_anaglyphMode = Cvar_VariableIntegerValue("r_anaglyphMode");
 		// if running in stereo, we need to draw the frame twice
@@ -872,6 +893,9 @@ void SCR_UpdateScreen( void ) {
 			re.EndFrame( &time_frontend, &time_backend );
 		} else {
 			re.EndFrame( NULL, NULL );
+		}
+		if ( cl_uiSpeeds ) {
+			CL_UISpeedsEndFrame();
 		}
 
 		// for com_speeds: the frame has been swapped (natively; a browser

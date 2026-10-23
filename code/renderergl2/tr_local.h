@@ -2551,6 +2551,10 @@ typedef enum {
 	RC_UPDATE_IMAGE
 } renderCommand_t;
 
+// the 2D commands, which ui_speeds times in runs (tr_times2d.c): a new one
+// belongs here too, or a run ends at it
+#define RC_IS_2D( cmd )	( (cmd) == RC_SET_COLOR || (cmd) == RC_STRETCH_PIC || (cmd) == RC_TRIS_2D || (cmd) == RC_UPDATE_IMAGE )
+
 
 // these are sort of arbitrary limits.
 // the limits apply to the sum of all scenes in a frame --

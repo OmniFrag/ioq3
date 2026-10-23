@@ -24,7 +24,23 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		12
+#define	REF_API_VERSION		13
+
+// ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
+// they were last asked for, timed in runs, each from its first
+// command to the draw of what it left
+#define MAX_GPU_TIMES2D		4
+
+typedef struct {
+	int64_t		cpu;		// the runs' time on the CPU, in ri.Nanoseconds
+	int			runs;
+	qboolean	gpuTimer;	// whether the GPU times them too
+	int			gpuUntimed;	// runs it didn't, for want of a free query
+	// earlier frames whose runs' GPU time came back since, oldest first,
+	// in nanoseconds; the GPU answers a frame or a few late
+	int			gpuFrames;
+	int64_t		gpu[MAX_GPU_TIMES2D];
+} times2D_t;
 
 // the window's size after a crash (r_mode), whatever the player chose
 #define R_MODE_FALLBACK		3	// 640 * 480
@@ -150,6 +166,13 @@ typedef struct {
 	// The size of the image a shader's first stage draws, as it was made or
 	// loaded; qfalse when it has none
 	qboolean (*GetShaderImageSize)( qhandle_t hShader, int *width, int *height );
+
+	// ui_speeds: copies the back end's 2D times out, unless times is NULL,
+	// starts them over, and says whether to time the next frames'. The
+	// client times the front end's SetColor, DrawStretchPic and
+	// DrawTriangles2D through wrappers (cl_uispeeds.c), where a new 2D
+	// draw belongs too.
+	void	(*TimeBackEnd2D)( times2D_t *times, qboolean on );
 } refexport_t;
 
 //
@@ -234,6 +257,9 @@ typedef struct {
 	void	(*Sys_GLimpSafeInit)( void );
 	void	(*Sys_GLimpInit)( void );
 	qboolean (*Sys_LowPhysicalMemory)( void );
+
+	// a monotonic clock, for ui_speeds' times
+	int64_t	(*Nanoseconds)( void );
 } refimport_t;
 
 

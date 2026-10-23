@@ -692,6 +692,19 @@ void CL_LoadConsoleHistory( void );
 void CL_SaveConsoleHistory( void );
 
 //
+// cl_uispeeds.c
+//
+extern qboolean	cl_uiSpeeds;	// ui_speeds is timing the 2D
+
+void	CL_UISpeedsInit( void );
+void	CL_UISpeedsRendererLoaded( void );
+void	CL_UISpeedsFrame( void );
+void	CL_UISpeedsEndFrame( void );
+void	CL_UISpeedsCgame( qboolean begin );
+void	CL_UISpeedsUI( qboolean begin );
+void	CL_UISpeedsReport( qboolean print );
+
+//
 // cl_scrn.c
 //
 void	SCR_Init (void);

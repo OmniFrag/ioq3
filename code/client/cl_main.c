@@ -1511,6 +1511,12 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	// shutting down the client so enter full screen ui mode
 	Cvar_Set("r_uiFullScreen", "1");
 
+	// what ui_speeds sampled in a match or demo, as it ends; one about to
+	// begin starts the samples over
+	if ( cl_uiSpeeds ) {
+		CL_UISpeedsReport( clc.state >= CA_CONNECTING );
+	}
+
 	if ( clc.demorecording ) {
 		CL_StopRecord_f ();
 	}
@@ -4413,6 +4419,7 @@ void CL_InitRef( void ) {
 	ri.Sys_GLimpSafeInit = Sys_GLimpSafeInit;
 	ri.Sys_GLimpInit = Sys_GLimpInit;
 	ri.Sys_LowPhysicalMemory = Sys_LowPhysicalMemory;
+	ri.Nanoseconds = Sys_Nanoseconds;
 
 	ret = GetRefAPI( REF_API_VERSION, &ri );
 
@@ -4427,6 +4434,7 @@ void CL_InitRef( void ) {
 	}
 
 	re = *ret;
+	CL_UISpeedsRendererLoaded();
 
 	// unpause so the cgame definitely gets a snapshot and renders a frame
 	Cvar_Set( "cl_paused", "0" );
@@ -4634,6 +4642,7 @@ void CL_Init( void ) {
 
 	CL_InitInput ();
 	Present_Init ();
+	CL_UISpeedsInit ();
 
 	//
 	// register our variables

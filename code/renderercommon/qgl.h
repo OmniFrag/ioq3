@@ -349,7 +349,14 @@ QGL_ARB_internalformat_query_PROCS;
 QGL_EXT_direct_state_access_PROCS;
 #undef GLE
 
+#ifndef GL_GPU_DISJOINT_EXT
+#define GL_GPU_DISJOINT_EXT 0x8FBB
+#endif
+
 extern int qglMajorVersion, qglMinorVersion;
+// timer queries (GL_ARB_timer_query, EXT_disjoint_timer_query), with the
+// query procs above loaded
+extern qboolean qglTimerQuery;
 extern int qglesMajorVersion, qglesMinorVersion;
 #define QGL_VERSION_ATLEAST( major, minor ) ( qglMajorVersion > major || ( qglMajorVersion == major && qglMinorVersion >= minor ) )
 #define QGLES_VERSION_ATLEAST( major, minor ) ( qglesMajorVersion > major || ( qglesMajorVersion == major && qglesMinorVersion >= minor ) )
