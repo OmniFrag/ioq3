@@ -322,6 +322,7 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
 
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
+	tess.twoSided = qfalse;
 	tess.shader = state;
 	tess.fogNum = fogNum;
 	tess.dlightBits = 0;		// will be OR'd in by surface functions
@@ -1008,7 +1009,7 @@ void RB_StageIteratorGeneric( void )
 	//
 	// set face culling appropriately
 	//
-	GL_Cull( shader->cullType );
+	GL_Cull( tess.twoSided ? CT_TWO_SIDED : shader->cullType );
 
 	// set polygon offset if necessary
 	if ( shader->polygonOffset )
@@ -1127,7 +1128,7 @@ void RB_StageIteratorVertexLitTexture( void )
 	//
 	// set face culling appropriately
 	//
-	GL_Cull( shader->cullType );
+	GL_Cull( tess.twoSided ? CT_TWO_SIDED : shader->cullType );
 
 	//
 	// set arrays and lock
@@ -1197,7 +1198,7 @@ void RB_StageIteratorLightmappedMultitexture( void ) {
 	//
 	// set face culling appropriately
 	//
-	GL_Cull( shader->cullType );
+	GL_Cull( tess.twoSided ? CT_TWO_SIDED : shader->cullType );
 
 	//
 	// set color, pointers, and lock

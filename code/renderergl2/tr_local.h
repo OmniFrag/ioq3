@@ -2127,6 +2127,10 @@ typedef struct shaderCommands_s
 	int			numIndexes;
 	int			numVertexes;
 
+	// drawn without culling, whatever the shader's: it holds a 2D batch,
+	// whose winding is its caller's (RB_Tris2D)
+	qboolean	twoSided;
+
 	// info extracted from current shader
 	int			numPasses;
 	void		(*currentStageIteratorFunc)( void );

@@ -46,6 +46,8 @@ RB_CheckOverflow
 ==============
 */
 void RB_CheckOverflow( int verts, int indexes ) {
+	qboolean	twoSided = tess.twoSided;
+
 	if (tess.numVertexes + verts < SHADER_MAX_VERTEXES
 		&& tess.numIndexes + indexes < SHADER_MAX_INDEXES) {
 		return;
@@ -61,6 +63,7 @@ void RB_CheckOverflow( int verts, int indexes ) {
 	}
 
 	RB_BeginSurface(tess.shader, tess.fogNum );
+	tess.twoSided = twoSided;
 }
 
 
