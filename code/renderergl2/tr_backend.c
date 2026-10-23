@@ -670,7 +670,7 @@ target, y down from the top; or with NULL, lets it draw anywhere. What
 waits to be drawn is drawn first, inside the rectangle it was given.
 =============
 */
-static void RB_Scissor2D( const int *rect ) {
+void RB_Scissor2D( const int *rect ) {
 	int width, height;
 
 	if ( rect ? backEnd.scissor2D && !memcmp( rect, backEnd.scissorRect2D, sizeof( backEnd.scissorRect2D ) ) : !backEnd.scissor2D ) {
@@ -2182,6 +2182,18 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_UPDATE_IMAGE:
 			data = RB_UpdateImageCmd( data );
+			break;
+		case RC_DRAW_2D:
+			data = RB_Draw2D( data );
+			break;
+		case RC_CLIPMASK_2D:
+			data = RB_ClipMask2D( data );
+			break;
+		case RC_DELETE_2D:
+			data = RB_Delete2D( data );
+			break;
+		case RC_UPDATE_TEXTURE_2D:
+			data = RB_UpdateTexture2D( data );
 			break;
 		case RC_DRAW_SURFS:
 			data = RB_DrawSurfs( data );

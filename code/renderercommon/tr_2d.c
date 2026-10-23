@@ -30,11 +30,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 =============
 R_CheckTris2D
 
-Whether tris can be drawn with at most maxBytes of vertexes and indexes.
-If not, error says why, or is empty when there's just nothing to draw.
+Whether tris can be drawn, with no flags but those in flags and at most
+maxBytes of vertexes and indexes. If not, error says why, or is empty when
+there's just nothing to draw.
 =============
 */
-qboolean R_CheckTris2D( const tris2D_t *tris, int maxBytes, char *error, int errorSize ) {
+qboolean R_CheckTris2D( const tris2D_t *tris, int flags, int maxBytes, char *error, int errorSize ) {
 	const draw2DState_t	*state = &tris->state;
 	const float			*m = state->transform;
 	qboolean			quads = ( state->flags & TRIS2D_QUADS ) != 0;
@@ -43,7 +44,7 @@ qboolean R_CheckTris2D( const tris2D_t *tris, int maxBytes, char *error, int err
 
 	error[0] = '\0';
 
-	if ( state->flags & ~( TRIS2D_SCISSOR | TRIS2D_TRANSFORM | TRIS2D_QUADS ) ) {
+	if ( state->flags & ~flags ) {
 		Com_sprintf( error, errorSize, "flags 0x%x has some this renderer doesn't draw yet", state->flags );
 		return qfalse;
 	}

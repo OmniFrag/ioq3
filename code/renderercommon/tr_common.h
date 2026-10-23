@@ -203,6 +203,140 @@ qboolean R_ValidateMDR( const void *buffer, int fileSize, const char *name );
 /*
 ====================================================================
 
+The UI's retained 2D (tr_ui2d_common.c): the front end of tr_public.h's
+CreateTexture2D to DeletePaint2D, which both renderers share, and the
+back end's commands that need no more of a renderer than its tr_ui2d.c
+gives (r_renderer2D)
+
+====================================================================
+*/
+
+#define MAX_TEXTURES2D			4096
+#define MAX_GEOMETRIES2D		16384
+#define MAX_GEOMETRY2D_VERTS	65536
+#define MAX_GEOMETRY2D_BYTES	( 16 * 1024 * 1024 )	// the vertexes and indexes of all of them
+#define MAX_PAINTS2D			1024
+
+typedef struct {
+	qboolean		deleted;		// its delete waits among the frame's commands
+	polyVert2D_t	*verts;
+	int				*indexes;
+	int				numVerts, numIndexes;
+	polyVert2D_t	*straightVerts;	// with straight colors, made when first asked for (R_StraightVerts2D)
+	void			*gpu;			// the renderer's copy, opengl2's buffers (malloc'd)
+} geometry2D_t;
+
+// a UI texture, which the renderer draws with image
+typedef struct {
+	qboolean		deleted;
+	image_t			image;			// not in the renderer's table of images
+	tex2DFormat_t	format;
+} texture2D_t;
+
+typedef enum {
+	HANDLE2D_TEXTURE,
+	HANDLE2D_GEOMETRY,
+	HANDLE2D_PAINT,
+	HANDLE2D_KINDS
+} handle2DKind_t;
+
+// the 2D state's flags that tr_ui2d_common.c's draws take, past the
+// immediate batch's
+#define TRIS2D_RETAINED_FLAGS	( TRIS2D_PREMULTIPLIED | TRIS2D_TEXTURE2D | TRIS2D_CLIPMASK | TRIS2D_PAINT )
+#define TRIS2D_ALL_FLAGS		( TRIS2D_IMMEDIATE_FLAGS | TRIS2D_RETAINED_FLAGS )
+
+// a 2D state drawn with a shader's stages, through the tessellator, rather
+// than the renderer's own UI path
+#define R_ShaderState2D( state ) ( ( state )->texture && !( ( state )->flags & ( TRIS2D_TEXTURE2D | TRIS2D_PAINT ) ) )
+
+// a premultiplied color channel straight, rounded
+#define R_StraightChannel2D( c, a ) ( ( a ) ? MIN( 255, ( ( c ) * 255 + ( a ) / 2 ) / ( a ) ) : 0 )
+
+// the render commands, after their renderCommand_t
+typedef struct {
+	int				commandId;
+	int				geometry;			// a retained geometry; 0 for the vertexes and indexes after this
+	int				numVerts, numIndexes;
+	draw2DState_t	state;
+} draw2DCommand_t;
+
+typedef struct {
+	int				commandId;
+	clipMaskOp_t	op;
+	int				geometry;
+	draw2DState_t	state;
+} clipMask2DCommand_t;
+
+typedef struct {
+	int				commandId;
+	handle2DKind_t	kind;
+	int				handle;
+} delete2DCommand_t;
+
+// followed by width * height pixels in the texture's format
+typedef struct {
+	int				commandId;
+	int				texture;
+	int				x, y, width, height;
+	int				bytes;
+} updateTexture2DCommand_t;
+
+// what each renderer gives tr_ui2d_common.c (tr_ui2d.c)
+typedef struct {
+	int		drawCommand, clipMaskCommand, deleteCommand, updateCommand;	// its renderCommand_t
+	int		maxCommandBytes;							// MAX_RENDER_COMMANDS
+	// what it draws (RE_GetCaps2D's retained part)
+	void	(*caps)( caps2D_t *caps );
+	// makes a texture's GL texture, from pixels or transparent black
+	void	(*createTexture)( texture2D_t *t, const byte *pixels );
+	// replaces a rectangle of it now, among the back end's commands
+	void	(*updateTexture)( texture2D_t *t, int x, int y, int width, int height, const byte *pixels );
+	// frees what a texture or a geometry has in GL, in the back end
+	void	(*freeGpu)( handle2DKind_t kind, void *object );
+	// the back end: the 2D target, projection and a state's scissor, with
+	// what waits drawn; and a geometry drawn unseen, into the stencil
+	void	(*begin)( const draw2DState_t *state );
+	void	(*drawUnseen)( const draw2DState_t *state, geometry2D_t *g );
+} renderer2D_t;
+
+extern const renderer2D_t	r_renderer2D;
+
+void				*R_GetCommandBuffer( int bytes );
+void				R_IssuePendingRenderCommands( void );
+
+// the front end: refexport_t's entries
+void				R_InitStore2D( void );
+void				R_ShutdownStore2D( qboolean freeGpu );
+int					R_CreateTexture2D( int width, int height, tex2DFormat_t format, const byte *pixels );
+void				R_UpdateTexture2D( int texture, int x, int y, int width, int height, const byte *pixels );
+void				R_DeleteTexture2D( int texture );
+int					R_CreateGeometry2D( const polyVert2D_t *verts, int numVerts, const int *indexes, int numIndexes );
+void				R_DrawGeometry2D( int geometry, const draw2DState_t *state );
+void				R_DeleteGeometry2D( int geometry );
+void				R_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DState_t *state );
+int					R_CreatePaint2D( const paint2D_t *paint );
+void				R_DeletePaint2D( int paint );
+// an immediate batch with TRIS2D_RETAINED_FLAGS
+void				R_DrawTriangles2DState( const tris2D_t *tris );
+
+// for the back end
+texture2D_t			*R_GetTexture2D( int texture, qboolean deleted );
+geometry2D_t		*R_GetGeometry2D( int geometry, qboolean deleted );
+const paint2D_t		*R_GetPaint2D( int paint, qboolean deleted );
+int					R_TexelBytes2D( tex2DFormat_t format );
+void				R_StraightColors2D( polyVert2D_t *verts, int numVerts );
+const polyVert2D_t	*R_StraightVerts2D( geometry2D_t *g );
+void				R_Transform2DMatrix( const draw2DState_t *state, float out[16] );
+void				R_Transform2DPoint( const float matrix[16], const float in[2], float out[2] );
+qboolean			R_BeginClipTest2D( const draw2DState_t *state );
+void				R_EndClipTest2D( void );
+const void			*RB_ClipMask2D( const void *data );
+const void			*RB_Delete2D( const void *data );
+const void			*RB_UpdateTexture2D( const void *data );
+
+/*
+====================================================================
+
 IMPLEMENTATION SPECIFIC FUNCTIONS
 
 ====================================================================

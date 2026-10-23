@@ -28,6 +28,7 @@ set(RENDERER_GL1_SOURCES
     ${SOURCE_DIR}/renderergl1/tr_shadows.c
     ${SOURCE_DIR}/renderergl1/tr_sky.c
     ${SOURCE_DIR}/renderergl1/tr_surface.c
+    ${SOURCE_DIR}/renderergl1/tr_ui2d.c
     ${SOURCE_DIR}/renderergl1/tr_world.c
 )
 

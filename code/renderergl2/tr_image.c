@@ -277,6 +277,10 @@ void R_ImageList_f( void ) {
 				// 4 bytes per pixel
 				estSize *= 4;
 				break;
+			case GL_DEPTH24_STENCIL8:
+				format = "D24S8  ";
+				estSize *= 4;
+				break;
 		}
 
 		// mipmap adds about 50%
@@ -2023,6 +2027,8 @@ static GLenum PixelDataFormatFromInternalFormat(GLenum internalFormat)
 		case GL_DEPTH_COMPONENT24_ARB:
 		case GL_DEPTH_COMPONENT32_ARB:
 			return GL_DEPTH_COMPONENT;
+		case GL_DEPTH24_STENCIL8:
+			return GL_DEPTH_STENCIL;
 		default:
 			return GL_RGBA;
 			break;
@@ -2215,6 +2221,8 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 
 	dataFormat = PixelDataFormatFromInternalFormat(internalFormat);
 	dataType = picFormat == GL_RGBA16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+	if (internalFormat == GL_DEPTH24_STENCIL8)
+		dataType = GL_UNSIGNED_INT_24_8;
 
 	// Convert image data format for OpenGL ES, data is converted for each mip level
 	if (qglesMajorVersion)
@@ -2291,6 +2299,8 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 			case GL_DEPTH_COMPONENT32:
 				internalFormat = GL_DEPTH_COMPONENT24;
 				dataType = GL_UNSIGNED_INT;
+				break;
+			case GL_DEPTH24_STENCIL8:
 				break;
 
 			default:
@@ -2380,6 +2390,7 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 		case GL_DEPTH_COMPONENT16_ARB:
 		case GL_DEPTH_COMPONENT24_ARB:
 		case GL_DEPTH_COMPONENT32_ARB:
+		case GL_DEPTH24_STENCIL8:
 			// Fix for sampling depth buffer on old nVidia cards.
 			// from http://www.idevgames.com/forums/thread-4141-post-34844.html#pid34844
 			// OpenGL ES has no depth texture mode
@@ -3134,7 +3145,8 @@ void R_CreateBuiltinImages( void ) {
 		if (r_drawSunRays->integer)
 			tr.sunRaysImage = R_CreateImage("*sunRays", NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, rgbFormat);
 
-		tr.renderDepthImage  = R_CreateImage("*renderdepth",  NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH_COMPONENT24);
+		// with stencil, for the UI's clip masks (tr_ui2d.c)
+		tr.renderDepthImage  = R_CreateImage("*renderdepth",  NULL, width, height, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, GL_DEPTH24_STENCIL8);
 
 		// sized by R_UpdateViewScale
 		tr.viewImage      = R_CreateImage("_view",      NULL, 1, 1, IMGTYPE_COLORALPHA, IMGFLAG_NO_COMPRESSION | IMGFLAG_CLAMPTOEDGE, R_ViewFormat());

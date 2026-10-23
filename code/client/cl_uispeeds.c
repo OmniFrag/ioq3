@@ -68,55 +68,78 @@ static int			gpuUntimed;	// runs the GPU didn't time, for want of queries
 static uisSamples_t	parts[UIS_PARTS];
 static int			*storage;	// the parts' samples, then scratch for sorting
 
+// a kind of 2D call that costs the same each time: one in every is timed,
+// at a phase drawn each frame, so a frame's calls, the same frame after
+// frame, are timed in turn. every is UIS_FRONT_END_EVERY, or the calls the
+// last frame made when fewer, so a frame like it times one of them and
+// isn't left out.
+typedef struct {
+	int			calls, timed;
+	int			every, phase;
+	int64_t		time;		// the timed ones'
+} uisSampled_t;
+
 // this frame's
 static struct {
 	int64_t		lastEnd;	// the last frame's end, 0 before the first
 	qboolean	inCgame, sceneSeen;
 	uisSpan_t	cgame, ui;
-	int			calls;		// the front end's 2D calls
-	int			pictures;	// pictures and colors
-	int64_t		sampled;	// the timed ones of them
-	int			sampledTimed;
+	uisSampled_t	pictures;	// pictures and colors
+	uisSampled_t	retained;	// retained geometry drawn, and clip masks set
 	int64_t		batches;	// every batch of triangles
 	int			batchesTimed;
-	int			phase;		// which call of each UIS_FRONT_END_EVERY is timed
 } f;
 
-// a cheap 2D call's start, when it's the one in UIS_FRONT_END_EVERY timed,
-// at a phase drawn each frame, so a frame's calls, the same frame after
-// frame, are timed in turn; 0 for the others, which are counted
-static int64_t CallStart( void ) {
-	f.calls++;
-	return ++f.pictures % UIS_FRONT_END_EVERY == f.phase ? Sys_Nanoseconds() : 0;
+// a call's start when it's the one of its kind timed; 0 for the others
+static int64_t CallStart( uisSampled_t *kind ) {
+	return ++kind->calls % kind->every == kind->phase ? Sys_Nanoseconds() : 0;
 }
 
-static void CallEnd( int64_t start ) {
+static void CallEnd( uisSampled_t *kind, int64_t start ) {
 	if ( start ) {
-		f.sampled += Sys_Nanoseconds() - start;
-		f.sampledTimed++;
+		kind->time += Sys_Nanoseconds() - start;
+		kind->timed++;
 	}
 }
 
-static int NextPhase( void ) {
+// the calls timed so far this frame, whose clock reads the spans hold
+static int TimedCalls( void ) {
+	return f.pictures.timed + f.retained.timed + f.batchesTimed;
+}
+
+// a kind's calls as long as its timed ones took, which leaves no bias
+// when they cost the same, the phase being random; qfalse when it had
+// some, none of them timed
+static qboolean AddSampled( const uisSampled_t *kind, int64_t *frontEnd ) {
+	if ( !kind->timed ) {
+		return !kind->calls;
+	}
+	*frontEnd += UIS_Corrected( kind->time, kind->timed, clockCost ) * kind->calls / kind->timed;
+	return qtrue;
+}
+
+// the next frame's sampling of a kind that made lastCalls this frame
+static void NextSample( uisSampled_t *kind, int lastCalls ) {
 	static unsigned int seed = 1;
 
+	kind->every = lastCalls > 0 && lastCalls < UIS_FRONT_END_EVERY ? lastCalls : UIS_FRONT_END_EVERY;
 	seed = seed * 1103515245u + 12345u;
-	return ( seed >> 16 ) % UIS_FRONT_END_EVERY;
+	kind->phase = ( seed >> 16 ) % kind->every;
 }
 
 static void Speeds_SetColor( const float *rgba ) {
-	int64_t start = CallStart();
+	int64_t start = CallStart( &f.pictures );
 
 	real.SetColor( rgba );
-	CallEnd( start );
+	CallEnd( &f.pictures, start );
 }
 
 static void Speeds_DrawStretchPic( float x, float y, float w, float h,
 		float s1, float t1, float s2, float t2, qhandle_t hShader ) {
-	int64_t start = CallStart();
+	int64_t start = CallStart( &f.pictures );
 
 	real.DrawStretchPic( x, y, w, h, s1, t1, s2, t2, hShader );
-	CallEnd( start );
+	CallEnd( &f.pictures, start );
 }
 
 // a batch costs as its vertexes do, and a frame has few: each is timed
@@ -126,17 +149,32 @@ static void Speeds_DrawTriangles2D( const tris2D_t *tris ) {
 	real.DrawTriangles2D( tris );
 	f.batches += Sys_Nanoseconds() - start;
 	f.batchesTimed++;
-	f.calls++;
+}
+
+// a retained geometry drawn, or drawn into the clip mask: a small command
+// each, which a retained UI makes many of
+static void Speeds_DrawGeometry2D( int geometry, const draw2DState_t *state ) {
+	int64_t start = CallStart( &f.retained );
+
+	real.DrawGeometry2D( geometry, state );
+	CallEnd( &f.retained, start );
+}
+
+static void Speeds_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DState_t *state ) {
+	int64_t start = CallStart( &f.retained );
+
+	real.SetClipMask2D( op, geometry, state );
+	CallEnd( &f.retained, start );
 }
 
 static void SpanBegin( uisSpan_t *span ) {
 	span->start = Sys_Nanoseconds();
-	span->timedAtStart = f.sampledTimed + f.batchesTimed;
+	span->timedAtStart = TimedCalls();
 }
 
 // its own clock read and the two of each call timed inside it come off
 static void SpanEnd( uisSpan_t *span ) {
-	int reads = 1 + 2 * ( f.sampledTimed + f.batchesTimed - span->timedAtStart );
+	int reads = 1 + 2 * ( TimedCalls() - span->timedAtStart );
 
 	span->total += UIS_Corrected( Sys_Nanoseconds() - span->start, reads, clockCost );
 	span->drawn = qtrue;
@@ -151,15 +189,21 @@ static void Speeds_RenderScene( const refdef_t *fd ) {
 	}
 }
 
-// UpdateImage2D stays out: a large update draws what waits in the back end
-// inside the call, which the back end's runs already time
+// as tr_public.h's TimeBackEnd2D says: the calls that only queue a 2D
+// draw. UpdateImage2D, UpdateTexture2D and the deletes stay out, since each
+// may draw what waits in the back end inside the call, and so do the
+// create calls, which make a resource rather than draw
 static void Wrap( void ) {
 	real = re;
 	re.SetColor = Speeds_SetColor;
 	re.DrawStretchPic = Speeds_DrawStretchPic;
 	re.DrawTriangles2D = Speeds_DrawTriangles2D;
+	re.DrawGeometry2D = Speeds_DrawGeometry2D;
+	re.SetClipMask2D = Speeds_SetClipMask2D;
 	re.RenderScene = Speeds_RenderScene;
 	Com_Memset( &f, 0, sizeof( f ) );
+	NextSample( &f.pictures, 0 );
+	NextSample( &f.retained, 0 );
 }
 
 // real is the whole table, taken again whenever the renderer loads
@@ -275,6 +319,8 @@ frame after sampling starts, or the renderer restarts, began untimed.
 void CL_UISpeedsEndFrame( void ) {
 	times2D_t	be;
 	int64_t		now = Sys_Nanoseconds(), frontEnd;
+	int			pictures = f.pictures.calls, retained = f.retained.calls;
+	qboolean	picturesSampled, retainedSampled;
 	int			i;
 
 	re.TimeBackEnd2D( &be, qtrue );
@@ -287,17 +333,14 @@ void CL_UISpeedsEndFrame( void ) {
 		if ( f.ui.drawn ) {
 			UIS_Add( &parts[UIS_UI], f.ui.total );
 		}
-		// the pictures and colors untimed as long as those timed took; a
-		// frame with some, none of them timed, is left out, which leaves no
-		// bias, its phase being random
-		if ( f.sampledTimed || !f.pictures ) {
-			frontEnd = UIS_Corrected( f.batches, f.batchesTimed, clockCost );
-			if ( f.sampledTimed ) {
-				frontEnd += UIS_Corrected( f.sampled, f.sampledTimed, clockCost ) * f.pictures / f.sampledTimed;
-			}
+		// a frame where a kind went untimed is left out
+		frontEnd = UIS_Corrected( f.batches, f.batchesTimed, clockCost );
+		picturesSampled = AddSampled( &f.pictures, &frontEnd );
+		retainedSampled = AddSampled( &f.retained, &frontEnd );
+		if ( picturesSampled && retainedSampled ) {
 			UIS_Add( &parts[UIS_FRONT_END], frontEnd );
 		}
-		UIS_Add( &parts[UIS_COMMANDS], f.calls );
+		UIS_Add( &parts[UIS_COMMANDS], pictures + retained + f.batchesTimed );
 		UIS_Add( &parts[UIS_BACK_END], UIS_Corrected( be.cpu, be.runs, clockCost ) );
 		for ( i = 0; i < be.gpuFrames; i++ ) {
 			UIS_Add( &parts[UIS_GPU], be.gpu[i] );
@@ -306,7 +349,8 @@ void CL_UISpeedsEndFrame( void ) {
 	}
 	Com_Memset( &f, 0, sizeof( f ) );
 	f.lastEnd = now;
-	f.phase = NextPhase();
+	NextSample( &f.pictures, pictures );
+	NextSample( &f.retained, retained );
 }
 
 /*

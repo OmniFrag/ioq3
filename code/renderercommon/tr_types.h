@@ -117,13 +117,53 @@ typedef struct {
 typedef struct {
 	qboolean	textureA8;			// A8 textures without a conversion to RGBA8
 	qboolean	clipMask;			// stencil clip masks
-	qboolean	paints;				// gradients and shapes on the GPU
+	qboolean	paints;				// gradients on the GPU (CreatePaint2D: 0 for a kind not drawn yet)
 	qboolean	msdf;				// multi-channel distance field text
 	qboolean	layers;				// layers and their filters
 	int			multisample;		// samples of the 2D target, 0 for none
 	int			maxTextureSize;		// an image's widest side
 	int			maxGeometryVerts;	// a retained geometry's vertexes, 0 for none
 } caps2D_t;
+
+// a UI texture's pixels (CreateTexture2D)
+typedef enum {
+	TEX2D_RGBA8,		// straight alpha
+	TEX2D_RGBA8_PREMUL,	// premultiplied alpha
+	TEX2D_A8			// coverage, a byte a pixel: white with this alpha (glyphs)
+} tex2DFormat_t;
+
+// what SetClipMask2D does with the clip mask, which draws with
+// TRIS2D_CLIPMASK test
+typedef enum {
+	CLIPMASK_OFF,			// the draws stop testing, until a new mask
+	CLIPMASK_SET,			// the mask becomes the geometry
+	CLIPMASK_SET_INVERSE,	// the mask becomes everything but the geometry
+	CLIPMASK_INTERSECT		// the mask keeps only what the geometry covers too
+} clipMaskOp_t;
+
+// A paint colors 2D triangles drawn with TRIS2D_PAINT, by their texture
+// coordinates, which say where each vertex is in the paint's space (the
+// element's box, as RmlUi gives them); the vertex colors multiply it
+typedef enum {
+	PAINT2D_LINEAR,			// p0 to p1
+	PAINT2D_RADIAL,			// centered on p0, p1 the radii of where it ends
+	PAINT2D_CONIC,			// around p0, starting at p1[0] radians clockwise from up
+	PAINT2D_ROUNDED_BOX,	// a rectangle with rounded corners (not drawn yet)
+	PAINT2D_MSDF			// a multi-channel distance field (not drawn yet)
+} paint2DKind_t;
+
+#define MAX_PAINT2D_STOPS	16
+
+typedef struct {
+	paint2DKind_t	kind;
+	qboolean		repeating;		// the stops again, past the first and the last
+	float			p0[2], p1[2];
+	int				numStops;		// 2 or more, positions in order: 0 at the start, 1 at the end
+	float			stopPos[MAX_PAINT2D_STOPS];
+	byte			stopColor[MAX_PAINT2D_STOPS][4];	// premultiplied
+	float			box[4], radii[4], feather;		// rounded box: rectangle, corner radii, edge softness
+	float			msdfRange;						// MSDF: the atlas's range in pixels
+} paint2D_t;
 
 typedef enum {
 	RT_MODEL,

@@ -76,6 +76,21 @@ int GL_BindMultiTexture(GLenum texunit, GLenum target, GLuint texture)
 	return 1;
 }
 
+/*
+** GL_ForgetTexture: a deleted texture, which GL unbinds and may give
+** its number to a new one, is bound nowhere
+*/
+void GL_ForgetTexture(GLuint texture)
+{
+	int i;
+
+	for (i = 0; i < NUM_TEXTURE_BUNDLES; i++)
+	{
+		if (glDsaState.textures[i] == texture)
+			glDsaState.textures[i] = 0;
+	}
+}
+
 GLvoid APIENTRY GLDSA_BindMultiTextureEXT(GLenum texunit, GLenum target, GLuint texture)
 {
 	if (glDsaState.texunit != texunit)

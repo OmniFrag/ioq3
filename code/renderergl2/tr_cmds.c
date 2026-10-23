@@ -298,9 +298,13 @@ void RE_DrawTriangles2D( const tris2D_t *tris ) {
 	if ( !tr.registered ) {
 		return;
 	}
+	if ( tris->state.flags & TRIS2D_RETAINED_FLAGS ) {
+		R_DrawTriangles2DState( tris );
+		return;
+	}
 	// no more than half the command buffer, which the frame's other
 	// commands share
-	if ( !R_CheckTris2D( tris, MAX_RENDER_COMMANDS / 2 - sizeof( *cmd ), error, sizeof( error ) ) ) {
+	if ( !R_CheckTris2D( tris, TRIS2D_IMMEDIATE_FLAGS, MAX_RENDER_COMMANDS / 2 - sizeof( *cmd ), error, sizeof( error ) ) ) {
 		if ( error[0] ) {
 			ri.Printf( PRINT_WARNING, "RE_DrawTriangles2D: %s\n", error );
 		}
@@ -399,12 +403,13 @@ void RE_UpdateImage2D( qhandle_t hShader, int x, int y, int width, int height, c
 =============
 RE_GetCaps2D
 
-The immediate path alone, so far
+The immediate path and the retained one
 =============
 */
 void RE_GetCaps2D( caps2D_t *caps ) {
 	Com_Memset( caps, 0, sizeof( *caps ) );
 	caps->maxTextureSize = glConfig.maxTextureSize;
+	R_GetCaps2DRetained( caps );
 }
 
 #define MODE_RED_CYAN	1
