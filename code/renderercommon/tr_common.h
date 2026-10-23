@@ -216,6 +216,8 @@ gives (r_renderer2D)
 #define MAX_GEOMETRY2D_VERTS	65536
 #define MAX_GEOMETRY2D_BYTES	( 16 * 1024 * 1024 )	// the vertexes and indexes of all of them
 #define MAX_PAINTS2D			1024
+#define MAX_FILTERS2D			1024
+#define MAX_LAYERS2D			8		// layers pushed at once, past the 2D target
 
 typedef struct {
 	qboolean		deleted;		// its delete waits among the frame's commands
@@ -237,8 +239,24 @@ typedef enum {
 	HANDLE2D_TEXTURE,
 	HANDLE2D_GEOMETRY,
 	HANDLE2D_PAINT,
+	HANDLE2D_FILTER,
 	HANDLE2D_KINDS
 } handle2DKind_t;
+
+// a filter (CreateFilter2D), with its numbers
+typedef enum {
+	FILTER2D_OPACITY,		// alpha
+	FILTER2D_BLUR,			// sigma
+	FILTER2D_DROP_SHADOW,	// red, green, blue, alpha, x, y, sigma
+	FILTER2D_COLOR_MATRIX	// a 4x5 matrix by rows
+} filter2DKind_t;
+
+#define MAX_FILTER2D_PARAMS	20
+
+typedef struct {
+	filter2DKind_t	kind;
+	float			params[MAX_FILTER2D_PARAMS];
+} filter2D_t;
 
 // the 2D state's flags that tr_ui2d_common.c's draws take, past the
 // immediate batch's
@@ -273,6 +291,23 @@ typedef struct {
 	int				handle;
 } delete2DCommand_t;
 
+typedef enum {
+	LAYER2D_PUSH,
+	LAYER2D_POP,
+	LAYER2D_COMPOSITE
+} layer2DOp_t;
+
+// filters, once they're checked, are copied in
+typedef struct {
+	int				commandId;
+	layer2DOp_t		op;
+	int				source, destination;
+	blend2DMode_t	blendMode;
+	draw2DState_t	state;
+	int				numFilters;
+	filter2D_t		filters[MAX_FILTERS2D_PER_COMPOSITE];
+} layer2DCommand_t;
+
 // followed by width * height pixels in the texture's format
 typedef struct {
 	int				commandId;
@@ -283,7 +318,7 @@ typedef struct {
 
 // what each renderer gives tr_ui2d_common.c (tr_ui2d.c)
 typedef struct {
-	int		drawCommand, clipMaskCommand, deleteCommand, updateCommand;	// its renderCommand_t
+	int		drawCommand, clipMaskCommand, deleteCommand, updateCommand, layerCommand;	// its renderCommand_t
 	int		maxCommandBytes;							// MAX_RENDER_COMMANDS
 	// what it draws (RE_GetCaps2D's retained part)
 	void	(*caps)( caps2D_t *caps );
@@ -316,6 +351,14 @@ void				R_DeleteGeometry2D( int geometry );
 void				R_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DState_t *state );
 int					R_CreatePaint2D( const paint2D_t *paint );
 void				R_DeletePaint2D( int paint );
+int					R_PushLayer2D( void );
+void				R_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
+						const draw2DState_t *state );
+void				R_PopLayer2D( void );
+int					R_CreateFilter2D( const char *name, const float *params, int numParams );
+void				R_DeleteFilter2D( int filter );
+// the frame's layers are popped as it ends (RE_EndFrame)
+void				R_EndFrame2D( void );
 // an immediate batch with TRIS2D_RETAINED_FLAGS
 void				R_DrawTriangles2DState( const tris2D_t *tris );
 

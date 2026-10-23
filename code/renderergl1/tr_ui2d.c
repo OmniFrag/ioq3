@@ -328,7 +328,7 @@ static void RB_Draw2DUnseen( const draw2DState_t *state, geometry2D_t *g ) {
 }
 
 const renderer2D_t r_renderer2D = {
-	RC_DRAW_2D, RC_CLIPMASK_2D, RC_DELETE_2D, RC_UPDATE_TEXTURE_2D,
+	RC_DRAW_2D, RC_CLIPMASK_2D, RC_DELETE_2D, RC_UPDATE_TEXTURE_2D, -1,
 	MAX_RENDER_COMMANDS,
 	R_GetCaps2DRetained, R_CreateTexture2DGL, R_UpdateTexture2DGL, R_FreeGpu2D,
 	RB_Begin2D, RB_Draw2DUnseen
