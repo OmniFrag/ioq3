@@ -1342,6 +1342,8 @@ void R_Init( void ) {
 	// before any module can take its name
 	tr.white2DShader = R_GetShaderByHandle( RE_RegisterShaderFromImage( "*white2D", LIGHTMAP_2D, tr.whiteImage, qfalse ) );
 
+	R_InitStore2D();
+
 	R_InitSkins();
 
 	R_ModelInit();
@@ -1401,6 +1403,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 	if ( tr.registered ) {
 		R_IssuePendingRenderCommands();
+		R_ShutdownStore2D( !destroyWindow );
 		R_DeleteTextures();
 	}
 
@@ -1504,6 +1507,15 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.UpdateImage2D = RE_UpdateImage2D;
 	re.GetCaps2D = RE_GetCaps2D;
 	re.GetShaderImageSize = RE_GetShaderImageSize;
+	re.CreateTexture2D = R_CreateTexture2D;
+	re.UpdateTexture2D = R_UpdateTexture2D;
+	re.DeleteTexture2D = R_DeleteTexture2D;
+	re.CreateGeometry2D = R_CreateGeometry2D;
+	re.DrawGeometry2D = R_DrawGeometry2D;
+	re.DeleteGeometry2D = R_DeleteGeometry2D;
+	re.SetClipMask2D = R_SetClipMask2D;
+	re.CreatePaint2D = R_CreatePaint2D;
+	re.DeletePaint2D = R_DeletePaint2D;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 

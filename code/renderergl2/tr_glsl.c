@@ -50,6 +50,8 @@ extern const char *fallbackShader_ssao_vp;
 extern const char *fallbackShader_ssao_fp;
 extern const char *fallbackShader_texturecolor_vp;
 extern const char *fallbackShader_texturecolor_fp;
+extern const char *fallbackShader_ui2d_vp;
+extern const char *fallbackShader_ui2d_fp;
 extern const char *fallbackShader_tonemap_vp;
 extern const char *fallbackShader_tonemap_fp;
 extern const char* fallbackShader_greyscale_vp;
@@ -1060,6 +1062,26 @@ void GLSL_InitGPUShaders(void)
 
 	numEtcShaders++;
 
+	// the UI's retained 2D (tr_ui2d.c), with gradients where GLSL indexes
+	// uniform arrays freely, which OpenGL ES 2.0's needn't
+	attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_COLOR;
+	extradefines[0] = '\0';
+	if (R_Paints2DAvailable())
+		Q_strcat(extradefines, 1024, "#define USE_PAINT\n");
+
+	if (!GLSL_InitGPUShader(&tr.ui2dShader, "ui2d", attribs, qtrue, extradefines, qtrue, fallbackShader_ui2d_vp, fallbackShader_ui2d_fp))
+	{
+		ri.Error(ERR_FATAL, "Could not load ui2d shader!");
+	}
+
+	GLSL_InitUniforms(&tr.ui2dShader);
+
+	GLSL_SetUniformInt(&tr.ui2dShader, UNIFORM_DIFFUSEMAP, TB_COLORMAP);
+
+	GLSL_FinishGPUShader(&tr.ui2dShader);
+
+	numEtcShaders++;
+
 	for (i = 0; i < FOGDEF_COUNT; i++)
 	{
 		if ((i & FOGDEF_USE_VERTEX_ANIMATION) && (i & FOGDEF_USE_BONE_ANIMATION))
@@ -1583,6 +1605,7 @@ void GLSL_ShutdownGPUShaders(void)
 		GLSL_DeleteGPUShader(&tr.genericShader[i]);
 
 	GLSL_DeleteGPUShader(&tr.textureColorShader);
+	GLSL_DeleteGPUShader(&tr.ui2dShader);
 
 	for ( i = 0; i < FOGDEF_COUNT; i++)
 		GLSL_DeleteGPUShader(&tr.fogShader[i]);

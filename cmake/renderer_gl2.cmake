@@ -34,6 +34,7 @@ set(RENDERER_GL2_SOURCES
     ${SOURCE_DIR}/renderergl2/tr_shadows.c
     ${SOURCE_DIR}/renderergl2/tr_sky.c
     ${SOURCE_DIR}/renderergl2/tr_surface.c
+    ${SOURCE_DIR}/renderergl2/tr_ui2d.c
     ${SOURCE_DIR}/renderergl2/tr_vbo.c
     ${SOURCE_DIR}/renderergl2/tr_world.c
 )

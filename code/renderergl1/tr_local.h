@@ -1596,12 +1596,17 @@ typedef enum {
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
 	RC_TRIS_2D,
-	RC_UPDATE_IMAGE
+	RC_UPDATE_IMAGE,
+	RC_DRAW_2D,
+	RC_CLIPMASK_2D,
+	RC_DELETE_2D,
+	RC_UPDATE_TEXTURE_2D
 } renderCommand_t;
 
 // the 2D commands, which ui_speeds times in runs (tr_times2d.c): a new one
 // belongs here too, or a run ends at it
-#define RC_IS_2D( cmd )	( (cmd) == RC_SET_COLOR || (cmd) == RC_STRETCH_PIC || (cmd) == RC_TRIS_2D || (cmd) == RC_UPDATE_IMAGE )
+#define RC_IS_2D( cmd )	( (cmd) == RC_SET_COLOR || (cmd) == RC_STRETCH_PIC || (cmd) == RC_TRIS_2D || (cmd) == RC_UPDATE_IMAGE \
+	|| (cmd) == RC_DRAW_2D || (cmd) == RC_CLIPMASK_2D || (cmd) == RC_DELETE_2D || (cmd) == RC_UPDATE_TEXTURE_2D )
 
 
 // these are sort of arbitrary limits.
@@ -1644,6 +1649,13 @@ void RE_GetCaps2D( caps2D_t *caps );
 qboolean RE_GetShaderImageSize( qhandle_t hShader, int *width, int *height );
 void R_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba );
 void RB_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba );
+void RB_SetGL2D( void );
+void RB_Scissor2D( const int *rect );
+
+// tr_ui2d.c: the retained 2D (renderercommon/tr_ui2d_common.c)
+void R_GetCaps2DRetained( caps2D_t *caps );
+const void *RB_Draw2D( const void *data );
+
 void RE_BeginFrame( stereoFrame_t stereoFrame );
 void RE_EndFrame( int *frontEndMsec, int *backEndMsec );
 void RE_SaveJPG(char * filename, int quality, int image_width, int image_height,

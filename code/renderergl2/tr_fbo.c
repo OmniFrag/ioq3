@@ -235,7 +235,13 @@ void FBO_ClearWhole(GLbitfield buffers, const vec4_t color)
 	qglDisable(GL_SCISSOR_TEST);
 	qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	if (buffers & GL_DEPTH_BUFFER_BIT)
+	{
+		// and the stencil, where there's one (the UI's clip masks), so
+		// it's never loaded either
 		qglDepthMask(GL_TRUE);
+		qglStencilMask(0xff);
+		buffers |= GL_STENCIL_BUFFER_BIT;
+	}
 
 	qglClearColor(color[0], color[1], color[2], color[3]);
 	qglClear(buffers);
@@ -316,14 +322,15 @@ static FBO_t *FBO_CreateRenderTarget(const char *name, const char *resolveName, 
 	if (tr.multisample && glRefConfig.framebufferMultisample)
 	{
 		FBO_CreateBuffer(fbo, format, 0, tr.multisample);
-		FBO_CreateBuffer(fbo, GL_DEPTH_COMPONENT24, 0, tr.multisample);
+		FBO_CreateBuffer(fbo, depthImage->internalFormat, 0, tr.multisample);
 		R_CheckFBO(fbo);
 
 		imageFbo = *resolveFbo = FBO_Create(resolveName, depthImage->width, depthImage->height);
 	}
 
 	FBO_AttachImage(imageFbo, image, GL_COLOR_ATTACHMENT0, 0);
-	FBO_AttachImage(imageFbo, depthImage, GL_DEPTH_ATTACHMENT, 0);
+	FBO_AttachImage(imageFbo, depthImage, depthImage->internalFormat == GL_DEPTH24_STENCIL8 ?
+		GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, 0);
 	R_CheckFBO(imageFbo);
 
 	return fbo;
@@ -345,7 +352,7 @@ static void FBO_ResizeRenderTarget(FBO_t *fbo, FBO_t *resolveFbo, image_t *depth
 		fbo->width = unused ? 1 : depthImage->width;
 		fbo->height = unused ? 1 : depthImage->height;
 		FBO_CreateBuffer(fbo, fbo->colorFormat, 0, tr.multisample);
-		FBO_CreateBuffer(fbo, fbo->depthFormat, 0, tr.multisample);
+		FBO_CreateBuffer(fbo, depthImage->internalFormat, 0, tr.multisample);
 		FBO_Fit(resolveFbo, depthImage);
 		R_CheckFBO(fbo);
 	}
@@ -465,7 +472,7 @@ none below 2, or without blits to resolve them
 */
 int FBO_Samples(int format)
 {
-	const GLenum formats[] = { format, R_RenderFormatFor(format), GL_DEPTH_COMPONENT24 };
+	const GLenum formats[] = { format, R_RenderFormatFor(format), GL_DEPTH_COMPONENT24, GL_DEPTH24_STENCIL8 };
 	int samples = MIN(r_ext_framebuffer_multisample->integer, glRefConfig.maxSamples);
 	int i, taken;
 

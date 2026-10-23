@@ -26,7 +26,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-qboolean R_CheckTris2D( const tris2D_t *tris, int maxBytes, char *error, int errorSize );
+// the flags the immediate path draws
+#define TRIS2D_IMMEDIATE_FLAGS	( TRIS2D_SCISSOR | TRIS2D_TRANSFORM | TRIS2D_QUADS )
+
+qboolean R_CheckTris2D( const tris2D_t *tris, int flags, int maxBytes, char *error, int errorSize );
 qboolean R_ClipScissor2D( const int *scissor, int width, int height, int *out );
 void R_CopyTris2D( const tris2D_t *tris, polyVert2D_t *verts, int *indexes );
 
