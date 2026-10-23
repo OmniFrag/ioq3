@@ -223,5 +223,16 @@ void		GLimp_SetGamma( unsigned char red[256],
 		unsigned char green[256],
 		unsigned char blue[256] );
 
+// tr_times2d.c: ui_speeds' times for the back end's 2D commands. While
+// r_times2D is set, the back end calls R_Times2DCommand before each
+// command, and where it says a run ends, draws what the tessellator holds
+// and calls R_Times2DEndRun
+extern int	r_times2D;
+
+qboolean	R_Times2DCommand( qboolean is2D );
+void		R_Times2DEndRun( void );
+void		RE_TimeBackEnd2D( times2D_t *times, qboolean on );
+void		R_Times2DShutdown( void );
+
 
 #endif

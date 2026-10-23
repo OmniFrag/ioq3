@@ -1005,7 +1005,13 @@ CL_CGameRendering
 =====================
 */
 void CL_CGameRendering( stereoFrame_t stereo ) {
+	if ( cl_uiSpeeds ) {
+		CL_UISpeedsCgame( qtrue );
+	}
 	VM_Call( cgvm, CG_DRAW_ACTIVE_FRAME, cl.serverTime, stereo, clc.demoplaying );
+	if ( cl_uiSpeeds ) {
+		CL_UISpeedsCgame( qfalse );
+	}
 	VM_Debug( 0 );
 }
 
