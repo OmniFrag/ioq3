@@ -297,6 +297,7 @@ void RB_BeginSurface( shader_t *shader, int fogNum, int cubemapIndex ) {
 	tess.numIndexes = 0;
 	tess.firstIndex = 0;
 	tess.numVertexes = 0;
+	tess.twoSided = qfalse;
 	tess.shader = state;
 	tess.fogNum = fogNum;
 	tess.cubemapIndex = cubemapIndex;
@@ -1690,7 +1691,7 @@ void RB_StageIteratorGeneric( void )
 	//
 	// set face culling appropriately
 	//
-	if (input->shader->cullType == CT_TWO_SIDED)
+	if (input->shader->cullType == CT_TWO_SIDED || input->twoSided)
 	{
 		GL_Cull( CT_TWO_SIDED );
 	}

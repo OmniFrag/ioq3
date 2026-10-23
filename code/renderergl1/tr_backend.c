@@ -971,6 +971,9 @@ static const void *RB_Tris2D( const void *data ) {
 		RB_BeginSurface( cmd->shader, 0 );
 	}
 
+	// a module's triangles may turn either way
+	tess.twoSided = qtrue;
+
 	if ( cmd->flags & TRIS2D_QUADS ) {
 		// the corners in the order RB_StretchPic gives them
 		for ( i = 0; i < cmd->numVerts; i += 4 ) {
