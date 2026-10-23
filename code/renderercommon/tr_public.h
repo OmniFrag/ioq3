@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		13
+#define	REF_API_VERSION		14
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -169,10 +169,46 @@ typedef struct {
 
 	// ui_speeds: copies the back end's 2D times out, unless times is NULL,
 	// starts them over, and says whether to time the next frames'. The
-	// client times the front end's SetColor, DrawStretchPic and
-	// DrawTriangles2D through wrappers (cl_uispeeds.c), where a new 2D
-	// draw belongs too.
+	// client times the front end's 2D through wrappers (cl_uispeeds.c),
+	// where a new 2D call belongs too if it only queues a draw: sampled
+	// when it costs the same each time, timed each time when its cost
+	// grows with its size. A call that may draw what waits in the back end
+	// inside it, or makes a resource, stays out.
 	void	(*TimeBackEnd2D)( times2D_t *times, qboolean on );
+
+	// Retained 2D, for a UI that keeps what it draws. Handles are numbered
+	// from 1, 0 is none, and all of them are gone when the renderer
+	// restarts. Deleting one takes effect in its place among the frame's
+	// draws, so what was drawn with it before still draws.
+
+	// A UI texture: width by height pixels in format (NULL for transparent
+	// black), at exactly that size, without mipmaps, light scaling or
+	// compression, clamped at its edges; 0 when there's no room for it.
+	// Drawn with TRIS2D_TEXTURE2D
+	int		(*CreateTexture2D)( int width, int height, tex2DFormat_t format, const byte *pixels );
+	// replaces a rectangle of it, with pixels in its format, as
+	// UpdateImage2D does an image's
+	void	(*UpdateTexture2D)( int texture, int x, int y, int width, int height, const byte *pixels );
+	void	(*DeleteTexture2D)( int texture );
+
+	// Geometry kept by the renderer: the vertexes and indexes are copied,
+	// and drawn again with any state, as often as asked, for the cost of a
+	// small command; 0 when it's malformed or there's no room for it
+	// (caps2D_t's maxGeometryVerts)
+	int		(*CreateGeometry2D)( const polyVert2D_t *verts, int numVerts, const int *indexes, int numIndexes );
+	void	(*DrawGeometry2D)( int geometry, const draw2DState_t *state );
+	void	(*DeleteGeometry2D)( int geometry );
+
+	// Changes the clip mask by op (clipMaskOp_t), with the geometry drawn
+	// as state places it, but not seen. Without caps2D_t's clipMask, does
+	// nothing, and TRIS2D_CLIPMASK clips nothing
+	void	(*SetClipMask2D)( clipMaskOp_t op, int geometry, const draw2DState_t *state );
+
+	// A paint (paint2D_t) for TRIS2D_PAINT; 0 when it's malformed, there's
+	// no room for it, or the renderer doesn't draw its kind (caps2D_t's
+	// paints)
+	int		(*CreatePaint2D)( const paint2D_t *paint );
+	void	(*DeletePaint2D)( int paint );
 } refexport_t;
 
 //
