@@ -338,6 +338,18 @@ typedef struct {
 	qboolean	contentReady;
 } serverInfo_t;
 
+// what a cgame's or ui's 2D extension calls keep, until it restarts
+#define	MAX_MODULE_IMAGES		64		// the images it may make
+#define	MAX_MODULE_IMAGE_SIZE	2048	// the widest side of one
+
+typedef struct {
+	qboolean	clipped;		// its 2D draws only inside clip
+	int			clip[4];		// x, y, width and height in window pixels
+	byte		color[4];		// its pictures' color (trap_R_SetColor)
+	qhandle_t	images[MAX_MODULE_IMAGES];	// the shaders of the images it made
+	int			numImages;
+} module2D_t;
+
 typedef struct {
 	qboolean	cddialog;			// bring up the cd needed dialog next frame
 
@@ -359,6 +371,10 @@ typedef struct {
 	qboolean	uiTextFocus;
 	qboolean	uiDeclaresTextFocus;
 	qboolean	cgameTextFocus;
+
+	// the modules' 2D extension calls
+	module2D_t	ui2D;
+	module2D_t	cgame2D;
 
 	int			framecount;
 	int			frametime;			// msec since last frame
@@ -683,6 +699,11 @@ void	SCR_DrawBigString( int x, int y, const char *s, float alpha, qboolean noCol
 void	SCR_DrawBigStringColor( int x, int y, const char *s, vec4_t color, qboolean noColorEscape );	// ignores embedded color control characters
 void	SCR_DrawSmallStringExt( int x, int y, const char *string, float *setColor, qboolean forceColor, qboolean noColorEscape );
 void	SCR_DrawSmallChar( int x, int y, int ch );
+void	SCR_ResetModule2D( module2D_t *m );
+void	SCR_ModuleSetColor( module2D_t *m, const float *rgba );
+void	SCR_ModuleStretchPic( const module2D_t *m, float x, float y, float w, float h,
+			float s1, float t1, float s2, float t2, qhandle_t hShader );
+intptr_t	SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args );
 
 
 //

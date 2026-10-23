@@ -158,6 +158,200 @@ void SCR_DrawPic( float x, float y, float width, float height, qhandle_t hShader
 }
 
 
+/*
+=================
+SCR_ResetModule2D
+
+A cgame's or ui's 2D state as it starts: no clip region or images, white
+=================
+*/
+void SCR_ResetModule2D( module2D_t *m ) {
+	Com_Memset( m, 0, sizeof( *m ) );
+	Com_Memset( m->color, 255, sizeof( m->color ) );
+}
+
+
+/*
+=================
+SCR_ModuleSetColor
+
+A cgame's or ui's color for its pictures, NULL for white, as the renderer
+keeps it
+=================
+*/
+void SCR_ModuleSetColor( module2D_t *m, const float *rgba ) {
+	int		i;
+
+	for ( i = 0; i < 4; i++ ) {
+		// a module's floats may be anything: clamped, NaN as 0, before
+		// they become bytes
+		float	c = rgba ? rgba[i] * 255 : 255;
+
+		m->color[i] = c >= 255 ? 255 : c > 0 ? c : 0;
+	}
+	re.SetColor( rgba );
+}
+
+
+/*
+=================
+SCR_ModuleStretchPic
+
+A cgame's or ui's picture; inside its clip region, a quad of triangles in
+the region's scissor, in its color, so that it merges with the module's
+triangles there. Shader 0 draws white there, as triangles take it
+=================
+*/
+void SCR_ModuleStretchPic( const module2D_t *m, float x, float y, float w, float h,
+		float s1, float t1, float s2, float t2, qhandle_t hShader ) {
+	polyVert2D_t	v[4];
+	tris2D_t		tris;
+	int				i;
+
+	if ( !m->clipped ) {
+		re.DrawStretchPic( x, y, w, h, s1, t1, s2, t2, hShader );
+		return;
+	}
+
+	// the corners as RB_StretchPic gives them
+	v[0].xy[0] = v[3].xy[0] = x;
+	v[1].xy[0] = v[2].xy[0] = x + w;
+	v[0].xy[1] = v[1].xy[1] = y;
+	v[2].xy[1] = v[3].xy[1] = y + h;
+	v[0].st[0] = v[3].st[0] = s1;
+	v[1].st[0] = v[2].st[0] = s2;
+	v[0].st[1] = v[1].st[1] = t1;
+	v[2].st[1] = v[3].st[1] = t2;
+	for ( i = 0; i < 4; i++ ) {
+		Byte4Copy( m->color, v[i].rgba );
+	}
+
+	Com_Memset( &tris, 0, sizeof( tris ) );
+	tris.state.texture = hShader;
+	tris.state.flags = TRIS2D_QUADS | TRIS2D_SCISSOR;
+	Com_Memcpy( tris.state.scissor, m->clip, sizeof( m->clip ) );
+	tris.verts = v;
+	tris.numVerts = 4;
+	re.DrawTriangles2D( &tris );
+}
+
+
+// whether a cgame or ui made image
+static qboolean SCR_ModuleMadeImage( const module2D_t *m, qhandle_t image ) {
+	int		i;
+
+	for ( i = 0; i < m->numImages; i++ ) {
+		if ( m->images[i] == image ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+
+/*
+=================
+SCR_ModuleCreateImage2D
+
+An image a cgame or ui makes, named for the module so that no file's name,
+or the other module's, can be taken
+=================
+*/
+static qhandle_t SCR_ModuleCreateImage2D( module2D_t *m, const char *module, const intptr_t *args ) {
+	const char	*name = VMA_STR( 1 );
+	int			width = args[2], height = args[3];
+	char		fullName[MAX_QPATH];
+	qhandle_t	image;
+
+	if ( m->numImages == MAX_MODULE_IMAGES ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s: trap_R_CreateImage2D: %s: it has made %i images, all it may\n",
+			module, name, MAX_MODULE_IMAGES );
+		return 0;
+	}
+	if ( width < 1 || height < 1 || width > MAX_MODULE_IMAGE_SIZE || height > MAX_MODULE_IMAGE_SIZE ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s: trap_R_CreateImage2D: %s: %i by %i isn't 1 to %i a side\n",
+			module, name, width, height, MAX_MODULE_IMAGE_SIZE );
+		return 0;
+	}
+	if ( strlen( module ) + strlen( name ) + 2 >= sizeof( fullName ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s: trap_R_CreateImage2D: %s: the name is too long\n", module, name );
+		return 0;
+	}
+	Com_sprintf( fullName, sizeof( fullName ), "*%s/%s", module, name );
+
+	image = re.CreateImage2D( fullName, width, height, VMA_BUF_OPT( 4, width * height * 4 ) );
+	// one it made before (CreateImage2D gives the same image again) counts once
+	if ( image && !SCR_ModuleMadeImage( m, image ) ) {
+		m->images[m->numImages++] = image;
+	}
+	return image;
+}
+
+
+/*
+=================
+SCR_Module2DCall
+
+The 2D extension calls of a cgame or ui, named module, whose state is m
+=================
+*/
+intptr_t SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args ) {
+	tris2D_t	tris;
+	const int	*rect;
+	int			width, height;
+
+	switch ( args[0] ) {
+	case COM_TRAP_R_SETCLIPREGION:
+		rect = VMA_BUF_OPT( 1, sizeof( m->clip ) );
+		m->clipped = rect != NULL;
+		if ( rect ) {
+			Com_Memcpy( m->clip, rect, sizeof( m->clip ) );
+		}
+		return 0;
+
+	case COM_TRAP_R_CREATEIMAGE2D:
+		return SCR_ModuleCreateImage2D( m, module, args );
+
+	case COM_TRAP_R_UPDATEIMAGE2D:
+		if ( !SCR_ModuleMadeImage( m, args[1] ) ) {
+			VM_ArgError( args, 1, "%i isn't an image the module made", (int)args[1] );
+		}
+		width = VMV_RANGE( 4, 1, MAX_MODULE_IMAGE_SIZE );
+		height = VMV_RANGE( 5, 1, MAX_MODULE_IMAGE_SIZE );
+		re.UpdateImage2D( args[1], args[2], args[3], width, height, VMA_BUF( 6, width * height * 4 ) );
+		return 0;
+
+	case COM_TRAP_R_DRAWTRIANGLES2D:
+		Com_Memset( &tris, 0, sizeof( tris ) );
+		tris.state.texture = args[1];
+		tris.state.flags = args[6];
+		if ( tris.state.flags & ~TRIS2D_QUADS ) {
+			VM_ArgError( args, 6, "has flags besides TRIS2D_QUADS (0x%x)", tris.state.flags );
+		}
+		tris.numVerts = args[3];
+		if ( !( tris.state.flags & TRIS2D_QUADS ) ) {
+			tris.numIndexes = args[5];
+		}
+		if ( !tris.numVerts || ( !( tris.state.flags & TRIS2D_QUADS ) && !tris.numIndexes ) ) {
+			return 0;
+		}
+		tris.verts = VMA_ARRAY( 2, polyVert2D_t, tris.numVerts );
+		if ( tris.numIndexes ) {
+			tris.indexes = VMA_ARRAY( 4, int, tris.numIndexes );
+		}
+		if ( m->clipped ) {
+			tris.state.flags |= TRIS2D_SCISSOR;
+			Com_Memcpy( tris.state.scissor, m->clip, sizeof( m->clip ) );
+		}
+		re.DrawTriangles2D( &tris );
+		return 0;
+	}
+
+	Com_Error( ERR_DROP, "SCR_Module2DCall: bad call %i", (int)args[0] );
+	return 0;
+}
+
+
 
 /*
 ** SCR_DrawChar
