@@ -575,6 +575,7 @@ vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc, qboolean unpure)
 
 	// show where the qvm was loaded from
 	FS_Which(filename, vm->searchPath);
+	vm->checksum = Com_BlockChecksum( header.v, fileLength );
 
 	error = VM_ValidateHeader( header.h, fileLength );
 	if ( error ) {
@@ -1056,12 +1057,13 @@ void VM_Forced_Unload_Done(void) {
 VM_GetValue
 
 Answers trap_GetValue( char *value, int valueSize, const char *key ) for the
-current module from its extensions, a table that ends with a NULL key. The
-buffer is checked as any syscall's is (VMA_STRBUF), so a missing, empty or
-out-of-bounds one drops the module.
+current module from its extensions, a table that ends with a NULL key, and
+then for a client module (extModule, else -1) from the engine extensions'
+calls (hooks.h). The buffer is checked as any syscall's is (VMA_STRBUF), so
+a missing, empty or out-of-bounds one drops the module.
 ============
 */
-intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions ) {
+intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions, int extModule ) {
 	int			valueSize = args[2];
 	char		*value = VMA_STRBUF( 1, valueSize );
 	const char	*key = VMA_STR_OPT( 3 );
@@ -1079,7 +1081,16 @@ intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions ) {
 			return qtrue;
 		}
 	}
-	return qfalse;
+	return extModule >= 0 && Hooks_ModuleValue( extModule, key, value, valueSize );
+}
+
+/*
+============
+VM_Checksum
+============
+*/
+int VM_Checksum( const vm_t *vm ) {
+	return vm ? vm->checksum : 0;
 }
 
 /*

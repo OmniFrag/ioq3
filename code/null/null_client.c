@@ -36,6 +36,15 @@ void CL_Init( void ) {
 void CL_MouseEvent( int dx, int dy, int time ) {
 }
 
+void CL_TextEditingEvent( const char *utf8, int cursor, int selection ) {
+}
+
+void CL_PointerEvent( float x, float y ) {
+}
+
+void CL_ExtensionsStarted( void ) {
+}
+
 void Key_WriteBindings( configText_t *config ) {
 }
 

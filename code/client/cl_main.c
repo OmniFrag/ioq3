@@ -1334,6 +1334,8 @@ void CL_ShutdownAll(qboolean shutdownRef)
 	CL_ShutdownUI();
 
 	// shutdown the renderer
+	if ( cls.rendererStarted )
+		Hooks_RendererStopping( shutdownRef );
 	if(shutdownRef)
 		CL_ShutdownRef();
 	else if(re.Shutdown)
@@ -1953,7 +1955,7 @@ static void CL_CompletePlayerName( char *args, int argNum )
 		const char *name;
 
 		//configstring
-		info = cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO];
+		info = CL_ExtConfigString( CS_SERVERINFO );
 		clientCount = atoi( Info_ValueForKey( info, "sv_maxclients" ) );
 
 		nameCount = 0;
@@ -2088,9 +2090,13 @@ void CL_Vid_Restart_f( void ) {
 #ifdef __EMSCRIPTEN__
 		// but keep the window: the page decides the canvas's size, and a new
 		// window loses browser fullscreen until the next click
+		if ( cls.rendererStarted )
+			Hooks_RendererStopping( qfalse );
 		if ( re.Shutdown )
 			re.Shutdown( qfalse );
 #else
+		if ( cls.rendererStarted )
+			Hooks_RendererStopping( qtrue );
 		CL_ShutdownRef();
 #endif
 
@@ -3867,7 +3873,7 @@ const char *CL_ExtServerInfo( void ) {
 	if ( clc.state < CA_LOADING || clc.state == CA_CINEMATIC ) {
 		return "";
 	}
-	info = cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO];
+	info = CL_ExtConfigString( CS_SERVERINFO );
 	return strlen( info ) < BIG_INFO_STRING ? info : "";
 }
 
@@ -4209,6 +4215,8 @@ void CL_InitRenderer( void ) {
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.whiteShader = re.RegisterShader( "white" );
 	cls.consoleShader = re.RegisterShader( "console" );
+
+	Hooks_RendererStarted();
 }
 
 /*
@@ -4574,7 +4582,7 @@ void CL_Sayto_f( void ) {
 
 	Com_FieldStringToPlayerName( name, MAX_NAME_LENGTH, rawname );
 
-	info = cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO];
+	info = CL_ExtConfigString( CS_SERVERINFO );
 	count = atoi( Info_ValueForKey( info, "sv_maxclients" ) );
 
 	clientNum = -1;

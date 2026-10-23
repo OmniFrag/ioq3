@@ -424,7 +424,12 @@ typedef struct {
 } vmExtension_t;
 
 // Extension syscalls, found through trap_GetValue, are numbered from 800 up,
-// clear of every fixed table, and a number is never reused.
+// clear of every fixed table, and a number is never reused: the engine's
+// own from 800 to 819, then from 900, and the engine extensions' calls for
+// the client's modules (hooks.h's extModuleCall_t) from
+// COM_TRAP_EXTENSION_FIRST to COM_TRAP_EXTENSION_LAST.
+#define	COM_TRAP_EXTENSION_FIRST	820
+#define	COM_TRAP_EXTENSION_LAST		899
 
 // trap_SetTextFocus( qboolean focused ): a cgame or ui text field has taken
 // or lost focus. A module that calls it gets text input (and a phone's
@@ -510,7 +515,12 @@ intptr_t		QDECL VM_Call( vm_t *vm, int callNum, ... );
 
 void	VM_Debug( int level );
 
-intptr_t	VM_GetValue( intptr_t *args, const vmExtension_t *extensions );
+// extModule is the client's module (hooks.h's extModule_t) whose engine
+// extensions also answer, or -1
+intptr_t	VM_GetValue( intptr_t *args, const vmExtension_t *extensions, int extModule );
+// a QVM's checksum (Com_BlockChecksum of its file), 0 for linked or native
+// code
+int		VM_Checksum( const vm_t *vm );
 const char	*VM_ExplicitArgStr( vm_t *vm, intptr_t value, const char *what );
 
 // Checked syscall arguments (vm_args.c): each macro decodes argument n of a
@@ -1098,6 +1108,7 @@ void		Log_Frame( void );
 #include "exttokens.h"
 // Hooks_Init after Com_Init, where an error stops the program
 void		Com_InitExtensions( void );
+void		Com_StartClient( void );
 
 fileHandle_t	FS_FCreateOpenPipeFile( const char *filename );
 // will properly create any needed paths and deal with seperater character issues
@@ -1334,7 +1345,9 @@ typedef enum {
 	SE_CHAR,		// evValue is an ascii char
 	SE_MOUSE,		// evValue and evValue2 are relative signed x / y moves
 	SE_JOYSTICK_AXIS,	// evValue is an axis number and evValue2 is the current state (-127 to 127)
-	SE_CONSOLE		// evPtr is a char*
+	SE_CONSOLE,		// evPtr is a char*
+	SE_TEXT_EDITING,	// evPtr is an input method's composition in UTF-8, evValue the caret and evValue2 the selection's length, in characters
+	SE_POINTER		// evValue and evValue2 are the pointer's x and y in pixels, as the bits of floats (floatint_t)
 } sysEventType_t;
 
 typedef struct {
@@ -1585,6 +1598,14 @@ void CL_CharEvent( int key );
 // char events are for field typing, not game control
 
 void CL_MouseEvent( int dx, int dy, int time );
+
+// an input method's composition, and the pointer's position in pixels,
+// for engine extensions (hooks.h)
+void CL_TextEditingEvent( const char *utf8, int cursor, int selection );
+void CL_PointerEvent( float x, float y );
+// the engine extensions have started (Com_InitExtensions), after the
+// renderer did
+void CL_ExtensionsStarted( void );
 
 void CL_JoystickEvent( int axis, int value, int time );
 

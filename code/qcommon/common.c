@@ -2724,6 +2724,17 @@ int Com_EventLoop( void ) {
 				Cbuf_AddText( (char *)ev.evPtr );
 				Cbuf_AddText( "\n" );
 			break;
+			case SE_TEXT_EDITING:
+				CL_TextEditingEvent( ev.evPtr ? (char *)ev.evPtr : "", ev.evValue, ev.evValue2 );
+			break;
+			case SE_POINTER: {
+				floatint_t x, y;
+
+				x.i = ev.evValue;
+				y.i = ev.evValue2;
+				CL_PointerEvent( x.f, y.f );
+			}
+			break;
 			default:
 				Com_Error( ERR_FATAL, "Com_EventLoop: bad event type %i", ev.evType );
 			break;
@@ -4115,12 +4126,9 @@ void Com_Init( char *commandLine ) {
 	// start in full screen ui mode
 	Cvar_Set("r_uiFullScreen", "1");
 
-	CL_StartHunkUsers( qfalse );
-
-	// make sure single player is off by default
-	Cvar_Set("ui_singlePlayerActive", "0");
-
-	com_fullyInitialized = qtrue;
+	// the renderer; sound and the ui start after the engine extensions,
+	// and initialization ends there (Com_StartClient)
+	CL_StartHunkUsers( qtrue );
 
 	// always set the cvar, but only print the info if it makes sense.
 	Com_DetectAltivec();
@@ -4811,6 +4819,29 @@ void Com_InitExtensions( void ) {
 		Sys_Error( "Error starting the engine extensions" );
 	}
 	Hooks_Init();
+	CL_ExtensionsStarted();
+}
+
+/*
+=================
+Com_StartClient
+
+Starts the client's sound and ui after the engine extensions, so the ui's
+first start can call them and they see what it registers; with abortframe
+set, as Com_InitExtensions has it. Initialization ends here, after the ui's
+first start, as it did in Com_Init
+=================
+*/
+void Com_StartClient( void ) {
+	if ( setjmp (abortframe) ) {
+		Sys_Error( "Error starting the client" );
+	}
+	CL_StartHunkUsers( qfalse );
+
+	// make sure single player is off by default
+	Cvar_Set("ui_singlePlayerActive", "0");
+
+	com_fullyInitialized = qtrue;
 }
 
 /*

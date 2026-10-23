@@ -976,45 +976,45 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	
 	// the renderer answers no name with handle 0
 	case UI_R_REGISTERMODEL:
-		return re.RegisterModel( VMA_STR_OPT( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_UI, EXT_ASSET_MODEL, re.RegisterModel, VMA_STR_OPT( 1 ) );
 
 	case UI_R_REGISTERSKIN:
-		return re.RegisterSkin( VMA_STR_OPT( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_UI, EXT_ASSET_SKIN, re.RegisterSkin, VMA_STR_OPT( 1 ) );
 
 	case UI_R_REGISTERSHADERNOMIP:
-		return re.RegisterShaderNoMip( VMA_STR( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_UI, EXT_ASSET_SHADER_NOMIP, re.RegisterShaderNoMip, VMA_STR( 1 ) );
 
 	case UI_R_CLEARSCENE:
-		re.ClearScene();
+		CL_ModuleClearScene( EXT_MODULE_UI );
 		return 0;
 
 	case UI_R_ADDREFENTITYTOSCENE:
-		re.AddRefEntityToScene( VMA_IN( 1, refEntity_t ) );
+		CL_ModuleAddRefEntity( EXT_MODULE_UI, VMA_IN( 1, refEntity_t ) );
 		return 0;
 
 	case UI_R_ADDPOLYTOSCENE: {
 		// the renderer's room (r_maxpolyverts) is the only limit
 		int numVerts = VMV_COUNT( 2, INT_MAX );
 
-		re.AddPolyToScene( args[1], numVerts, VMA_ARRAY( 3, polyVert_t, numVerts ), 1 );
+		CL_ModuleAddPolys( EXT_MODULE_UI, args[1], numVerts, VMA_ARRAY( 3, polyVert_t, numVerts ), 1 );
 		return 0;
 	}
 
 	case UI_R_ADDLIGHTTOSCENE:
-		re.AddLightToScene( VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5) );
+		CL_ModuleAddLight( EXT_MODULE_UI, VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5), qfalse );
 		return 0;
 
 	case UI_R_RENDERSCENE:
-		re.RenderScene( VMA_IN( 1, refdef_t ) );
+		CL_ModuleRenderScene( EXT_MODULE_UI, VMA_IN( 1, refdef_t ) );
 		return 0;
 
 	case UI_R_SETCOLOR:
 		// no color is white
-		SCR_ModuleSetColor( &cls.ui2D, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
+		CL_ModuleSetColor( EXT_MODULE_UI, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
 		return 0;
 
 	case UI_R_DRAWSTRETCHPIC:
-		SCR_ModuleStretchPic( &cls.ui2D, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		CL_ModuleDrawStretchPic( EXT_MODULE_UI, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
 		return 0;
 
   case UI_R_MODELBOUNDS:
@@ -1169,7 +1169,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case UI_R_REGISTERFONT:
 		// no name registers nothing
-		re.RegisterFont( VMA_STR_OPT( 1 ), args[2], VMA_OUT( 3, fontInfo_t ));
+		CL_ModuleRegisterFont( EXT_MODULE_UI, VMA_STR_OPT( 1 ), args[2], VMA_OUT( 3, fontInfo_t ) );
 		return 0;
 
 	case UI_MEMSET:
@@ -1253,7 +1253,7 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return CL_CDKeyValidate(VMA_STR( 1 ), VMA_STR_OPT( 2 ));
 		
 	case COM_TRAP_GETVALUE:
-		return VM_GetValue( args, cl_uiExtensions );
+		return VM_GetValue( args, cl_uiExtensions, EXT_MODULE_UI );
 
 	case COM_TRAP_SETTEXTFOCUS:
 		cls.uiTextFocus = args[1] != 0;
@@ -1285,11 +1285,17 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case COM_TRAP_R_CREATEIMAGE2D:
 	case COM_TRAP_R_UPDATEIMAGE2D:
 	case COM_TRAP_R_DRAWTRIANGLES2D:
-		return SCR_Module2DCall( &cls.ui2D, "ui", args );
+		return SCR_Module2DCall( EXT_MODULE_UI, args );
 
-	default:
+	default: {
+		intptr_t	result;
+
+		// an engine extension's call (hooks.h)
+		if ( Hooks_ModuleCall( EXT_MODULE_UI, args, &result ) ) {
+			return result;
+		}
 		Com_Error( ERR_DROP, "Bad UI system trap: %ld", (long int) args[0] );
-
+	}
 	}
 
 	return 0;
@@ -1307,6 +1313,7 @@ void CL_ShutdownUI( void ) {
 		return;
 	}
 	VM_Call( uivm, UI_SHUTDOWN );
+	Hooks_ModuleShutdown( EXT_MODULE_UI );
 	VM_Free( uivm );
 	uivm = NULL;
 }
