@@ -863,8 +863,8 @@ image_t *R_CreateImage( const char *name, byte *pic, int width, int height,
 
 	strcpy (image->imgName, name);
 
-	image->width = width;
-	image->height = height;
+	image->width = image->fileWidth = width;
+	image->height = image->fileHeight = height;
 	if (flags & IMGFLAG_CLAMPTOEDGE)
 		glWrapClampMode = haveClampToEdge ? GL_CLAMP_TO_EDGE : GL_CLAMP;
 	else
@@ -883,7 +883,17 @@ image_t *R_CreateImage( const char *name, byte *pic, int width, int height,
 
 	GL_Bind(image);
 
-	Upload32( (unsigned *)pic, image->width, image->height, 
+	if ( flags & IMGFLAG_DYNAMIC ) {
+		// as it is, RGBA, for an image whose rectangles are replaced later
+		// (RE_UpdateImage2D)
+		qglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pic );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		image->internalFormat = GL_RGBA8;
+		image->uploadWidth = width;
+		image->uploadHeight = height;
+	} else {
+		Upload32( (unsigned *)pic, image->width, image->height,
 								image->flags & IMGFLAG_MIPMAP,
 								image->flags & IMGFLAG_PICMIP,
 								isLightmap,
@@ -891,6 +901,7 @@ image_t *R_CreateImage( const char *name, byte *pic, int width, int height,
 								&image->internalFormat,
 								&image->uploadWidth,
 								&image->uploadHeight );
+	}
 
 	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glWrapClampMode );
 	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glWrapClampMode );
@@ -1030,7 +1041,7 @@ Returns NULL if it fails, not a default image.
 image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 {
 	image_t	*image;
-	int		width, height;
+	int		width, height, fileWidth, fileHeight;
 	byte	*pic;
 	long	hash;
 	char	fileName[MAX_QPATH];
@@ -1074,13 +1085,87 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 		}
 	}
 
+	fileWidth = width;
+	fileHeight = height;
+
 	// every upload rounds to powers of two
 	R_Upscale2D( name, &pic, &width, &height, qtrue, ( flags & IMGFLAG_PICMIP ) && r_picmip->integer );
 
 	image = R_CreateImage( ( char * ) name, pic, width, height, type, flags, 0 );
 	Q_strncpyz( image->fileName, fileName, sizeof( image->fileName ) );
+	image->fileWidth = fileWidth;
+	image->fileHeight = fileHeight;
 	ri.Free( pic );
 	return image;
+}
+
+
+/*
+================
+RE_CreateImage2D
+
+An image at exactly its size, whose rectangles RE_UpdateImage2D replaces,
+and a 2D shader drawing it
+================
+*/
+qhandle_t RE_CreateImage2D( const char *name, int width, int height, const byte *rgba ) {
+	image_t		*image;
+	qhandle_t	hShader;
+	byte		*clear = NULL;
+
+	if ( !tr.registered ) {
+		return 0;
+	}
+	if ( !name || name[0] != '*' || strlen( name ) >= MAX_QPATH ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: \"%s\" isn't a name that starts with '*'\n", name ? name : "" );
+		return 0;
+	}
+
+	// sizes that aren't powers of two need GL 2.0
+	if ( width < 1 || height < 1 || width > glConfig.maxTextureSize || height > glConfig.maxTextureSize ||
+		width > INT_MAX / 4 / height ||
+		( !QGL_VERSION_ATLEAST( 2, 0 ) && ( ( width & ( width - 1 ) ) || ( height & ( height - 1 ) ) ) ) ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s: %i by %i isn't a size this GL takes\n", name, width, height );
+		return 0;
+	}
+
+	for ( image = hashTable[generateHashValue( name )]; image; image = image->next ) {
+		if ( !strcmp( name, image->imgName ) ) {
+			break;
+		}
+	}
+	// one made before at the same size, as by a module that has restarted
+	// since, is given again with these pixels
+	if ( image ? !( image->flags & IMGFLAG_DYNAMIC ) || image->width != width || image->height != height
+			: R_FindShaderByName( name ) != tr.defaultShader ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s is taken\n", name );
+		return 0;
+	}
+	if ( !image && tr.numImages == MAX_DRAWIMAGES ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s: there are too many images\n", name );
+		return 0;
+	}
+
+	if ( !rgba ) {
+		clear = ri.Malloc( width * height * 4 );
+		Com_Memset( clear, 0, width * height * 4 );
+		rgba = clear;
+	}
+
+	if ( image ) {
+		hShader = RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse );
+		R_UpdateImage( image, 0, 0, width, height, rgba );
+	} else {
+		image = R_CreateImage( name, (byte *)rgba, width, height, IMGTYPE_COLORALPHA,
+			IMGFLAG_NO_COMPRESSION | IMGFLAG_NOLIGHTSCALE | IMGFLAG_CLAMPTOEDGE | IMGFLAG_DYNAMIC, 0 );
+		hShader = RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse );
+	}
+
+	if ( clear ) {
+		ri.Free( clear );
+	}
+
+	return hShader;
 }
 
 

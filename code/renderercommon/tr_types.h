@@ -71,6 +71,60 @@ typedef struct poly_s {
 	polyVert_t			*verts;
 } poly_t;
 
+// a vertex of 2D triangles (DrawTriangles2D): where it is in window pixels,
+// x right and y down from the top left, its color and its texture
+// coordinates; 20 bytes, in the order RmlUi's vertexes have
+typedef struct {
+	float		xy[2];
+	byte		rgba[4];
+	float		st[2];
+} polyVert2D_t;
+
+#define TRIS2D_SCISSOR		0x0001	// draw only inside scissor
+#define TRIS2D_TRANSFORM	0x0002	// transform the vertexes first
+#define TRIS2D_QUADS		0x0004	// no indexes: each four vertexes a quad, clockwise
+#define TRIS2D_PREMULTIPLIED	0x0008	// colors and texture premultiplied: ONE, ONE_MINUS_SRC_ALPHA
+#define TRIS2D_TEXTURE2D	0x0010	// texture names a UI texture, not a shader
+#define TRIS2D_CLIPMASK		0x0020	// draw only where the clip mask is set
+#define TRIS2D_PAINT		0x0040	// color from paint (a gradient or a shape), times the vertex color
+
+// how 2D triangles are drawn; a renderer that doesn't draw a flag yet
+// leaves the batch out, with a warning
+typedef struct {
+	int			texture;		// a shader handle, or a UI texture with TRIS2D_TEXTURE2D; 0 for white
+	int			flags;			// TRIS2D_*
+	int			scissor[4];		// x, y, width and height in window pixels
+	// row-major 3x3 and homogeneous: x' = ( m0 x + m1 y + m2 ) / w and
+	// y' = ( m3 x + m4 y + m5 ) / w, with w = m6 x + m7 y + m8, which must
+	// stay above 0
+	float		transform[9];
+	float		translate[2];	// added first, RmlUi's translation, with or without the transform
+	int			paint;			// with TRIS2D_PAINT
+} draw2DState_t;
+
+// indexed triangles drawn in 2D, as a shader draws a picture: a shader made
+// from an image (RegisterShaderNoMip, CreateImage2D) multiplies it by the
+// vertex colors and blends it by its alpha
+typedef struct {
+	draw2DState_t		state;
+	const polyVert2D_t	*verts;
+	int					numVerts;
+	const int			*indexes;		// three a triangle, each below numVerts;
+	int					numIndexes;		// none with TRIS2D_QUADS
+} tris2D_t;
+
+// what a renderer's 2D path can do (GetCaps2D)
+typedef struct {
+	qboolean	textureA8;			// A8 textures without a conversion to RGBA8
+	qboolean	clipMask;			// stencil clip masks
+	qboolean	paints;				// gradients and shapes on the GPU
+	qboolean	msdf;				// multi-channel distance field text
+	qboolean	layers;				// layers and their filters
+	int			multisample;		// samples of the 2D target, 0 for none
+	int			maxTextureSize;		// an image's widest side
+	int			maxGeometryVerts;	// a retained geometry's vertexes, 0 for none
+} caps2D_t;
+
 typedef enum {
 	RT_MODEL,
 	RT_POLY,
