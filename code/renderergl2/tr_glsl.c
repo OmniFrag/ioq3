@@ -52,6 +52,8 @@ extern const char *fallbackShader_texturecolor_vp;
 extern const char *fallbackShader_texturecolor_fp;
 extern const char *fallbackShader_ui2d_vp;
 extern const char *fallbackShader_ui2d_fp;
+extern const char *fallbackShader_ui2dfilter_vp;
+extern const char *fallbackShader_ui2dfilter_fp;
 extern const char *fallbackShader_tonemap_vp;
 extern const char *fallbackShader_tonemap_fp;
 extern const char* fallbackShader_greyscale_vp;
@@ -1082,6 +1084,27 @@ void GLSL_InitGPUShaders(void)
 
 	numEtcShaders++;
 
+	// the UI's layers' passes (tr_ui2d_layers.c), where GLSL loops over
+	// uniform arrays freely, as for gradients; without, no layers
+	if (R_Paints2DAvailable())
+	{
+		attribs = ATTR_POSITION | ATTR_TEXCOORD;
+		extradefines[0] = '\0';
+
+		if (!GLSL_InitGPUShader(&tr.ui2dFilterShader, "ui2dfilter", attribs, qtrue, extradefines, qtrue, fallbackShader_ui2dfilter_vp, fallbackShader_ui2dfilter_fp))
+		{
+			ri.Error(ERR_FATAL, "Could not load ui2dfilter shader!");
+		}
+
+		GLSL_InitUniforms(&tr.ui2dFilterShader);
+
+		GLSL_SetUniformInt(&tr.ui2dFilterShader, UNIFORM_DIFFUSEMAP, TB_COLORMAP);
+
+		GLSL_FinishGPUShader(&tr.ui2dFilterShader);
+
+		numEtcShaders++;
+	}
+
 	for (i = 0; i < FOGDEF_COUNT; i++)
 	{
 		if ((i & FOGDEF_USE_VERTEX_ANIMATION) && (i & FOGDEF_USE_BONE_ANIMATION))
@@ -1606,6 +1629,7 @@ void GLSL_ShutdownGPUShaders(void)
 
 	GLSL_DeleteGPUShader(&tr.textureColorShader);
 	GLSL_DeleteGPUShader(&tr.ui2dShader);
+	GLSL_DeleteGPUShader(&tr.ui2dFilterShader);
 
 	for ( i = 0; i < FOGDEF_COUNT; i++)
 		GLSL_DeleteGPUShader(&tr.fogShader[i]);

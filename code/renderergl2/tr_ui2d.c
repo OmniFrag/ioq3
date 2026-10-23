@@ -33,8 +33,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static struct {
 	GLint		vertexPremultiplied, colorScale, textureMode;
 	GLint		paintKind, paintRepeat, paintP0, paintP1, numStops, stopPos, stopColor;
+	GLint		paintBox, paintRadii, paintFeather, msdfRange, textureSize;
 
-	int			lastPremultiplied, lastTextureMode;
+	int			lastPremultiplied, lastTextureMode, lastTextureWidth, lastTextureHeight;
 	float		lastColorScale;
 	qboolean	painting;
 	paint2D_t	lastPaint;
@@ -202,10 +203,11 @@ What GetCaps2D says of the retained 2D
 void R_GetCaps2DRetained( caps2D_t *caps ) {
 	caps->textureA8 = R_TextureR8();
 	caps->clipMask = R_ClipMask2DAvailable();
-	caps->paints = R_Paints2DAvailable();
+	caps->paints = caps->msdf = R_Paints2DAvailable();
 	caps->maxGeometryVerts = MAX_GEOMETRY2D_VERTS;
 	// the render target's samples, unless the views draw apart from it
 	// (FBO_UseRenderTarget)
+	caps->layers = R_Layers2DAvailable();
 	caps->multisample = tr.renderFbo && tr.renderFbo == tr.renderTargetFbo && tr.renderTargetResolveFbo ?
 		tr.multisample : 0;
 }
@@ -232,6 +234,11 @@ void R_InitUI2D( void ) {
 	ui2d.numStops = qglGetUniformLocation( program, "u_NumStops" );
 	ui2d.stopPos = qglGetUniformLocation( program, "u_StopPos" );
 	ui2d.stopColor = qglGetUniformLocation( program, "u_StopColor" );
+	ui2d.paintBox = qglGetUniformLocation( program, "u_PaintBox" );
+	ui2d.paintRadii = qglGetUniformLocation( program, "u_PaintRadii" );
+	ui2d.paintFeather = qglGetUniformLocation( program, "u_PaintFeather" );
+	ui2d.msdfRange = qglGetUniformLocation( program, "u_MsdfRange" );
+	ui2d.textureSize = qglGetUniformLocation( program, "u_TextureSize" );
 
 	// GL starts them at 0: what's set first is set
 	ui2d.lastPremultiplied = ui2d.lastTextureMode = -1;
@@ -327,10 +334,11 @@ static void RB_Draw2DShader( const draw2DState_t *state, const polyVert2D_t *ver
 ===============
 RB_Paint2D
 
-A paint's uniforms, when it isn't the one they hold
+A paint's uniforms, when it isn't the one they hold; a distance field's
+texture size, with it
 ===============
 */
-static void RB_Paint2D( const paint2D_t *paint ) {
+static void RB_Paint2D( const paint2D_t *paint, const texture2D_t *texture ) {
 	float	colors[MAX_PAINT2D_STOPS * 4];
 	int		i;
 
@@ -341,20 +349,34 @@ static void RB_Paint2D( const paint2D_t *paint ) {
 		}
 		return;
 	}
+	if ( paint->kind == PAINT2D_MSDF && texture &&
+		( texture->image.width != ui2d.lastTextureWidth || texture->image.height != ui2d.lastTextureHeight ) ) {
+		qglUniform2f( ui2d.textureSize, texture->image.width, texture->image.height );
+		ui2d.lastTextureWidth = texture->image.width;
+		ui2d.lastTextureHeight = texture->image.height;
+	}
 	if ( ui2d.painting && !memcmp( paint, &ui2d.lastPaint, sizeof( *paint ) ) ) {
 		return;
 	}
 
-	for ( i = 0; i < paint->numStops * 4; i++ ) {
-		colors[i] = paint->stopColor[i / 4][i % 4] / 255.0f;
-	}
 	qglUniform1i( ui2d.paintKind, paint->kind );
-	qglUniform1i( ui2d.paintRepeat, paint->repeating );
-	qglUniform2f( ui2d.paintP0, paint->p0[0], paint->p0[1] );
-	qglUniform2f( ui2d.paintP1, paint->p1[0], paint->p1[1] );
-	qglUniform1i( ui2d.numStops, paint->numStops );
-	qglUniform1fv( ui2d.stopPos, paint->numStops, paint->stopPos );
-	qglUniform1fv( ui2d.stopColor, paint->numStops * 4, colors );
+	if ( paint->kind == PAINT2D_ROUNDED_BOX ) {
+		qglUniform4f( ui2d.paintBox, paint->box[0], paint->box[1], paint->box[2], paint->box[3] );
+		qglUniform4f( ui2d.paintRadii, paint->radii[0], paint->radii[1], paint->radii[2], paint->radii[3] );
+		qglUniform1f( ui2d.paintFeather, paint->feather );
+	} else if ( paint->kind == PAINT2D_MSDF ) {
+		qglUniform1f( ui2d.msdfRange, paint->msdfRange );
+	} else {
+		for ( i = 0; i < paint->numStops * 4; i++ ) {
+			colors[i] = paint->stopColor[i / 4][i % 4] / 255.0f;
+		}
+		qglUniform1i( ui2d.paintRepeat, paint->repeating );
+		qglUniform2f( ui2d.paintP0, paint->p0[0], paint->p0[1] );
+		qglUniform2f( ui2d.paintP1, paint->p1[0], paint->p1[1] );
+		qglUniform1i( ui2d.numStops, paint->numStops );
+		qglUniform1fv( ui2d.stopPos, paint->numStops, paint->stopPos );
+		qglUniform1fv( ui2d.stopColor, paint->numStops * 4, colors );
+	}
 	ui2d.lastPaint = *paint;
 	ui2d.painting = qtrue;
 }
@@ -402,7 +424,7 @@ static void RB_Bind2DProgram( const draw2DState_t *state, qboolean writeColor ) 
 		qglUniform1f( ui2d.colorScale, tr.frameLight );
 		ui2d.lastColorScale = tr.frameLight;
 	}
-	RB_Paint2D( writeColor && ( state->flags & TRIS2D_PAINT ) ? R_GetPaint2D( state->paint, qtrue ) : NULL );
+	RB_Paint2D( writeColor && ( state->flags & TRIS2D_PAINT ) ? R_GetPaint2D( state->paint, qtrue ) : NULL, texture );
 
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 	GL_Cull( CT_TWO_SIDED );
@@ -550,7 +572,7 @@ tessellator drawn first, since these draw at once
 */
 static void RB_Begin2D( const draw2DState_t *state ) {
 	if ( glRefConfig.framebufferObject ) {
-		FBO_Bind( tr.renderFbo );
+		FBO_Bind( RB_Target2D() );
 	}
 	RB_SetGL2D();
 	RB_Scissor2D( ( state->flags & TRIS2D_SCISSOR ) ? state->scissor : NULL );
@@ -577,7 +599,7 @@ static void RB_Draw2DUnseen( const draw2DState_t *state, geometry2D_t *g ) {
 }
 
 const renderer2D_t r_renderer2D = {
-	RC_DRAW_2D, RC_CLIPMASK_2D, RC_DELETE_2D, RC_UPDATE_TEXTURE_2D,
+	RC_DRAW_2D, RC_CLIPMASK_2D, RC_DELETE_2D, RC_UPDATE_TEXTURE_2D, RC_LAYER_2D,
 	MAX_RENDER_COMMANDS,
 	R_GetCaps2DRetained, R_CreateTexture2DGL, R_UpdateTexture2DGL, R_FreeGpu2D,
 	RB_Begin2D, RB_Draw2DUnseen

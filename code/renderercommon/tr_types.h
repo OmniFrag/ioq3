@@ -117,10 +117,10 @@ typedef struct {
 typedef struct {
 	qboolean	textureA8;			// A8 textures without a conversion to RGBA8
 	qboolean	clipMask;			// stencil clip masks
-	qboolean	paints;				// gradients on the GPU (CreatePaint2D: 0 for a kind not drawn yet)
+	qboolean	paints;				// gradients and rounded boxes on the GPU
 	qboolean	msdf;				// multi-channel distance field text
-	qboolean	layers;				// layers and their filters
-	int			multisample;		// samples of the 2D target, 0 for none
+	qboolean	layers;				// layers and their filters (PushLayer2D)
+	int			multisample;		// samples of the 2D target, and so of the layers; 0 for none
 	int			maxTextureSize;		// an image's widest side
 	int			maxGeometryVerts;	// a retained geometry's vertexes, 0 for none
 } caps2D_t;
@@ -143,13 +143,14 @@ typedef enum {
 
 // A paint colors 2D triangles drawn with TRIS2D_PAINT, by their texture
 // coordinates, which say where each vertex is in the paint's space (the
-// element's box, as RmlUi gives them); the vertex colors multiply it
+// element's box, as RmlUi gives them); the vertex colors multiply it. A
+// shape anti-aliases its own edges
 typedef enum {
 	PAINT2D_LINEAR,			// p0 to p1
 	PAINT2D_RADIAL,			// centered on p0, p1 the radii of where it ends
 	PAINT2D_CONIC,			// around p0, starting at p1[0] radians clockwise from up
-	PAINT2D_ROUNDED_BOX,	// a rectangle with rounded corners (not drawn yet)
-	PAINT2D_MSDF			// a multi-channel distance field (not drawn yet)
+	PAINT2D_ROUNDED_BOX,	// box with radii corners, its edge softened over feather pixels (a soft shadow)
+	PAINT2D_MSDF			// the coverage of a multi-channel distance field in the UI texture (TRIS2D_TEXTURE2D)
 } paint2DKind_t;
 
 #define MAX_PAINT2D_STOPS	16
@@ -158,12 +159,21 @@ typedef struct {
 	paint2DKind_t	kind;
 	qboolean		repeating;		// the stops again, past the first and the last
 	float			p0[2], p1[2];
-	int				numStops;		// 2 or more, positions in order: 0 at the start, 1 at the end
+	int				numStops;		// a gradient's, 2 or more, positions in order: 0 at the start, 1 at the end
 	float			stopPos[MAX_PAINT2D_STOPS];
 	byte			stopColor[MAX_PAINT2D_STOPS][4];	// premultiplied
 	float			box[4], radii[4], feather;		// rounded box: rectangle, corner radii, edge softness
-	float			msdfRange;						// MSDF: the atlas's range in pixels
+	float			msdfRange;						// MSDF: the field's range in the texture's pixels
 } paint2D_t;
+
+// how CompositeLayers2D puts a layer onto another
+typedef enum {
+	BLEND2D_BLEND,		// over it, premultiplied
+	BLEND2D_REPLACE		// instead of it
+} blend2DMode_t;
+
+// the most filters one CompositeLayers2D applies
+#define MAX_FILTERS2D_PER_COMPOSITE	8
 
 typedef enum {
 	RT_MODEL,

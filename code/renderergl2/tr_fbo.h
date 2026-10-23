@@ -54,6 +54,8 @@ typedef struct FBO_s
 	qboolean        clearOnBind;	// cleared whole as the frame first binds it (RB_DrawBuffer)
 } FBO_t;
 
+qboolean R_CheckFBO(const FBO_t * fbo);
+void FBO_CreateBuffer(FBO_t *fbo, int format, int index, int multisample);
 void FBO_AttachImage(FBO_t *fbo, image_t *image, GLenum attachment, GLuint cubemapside);
 void FBO_Bind(FBO_t *fbo);
 void FBO_ClearWhole(GLbitfield buffers, const vec4_t color);

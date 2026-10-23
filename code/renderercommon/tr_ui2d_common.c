@@ -48,7 +48,12 @@ typedef struct {
 	paint2D_t	paint;
 } paintSlot_t;
 
-static void	*textures[MAX_TEXTURES2D], *geometries[MAX_GEOMETRIES2D], *paints[MAX_PAINTS2D];
+typedef struct {
+	qboolean	deleted;
+	filter2D_t	filter;
+} filterSlot_t;
+
+static void	*textures[MAX_TEXTURES2D], *geometries[MAX_GEOMETRIES2D], *paints[MAX_PAINTS2D], *filterSlots[MAX_FILTERS2D];
 
 static struct {
 	void		**slots;
@@ -58,10 +63,12 @@ static struct {
 } tables[HANDLE2D_KINDS] = {
 	{ textures, MAX_TEXTURES2D, 0, "Texture2D" },
 	{ geometries, MAX_GEOMETRIES2D, 0, "Geometry2D" },
-	{ paints, MAX_PAINTS2D, 0, "Paint2D" }
+	{ paints, MAX_PAINTS2D, 0, "Paint2D" },
+	{ filterSlots, MAX_FILTERS2D, 0, "Filter2D" }
 };
 
 static qboolean	store2DOpen;	// between the renderer's start and its stop
+static int		layerDepth;		// the layers the front end has pushed this frame
 static int		geometryBytes;	// the vertexes and indexes kept, of MAX_GEOMETRY2D_BYTES
 
 // The clip mask in the stencil. Each new mask writes a value above every
@@ -141,7 +148,7 @@ Frees a slot's object, and with freeGpu, what GL has of it
 static void R_FreeSlot2D( handle2DKind_t kind, int handle, qboolean freeGpu ) {
 	void	*object = tables[kind].slots[handle - 1];
 
-	if ( freeGpu && kind != HANDLE2D_PAINT ) {
+	if ( freeGpu && ( kind == HANDLE2D_TEXTURE || kind == HANDLE2D_GEOMETRY ) ) {
 		r_renderer2D.freeGpu( kind, object );
 	}
 	if ( kind == HANDLE2D_GEOMETRY ) {
@@ -167,6 +174,7 @@ GL too with freeGpu, when its context stays
 */
 void R_InitStore2D( void ) {
 	store2DOpen = qtrue;
+	layerDepth = 0;
 	// the new stencil holds anything: the first mask clears it
 	clipOn = qfalse;
 	clipValue = 0xff;
@@ -380,48 +388,86 @@ const polyVert2D_t *R_StraightVerts2D( geometry2D_t *g ) {
 
 /*
 ===============
-R_CreatePaint2D
+R_CheckGradient2D and R_CheckShape2D
 
-Keeps a paint once it's checked; 0 when it's malformed, there's no room,
-or the renderer doesn't draw its kind: gradients where caps2D_t has
-paints, and the rest not yet
+Whether a gradient's stops and points, or a shape's numbers, make sense
 ===============
 */
-int R_CreatePaint2D( const paint2D_t *paint ) {
-	paintSlot_t	*slot;
-	caps2D_t	caps;
-	int			i;
+static qboolean R_CheckGradient2D( const paint2D_t *paint ) {
+	int		i;
 
-	if ( !store2DOpen ) {
-		return 0;
-	}
-	r_renderer2D.caps( &caps );
-	if ( !paint || !caps.paints || (unsigned)paint->kind > PAINT2D_CONIC ) {
-		ri.Printf( PRINT_DEVELOPER, "CreatePaint2D: kind %i isn't drawn\n", paint ? (int)paint->kind : -1 );
-		return 0;
-	}
 	if ( paint->numStops < 2 || paint->numStops > MAX_PAINT2D_STOPS ) {
 		ri.Printf( PRINT_WARNING, "CreatePaint2D: %i stops, not 2 to %i\n", paint->numStops, MAX_PAINT2D_STOPS );
-		return 0;
+		return qfalse;
 	}
 	for ( i = 0; i < paint->numStops; i++ ) {
 		if ( !isfinite( paint->stopPos[i] ) || ( i && paint->stopPos[i] < paint->stopPos[i - 1] ) ) {
 			ri.Printf( PRINT_WARNING, "CreatePaint2D: stop %i is out of order\n", i );
-			return 0;
+			return qfalse;
 		}
 	}
 	for ( i = 0; i < 2; i++ ) {
 		if ( !isfinite( paint->p0[i] ) || !isfinite( paint->p1[i] ) ) {
 			ri.Printf( PRINT_WARNING, "CreatePaint2D: a point isn't a number\n" );
-			return 0;
+			return qfalse;
 		}
 	}
 	if ( paint->kind == PAINT2D_LINEAR && paint->p0[0] == paint->p1[0] && paint->p0[1] == paint->p1[1] ) {
 		ri.Printf( PRINT_WARNING, "CreatePaint2D: a linear gradient from %g, %g to itself\n", paint->p0[0], paint->p0[1] );
-		return 0;
+		return qfalse;
 	}
 	if ( paint->kind == PAINT2D_RADIAL && ( paint->p1[0] <= 0 || paint->p1[1] <= 0 ) ) {
 		ri.Printf( PRINT_WARNING, "CreatePaint2D: radii %g, %g\n", paint->p1[0], paint->p1[1] );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean R_CheckShape2D( const paint2D_t *paint ) {
+	int		i;
+
+	if ( paint->kind == PAINT2D_MSDF ) {
+		if ( !isfinite( paint->msdfRange ) || paint->msdfRange <= 0 ) {
+			ri.Printf( PRINT_WARNING, "CreatePaint2D: a distance field's range of %g\n", paint->msdfRange );
+			return qfalse;
+		}
+		return qtrue;
+	}
+	for ( i = 0; i < 4; i++ ) {
+		if ( !isfinite( paint->box[i] ) || !isfinite( paint->radii[i] ) || paint->radii[i] < 0 ) {
+			ri.Printf( PRINT_WARNING, "CreatePaint2D: a rounded box's numbers\n" );
+			return qfalse;
+		}
+	}
+	if ( paint->box[2] <= 0 || paint->box[3] <= 0 || !isfinite( paint->feather ) || paint->feather < 0 ) {
+		ri.Printf( PRINT_WARNING, "CreatePaint2D: a rounded box %g by %g, feather %g\n", paint->box[2], paint->box[3],
+			paint->feather );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+===============
+R_CreatePaint2D
+
+Keeps a paint once it's checked; 0 when it's malformed, there's no room,
+or the renderer doesn't draw its kind (caps2D_t's paints and msdf)
+===============
+*/
+int R_CreatePaint2D( const paint2D_t *paint ) {
+	paintSlot_t	*slot;
+	caps2D_t	caps;
+
+	if ( !store2DOpen ) {
+		return 0;
+	}
+	r_renderer2D.caps( &caps );
+	if ( !paint || !caps.paints || (unsigned)paint->kind > PAINT2D_MSDF || ( paint->kind == PAINT2D_MSDF && !caps.msdf ) ) {
+		ri.Printf( PRINT_DEVELOPER, "CreatePaint2D: kind %i isn't drawn\n", paint ? (int)paint->kind : -1 );
+		return 0;
+	}
+	if ( paint->kind <= PAINT2D_CONIC ? !R_CheckGradient2D( paint ) : !R_CheckShape2D( paint ) ) {
 		return 0;
 	}
 
@@ -438,8 +484,9 @@ int R_CreatePaint2D( const paint2D_t *paint ) {
 R_CheckState2D
 
 Whether a 2D state can be drawn: its flags known, its scissor not empty,
-and its texture and paint there. out gets it with the scissor cut to the
-window, as RE_DrawTriangles2D cuts it.
+and its texture and paint there. out, when given, gets it with the scissor
+cut to the window, as RE_DrawTriangles2D cuts it; a composite's isn't cut,
+as its filters reach past it (RB_CompositeBox2D clamps what they reach).
 ===============
 */
 static qboolean R_CheckState2D( const draw2DState_t *state, draw2DState_t *out, const char *caller ) {
@@ -447,18 +494,30 @@ static qboolean R_CheckState2D( const draw2DState_t *state, draw2DState_t *out, 
 		ri.Printf( PRINT_WARNING, "%s: flags 0x%x\n", caller, state->flags );
 		return qfalse;
 	}
-	*out = *state;
-	if ( ( state->flags & TRIS2D_SCISSOR ) &&
-		!R_ClipScissor2D( state->scissor, glConfig.vidWidth, glConfig.vidHeight, out->scissor ) ) {
+	if ( out ) {
+		*out = *state;
+	}
+	if ( ( state->flags & TRIS2D_SCISSOR ) && ( out ?
+		!R_ClipScissor2D( state->scissor, glConfig.vidWidth, glConfig.vidHeight, out->scissor ) :
+		state->scissor[2] <= 0 || state->scissor[3] <= 0 ) ) {
 		return qfalse;
 	}
 	if ( ( state->flags & TRIS2D_TEXTURE2D ) && !R_GetTexture2D( state->texture, qfalse ) ) {
 		ri.Printf( PRINT_WARNING, "%s: no texture %i\n", caller, state->texture );
 		return qfalse;
 	}
-	if ( ( state->flags & TRIS2D_PAINT ) && !R_GetPaint2D( state->paint, qfalse ) ) {
-		ri.Printf( PRINT_WARNING, "%s: no paint %i\n", caller, state->paint );
-		return qfalse;
+	if ( state->flags & TRIS2D_PAINT ) {
+		const paint2D_t	*paint = R_GetPaint2D( state->paint, qfalse );
+
+		if ( !paint ) {
+			ri.Printf( PRINT_WARNING, "%s: no paint %i\n", caller, state->paint );
+			return qfalse;
+		}
+		// a distance field is the texture's
+		if ( paint->kind == PAINT2D_MSDF && !( state->flags & TRIS2D_TEXTURE2D ) ) {
+			ri.Printf( PRINT_WARNING, "%s: a distance field without a texture\n", caller );
+			return qfalse;
+		}
 	}
 	return qtrue;
 }
@@ -635,6 +694,182 @@ void R_DeleteGeometry2D( int geometry ) {
 
 void R_DeletePaint2D( int paint ) {
 	R_Delete2D( HANDLE2D_PAINT, paint );
+}
+
+/*
+===============
+R_CreateFilter2D
+
+A filter by its name, with as many numbers as it takes (tr_public.h)
+===============
+*/
+int R_CreateFilter2D( const char *name, const float *params, int numParams ) {
+	static const struct {
+		const char		*name;
+		filter2DKind_t	kind;
+		int				numParams;
+	} kinds[] = {
+		{ "opacity", FILTER2D_OPACITY, 1 },
+		{ "blur", FILTER2D_BLUR, 1 },
+		{ "drop-shadow", FILTER2D_DROP_SHADOW, 7 },
+		{ "color-matrix", FILTER2D_COLOR_MATRIX, 20 }
+	};
+	filterSlot_t	*slot;
+	caps2D_t		caps;
+	int				i, k;
+
+	if ( !store2DOpen || !name ) {
+		return 0;
+	}
+	r_renderer2D.caps( &caps );
+	if ( !caps.layers ) {
+		return 0;
+	}
+	for ( k = 0; k < (int)ARRAY_LEN( kinds ) && Q_stricmp( name, kinds[k].name ); k++ ) {
+	}
+	if ( k == (int)ARRAY_LEN( kinds ) ) {
+		ri.Printf( PRINT_WARNING, "CreateFilter2D: no filter %s\n", name );
+		return 0;
+	}
+	if ( numParams != kinds[k].numParams || !params ) {
+		ri.Printf( PRINT_WARNING, "CreateFilter2D: %s takes %i numbers, not %i\n", name, kinds[k].numParams, numParams );
+		return 0;
+	}
+	for ( i = 0; i < numParams; i++ ) {
+		if ( !isfinite( params[i] ) ) {
+			ri.Printf( PRINT_WARNING, "CreateFilter2D: %s's number %i isn't one\n", name, i );
+			return 0;
+		}
+	}
+	if ( ( kinds[k].kind == FILTER2D_BLUR && params[0] < 0 ) || ( kinds[k].kind == FILTER2D_DROP_SHADOW && params[6] < 0 ) ) {
+		ri.Printf( PRINT_WARNING, "CreateFilter2D: %s's sigma is below 0\n", name );
+		return 0;
+	}
+
+	slot = calloc( 1, sizeof( *slot ) );
+	if ( !slot ) {
+		return 0;
+	}
+	slot->filter.kind = kinds[k].kind;
+	Com_Memcpy( slot->filter.params, params, numParams * sizeof( *params ) );
+	// an alpha, or a shadow's premultiplied color, from 0 to 1, as CSS
+	// clamps it, so the colors composited stay premultiplied
+	if ( slot->filter.kind == FILTER2D_OPACITY || slot->filter.kind == FILTER2D_DROP_SHADOW ) {
+		for ( i = 0; i < ( slot->filter.kind == FILTER2D_OPACITY ? 1 : 4 ); i++ ) {
+			slot->filter.params[i] = Com_Clamp( 0, 1, slot->filter.params[i] );
+		}
+	}
+	return R_AddSlot2D( HANDLE2D_FILTER, slot );
+}
+
+void R_DeleteFilter2D( int filter ) {
+	R_Delete2D( HANDLE2D_FILTER, filter );
+}
+
+/*
+===============
+R_QueueLayer2D
+===============
+*/
+static layer2DCommand_t *R_QueueLayer2D( layer2DOp_t op ) {
+	layer2DCommand_t	*cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+
+	if ( cmd ) {
+		cmd->commandId = r_renderer2D.layerCommand;
+		cmd->op = op;
+		cmd->numFilters = 0;
+	}
+	return cmd;
+}
+
+/*
+===============
+R_PushLayer2D and R_PopLayer2D
+===============
+*/
+int R_PushLayer2D( void ) {
+	caps2D_t	caps;
+
+	if ( !store2DOpen ) {
+		return 0;
+	}
+	r_renderer2D.caps( &caps );
+	if ( !caps.layers ) {
+		return 0;
+	}
+	if ( layerDepth == MAX_LAYERS2D ) {
+		ri.Printf( PRINT_WARNING, "PushLayer2D: %i layers are pushed already\n", MAX_LAYERS2D );
+		return 0;
+	}
+	if ( !R_QueueLayer2D( LAYER2D_PUSH ) ) {
+		return 0;
+	}
+	return ++layerDepth;
+}
+
+void R_PopLayer2D( void ) {
+	if ( layerDepth && R_QueueLayer2D( LAYER2D_POP ) ) {
+		layerDepth--;
+	}
+}
+
+void R_EndFrame2D( void ) {
+	layerDepth = 0;
+}
+
+/*
+===============
+R_CompositeLayers2D
+===============
+*/
+void R_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
+	const draw2DState_t *state ) {
+	const filterSlot_t	*slots[MAX_FILTERS2D_PER_COMPOSITE];
+	layer2DCommand_t	*cmd;
+	int					i;
+
+	if ( !layerDepth ) {
+		return;
+	}
+	if ( source < 0 || source > layerDepth || destination < 0 || destination > layerDepth || source == destination ) {
+		ri.Printf( PRINT_WARNING, "CompositeLayers2D: layers %i and %i, of %i\n", source, destination, layerDepth );
+		return;
+	}
+	if ( (unsigned)blendMode > BLEND2D_REPLACE ) {
+		ri.Printf( PRINT_WARNING, "CompositeLayers2D: blend mode %i\n", blendMode );
+		return;
+	}
+	if ( numFilters < 0 || numFilters > MAX_FILTERS2D_PER_COMPOSITE || ( numFilters && !filters ) ) {
+		ri.Printf( PRINT_WARNING, "CompositeLayers2D: %i filters\n", numFilters );
+		return;
+	}
+	for ( i = 0; i < numFilters; i++ ) {
+		slots[i] = R_GetSlot2D( HANDLE2D_FILTER, filters[i], qfalse );
+		if ( !slots[i] ) {
+			ri.Printf( PRINT_WARNING, "CompositeLayers2D: no filter %i\n", filters[i] );
+			return;
+		}
+	}
+	if ( state && !R_CheckState2D( state, NULL, "CompositeLayers2D" ) ) {
+		return;
+	}
+
+	cmd = R_QueueLayer2D( LAYER2D_COMPOSITE );
+	if ( !cmd ) {
+		return;
+	}
+	cmd->source = source;
+	cmd->destination = destination;
+	cmd->blendMode = blendMode;
+	cmd->numFilters = numFilters;
+	for ( i = 0; i < numFilters; i++ ) {
+		cmd->filters[i] = slots[i]->filter;
+	}
+	if ( state ) {
+		cmd->state = *state;
+	} else {
+		Com_Memset( &cmd->state, 0, sizeof( cmd->state ) );
+	}
 }
 
 /*

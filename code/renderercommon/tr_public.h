@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		14
+#define	REF_API_VERSION		15
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -209,6 +209,27 @@ typedef struct {
 	// paints)
 	int		(*CreatePaint2D)( const paint2D_t *paint );
 	void	(*DeletePaint2D)( int paint );
+
+	// Layers, where caps2D_t has layers: a new one like the 2D target,
+	// transparent, which the 2D draws go into until it's popped. Its
+	// handle is its depth; the 2D target is 0. Layers share the 2D
+	// target's stencil, so a clip mask holds across them.
+	// CompositeLayers2D puts source onto destination (blend2DMode_t)
+	// through the filters, in order, within state's scissor, grown by
+	// the filters' reach, and with TRIS2D_CLIPMASK, where the mask is; a
+	// NULL state is the whole target. What's pushed in a frame is popped
+	// at its end
+	int		(*PushLayer2D)( void );
+	void	(*CompositeLayers2D)( int source, int destination, int blendMode, const int *filters, int numFilters,
+				const draw2DState_t *state );
+	void	(*PopLayer2D)( void );
+	// A filter, by name, with its numbers:
+	//   opacity		alpha
+	//   blur			sigma, in pixels
+	//   drop-shadow	red, green, blue, alpha (premultiplied, 0 to 1), x and y offset, sigma
+	//   color-matrix	20 numbers, a 4x5 matrix by rows, on straight colors from 0 to 1
+	int		(*CreateFilter2D)( const char *name, const float *params, int numParams );
+	void	(*DeleteFilter2D)( int filter );
 } refexport_t;
 
 //
