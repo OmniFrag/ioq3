@@ -63,6 +63,7 @@ typedef struct {
 	// the pointer's
 	qboolean		mouse;			// in_mouse is on
 	qboolean		holdable;		// there's a pointer to hold: none on a touch screen
+	qboolean		cursor;			// an engine extension shows a cursor (CL_ExtSetPointerMode)
 	qboolean		console;		// the console is down
 	// natively, the player clicked into the window since it got the focus,
 	// or was fullscreen since

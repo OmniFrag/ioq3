@@ -324,7 +324,8 @@ presentPointer_t Present_Pointer( const presentFacts_t *facts )
 	presentPointer_t	pointer;
 	qboolean			entered;
 
-	pointer.grab = facts->mouse && facts->holdable && ( facts->fullscreen || !in_nograb->integer );
+	// an engine extension's cursor moves over the window, unheld
+	pointer.grab = facts->mouse && facts->holdable && !facts->cursor && ( facts->fullscreen || !in_nograb->integer );
 	entered = facts->capturesAtClick ? facts->captured || !pointer.grab : facts->clickedIn;
 	pointer.read = facts->mouse && facts->focused && entered &&
 		( facts->fullscreen || !( facts->console || facts->loading ) );

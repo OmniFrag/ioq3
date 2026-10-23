@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "cl_ext.h"
 #include "../ui/ui_public.h"
 #include "keys.h"
 #include "cl_present.h"
@@ -376,6 +377,12 @@ typedef struct {
 	module2D_t	ui2D;
 	module2D_t	cgame2D;
 
+	// an engine extension shows a cursor, or has a text field with focus,
+	// and where it is, if it said (CL_ExtSetPointerMode, CL_ExtSetTextFocus)
+	qboolean	extCursor;
+	qboolean	extTextFocus;
+	int			extTextArea[4];
+
 	int			framecount;
 	int			frametime;			// msec since last frame
 
@@ -586,6 +593,23 @@ void CL_ShutdownRef( void );
 qboolean CL_ResizeWindow( void );
 void CL_GetSafeArea( int rect[4] );
 qboolean CL_WantsTextInput( void );
+// whether an engine extension takes the mouse's motion (hooks.h)
+qboolean CL_ExtMouseEvent( int dx, int dy );
+// the game modules' registrations and renderer calls, which the engine
+// extensions see and may take (hooks.h's moduleAsset and moduleRender)
+// (cl_ext.c)
+qhandle_t CL_ModuleRegister( extModule_t module, extAssetKind_t kind,
+	qhandle_t (*registerAsset)( const char *name ), const char *name );
+void CL_ModuleRegisterFont( extModule_t module, const char *name, int pointSize, fontInfo_t *font );
+void CL_ModuleSetColor( extModule_t module, const float *color );
+void CL_ModuleDrawStretchPic( extModule_t module, float x, float y, float w, float h, float s1, float t1,
+	float s2, float t2, qhandle_t shader );
+void CL_ModuleClearScene( extModule_t module );
+void CL_ModuleAddRefEntity( extModule_t module, const refEntity_t *entity );
+void CL_ModuleAddPolys( extModule_t module, qhandle_t shader, int numVerts, const polyVert_t *verts, int numPolys );
+void CL_ModuleAddLight( extModule_t module, const vec3_t origin, float intensity, float r, float g, float b,
+	qboolean additive );
+void CL_ModuleRenderScene( extModule_t module, const refdef_t *refdef );
 void CL_InitRef( void );
 qboolean CL_CDKeyValidate( const char *key, const char *checksum );
 int CL_ServerStatus( char *serverAddress, char *serverStatusString, int maxLen );
@@ -703,7 +727,9 @@ void	SCR_ResetModule2D( module2D_t *m );
 void	SCR_ModuleSetColor( module2D_t *m, const float *rgba );
 void	SCR_ModuleStretchPic( const module2D_t *m, float x, float y, float w, float h,
 			float s1, float t1, float s2, float t2, qhandle_t hShader );
-intptr_t	SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args );
+intptr_t	SCR_Module2DCall( extModule_t ext, intptr_t *args );
+// a cgame's or ui's 2D state (cl_ext.c)
+module2D_t	*CL_Module2D( extModule_t ext );
 
 
 //

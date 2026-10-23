@@ -390,6 +390,7 @@ void CL_ShutdownCGame( void ) {
 		return;
 	}
 	VM_Call( cgvm, CG_SHUTDOWN );
+	Hooks_ModuleShutdown( EXT_MODULE_CGAME );
 	VM_Free( cgvm );
 	cgvm = NULL;
 }
@@ -683,27 +684,27 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		re.LoadWorld( VMA_STR( 1 ) );
 		return 0;
 	case CG_R_REGISTERMODEL:
-		return re.RegisterModel( VMA_STR_OPT( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_CGAME, EXT_ASSET_MODEL, re.RegisterModel, VMA_STR_OPT( 1 ) );
 	case CG_R_REGISTERSKIN:
-		return re.RegisterSkin( VMA_STR_OPT( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_CGAME, EXT_ASSET_SKIN, re.RegisterSkin, VMA_STR_OPT( 1 ) );
 	case CG_R_REGISTERSHADER:
-		return re.RegisterShader( VMA_STR( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_CGAME, EXT_ASSET_SHADER, re.RegisterShader, VMA_STR( 1 ) );
 	case CG_R_REGISTERSHADERNOMIP:
-		return re.RegisterShaderNoMip( VMA_STR( 1 ) );
+		return CL_ModuleRegister( EXT_MODULE_CGAME, EXT_ASSET_SHADER_NOMIP, re.RegisterShaderNoMip, VMA_STR( 1 ) );
 	case CG_R_REGISTERFONT:
-		re.RegisterFont( VMA_STR_OPT( 1 ), args[2], VMA_OUT( 3, fontInfo_t ) );
+		CL_ModuleRegisterFont( EXT_MODULE_CGAME, VMA_STR_OPT( 1 ), args[2], VMA_OUT( 3, fontInfo_t ) );
 		return 0;
 	case CG_R_CLEARSCENE:
-		re.ClearScene();
+		CL_ModuleClearScene( EXT_MODULE_CGAME );
 		return 0;
 	case CG_R_ADDREFENTITYTOSCENE:
-		re.AddRefEntityToScene( VMA_IN( 1, refEntity_t ) );
+		CL_ModuleAddRefEntity( EXT_MODULE_CGAME, VMA_IN( 1, refEntity_t ) );
 		return 0;
 	case CG_R_ADDPOLYTOSCENE: {
 		// the renderer takes what fits in r_maxpolyverts
 		int		numVerts = VMV_COUNT( 2, INT_MAX );
 
-		re.AddPolyToScene( args[1], numVerts, VMA_ARRAY( 3, polyVert_t, numVerts ), 1 );
+		CL_ModuleAddPolys( EXT_MODULE_CGAME, args[1], numVerts, VMA_ARRAY( 3, polyVert_t, numVerts ), 1 );
 		return 0;
 	}
 	case CG_R_ADDPOLYSTOSCENE: {
@@ -711,27 +712,27 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		int		numVerts = VMV_COUNT( 2, INT_MAX );
 		int		numPolys = VMV_COUNT( 4, INT_MAX );
 
-		re.AddPolyToScene( args[1], numVerts,
+		CL_ModuleAddPolys( EXT_MODULE_CGAME, args[1], numVerts,
 			VMA_ARRAY2( 3, polyVert_t, numVerts, numPolys ), numPolys );
 		return 0;
 	}
 	case CG_R_LIGHTFORPOINT:
 		return re.LightForPoint( VMA_VEC3( 1 ), VMA_VEC3( 2 ), VMA_VEC3( 3 ), VMA_VEC3( 4 ) );
 	case CG_R_ADDLIGHTTOSCENE:
-		re.AddLightToScene( VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5) );
+		CL_ModuleAddLight( EXT_MODULE_CGAME, VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5), qfalse );
 		return 0;
 	case CG_R_ADDADDITIVELIGHTTOSCENE:
-		re.AddAdditiveLightToScene( VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5) );
+		CL_ModuleAddLight( EXT_MODULE_CGAME, VMA_VEC3( 1 ), VMF(2), VMF(3), VMF(4), VMF(5), qtrue );
 		return 0;
 	case CG_R_RENDERSCENE:
-		re.RenderScene( VMA_IN( 1, refdef_t ) );
+		CL_ModuleRenderScene( EXT_MODULE_CGAME, VMA_IN( 1, refdef_t ) );
 		return 0;
 	case CG_R_SETCOLOR:
 		// NULL is white
-		SCR_ModuleSetColor( &cls.cgame2D, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
+		CL_ModuleSetColor( EXT_MODULE_CGAME, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
 		return 0;
 	case CG_R_DRAWSTRETCHPIC:
-		SCR_ModuleStretchPic( &cls.cgame2D, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		CL_ModuleDrawStretchPic( EXT_MODULE_CGAME, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
 		return 0;
 	case CG_R_MODELBOUNDS:
 		re.ModelBounds( args[1], VMA_VEC3( 2 ), VMA_VEC3( 3 ) );
@@ -858,7 +859,7 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return re.inPVS( VMA_VEC3( 1 ), VMA_VEC3( 2 ) );
 
 	case COM_TRAP_GETVALUE:
-		return VM_GetValue( args, cl_cgameExtensions );
+		return VM_GetValue( args, cl_cgameExtensions, EXT_MODULE_CGAME );
 
 	case COM_TRAP_SETTEXTFOCUS:
 		cls.cgameTextFocus = args[1] != 0;
@@ -889,11 +890,18 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case COM_TRAP_R_CREATEIMAGE2D:
 	case COM_TRAP_R_UPDATEIMAGE2D:
 	case COM_TRAP_R_DRAWTRIANGLES2D:
-		return SCR_Module2DCall( &cls.cgame2D, "cgame", args );
+		return SCR_Module2DCall( EXT_MODULE_CGAME, args );
 
-	default:
-	        assert(0);
+	default: {
+		intptr_t	result;
+
+		// an engine extension's call (hooks.h)
+		if ( Hooks_ModuleCall( EXT_MODULE_CGAME, args, &result ) ) {
+			return result;
+		}
+		assert(0);
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
+	}
 	}
 	return 0;
 }

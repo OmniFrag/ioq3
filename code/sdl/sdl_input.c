@@ -71,6 +71,24 @@ static int64_t in_newestInput = 0;	// the newest key or mouse event, in Sys_Nano
 
 static SDL_Window *SDL_window = NULL;
 
+// the text input area last given to SDL, in the window's coordinates, all
+// 0 for none (IN_SetTextInputArea)
+static SDL_Rect textInputArea;
+
+/*
+===============
+IN_PixelDensity
+
+Pixels per window coordinate, which SDL may not know yet
+===============
+*/
+static float IN_PixelDensity( void )
+{
+	float density = SDL_GetWindowPixelDensity( SDL_window );
+
+	return density > 0.0f ? density : 1.0f;
+}
+
 #ifdef SDL_PLATFORM_WINDOWS
 static cvar_t *r_fullscreenButton = NULL;
 // the title bar's button was pressed (win_caption.c)
@@ -1278,7 +1296,9 @@ void IN_ProcessEvent( const SDL_Event *e )
 	switch( e->type )
 	{
 		case SDL_EVENT_KEY_DOWN:
-			if ( e->key.repeat && Key_GetCatcher( ) == 0 )
+			// an engine extension's text field repeats keys as the
+			// catchers' do
+			if ( e->key.repeat && Key_GetCatcher( ) == 0 && !cls.extTextFocus )
 				break;
 
 			if( ( key = IN_TranslateSDLToQ3Key( &e->key, qtrue ) ) )
@@ -1323,8 +1343,30 @@ void IN_ProcessEvent( const SDL_Event *e )
 			}
 			break;
 
+		case SDL_EVENT_TEXT_EDITING:
+			// an input method's composition, which only an engine
+			// extension's field reads
+			if( cls.extTextFocus )
+			{
+				char *copy = CopyString( e->edit.text ? e->edit.text : "" );
+
+				Com_QueueEvent( time, SE_TEXT_EDITING, e->edit.start, e->edit.length, strlen( copy ) + 1, copy );
+			}
+			break;
+
 		case SDL_EVENT_MOUSE_MOTION:
-			if( mouseActive )
+			// where the pointer is, in pixels, for an engine extension's
+			// cursor, which the pointer moves unheld (Present_Pointer)
+			if( mouseActive && cls.extCursor && !SDL_GetWindowRelativeMouseMode( SDL_window ) )
+			{
+				float density = IN_PixelDensity( );
+				floatint_t x, y;
+
+				x.f = e->motion.x * density;
+				y.f = e->motion.y * density;
+				Com_QueueEvent( time, SE_POINTER, x.i, y.i, 0, NULL );
+			}
+			else if( mouseActive )
 			{
 				// SDL3 reports fractions of a pixel, which slow motion
 				// is made of on some platforms; carry them over
@@ -1519,6 +1561,7 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 	facts->loading = loading;
 	facts->mouse = mouseAvailable;
 	facts->console = ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) != 0;
+	facts->cursor = cls.extCursor;
 	facts->clickedIn = mouseClickedIn;
 #ifdef __EMSCRIPTEN__
 	{
@@ -1578,6 +1621,34 @@ void IN_RecreateWindow( void )
 
 /*
 ===============
+IN_SetTextInputArea
+
+Where an engine extension's text field is, in pixels, so an input method
+puts its window by it, or NULL for none; SDL takes the window's
+coordinates, which change with the pixel density for the same pixels
+===============
+*/
+static void IN_SetTextInputArea( const int rect[4] )
+{
+	SDL_Rect	area = { 0 };
+
+	if( rect )
+	{
+		float density = IN_PixelDensity( );
+
+		area.x = rect[0] / density;
+		area.y = rect[1] / density;
+		area.w = rect[2] / density;
+		area.h = rect[3] / density;
+	}
+	if( !memcmp( &textInputArea, &area, sizeof( area ) ) )
+		return;
+	textInputArea = area;
+	SDL_SetTextInputArea( SDL_window, rect ? &area : NULL, 0 );
+}
+
+/*
+===============
 IN_Frame
 ===============
 */
@@ -1598,6 +1669,10 @@ void IN_Frame( void )
 		else
 			SDL_StartTextInput( SDL_window );
 	}
+	// an extension's field's area, and none once it has none or loses focus
+	if( SDL_TextInputActive( SDL_window ) )
+		IN_SetTextInputArea( cls.extTextFocus && cls.extTextArea[2] > 0 && cls.extTextArea[3] > 0 ?
+			cls.extTextArea : NULL );
 
 	// If not DISCONNECTED (main menu) or ACTIVE (in game), we're loading
 	loading = ( clc.state != CA_DISCONNECTED && clc.state != CA_ACTIVE );
@@ -1702,6 +1777,8 @@ void IN_Init( void *windowData )
 	}
 
 	SDL_window = (SDL_Window *)windowData;
+	// a new window has no text input area yet
+	Com_Memset( &textInputArea, 0, sizeof( textInputArea ) );
 
 	Com_DPrintf( "\n------- Input Initialization -------\n" );
 

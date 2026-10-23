@@ -13,6 +13,7 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_cin.c
     ${SOURCE_DIR}/client/cl_console.c
     ${SOURCE_DIR}/client/cl_content.c
+    ${SOURCE_DIR}/client/cl_ext.c
     ${SOURCE_DIR}/client/cl_input.c
     ${SOURCE_DIR}/client/cl_keys.c
     ${SOURCE_DIR}/client/cl_main.c
