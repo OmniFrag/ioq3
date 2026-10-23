@@ -747,6 +747,10 @@ static const vmExtension_t cl_uiExtensions[] = {
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ "trap_ToggleFullscreen_OF", COM_TRAP_TOGGLEFULLSCREEN },
+	{ "trap_R_SetClipRegion_OF", COM_TRAP_R_SETCLIPREGION },
+	{ "trap_R_CreateImage2D_OF", COM_TRAP_R_CREATEIMAGE2D },
+	{ "trap_R_UpdateImage2D_OF", COM_TRAP_R_UPDATEIMAGE2D },
+	{ "trap_R_DrawTriangles2D_OF", COM_TRAP_R_DRAWTRIANGLES2D },
 	// why fullscreen isn't what the player wants, as the console says it,
 	// "" when it is
 	{ "fullscreenReason_OF", 0, Present_Reason },
@@ -857,7 +861,11 @@ static const char * const cl_uiSyscallNames[] = {
 	SYSCALL( COM_TRAP_FOLLOWWINDOWSIZE ),
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
-	SYSCALL( COM_TRAP_TOGGLEFULLSCREEN )
+	SYSCALL( COM_TRAP_TOGGLEFULLSCREEN ),
+	SYSCALL( COM_TRAP_R_SETCLIPREGION ),
+	SYSCALL( COM_TRAP_R_CREATEIMAGE2D ),
+	SYSCALL( COM_TRAP_R_UPDATEIMAGE2D ),
+	SYSCALL( COM_TRAP_R_DRAWTRIANGLES2D )
 };
 
 // the engine's read-only and startup cvars q3_ui sets: it clears the
@@ -1002,11 +1010,11 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case UI_R_SETCOLOR:
 		// no color is white
-		re.SetColor( VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
+		SCR_ModuleSetColor( &cls.ui2D, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
 		return 0;
 
 	case UI_R_DRAWSTRETCHPIC:
-		re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		SCR_ModuleStretchPic( &cls.ui2D, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
 		return 0;
 
   case UI_R_MODELBOUNDS:
@@ -1273,6 +1281,12 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 		Present_ToggleFullscreen( CVAR_SOURCE_MENU );
 		return 0;
 
+	case COM_TRAP_R_SETCLIPREGION:
+	case COM_TRAP_R_CREATEIMAGE2D:
+	case COM_TRAP_R_UPDATEIMAGE2D:
+	case COM_TRAP_R_DRAWTRIANGLES2D:
+		return SCR_Module2DCall( &cls.ui2D, "ui", args );
+
 	default:
 		Com_Error( ERR_DROP, "Bad UI system trap: %ld", (long int) args[0] );
 
@@ -1320,6 +1334,7 @@ void CL_InitUI( void ) {
 	cls.uiResizesInPlace = qfalse;
 	cls.uiTextFocus = qfalse;
 	cls.uiDeclaresTextFocus = qfalse;
+	SCR_ResetModule2D( &cls.ui2D );
 	uivm = VM_Create( "ui", CL_UISystemCalls, interpret );
 	if ( !uivm ) {
 		Com_Error( ERR_FATAL, "VM_Create on UI failed" );
