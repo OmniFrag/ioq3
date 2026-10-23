@@ -13,6 +13,7 @@ set(RENDERER_COMMON_SOURCES
     ${SOURCE_DIR}/renderercommon/tr_model_md3.c
     ${SOURCE_DIR}/renderercommon/tr_model_mdr.c
     ${SOURCE_DIR}/renderercommon/tr_noise.c
+    ${SOURCE_DIR}/renderercommon/tr_times2d.c
     ${SOURCE_DIR}/renderercommon/tr_upscale.c
     ${SOURCE_DIR}/renderercommon/puff.c
 )

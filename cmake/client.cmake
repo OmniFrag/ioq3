@@ -22,6 +22,8 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_present.c
     ${SOURCE_DIR}/client/cl_scrn.c
     ${SOURCE_DIR}/client/cl_ui.c
+    ${SOURCE_DIR}/client/cl_uispeeds.c
+    ${SOURCE_DIR}/client/cl_uispeeds_stats.c
     ${SOURCE_DIR}/client/cl_avi.c
     ${SOURCE_DIR}/client/libmumblelink.c
     ${SOURCE_DIR}/client/snd_altivec.c

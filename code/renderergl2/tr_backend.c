@@ -2161,6 +2161,12 @@ void RB_ExecuteRenderCommands( const void *data ) {
 	while ( 1 ) {
 		data = PADP(data, sizeof(void *));
 
+		// ui_speeds: a run of 2D commands ends with the draw of what it left
+		if ( r_times2D && R_Times2DCommand( RC_IS_2D( *(const int *)data ) ) ) {
+			RB_EndSurface();
+			R_Times2DEndRun();
+		}
+
 		switch ( *(const int *)data ) {
 		case RC_SET_COLOR:
 			data = RB_SetColor( data );

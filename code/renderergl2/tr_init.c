@@ -1810,6 +1810,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	// shut down platform specific OpenGL stuff
 	if ( destroyWindow ) {
 		R_ShutdownUpscale2D();
+		R_Times2DShutdown();
 		GLimp_Shutdown();
 
 		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
@@ -1910,6 +1911,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.inPVS = R_inPVS;
 
 	re.TakeVideoFrame = RE_TakeVideoFrame;
+	re.TimeBackEnd2D = RE_TimeBackEnd2D;
 	re.FrameReady = GLimp_FrameReady;
 	re.SetFullscreen = GLimp_SetFullscreen;
 	re.WindowSizeIsOwn = GLimp_WindowSizeIsOwn;
