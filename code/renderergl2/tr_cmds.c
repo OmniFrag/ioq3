@@ -280,6 +280,133 @@ void RE_StretchPic ( float x, float y, float w, float h,
 	cmd->t2 = t2;
 }
 
+
+/*
+=============
+RE_DrawTriangles2D
+
+Copies the triangles into the command buffer, already moved, so that the
+back end only appends them to the tessellator
+=============
+*/
+void RE_DrawTriangles2D( const tris2D_t *tris ) {
+	tris2DCommand_t	*cmd;
+	polyVert2D_t	*verts;
+	int				scissor[4] = { 0 };
+	char			error[128];
+
+	if ( !tr.registered ) {
+		return;
+	}
+	// no more than half the command buffer, which the frame's other
+	// commands share
+	if ( !R_CheckTris2D( tris, MAX_RENDER_COMMANDS / 2 - sizeof( *cmd ), error, sizeof( error ) ) ) {
+		if ( error[0] ) {
+			ri.Printf( PRINT_WARNING, "RE_DrawTriangles2D: %s\n", error );
+		}
+		return;
+	}
+	// inside the window, which also keeps the back end's sums in range
+	if ( ( tris->state.flags & TRIS2D_SCISSOR ) &&
+		!R_ClipScissor2D( tris->state.scissor, glConfig.vidWidth, glConfig.vidHeight, scissor ) ) {
+		return;
+	}
+
+	cmd = R_GetCommandBuffer( sizeof( *cmd ) + tris->numVerts * sizeof( *verts ) + tris->numIndexes * sizeof( int ) );
+	if ( !cmd ) {
+		return;
+	}
+	cmd->commandId = RC_TRIS_2D;
+	if ( tris->state.texture ) {
+		cmd->shader = R_GetShaderByHandle( tris->state.texture );
+	} else {
+		cmd->shader = tr.white2DShader;
+	}
+	cmd->numVerts = tris->numVerts;
+	cmd->numIndexes = tris->numIndexes;
+	cmd->flags = tris->state.flags & ( TRIS2D_SCISSOR | TRIS2D_QUADS );
+	Com_Memcpy( cmd->scissor, scissor, sizeof( cmd->scissor ) );
+
+	verts = (polyVert2D_t *)( cmd + 1 );
+	R_CopyTris2D( tris, verts, (int *)( verts + tris->numVerts ) );
+}
+
+
+/*
+=============
+R_UpdateImage
+
+Replaces a rectangle inside an image RE_CreateImage2D made. A small one
+waits in the command buffer, in its place among the draws; a large one is
+uploaded at once, once what waits is drawn.
+=============
+*/
+void R_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba ) {
+	updateImageCommand_t	*cmd;
+	int64_t		bytes = (int64_t)width * height * 4;
+
+	if ( bytes <= MAX_RENDER_COMMANDS / 8 ) {
+		cmd = R_GetCommandBuffer( sizeof( *cmd ) + bytes );
+		if ( cmd ) {
+			cmd->commandId = RC_UPDATE_IMAGE;
+			cmd->image = image;
+			cmd->x = x;
+			cmd->y = y;
+			cmd->width = width;
+			cmd->height = height;
+			Com_Memcpy( cmd + 1, rgba, bytes );
+			return;
+		}
+	}
+
+	R_IssuePendingRenderCommands();
+	RB_UpdateImage( image, x, y, width, height, rgba );
+}
+
+
+/*
+=============
+RE_UpdateImage2D
+=============
+*/
+void RE_UpdateImage2D( qhandle_t hShader, int x, int y, int width, int height, const byte *rgba ) {
+	shader_t	*shader;
+	image_t		*image = NULL;
+
+	if ( !tr.registered || !rgba ) {
+		return;
+	}
+
+	shader = R_GetShaderByHandle( hShader );
+	if ( shader->stages[0] ) {
+		image = shader->stages[0]->bundle[0].image[0];
+	}
+	if ( !image || !( image->flags & IMGFLAG_DYNAMIC ) ) {
+		ri.Printf( PRINT_WARNING, "RE_UpdateImage2D: %s isn't an image RE_CreateImage2D made\n", shader->name );
+		return;
+	}
+	if ( x < 0 || y < 0 || width < 1 || height < 1 || width > image->width - x || height > image->height - y ) {
+		ri.Printf( PRINT_WARNING, "RE_UpdateImage2D: %s: %i by %i at %i, %i isn't inside it\n",
+			shader->name, width, height, x, y );
+		return;
+	}
+
+	R_UpdateImage( image, x, y, width, height, rgba );
+}
+
+
+/*
+=============
+RE_GetCaps2D
+
+The immediate path alone, so far
+=============
+*/
+void RE_GetCaps2D( caps2D_t *caps ) {
+	Com_Memset( caps, 0, sizeof( *caps ) );
+	caps->maxTextureSize = glConfig.maxTextureSize;
+}
+
 #define MODE_RED_CYAN	1
 #define MODE_RED_BLUE	2
 #define MODE_RED_GREEN	3

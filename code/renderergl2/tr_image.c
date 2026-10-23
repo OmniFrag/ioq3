@@ -2203,8 +2203,8 @@ image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, GLe
 
 	strcpy (image->imgName, name);
 
-	image->width = width;
-	image->height = height;
+	image->width = image->fileWidth = width;
+	image->height = image->fileHeight = height;
 	if (flags & IMGFLAG_CLAMPTOEDGE)
 		glWrapClampMode = GL_CLAMP_TO_EDGE;
 	else
@@ -2579,7 +2579,7 @@ Returns NULL if it fails, not a default image.
 image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 {
 	image_t	*image;
-	int		width, height;
+	int		width, height, fileWidth, fileHeight;
 	byte	*pic;
 	GLenum  picFormat;
 	int picNumMips;
@@ -2625,6 +2625,9 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 			return image;
 		}
 	}
+
+	fileWidth = width;
+	fileHeight = height;
 
 	// mipmapped uploads round to powers of two; an upscaled picture has only
 	// its first level, not a DDS file's mipmaps
@@ -2759,8 +2762,77 @@ image_t	*R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags )
 
 	image = R_CreateImage2( ( char * ) name, pic, width, height, picFormat, picNumMips, type, flags, 0 );
 	Q_strncpyz( image->fileName, fileName, sizeof( image->fileName ) );
+	image->fileWidth = fileWidth;
+	image->fileHeight = fileHeight;
 	ri.Free( pic );
 	return image;
+}
+
+
+/*
+================
+RE_CreateImage2D
+
+An image at exactly its size, whose rectangles RE_UpdateImage2D replaces,
+and a 2D shader drawing it
+================
+*/
+qhandle_t RE_CreateImage2D( const char *name, int width, int height, const byte *rgba ) {
+	image_t		*image;
+	qhandle_t	hShader;
+	byte		*clear = NULL;
+
+	if ( !tr.registered ) {
+		return 0;
+	}
+	if ( !name || name[0] != '*' || strlen( name ) >= MAX_QPATH ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: \"%s\" isn't a name that starts with '*'\n", name ? name : "" );
+		return 0;
+	}
+
+	if ( width < 1 || height < 1 || width > glConfig.maxTextureSize || height > glConfig.maxTextureSize ||
+		width > INT_MAX / 4 / height ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s: %i by %i isn't a size this GL takes\n", name, width, height );
+		return 0;
+	}
+
+	for ( image = hashTable[generateHashValue( name )]; image; image = image->next ) {
+		if ( !strcmp( name, image->imgName ) ) {
+			break;
+		}
+	}
+	// one made before at the same size, as by a module that has restarted
+	// since, is given again with these pixels
+	if ( image ? !( image->flags & IMGFLAG_DYNAMIC ) || image->width != width || image->height != height
+			: R_FindShaderByName( name ) != tr.defaultShader ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s is taken\n", name );
+		return 0;
+	}
+	if ( !image && tr.numImages == MAX_DRAWIMAGES ) {
+		ri.Printf( PRINT_WARNING, "RE_CreateImage2D: %s: there are too many images\n", name );
+		return 0;
+	}
+
+	if ( !rgba ) {
+		clear = ri.Malloc( width * height * 4 );
+		Com_Memset( clear, 0, width * height * 4 );
+		rgba = clear;
+	}
+
+	if ( image ) {
+		hShader = RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse );
+		R_UpdateImage( image, 0, 0, width, height, rgba );
+	} else {
+		image = R_CreateImage( name, (byte *)rgba, width, height, IMGTYPE_COLORALPHA,
+			IMGFLAG_NO_COMPRESSION | IMGFLAG_NOLIGHTSCALE | IMGFLAG_CLAMPTOEDGE | IMGFLAG_DYNAMIC, GL_RGBA8 );
+		hShader = RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse );
+	}
+
+	if ( clear ) {
+		ri.Free( clear );
+	}
+
+	return hShader;
 }
 
 

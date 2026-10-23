@@ -877,6 +877,9 @@ typedef struct {
 	byte		color2D[4];
 	qboolean	vertexes2D;		// shader needs to be finished
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
+
+	qboolean	scissor2D;		// 2D draws only inside scissorRect2D
+	int			scissorRect2D[4];
 } backEndState_t;
 
 /*
@@ -918,6 +921,7 @@ typedef struct {
 
 	shader_t				*flareShader;
 	shader_t				*sunShader;
+	shader_t				*white2DShader;		// DrawTriangles2D's texture 0
 
 	int						numLightmaps;
 	image_t					**lightmaps;
@@ -1514,6 +1518,28 @@ typedef struct {
 	float	s2, t2;
 } stretchPicCommand_t;
 
+// followed by numVerts polyVert2D_t, already moved, and numIndexes ints,
+// none for quads
+typedef struct {
+	int		commandId;
+	shader_t	*shader;
+	int		numVerts;
+	int		numIndexes;
+	int		flags;			// TRIS2D_SCISSOR, TRIS2D_QUADS
+	int		scissor[4];
+} tris2DCommand_t;
+
+// the most vertexes a tris2DCommand_t holds: half the command buffer
+#define	MAX_TRIS2D_VERTS	( MAX_RENDER_COMMANDS / 2 / sizeof( polyVert2D_t ) )
+
+// followed by width * height RGBA pixels
+typedef struct {
+	int		commandId;
+	image_t	*image;
+	int		x, y;
+	int		width, height;
+} updateImageCommand_t;
+
 typedef struct {
 	int		commandId;
 	trRefdef_t	refdef;
@@ -1564,7 +1590,9 @@ typedef enum {
 	RC_SCREENSHOT,
 	RC_VIDEOFRAME,
 	RC_COLORMASK,
-	RC_CLEARDEPTH
+	RC_CLEARDEPTH,
+	RC_TRIS_2D,
+	RC_UPDATE_IMAGE
 } renderCommand_t;
 
 
@@ -1601,6 +1629,13 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 void RE_SetColor( const float *rgba );
 void RE_StretchPic ( float x, float y, float w, float h, 
 					  float s1, float t1, float s2, float t2, qhandle_t hShader );
+void RE_DrawTriangles2D( const tris2D_t *tris );
+qhandle_t RE_CreateImage2D( const char *name, int width, int height, const byte *rgba );
+void RE_UpdateImage2D( qhandle_t hShader, int x, int y, int width, int height, const byte *rgba );
+void RE_GetCaps2D( caps2D_t *caps );
+qboolean RE_GetShaderImageSize( qhandle_t hShader, int *width, int *height );
+void R_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba );
+void RB_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba );
 void RE_BeginFrame( stereoFrame_t stereoFrame );
 void RE_EndFrame( int *frontEndMsec, int *backEndMsec );
 void RE_SaveJPG(char * filename, int quality, int image_width, int image_height,

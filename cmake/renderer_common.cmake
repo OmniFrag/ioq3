@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
 set(RENDERER_COMMON_SOURCES
+    ${SOURCE_DIR}/renderercommon/tr_2d.c
     ${SOURCE_DIR}/renderercommon/tr_font.c
     ${SOURCE_DIR}/renderercommon/tr_image_bmp.c
     ${SOURCE_DIR}/renderercommon/tr_image_jpg.c
