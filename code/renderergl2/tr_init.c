@@ -1671,6 +1671,7 @@ void R_Init( void ) {
 
 	GLSL_InitGPUShaders();
 	R_InitUI2D();
+	R_InitLayers2D();
 
 	R_InitVaos();
 
@@ -1795,6 +1796,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	if ( tr.registered ) {
 		R_IssuePendingRenderCommands();
 		R_ShutdownStore2D( !destroyWindow );
+		R_ShutdownLayers2D();
 		R_ShutDownQueries();
 		if (glRefConfig.framebufferObject)
 			FBO_Shutdown();
@@ -1913,6 +1915,11 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.SetClipMask2D = R_SetClipMask2D;
 	re.CreatePaint2D = R_CreatePaint2D;
 	re.DeletePaint2D = R_DeletePaint2D;
+	re.PushLayer2D = R_PushLayer2D;
+	re.CompositeLayers2D = R_CompositeLayers2D;
+	re.PopLayer2D = R_PopLayer2D;
+	re.CreateFilter2D = R_CreateFilter2D;
+	re.DeleteFilter2D = R_DeleteFilter2D;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 

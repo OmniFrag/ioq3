@@ -752,7 +752,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 
 	if (glRefConfig.framebufferObject)
 	{
-		FBO_Bind(tr.renderFbo);
+		FBO_Bind(RB_Target2D());
 	}
 
 	RB_SetGL2D();
@@ -861,7 +861,7 @@ const void *RB_StretchPic ( const void *data ) {
 	cmd = (const stretchPicCommand_t *)data;
 
 	if (glRefConfig.framebufferObject)
-		FBO_Bind(tr.renderFbo);
+		FBO_Bind(RB_Target2D());
 
 	RB_SetGL2D();
 	RB_Scissor2D( NULL );
@@ -959,7 +959,7 @@ static const void *RB_Tris2D( const void *data ) {
 	int		i, j, first;
 
 	if (glRefConfig.framebufferObject)
-		FBO_Bind(tr.renderFbo);
+		FBO_Bind(RB_Target2D());
 
 	RB_SetGL2D();
 	RB_Scissor2D( ( cmd->flags & TRIS2D_SCISSOR ) ? cmd->scissor : NULL );
@@ -1687,6 +1687,7 @@ const void	*RB_SwapBuffers( const void *data ) {
 	if ( tess.numIndexes ) {
 		RB_EndSurface();
 	}
+	RB_EndFrame2D();
 
 	// texture swapping test
 	if ( r_showImages->integer ) {
@@ -2194,6 +2195,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_UPDATE_TEXTURE_2D:
 			data = RB_UpdateTexture2D( data );
+			break;
+		case RC_LAYER_2D:
+			data = RB_Layer2D( data );
 			break;
 		case RC_DRAW_SURFS:
 			data = RB_DrawSurfs( data );

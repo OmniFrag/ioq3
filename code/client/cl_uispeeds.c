@@ -85,7 +85,7 @@ static struct {
 	qboolean	inCgame, sceneSeen;
 	uisSpan_t	cgame, ui;
 	uisSampled_t	pictures;	// pictures and colors
-	uisSampled_t	retained;	// retained geometry drawn, and clip masks set
+	uisSampled_t	retained;	// retained geometry, clip masks and layers
 	int64_t		batches;	// every batch of triangles
 	int			batchesTimed;
 } f;
@@ -167,6 +167,30 @@ static void Speeds_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DSta
 	CallEnd( &f.retained, start );
 }
 
+// a layer pushed, composited or popped: a small command each too
+static int Speeds_PushLayer2D( void ) {
+	int64_t	start = CallStart( &f.retained );
+	int		layer = real.PushLayer2D();
+
+	CallEnd( &f.retained, start );
+	return layer;
+}
+
+static void Speeds_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
+		const draw2DState_t *state ) {
+	int64_t start = CallStart( &f.retained );
+
+	real.CompositeLayers2D( source, destination, blendMode, filters, numFilters, state );
+	CallEnd( &f.retained, start );
+}
+
+static void Speeds_PopLayer2D( void ) {
+	int64_t start = CallStart( &f.retained );
+
+	real.PopLayer2D();
+	CallEnd( &f.retained, start );
+}
+
 static void SpanBegin( uisSpan_t *span ) {
 	span->start = Sys_Nanoseconds();
 	span->timedAtStart = TimedCalls();
@@ -200,6 +224,9 @@ static void Wrap( void ) {
 	re.DrawTriangles2D = Speeds_DrawTriangles2D;
 	re.DrawGeometry2D = Speeds_DrawGeometry2D;
 	re.SetClipMask2D = Speeds_SetClipMask2D;
+	re.PushLayer2D = Speeds_PushLayer2D;
+	re.CompositeLayers2D = Speeds_CompositeLayers2D;
+	re.PopLayer2D = Speeds_PopLayer2D;
 	re.RenderScene = Speeds_RenderScene;
 	Com_Memset( &f, 0, sizeof( f ) );
 	NextSample( &f.pictures, 0 );

@@ -4,8 +4,9 @@ uniform sampler2D u_DiffuseMap;
 uniform int    u_TextureMode;
 
 #if defined(USE_PAINT)
-// a gradient (paint2D_t) by the texture coordinates: -1 none, 0 linear,
-// 1 radial, 2 conic; colors premultiplied, four floats a stop
+// a paint (paint2D_t) by the texture coordinates: -1 none, 0 linear, 1
+// radial, 2 conic, 3 a rounded box, 4 a multi-channel distance field in
+// the texture; gradients' colors premultiplied, four floats a stop
 uniform int    u_PaintKind;
 uniform int    u_PaintRepeat;
 uniform vec2   u_PaintP0;
@@ -13,6 +14,11 @@ uniform vec2   u_PaintP1;
 uniform int    u_NumStops;
 uniform float  u_StopPos[16];
 uniform float  u_StopColor[64];
+uniform vec4   u_PaintBox;		// x, y, width, height
+uniform vec4   u_PaintRadii;	// top left, top right, bottom right, bottom left
+uniform float  u_PaintFeather;
+uniform float  u_MsdfRange;		// the field's range in texels
+uniform vec2   u_TextureSize;
 #endif
 
 varying vec4   var_Color;
@@ -25,7 +31,7 @@ vec4 StopColor(int i)
 	return vec4(u_StopColor[i * 4], u_StopColor[i * 4 + 1], u_StopColor[i * 4 + 2], u_StopColor[i * 4 + 3]);
 }
 
-vec4 Paint(float t)
+vec4 Gradient(float t)
 {
 	float first = u_StopPos[0];
 	float last = u_StopPos[u_NumStops - 1];
@@ -50,11 +56,47 @@ vec4 Paint(float t)
 
 	return color;
 }
+
+// how much of a rounded box covers this pixel: its signed distance,
+// anti-aliased over a pixel, or softened over the feather
+float RoundedBox(vec2 p)
+{
+	vec2 halfSize = u_PaintBox.zw * 0.5;
+	vec2 q = p - (u_PaintBox.xy + halfSize);
+	// a corner no rounder than the box allows
+	float r = min(q.x < 0.0 ? (q.y < 0.0 ? u_PaintRadii.x : u_PaintRadii.w) : (q.y < 0.0 ? u_PaintRadii.y : u_PaintRadii.z),
+		min(halfSize.x, halfSize.y));
+	vec2 e = abs(q) - halfSize + r;
+	float d = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - r;
+	float soft = max(fwidth(d), u_PaintFeather);
+
+	return clamp(0.5 - d / soft, 0.0, 1.0);
+}
+
+// how much of a glyph a multi-channel distance field covers: the median
+// of its channels, its range scaled to the pixels it's drawn at
+float Msdf(vec4 texel)
+{
+	float d = max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));
+	vec2 unitRange = vec2(u_MsdfRange) / u_TextureSize;
+	vec2 screenTexSize = 1.0 / fwidth(var_TexCoord);
+	float pixelRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);
+
+	return clamp(pixelRange * (d - 0.5) + 0.5, 0.0, 1.0);
+}
 #endif
 
 void main()
 {
 	vec4 color = var_Color;
+
+#if defined(USE_PAINT)
+	if (u_PaintKind == 4)
+	{
+		gl_FragColor = color * Msdf(texture2D(u_DiffuseMap, var_TexCoord));
+		return;
+	}
+#endif
 
 	if (u_TextureMode != 0)
 	{
@@ -69,7 +111,9 @@ void main()
 	}
 
 #if defined(USE_PAINT)
-	if (u_PaintKind >= 0)
+	if (u_PaintKind == 3)
+		color *= RoundedBox(var_TexCoord);
+	else if (u_PaintKind >= 0)
 	{
 		vec2 d = var_TexCoord - u_PaintP0;
 		float t;
@@ -85,7 +129,7 @@ void main()
 			// clockwise from up, with y down
 			t = fract((atan(d.x, -d.y) - u_PaintP1.x) / 6.28318530718);
 
-		color *= Paint(t);
+		color *= Gradient(t);
 	}
 #endif
 
