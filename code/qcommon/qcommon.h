@@ -468,6 +468,25 @@ typedef struct {
 // and info string, and at most 256 a game frame; it counts the rest
 #define	COM_TRAP_GAMEFACT	807
 
+// A cgame's or ui's 2D, in window pixels:
+// - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
+//   triangles inside a rectangle (x, y, width and height), or with NULL
+//   lets them draw anywhere again;
+// - qhandle_t trap_R_CreateImage2D( const char *name, int width, int height,
+//   const byte *rgba ) makes an image of RGBA pixels (transparent for NULL)
+//   and a shader drawing it, 0 when it can't;
+// - trap_R_UpdateImage2D( qhandle_t image, int x, int y, int width, int
+//   height, const byte *rgba ) replaces a rectangle of one, in order among
+//   the draws;
+// - trap_R_DrawTriangles2D( qhandle_t shader, const polyVert2D_t *verts,
+//   int numVerts, const int *indexes, int numIndexes, int flags ) draws a
+//   batch of triangles in one call, or of quads without indexes with
+//   TRIS2D_QUADS, the only flag a module gives
+#define	COM_TRAP_R_SETCLIPREGION	808
+#define	COM_TRAP_R_CREATEIMAGE2D	809
+#define	COM_TRAP_R_UPDATEIMAGE2D	810
+#define	COM_TRAP_R_DRAWTRIANGLES2D	811
+
 // trap_Cvar_SetRange's types, CNQ3's cvarType_t; its others, CPMA's colors,
 // are left unchecked
 #define	CVAR_RANGE_STRING	0	// no range

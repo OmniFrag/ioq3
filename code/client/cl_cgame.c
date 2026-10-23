@@ -410,6 +410,10 @@ static const vmExtension_t cl_cgameExtensions[] = {
 	{ "trap_GetSafeArea_OF", COM_TRAP_GETSAFEAREA },
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
+	{ "trap_R_SetClipRegion_OF", COM_TRAP_R_SETCLIPREGION },
+	{ "trap_R_CreateImage2D_OF", COM_TRAP_R_CREATEIMAGE2D },
+	{ "trap_R_UpdateImage2D_OF", COM_TRAP_R_UPDATEIMAGE2D },
+	{ "trap_R_DrawTriangles2D_OF", COM_TRAP_R_DRAWTRIANGLES2D },
 	{ NULL, 0 }
 };
 
@@ -524,6 +528,10 @@ static const char * const cl_cgameSyscallNames[] = {
 	SYSCALL( COM_TRAP_ISRECORDINGDEMO ),
 	SYSCALL( COM_TRAP_GETSAFEAREA ),
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
+	SYSCALL( COM_TRAP_R_SETCLIPREGION ),
+	SYSCALL( COM_TRAP_R_CREATEIMAGE2D ),
+	SYSCALL( COM_TRAP_R_UPDATEIMAGE2D ),
+	SYSCALL( COM_TRAP_R_DRAWTRIANGLES2D ),
 };
 
 /*
@@ -720,10 +728,10 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return 0;
 	case CG_R_SETCOLOR:
 		// NULL is white
-		re.SetColor( VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
+		SCR_ModuleSetColor( &cls.cgame2D, VMA_BUF_OPT( 1, sizeof( vec4_t ) ) );
 		return 0;
 	case CG_R_DRAWSTRETCHPIC:
-		re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		SCR_ModuleStretchPic( &cls.cgame2D, VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
 		return 0;
 	case CG_R_MODELBOUNDS:
 		re.ModelBounds( args[1], VMA_VEC3( 2 ), VMA_VEC3( 3 ) );
@@ -877,6 +885,12 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		CL_GetSafeArea( VMA_ARRAY( 1, int, 4 ) );
 		return 0;
 
+	case COM_TRAP_R_SETCLIPREGION:
+	case COM_TRAP_R_CREATEIMAGE2D:
+	case COM_TRAP_R_UPDATEIMAGE2D:
+	case COM_TRAP_R_DRAWTRIANGLES2D:
+		return SCR_Module2DCall( &cls.cgame2D, "cgame", args );
+
 	default:
 	        assert(0);
 		Com_Error( ERR_DROP, "Bad cgame system trap: %ld", (long int) args[0] );
@@ -921,6 +935,7 @@ void CL_InitCGame( void ) {
 
 	cls.cgameResizesInPlace = qfalse;
 	cls.cgameTextFocus = qfalse;
+	SCR_ResetModule2D( &cls.cgame2D );
 	cgvm = VM_Create( "cgame", CL_CgameSystemCalls, interpret );
 	if ( !cgvm ) {
 		Com_Error( ERR_DROP, "VM_Create on cgame failed" );
