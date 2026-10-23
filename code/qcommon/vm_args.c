@@ -65,6 +65,8 @@ void QDECL VM_ArgError( const intptr_t *args, int n, const char *fmt, ... ) {
 
 	if ( call >= 0 && call < currentVM->numSyscallNames && currentVM->syscallNames[call] ) {
 		name = currentVM->syscallNames[call];
+	} else if ( ( name = Hooks_ModuleCallKey( call ) ) != NULL ) {
+		// an engine extension's, by its key
 	} else {
 		Com_sprintf( number, sizeof( number ), "%i", (int)call );
 		name = number;

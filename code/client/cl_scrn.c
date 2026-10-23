@@ -257,7 +257,9 @@ An image a cgame or ui makes, named for the module so that no file's name,
 or the other module's, can be taken
 =================
 */
-static qhandle_t SCR_ModuleCreateImage2D( module2D_t *m, const char *module, const intptr_t *args ) {
+static qhandle_t SCR_ModuleCreateImage2D( extModule_t ext, const intptr_t *args ) {
+	module2D_t	*m = CL_Module2D( ext );
+	const char	*module = ext == EXT_MODULE_CGAME ? "cgame" : "ui";
 	const char	*name = VMA_STR( 1 );
 	int			width = args[2], height = args[3];
 	char		fullName[MAX_QPATH];
@@ -280,9 +282,12 @@ static qhandle_t SCR_ModuleCreateImage2D( module2D_t *m, const char *module, con
 	Com_sprintf( fullName, sizeof( fullName ), "*%s/%s", module, name );
 
 	image = re.CreateImage2D( fullName, width, height, VMA_BUF_OPT( 4, width * height * 4 ) );
-	// one it made before (CreateImage2D gives the same image again) counts once
-	if ( image && !SCR_ModuleMadeImage( m, image ) ) {
-		m->images[m->numImages++] = image;
+	if ( image ) {
+		// one it made before (CreateImage2D gives the same image again) counts once
+		if ( !SCR_ModuleMadeImage( m, image ) ) {
+			m->images[m->numImages++] = image;
+		}
+		Hooks_ModuleAsset( ext, EXT_ASSET_IMAGE2D, fullName, image, NULL );
 	}
 	return image;
 }
@@ -292,17 +297,26 @@ static qhandle_t SCR_ModuleCreateImage2D( module2D_t *m, const char *module, con
 =================
 SCR_Module2DCall
 
-The 2D extension calls of a cgame or ui, named module, whose state is m
+The 2D extension calls of a cgame or ui, which the engine extensions see;
+one may take an image's update or a batch (hooks.h's moduleRender)
 =================
 */
-intptr_t SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args ) {
+intptr_t SCR_Module2DCall( extModule_t ext, intptr_t *args ) {
+	module2D_t	*m = CL_Module2D( ext );
 	tris2D_t	tris;
 	const int	*rect;
+	const byte	*pixels;
 	int			width, height;
 
 	switch ( args[0] ) {
 	case COM_TRAP_R_SETCLIPREGION:
 		rect = VMA_BUF_OPT( 1, sizeof( m->clip ) );
+		if ( Hooks_WantModuleRender( ) ) {
+			extRenderCall_t	call = { EXT_RENDER_CLIP_REGION };
+
+			call.clip = rect;
+			Hooks_ModuleRenderSeen( ext, &call );
+		}
 		m->clipped = rect != NULL;
 		if ( rect ) {
 			Com_Memcpy( m->clip, rect, sizeof( m->clip ) );
@@ -310,7 +324,7 @@ intptr_t SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args ) {
 		return 0;
 
 	case COM_TRAP_R_CREATEIMAGE2D:
-		return SCR_ModuleCreateImage2D( m, module, args );
+		return SCR_ModuleCreateImage2D( ext, args );
 
 	case COM_TRAP_R_UPDATEIMAGE2D:
 		if ( !SCR_ModuleMadeImage( m, args[1] ) ) {
@@ -318,7 +332,21 @@ intptr_t SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args ) {
 		}
 		width = VMV_RANGE( 4, 1, MAX_MODULE_IMAGE_SIZE );
 		height = VMV_RANGE( 5, 1, MAX_MODULE_IMAGE_SIZE );
-		re.UpdateImage2D( args[1], args[2], args[3], width, height, VMA_BUF( 6, width * height * 4 ) );
+		pixels = VMA_BUF( 6, width * height * 4 );
+		if ( Hooks_WantModuleRender( ) ) {
+			extRenderCall_t	call = { EXT_RENDER_UPDATE_IMAGE };
+
+			call.image = args[1];
+			call.area[0] = args[2];
+			call.area[1] = args[3];
+			call.area[2] = width;
+			call.area[3] = height;
+			call.pixels = pixels;
+			if ( Hooks_ModuleRender( ext, &call ) ) {
+				return 0;
+			}
+		}
+		re.UpdateImage2D( args[1], args[2], args[3], width, height, pixels );
 		return 0;
 
 	case COM_TRAP_R_DRAWTRIANGLES2D:
@@ -342,6 +370,15 @@ intptr_t SCR_Module2DCall( module2D_t *m, const char *module, intptr_t *args ) {
 		if ( m->clipped ) {
 			tris.state.flags |= TRIS2D_SCISSOR;
 			Com_Memcpy( tris.state.scissor, m->clip, sizeof( m->clip ) );
+		}
+		if ( Hooks_WantModuleRender( ) ) {
+			extRenderCall_t	call = { EXT_RENDER_TRIANGLES };
+
+			call.tris = &tris;
+			call.clip = m->clipped ? m->clip : NULL;
+			if ( Hooks_ModuleRender( ext, &call ) ) {
+				return 0;
+			}
 		}
 		re.DrawTriangles2D( &tris );
 		return 0;
@@ -753,6 +790,7 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			// refresh to update the time
 			VM_Call( uivm, UI_REFRESH, cls.realtime );
 			VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, qfalse );
+			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_LOADING:
 		case CA_PRIMED:
@@ -764,10 +802,13 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			// refresh to update the time
 			VM_Call( uivm, UI_REFRESH, cls.realtime );
 			VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, qtrue );
+			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_ACTIVE:
 			// always supply STEREO_CENTER as vieworg offset is now done by the engine.
 			CL_CGameRendering(stereoFrame);
+			// under the recording line and the voice meter
+			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
 			SCR_DrawDemoRecording();
 #ifdef USE_VOIP
 			SCR_DrawVoipMeter();
@@ -780,9 +821,11 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	if ( Key_GetCatcher( ) & KEYCATCH_UI && uivm ) {
 		VM_Call( uivm, UI_REFRESH, cls.realtime );
 	}
+	Hooks_Draw( EXT_DRAW_MENU, stereoFrame );
 
 	// console draws next
 	Con_DrawConsole ();
+	Hooks_Draw( EXT_DRAW_TOP, stereoFrame );
 
 	// debug graph can be drawn on top of anything
 	if ( cl_debuggraph->integer || cl_timegraph->integer || cl_debugMove->integer ) {

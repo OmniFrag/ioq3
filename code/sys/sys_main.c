@@ -1195,6 +1195,7 @@ static void Sys_Start( int argc, char **argv )
 	// starts none
 	if( !com_check )
 		Com_InitExtensions( );
+	Com_StartClient( );
 
 #ifdef USE_PROTOCOL_REGISTRATION
 	{

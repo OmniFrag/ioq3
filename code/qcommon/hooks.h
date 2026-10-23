@@ -40,13 +40,56 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define MAX_GAME_FACT_NAME		15
 #define MAX_GAME_FACTS_PER_FRAME	256
 
+// where in the client's frame the draw hook is called (cl_scrn.c)
+typedef enum {
+	EXT_DRAW_GAME,	// after cgame's frame, or the ui's connect screen while connecting
+	EXT_DRAW_MENU,	// after the ui's menu, every frame, whether or not one is up
+	EXT_DRAW_TOP	// after the console, before the debug graph
+} extDrawPoint_t;
+
+// the client's game modules
+typedef enum {
+	EXT_MODULE_CGAME,
+	EXT_MODULE_UI,
+	EXT_NUM_MODULES
+} extModule_t;
+
+#define EXT_MODULE_BIT( module )	( 1 << ( module ) )
+
+// An extension call for game modules: a key they find with trap_GetValue
+// (qcommon.h's COM_TRAP_GETVALUE), answered with trap, a syscall number
+// from COM_TRAP_EXTENSION_FIRST to COM_TRAP_EXTENSION_LAST, which the
+// modules in the modules bits call. The engine refuses to start when two
+// extensions' calls share a number or a key, or a number is out of range.
+typedef struct {
+	const char	*key;		// trap_<Name>_OF (docs/contracts.md, rule 3)
+	int		trap;
+	int		modules;	// EXT_MODULE_BIT()s
+} extModuleCall_t;
+
+// what a module registered (moduleAsset)
+typedef enum {
+	EXT_ASSET_SHADER,
+	EXT_ASSET_SHADER_NOMIP,
+	EXT_ASSET_MODEL,
+	EXT_ASSET_SKIN,
+	EXT_ASSET_FONT,
+	EXT_ASSET_IMAGE2D		// an image it made (trap_R_CreateImage2D_OF), named as the engine names it
+} extAssetKind_t;
+
+// a game module's renderer call (moduleRender), defined in client/cl_ext.h
+// with the renderer's types
+struct extRenderCall_s;
+
 typedef struct {
 	const char	*name;
 
 	// Once, as the program starts: after the network, and on a dedicated
 	// server once its port is open and its PID file written; never under
-	// --check. Register cvars and commands here. Returns whether the
-	// extension stays active: one that returns qfalse gets no other call.
+	// --check. A client's renderer has started, its sound and ui not yet,
+	// so the ui's first start finds the extensions' calls. Register cvars
+	// and commands here. Returns whether the extension stays active: one
+	// that returns qfalse gets no other call.
 	// An error raised here stops the program, as one in Com_Init does.
 	qboolean	(*init)( void );
 
@@ -153,6 +196,66 @@ typedef struct {
 	// A demo started playing (qtrue) or stopped (qfalse): called before
 	// clientStateChanged when both changed
 	void		(*demoPlayback)( qboolean playing );
+
+	// The client's renderer, frame and input, in a client build only. The
+	// renderer's table and window are client/cl_ext.h's CL_ExtRenderer and
+	// CL_ExtGlconfig.
+
+	// The renderer has started, after CL_InitRenderer registered the
+	// client's own shaders; every handle from before is gone. On every map
+	// load and vid_restart, and once as the client starts
+	void		(*rendererStarted)( void );
+	// The renderer is about to stop, the window kept (a map load, a
+	// vid_restart on the web) or not (quit, a native vid_restart). Handles
+	// are valid until this returns
+	void		(*rendererStopping)( qboolean destroyWindow );
+	// Draw now, at this point of the frame, between the renderer's
+	// BeginFrame and EndFrame; once for each stereo field, stereo being its
+	// stereoFrame_t (tr_types.h). Each point is called every frame the
+	// client draws: EXT_DRAW_GAME only while connecting, loading and in the
+	// game, and not while the ui covers the screen (UI_IS_FULLSCREEN)
+	void		(*draw)( extDrawPoint_t point, int stereo );
+	// Input, before the ui, cgame and binds see it, and never while the
+	// console or the chat line has the keyboard. Return qtrue to take the
+	// event: nothing else sees it, and the up of a key whose down an
+	// extension took goes to that extension alone, wherever the keyboard
+	// has gone since. Keys are keyNum_t; the console key and Alt+Enter are
+	// the engine's
+	qboolean	(*keyEvent)( int key, qboolean down, unsigned time );
+	// a character as UTF-32, before any mapping to the modules' bytes
+	qboolean	(*charEvent)( int codepoint );
+	// an input method's composition, while an extension's field has focus
+	// (CL_ExtSetTextFocus): its text in UTF-8, and the caret and the length
+	// of its selection in characters, -1 where the input method gives
+	// none, as SDL passes them; "" when it ends
+	qboolean	(*textEditing)( const char *utf8, int cursor, int selection );
+	// the pointer's position in pixels, while an extension has asked for a
+	// cursor (CL_ExtSetPointerMode)
+	qboolean	(*pointerEvent)( float x, float y );
+	// the mouse's relative motion, as the ui, cgame or the view would get it
+	qboolean	(*mouseEvent)( int dx, int dy );
+
+	// Extension calls for the client's game modules. moduleCalls ends with
+	// a NULL key; moduleCall answers a module's call of one of them with
+	// its arguments (args[0] is the number, args[1] on the module's), checked
+	// with qcommon.h's VMA_ and VMV_ macros, whose errors name the call by
+	// its key. Linked modules and QVMs both call it
+	const extModuleCall_t	*moduleCalls;
+	intptr_t	(*moduleCall)( extModule_t module, int trap, intptr_t *args );
+	// A module is shutting down, its own shutdown run: a map's end, a
+	// vid_restart, a disconnect, the ui's restart, quit
+	void		(*moduleShutdown)( extModule_t module );
+
+	// The modules' renderer calls, as they make them. moduleAsset tells of
+	// each shader, model, skin and font a module registers, with the handle
+	// the renderer gave it (0 for none) and, for a font, the glyphs the
+	// renderer filled in; and of each image it makes, each time, the same
+	// one again when it's given back. moduleRender sees each 2D and scene
+	// call (cl_ext.h's extRenderKind_t) before the renderer does, and
+	// returns qtrue to take it: the renderer then never gets it
+	void		(*moduleAsset)( extModule_t module, extAssetKind_t kind, const char *name, qhandle_t handle,
+				const fontInfo_t *font );
+	qboolean	(*moduleRender)( extModule_t module, const struct extRenderCall_s *call );
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -188,6 +291,34 @@ void	Hooks_ServerCommand( int clientNum, const char *text );
 void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );
+void	Hooks_RendererStarted( void );
+void	Hooks_RendererStopping( qboolean destroyWindow );
+void	Hooks_Draw( extDrawPoint_t point, int stereo );
+// a key's down: the number, from 1, of the extension that took it, which
+// its repeats and its up go to (Hooks_KeyTo); 0 when none did
+int	Hooks_KeyDown( int key, unsigned time );
+void	Hooks_KeyTo( int taker, int key, qboolean down, unsigned time );
+qboolean	Hooks_CharEvent( int codepoint );
+void	Hooks_TextEditing( const char *utf8, int cursor, int selection );
+void	Hooks_PointerEvent( float x, float y );
+qboolean	Hooks_MouseEvent( int dx, int dy );
+// a module's trap_GetValue for a key an extension answers: qtrue with its
+// number written to value
+qboolean	Hooks_ModuleValue( extModule_t module, const char *key, char *value, int valueSize );
+// a module's syscall that no engine case took: qtrue with *result if an
+// extension declared it for that module
+qboolean	Hooks_ModuleCall( extModule_t module, intptr_t *args, intptr_t *result );
+// the key of an extension's call, or NULL, for errors
+const char	*Hooks_ModuleCallKey( int trap );
+void	Hooks_ModuleShutdown( extModule_t module );
+// whether an extension wants the modules' renderer calls, so the client
+// skips building them when none does
+qboolean	Hooks_WantModuleRender( void );
+void	Hooks_ModuleAsset( extModule_t module, extAssetKind_t kind, const char *name, qhandle_t handle,
+		const fontInfo_t *font );
+qboolean	Hooks_ModuleRender( extModule_t module, const struct extRenderCall_s *call );
+// a call each extension sees and none takes, whatever its moduleRender returns
+void	Hooks_ModuleRenderSeen( extModule_t module, const struct extRenderCall_s *call );
 
 // The client, for extensions, in a client build only (client/cl_main.c).
 // Each reads the connection as it stands now.
@@ -215,6 +346,31 @@ int		CL_ExtClientNum( void );
 // every mod keeps for server browsers; what the rest means is the
 // game's. qfalse with none
 qboolean	CL_ExtPlayerState( playerState_t *ps );
+// the window's safe area in pixels, as x, y, width and height, clear of
+// notches and the like: the whole window where the system reports none
+void		CL_ExtSafeArea( int rect[4] );
+// the key catchers up now: KEYCATCH_CONSOLE, _UI, _MESSAGE, _CGAME
+// (keycodes.h)
+int		CL_ExtKeyCatcher( void );
+// Whether an extension shows a cursor: with qtrue the pointer is no longer
+// held as view motion while the game reads it, the system's cursor shows,
+// and its position comes to the pointerEvent hook. qfalse gives it back
+void		CL_ExtSetPointerMode( qboolean cursor );
+// Whether an extension's text field has focus, and where it is in pixels
+// (x, y, width, height; NULL for anywhere), so text input runs, a phone's
+// keyboard shows and an input method places its window there
+void		CL_ExtSetTextFocus( qboolean focused, const int rect[4] );
+// a configstring of the gamestate, "" for none or one out of range
+const char	*CL_ExtConfigString( int index );
+// the last snapshot's entities, at most max of them, in the game; returns
+// how many, 0 with none
+int		CL_ExtSnapshotEntities( entityState_t *out, int max );
+// the running module's QVM checksum (Com_BlockChecksum of the file), 0 for
+// linked or native code or none
+int		CL_ExtModuleChecksum( extModule_t module );
+// the file downloading, "" for none, with the bytes received and its size
+// (0 while unknown)
+const char	*CL_ExtDownloadState( int *count, int *size );
 
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or

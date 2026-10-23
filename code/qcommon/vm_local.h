@@ -200,6 +200,8 @@ struct vm_s {
 
 	const char * const	*syscallNames;	// by number, for VM_ArgError
 	int			numSyscallNames;
+
+	int			checksum;		// a QVM's, of its file; 0 for linked or native code
 };
 
 

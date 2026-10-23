@@ -1268,6 +1268,16 @@ void CL_ParseBinding( int key, qboolean down, unsigned time )
 	}
 }
 
+// the engine extension, numbered from 1, that took each key's down, which
+// gets its repeats and its up (hooks.h)
+static int	keyTaker[MAX_KEYS];
+
+// whether the engine extensions get input now: not while the console or the
+// chat line has the keyboard
+static qboolean CL_ExtensionsGetInput( void ) {
+	return !( Key_GetCatcher( ) & ( KEYCATCH_CONSOLE | KEYCATCH_MESSAGE ) );
+}
+
 /*
 ===================
 CL_KeyDownEvent
@@ -1299,6 +1309,18 @@ void CL_KeyDownEvent( int key, unsigned time )
 		Con_ToggleConsole_f ();
 		Key_ClearStates ();
 		return;
+	}
+
+	// an engine extension's, if one takes it, with no bind run
+	if ( keyTaker[key] ) {
+		Hooks_KeyTo( keyTaker[key], key, qtrue, time );
+		return;
+	}
+	if ( CL_ExtensionsGetInput( ) ) {
+		keyTaker[key] = Hooks_KeyDown( key, time );
+		if ( keyTaker[key] ) {
+			return;
+		}
 	}
 
 
@@ -1390,6 +1412,15 @@ void CL_KeyUpEvent( int key, unsigned time )
 	if ( key == K_CONSOLE || ( key == K_ESCAPE && keys[K_SHIFT].down ) )
 		return;
 
+	// where its down went: to an engine extension
+	if ( keyTaker[key] ) {
+		int taker = keyTaker[key];
+
+		keyTaker[key] = 0;
+		Hooks_KeyTo( taker, key, qfalse, time );
+		return;
+	}
+
 	//
 	// key up events only perform actions if the game key binding is
 	// a button command (leading + sign).  These will be processed even in
@@ -1433,6 +1464,10 @@ void CL_CharEvent( int key ) {
 		return;
 	}
 
+	if ( CL_ExtensionsGetInput( ) && Hooks_CharEvent( key ) ) {
+		return;
+	}
+
 	// distribute the key down event to the appropriate handler
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
 	{
@@ -1452,6 +1487,43 @@ void CL_CharEvent( int key ) {
 	}
 }
 
+
+/*
+===================
+CL_TextEditingEvent
+
+An input method's composition, which only the engine extensions read
+===================
+*/
+void CL_TextEditingEvent( const char *utf8, int cursor, int selection ) {
+	if ( CL_ExtensionsGetInput( ) ) {
+		Hooks_TextEditing( utf8, cursor, selection );
+	}
+}
+
+/*
+===================
+CL_PointerEvent
+
+The pointer's position, which only the engine extensions read
+===================
+*/
+void CL_PointerEvent( float x, float y ) {
+	if ( CL_ExtensionsGetInput( ) ) {
+		Hooks_PointerEvent( x, y );
+	}
+}
+
+/*
+===================
+CL_ExtMouseEvent
+
+The mouse's motion, if an engine extension takes it
+===================
+*/
+qboolean CL_ExtMouseEvent( int dx, int dy ) {
+	return CL_ExtensionsGetInput( ) && Hooks_MouseEvent( dx, dy );
+}
 
 /*
 ===================
@@ -1508,6 +1580,9 @@ focus (trap_SetTextFocus) takes text whenever it's up.
 */
 qboolean CL_WantsTextInput( void ) {
 	if ( keyCatchers & ( KEYCATCH_CONSOLE | KEYCATCH_MESSAGE ) ) {
+		return qtrue;
+	}
+	if ( cls.extTextFocus ) {
 		return qtrue;
 	}
 	if ( keyCatchers & KEYCATCH_UI ) {
