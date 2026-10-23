@@ -2876,6 +2876,30 @@ shader_t *R_GetShaderByHandle( qhandle_t hShader ) {
 }
 
 /*
+====================
+RE_GetShaderImageSize
+
+The size of the image a shader's first stage draws, as its file has it
+or as it was made: qfalse for a shader that failed to load
+====================
+*/
+qboolean RE_GetShaderImageSize( qhandle_t hShader, int *width, int *height ) {
+	shader_t	*sh;
+	image_t		*image;
+
+	if ( hShader < 0 || hShader >= tr.numShaders ) {
+		return qfalse;
+	}
+	sh = tr.shaders[hShader];
+	if ( sh->defaultShader || !sh->stages[0] || !( image = sh->stages[0]->bundle[0].image[0] ) ) {
+		return qfalse;
+	}
+	*width = image->fileWidth;
+	*height = image->fileHeight;
+	return qtrue;
+}
+
+/*
 ===============
 R_ShaderList_f
 

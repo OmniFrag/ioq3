@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		11
+#define	REF_API_VERSION		12
 
 // the window's size after a crash (r_mode), whatever the player chose
 #define R_MODE_FALLBACK		3	// 640 * 480
@@ -122,6 +122,34 @@ typedef struct {
 	// renderer can't wait for it after the swap (WebGL), the client skips
 	// a frame instead while the last is still being drawn. May be NULL.
 	qboolean (*FrameReady)( void );
+
+	// Draws indexed triangles in 2D (tris2D_t), merged with the batches and
+	// pictures around them that have the same shader and scissor. The
+	// arrays are copied, so they can be reused at once. A batch that's
+	// malformed, or larger than half the frame's command buffer, is left
+	// out with a warning.
+	void	(*DrawTriangles2D)( const tris2D_t *tris );
+
+	// Makes an image of RGBA pixels with straight alpha, width by height
+	// (NULL for transparent black), and a shader drawing it in 2D, whose
+	// handle it returns, 0 when it can't. Its name must start with '*',
+	// which no file's does, and be new, or one this made before at the same
+	// size, which is given again with these pixels (for a module that has
+	// restarted since). Its rectangles can be replaced; it lasts until the
+	// renderer restarts, as registered shaders do.
+	qhandle_t (*CreateImage2D)( const char *name, int width, int height, const byte *rgba );
+
+	// Replaces a rectangle of an image CreateImage2D made with width by
+	// height RGBA pixels: what was drawn before the call shows the old
+	// pixels, and what is drawn after it the new
+	void	(*UpdateImage2D)( qhandle_t hShader, int x, int y, int width, int height, const byte *rgba );
+
+	// What the 2D path can do
+	void	(*GetCaps2D)( caps2D_t *caps );
+
+	// The size of the image a shader's first stage draws, as it was made or
+	// loaded; qfalse when it has none
+	qboolean (*GetShaderImageSize)( qhandle_t hShader, int *width, int *height );
 } refexport_t;
 
 //

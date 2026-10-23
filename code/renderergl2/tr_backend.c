@@ -642,6 +642,7 @@ void	RB_SetGL2D (void) {
 	// set 2D virtual screen size
 	qglViewport( 0, 0, width, height );
 	qglScissor( 0, 0, width, height );
+	backEnd.scissor2D = qfalse;
 
 	Mat4Ortho(0, width, height, 0, 0, 1, matrix);
 	GL_SetProjectionMatrix(matrix);
@@ -657,6 +658,45 @@ void	RB_SetGL2D (void) {
 	// set time for 2D shaders
 	backEnd.refdef.time = ri.Milliseconds();
 	backEnd.refdef.floatTime = backEnd.refdef.time * 0.001;
+}
+
+
+/*
+=============
+RB_Scissor2D
+
+Keeps 2D drawing inside rect: x, y, width and height in pixels of the 2D
+target, y down from the top; or with NULL, lets it draw anywhere. What
+waits to be drawn is drawn first, inside the rectangle it was given.
+=============
+*/
+static void RB_Scissor2D( const int *rect ) {
+	int width, height;
+
+	if ( rect ? backEnd.scissor2D && !memcmp( rect, backEnd.scissorRect2D, sizeof( backEnd.scissorRect2D ) ) : !backEnd.scissor2D ) {
+		return;
+	}
+
+	if ( tess.numIndexes ) {
+		RB_EndSurface();
+	}
+
+	if ( glState.currentFBO ) {
+		width = glState.currentFBO->width;
+		height = glState.currentFBO->height;
+	} else {
+		width = glConfig.vidWidth;
+		height = glConfig.vidHeight;
+	}
+
+	if ( rect ) {
+		// GL's rows go up
+		qglScissor( rect[0], height - rect[1] - rect[3], rect[2], rect[3] );
+		Com_Memcpy( backEnd.scissorRect2D, rect, sizeof( backEnd.scissorRect2D ) );
+	} else {
+		qglScissor( 0, 0, width, height );
+	}
+	backEnd.scissor2D = rect != NULL;
 }
 
 
@@ -716,6 +756,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 	}
 
 	RB_SetGL2D();
+	RB_Scissor2D( NULL );
 
 	VectorSet4(quadVerts[0], x,     y,     0.0f, 1.0f);
 	VectorSet4(quadVerts[1], x + w, y,     0.0f, 1.0f);
@@ -823,6 +864,7 @@ const void *RB_StretchPic ( const void *data ) {
 		FBO_Bind(tr.renderFbo);
 
 	RB_SetGL2D();
+	RB_Scissor2D( NULL );
 
 	shader = cmd->shader;
 	// an empty surface may be left from before: RB_EndSurface keeps
@@ -889,6 +931,132 @@ const void *RB_StretchPic ( const void *data ) {
 	tess.texCoords[ numVerts + 3 ][1] = cmd->t2;
 
 	return (const void *)(cmd + 1);
+}
+
+
+static ID_INLINE void RB_Vertex2D( int n, const polyVert2D_t *v ) {
+	tess.xyz[n][0] = v->xy[0];
+	tess.xyz[n][1] = v->xy[1];
+	tess.xyz[n][2] = 0;
+	tess.texCoords[n][0] = v->st[0];
+	tess.texCoords[n][1] = v->st[1];
+	VectorScale4( v->rgba, 257, tess.color[n] );
+}
+
+
+/*
+=============
+RB_Tris2D
+
+Appends 2D triangles to the tessellator, which draws them with the
+shader's stages as it draws a picture's quad
+=============
+*/
+static const void *RB_Tris2D( const void *data ) {
+	const tris2DCommand_t	*cmd = (const tris2DCommand_t *)data;
+	const polyVert2D_t		*verts = (const polyVert2D_t *)( cmd + 1 );
+	const int				*indexes = (const int *)( verts + cmd->numVerts );
+	int		i, j, first;
+
+	if (glRefConfig.framebufferObject)
+		FBO_Bind(tr.renderFbo);
+
+	RB_SetGL2D();
+	RB_Scissor2D( ( cmd->flags & TRIS2D_SCISSOR ) ? cmd->scissor : NULL );
+
+	if ( cmd->shader != tess.shader || !tess.numIndexes ) {
+		if ( tess.numIndexes ) {
+			RB_EndSurface();
+		}
+		backEnd.currentEntity = &backEnd.entity2D;
+		RB_BeginSurface( cmd->shader, 0, 0 );
+	}
+
+	if ( cmd->flags & TRIS2D_QUADS ) {
+		// the corners in the order RB_StretchPic gives them
+		for ( i = 0; i < cmd->numVerts; i += 4 ) {
+			RB_CHECKOVERFLOW( 4, 6 );
+			first = tess.numVertexes;
+
+			for ( j = 0; j < 4; j++ ) {
+				RB_Vertex2D( first + j, &verts[i + j] );
+			}
+			tess.indexes[ tess.numIndexes + 0 ] = first + 3;
+			tess.indexes[ tess.numIndexes + 1 ] = first + 0;
+			tess.indexes[ tess.numIndexes + 2 ] = first + 2;
+			tess.indexes[ tess.numIndexes + 3 ] = first + 2;
+			tess.indexes[ tess.numIndexes + 4 ] = first + 0;
+			tess.indexes[ tess.numIndexes + 5 ] = first + 1;
+
+			tess.numVertexes += 4;
+			tess.numIndexes += 6;
+		}
+	} else if ( cmd->numVerts < SHADER_MAX_VERTEXES && cmd->numIndexes < SHADER_MAX_INDEXES ) {
+		RB_CHECKOVERFLOW( cmd->numVerts, cmd->numIndexes );
+		first = tess.numVertexes;
+
+		for ( i = 0; i < cmd->numVerts; i++ ) {
+			RB_Vertex2D( first + i, &verts[i] );
+		}
+		for ( i = 0; i < cmd->numIndexes; i++ ) {
+			tess.indexes[ tess.numIndexes + i ] = first + indexes[i];
+		}
+
+		tess.numVertexes += cmd->numVerts;
+		tess.numIndexes += cmd->numIndexes;
+	} else {
+		// more than the tessellator holds: a triangle at a time, each vertex
+		// copied once while the tessellator holds it
+		static int		remap[MAX_TRIS2D_VERTS];
+		static unsigned	remapPass[MAX_TRIS2D_VERTS], pass;	// unsigned, so that pass may wrap
+
+		pass++;
+		for ( i = 0; i < cmd->numIndexes; i += 3 ) {
+			if ( tess.numVertexes + 3 >= SHADER_MAX_VERTEXES || tess.numIndexes + 3 >= SHADER_MAX_INDEXES ) {
+				RB_CheckOverflow( 3, 3 );
+				pass++;
+			}
+			for ( j = 0; j < 3; j++ ) {
+				int v = indexes[i + j];
+
+				if ( remapPass[v] != pass ) {
+					remapPass[v] = pass;
+					remap[v] = tess.numVertexes;
+					RB_Vertex2D( tess.numVertexes++, &verts[v] );
+				}
+				tess.indexes[ tess.numIndexes++ ] = remap[v];
+			}
+		}
+	}
+
+	return (const void *)( indexes + cmd->numIndexes );
+}
+
+
+/*
+=============
+RB_UpdateImage
+
+Replaces a rectangle of an image RE_CreateImage2D made
+=============
+*/
+void RB_UpdateImage( image_t *image, int x, int y, int width, int height, const byte *rgba ) {
+	// what waits to be drawn was given the old pixels
+	if ( tess.numIndexes ) {
+		RB_EndSurface();
+	}
+
+	R_UpdateSubImage( image, (byte *)rgba, x, y, width, height, GL_RGBA8 );
+}
+
+
+static const void *RB_UpdateImageCmd( const void *data ) {
+	const updateImageCommand_t	*cmd = (const updateImageCommand_t *)data;
+	const byte	*pixels = (const byte *)( cmd + 1 );
+
+	RB_UpdateImage( cmd->image, cmd->x, cmd->y, cmd->width, cmd->height, pixels );
+
+	return (const void *)( pixels + cmd->width * cmd->height * 4 );
 }
 
 
@@ -1510,7 +1678,9 @@ RB_SwapBuffers
 const void	*RB_SwapBuffers( const void *data ) {
 	const swapBuffersCommand_t	*cmd;
 
-	// finish any 2D drawing if needed
+	// finish any 2D drawing if needed, and let what follows (the present
+	// and the next frame's clears) reach the whole target
+	RB_Scissor2D( NULL );
 	if ( tess.numIndexes ) {
 		RB_EndSurface();
 	}
@@ -1997,6 +2167,12 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_STRETCH_PIC:
 			data = RB_StretchPic( data );
+			break;
+		case RC_TRIS_2D:
+			data = RB_Tris2D( data );
+			break;
+		case RC_UPDATE_IMAGE:
+			data = RB_UpdateImageCmd( data );
 			break;
 		case RC_DRAW_SURFS:
 			data = RB_DrawSurfs( data );

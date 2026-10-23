@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../renderercommon/tr_public.h"
+#include "tr_2d.h"
 #include "qgl.h"
 
 typedef enum
@@ -44,12 +45,14 @@ typedef enum
 	IMGFLAG_NOLIGHTSCALE   = 0x0020,
 	IMGFLAG_CLAMPTOEDGE    = 0x0040,
 	IMGFLAG_GENNORMALMAP   = 0x0080,
+	IMGFLAG_DYNAMIC        = 0x0100,	// its rectangles may be replaced (RE_UpdateImage2D)
 } imgFlags_t;
 
 typedef struct image_s {
 	char		imgName[MAX_QPATH];		// game path, including extension
 	char		fileName[MAX_QPATH];	// the file it was read from, "" for one made in code
 	int			width, height;				// source image
+	int			fileWidth, fileHeight;		// the file's, before R_Upscale2D; width and height for an image made in code
 	int			uploadWidth, uploadHeight;	// after power of two and picmip but not including clamp to MAX_TEXTURE_SIZE
 	GLuint		texnum;					// gl texture binding
 

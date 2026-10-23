@@ -1339,6 +1339,9 @@ void R_Init( void ) {
 
 	R_InitShaders();
 
+	// before any module can take its name
+	tr.white2DShader = R_GetShaderByHandle( RE_RegisterShaderFromImage( "*white2D", LIGHTMAP_2D, tr.whiteImage, qfalse ) );
+
 	R_InitSkins();
 
 	R_ModelInit();
@@ -1495,6 +1498,11 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 
 	re.SetColor = RE_SetColor;
 	re.DrawStretchPic = RE_StretchPic;
+	re.DrawTriangles2D = RE_DrawTriangles2D;
+	re.CreateImage2D = RE_CreateImage2D;
+	re.UpdateImage2D = RE_UpdateImage2D;
+	re.GetCaps2D = RE_GetCaps2D;
+	re.GetShaderImageSize = RE_GetShaderImageSize;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 
