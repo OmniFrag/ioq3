@@ -32,21 +32,21 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "cl_uispeeds.h"
 
-#define UIS_CAPACITY		8192	// samples held a part; more are thinned
-#define UIS_FRONT_END_EVERY	16		// one front-end call timed in so many
+#define UISPEEDS_CAPACITY		8192	// samples held a part; more are thinned
+#define UISPEEDS_FRONT_END_EVERY	16		// one front-end call timed in so many
 
 enum {
-	UIS_FRAME,
-	UIS_CGAME,
-	UIS_UI,
-	UIS_FRONT_END,
-	UIS_COMMANDS,
-	UIS_BACK_END,
-	UIS_GPU,
-	UIS_PARTS
+	UISPEEDS_FRAME,
+	UISPEEDS_CGAME,
+	UISPEEDS_UI,
+	UISPEEDS_FRONT_END,
+	UISPEEDS_COMMANDS,
+	UISPEEDS_BACK_END,
+	UISPEEDS_GPU,
+	UISPEEDS_PARTS
 };
 
-static const char *partNames[UIS_PARTS] = {
+static const char *partNames[UISPEEDS_PARTS] = {
 	"frame", "cgame 2D", "ui 2D", "front end 2D", "2D commands", "back end 2D", "GPU 2D"
 };
 
@@ -65,12 +65,12 @@ static refexport_t	real;		// the renderer's own entry points ours stand in for
 static double		clockCost;	// a clock read's, in nanoseconds
 static qboolean		gpuTimer;
 static int			gpuUntimed;	// runs the GPU didn't time, for want of queries
-static uisSamples_t	parts[UIS_PARTS];
+static uisSamples_t	parts[UISPEEDS_PARTS];
 static int			*storage;	// the parts' samples, then scratch for sorting
 
 // a kind of 2D call that costs the same each time: one in every is timed,
 // at a phase drawn each frame, so a frame's calls, the same frame after
-// frame, are timed in turn. every is UIS_FRONT_END_EVERY, or the calls the
+// frame, are timed in turn. every is UISPEEDS_FRONT_END_EVERY, or the calls the
 // last frame made when fewer, so a frame like it times one of them and
 // isn't left out.
 typedef struct {
@@ -114,7 +114,7 @@ static qboolean AddSampled( const uisSampled_t *kind, int64_t *frontEnd ) {
 	if ( !kind->timed ) {
 		return !kind->calls;
 	}
-	*frontEnd += UIS_Corrected( kind->time, kind->timed, clockCost ) * kind->calls / kind->timed;
+	*frontEnd += UISpeeds_Corrected( kind->time, kind->timed, clockCost ) * kind->calls / kind->timed;
 	return qtrue;
 }
 
@@ -122,7 +122,7 @@ static qboolean AddSampled( const uisSampled_t *kind, int64_t *frontEnd ) {
 static void NextSample( uisSampled_t *kind, int lastCalls ) {
 	static unsigned int seed = 1;
 
-	kind->every = lastCalls > 0 && lastCalls < UIS_FRONT_END_EVERY ? lastCalls : UIS_FRONT_END_EVERY;
+	kind->every = lastCalls > 0 && lastCalls < UISPEEDS_FRONT_END_EVERY ? lastCalls : UISPEEDS_FRONT_END_EVERY;
 	seed = seed * 1103515245u + 12345u;
 	kind->phase = ( seed >> 16 ) % kind->every;
 }
@@ -200,7 +200,7 @@ static void SpanBegin( uisSpan_t *span ) {
 static void SpanEnd( uisSpan_t *span ) {
 	int reads = 1 + 2 * ( TimedCalls() - span->timedAtStart );
 
-	span->total += UIS_Corrected( Sys_Nanoseconds() - span->start, reads, clockCost );
+	span->total += UISpeeds_Corrected( Sys_Nanoseconds() - span->start, reads, clockCost );
 	span->drawn = qtrue;
 }
 
@@ -251,8 +251,8 @@ static double ClockCost( void ) {
 static void ClearParts( void ) {
 	int i;
 
-	for ( i = 0; i < UIS_PARTS; i++ ) {
-		UIS_Clear( &parts[i] );
+	for ( i = 0; i < UISPEEDS_PARTS; i++ ) {
+		UISpeeds_Clear( &parts[i] );
 	}
 	gpuUntimed = 0;
 	f.lastEnd = 0;
@@ -261,9 +261,9 @@ static void ClearParts( void ) {
 static void Start( void ) {
 	int i;
 
-	storage = Z_Malloc( ( UIS_PARTS + 1 ) * UIS_CAPACITY * sizeof( *storage ) );
-	for ( i = 0; i < UIS_PARTS; i++ ) {
-		UIS_Init( &parts[i], storage + i * UIS_CAPACITY, UIS_CAPACITY );
+	storage = Z_Malloc( ( UISPEEDS_PARTS + 1 ) * UISPEEDS_CAPACITY * sizeof( *storage ) );
+	for ( i = 0; i < UISPEEDS_PARTS; i++ ) {
+		UISpeeds_Init( &parts[i], storage + i * UISPEEDS_CAPACITY, UISPEEDS_CAPACITY );
 	}
 	clockCost = ClockCost();
 	gpuTimer = qfalse;
@@ -293,18 +293,18 @@ void CL_UISpeedsReport( qboolean print ) {
 	uisSummary_t	sum;
 	int				i;
 
-	if ( !print || !parts[UIS_FRAME].seen ) {
+	if ( !print || !parts[UISPEEDS_FRAME].seen ) {
 		ClearParts();
 		return;
 	}
 	Com_Printf( "ui_speeds: %d frames, per frame: median, p95, max, mean; in usec, less %.0f ns a clock read\n",
-		parts[UIS_FRAME].seen, clockCost );
-	for ( i = 0; i < UIS_PARTS; i++ ) {
+		parts[UISPEEDS_FRAME].seen, clockCost );
+	for ( i = 0; i < UISPEEDS_PARTS; i++ ) {
 		// counts as they are; times in microseconds
-		double scale = i == UIS_COMMANDS ? 1 : 0.001;
+		double scale = i == UISPEEDS_COMMANDS ? 1 : 0.001;
 
-		if ( !UIS_Summarize( &parts[i], storage + UIS_PARTS * UIS_CAPACITY, &sum ) ) {
-			Com_Printf( "  %-14s %s\n", partNames[i], i == UIS_GPU && !gpuTimer ? "no timer queries" : "none" );
+		if ( !UISpeeds_Summarize( &parts[i], storage + UISPEEDS_PARTS * UISPEEDS_CAPACITY, &sum ) ) {
+			Com_Printf( "  %-14s %s\n", partNames[i], i == UISPEEDS_GPU && !gpuTimer ? "no timer queries" : "none" );
 			continue;
 		}
 		Com_Printf( "  %-14s %9.1f %9.1f %9.1f %9.1f  (%d frames)\n", partNames[i],
@@ -353,24 +353,24 @@ void CL_UISpeedsEndFrame( void ) {
 	re.TimeBackEnd2D( &be, qtrue );
 	gpuTimer = be.gpuTimer;
 	if ( f.lastEnd ) {
-		UIS_Add( &parts[UIS_FRAME], now - f.lastEnd );
+		UISpeeds_Add( &parts[UISPEEDS_FRAME], now - f.lastEnd );
 		if ( f.cgame.drawn ) {
-			UIS_Add( &parts[UIS_CGAME], f.cgame.total );
+			UISpeeds_Add( &parts[UISPEEDS_CGAME], f.cgame.total );
 		}
 		if ( f.ui.drawn ) {
-			UIS_Add( &parts[UIS_UI], f.ui.total );
+			UISpeeds_Add( &parts[UISPEEDS_UI], f.ui.total );
 		}
 		// a frame where a kind went untimed is left out
-		frontEnd = UIS_Corrected( f.batches, f.batchesTimed, clockCost );
+		frontEnd = UISpeeds_Corrected( f.batches, f.batchesTimed, clockCost );
 		picturesSampled = AddSampled( &f.pictures, &frontEnd );
 		retainedSampled = AddSampled( &f.retained, &frontEnd );
 		if ( picturesSampled && retainedSampled ) {
-			UIS_Add( &parts[UIS_FRONT_END], frontEnd );
+			UISpeeds_Add( &parts[UISPEEDS_FRONT_END], frontEnd );
 		}
-		UIS_Add( &parts[UIS_COMMANDS], pictures + retained + f.batchesTimed );
-		UIS_Add( &parts[UIS_BACK_END], UIS_Corrected( be.cpu, be.runs, clockCost ) );
+		UISpeeds_Add( &parts[UISPEEDS_COMMANDS], pictures + retained + f.batchesTimed );
+		UISpeeds_Add( &parts[UISPEEDS_BACK_END], UISpeeds_Corrected( be.cpu, be.runs, clockCost ) );
 		for ( i = 0; i < be.gpuFrames; i++ ) {
-			UIS_Add( &parts[UIS_GPU], be.gpu[i] );
+			UISpeeds_Add( &parts[UISPEEDS_GPU], be.gpu[i] );
 		}
 		gpuUntimed += be.gpuUntimed;
 	}
