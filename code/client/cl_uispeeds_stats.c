@@ -26,13 +26,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "cl_uispeeds.h"
 
-void UIS_Init( uisSamples_t *s, int *storage, int capacity ) {
+void UISpeeds_Init( uisSamples_t *s, int *storage, int capacity ) {
 	s->values = storage;
 	s->capacity = capacity;
-	UIS_Clear( s );
+	UISpeeds_Clear( s );
 }
 
-void UIS_Clear( uisSamples_t *s ) {
+void UISpeeds_Clear( uisSamples_t *s ) {
 	s->count = 0;
 	s->stride = 1;
 	s->seen = 0;
@@ -40,7 +40,7 @@ void UIS_Clear( uisSamples_t *s ) {
 	s->max = 0;
 }
 
-void UIS_Add( uisSamples_t *s, int64_t value ) {
+void UISpeeds_Add( uisSamples_t *s, int64_t value ) {
 	int v = value < 0 ? 0 : value > INT_MAX ? INT_MAX : (int)value;
 	int i;
 
@@ -70,7 +70,7 @@ static int CompareInts( const void *a, const void *b ) {
 	return ( x > y ) - ( x < y );
 }
 
-qboolean UIS_Summarize( const uisSamples_t *s, int *scratch, uisSummary_t *out ) {
+qboolean UISpeeds_Summarize( const uisSamples_t *s, int *scratch, uisSummary_t *out ) {
 	int n = s->count;
 
 	Com_Memset( out, 0, sizeof( *out ) );
@@ -88,7 +88,7 @@ qboolean UIS_Summarize( const uisSamples_t *s, int *scratch, uisSummary_t *out )
 	return qtrue;
 }
 
-int64_t UIS_Corrected( int64_t span, int reads, double clockCost ) {
+int64_t UISpeeds_Corrected( int64_t span, int reads, double clockCost ) {
 	int64_t corrected = span - (int64_t)( reads * clockCost + 0.5 );
 
 	return MAX( corrected, 0 );

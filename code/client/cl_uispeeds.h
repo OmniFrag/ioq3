@@ -49,16 +49,16 @@ typedef struct {
 	int64_t		max;
 } uisSummary_t;
 
-void		UIS_Init( uisSamples_t *s, int *storage, int capacity );
-void		UIS_Clear( uisSamples_t *s );
-void		UIS_Add( uisSamples_t *s, int64_t value );
+void		UISpeeds_Init( uisSamples_t *s, int *storage, int capacity );
+void		UISpeeds_Clear( uisSamples_t *s );
+void		UISpeeds_Add( uisSamples_t *s, int64_t value );
 
 // the held samples' median and p95, sorting them in scratch, which holds
 // the capacity; qfalse if none were given
-qboolean	UIS_Summarize( const uisSamples_t *s, int *scratch, uisSummary_t *out );
+qboolean	UISpeeds_Summarize( const uisSamples_t *s, int *scratch, uisSummary_t *out );
 
 // a span's time less the clock reads inside it, each costing clockCost
 // nanoseconds; never below 0
-int64_t		UIS_Corrected( int64_t span, int reads, double clockCost );
+int64_t		UISpeeds_Corrected( int64_t span, int reads, double clockCost );
 
 #endif
