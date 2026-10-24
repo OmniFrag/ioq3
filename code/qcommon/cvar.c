@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "hooks.h"
 
 #include <float.h>
 
@@ -2218,16 +2219,43 @@ static const char *Cvar_Applies( const cvar_t *var, const cvarDeclaration_t *dec
 	return ( var->flags & CVAR_INIT ) ? "at startup" : ( var->flags & CVAR_LATCH ) ? "next map" : "at once";
 }
 
-// what help says of when a change takes effect (Cvar_Applies)
+// when a change takes effect (Cvar_Applies), what help says of it, and
+// what extensions get (Cvar_ExtApplies)
 static const struct {
-	const char	*applies;
-	const char	*sentence;
+	const char			*applies;
+	const char			*sentence;
+	extCvarApplies_t	kind;
 } cvar_appliesSentences[] = {
-	{ "at once", "Takes effect at once." },
-	{ "next map", "Takes effect at the next map." },
-	{ "restart", "Takes effect at the next restart." },
-	{ "at startup", "Takes effect only at startup: set it on the command line." }
+	{ "at once", "Takes effect at once.", EXT_APPLIES_NOW },
+	{ "next map", "Takes effect at the next map.", EXT_APPLIES_MAP },
+	{ "vid_restart", "Takes effect at the next vid_restart.", EXT_APPLIES_VID_RESTART },
+	{ "snd_restart", "Takes effect at the next snd_restart.", EXT_APPLIES_SND_RESTART },
+	{ "restart", "Takes effect at the next restart.", EXT_APPLIES_RESTART },
+	{ "at startup", "Takes effect only at startup: set it on the command line.", EXT_APPLIES_RESTART }
 };
+
+// the table's row for an applies, or its length for none
+static int Cvar_AppliesRow( const char *applies ) {
+	int		i;
+
+	for ( i = 0; applies && i < ARRAY_LEN( cvar_appliesSentences ) && strcmp( cvar_appliesSentences[i].applies, applies ); i++ ) {
+	}
+	return applies ? i : ARRAY_LEN( cvar_appliesSentences );
+}
+
+/*
+============
+Cvar_ExtApplies
+
+Cvar_Applies for extensions (hooks.h); a read only cvar's is now, as it
+never changes
+============
+*/
+extCvarApplies_t Cvar_ExtApplies( const cvar_t *var ) {
+	int		i = Cvar_AppliesRow( Cvar_Applies( var, Cvar_Declaration( var->name ) ) );
+
+	return i < ARRAY_LEN( cvar_appliesSentences ) ? cvar_appliesSentences[i].kind : EXT_APPLIES_NOW;
+}
 
 // the flags, by the names cvar_dump lists, and what help says of the ones
 // that change what a player or admin sees
@@ -2332,8 +2360,7 @@ static void Cvar_HelpNotes( const cvar_t *var, const cvarDeclaration_t *declarat
 	if ( !applies ) {
 		Q_strcat( notes, size, "Read only." );
 	} else {
-		for ( i = 0; i < ARRAY_LEN( cvar_appliesSentences ) && strcmp( cvar_appliesSentences[i].applies, applies ); i++ ) {
-		}
+		i = Cvar_AppliesRow( applies );
 		Q_strcat( notes, size, i < ARRAY_LEN( cvar_appliesSentences ) ?
 			cvar_appliesSentences[i].sentence : va( "Takes effect %s.", applies ) );
 		if ( ( var->flags & CVAR_ARCHIVE ) && Cvar_Scope( var ) != CVAR_SCOPE_NONE ) {
@@ -2665,6 +2692,31 @@ mod's referee password
 static qboolean Cvar_IsSecret( const cvar_t *var, const cvarDeclaration_t *declaration ) {
 	return ( var->flags & CVAR_PRIVATE ) || Q_stristr( var->name, "password" ) ||
 		( declaration && declaration->type && !strcmp( declaration->type, "password" ) );
+}
+
+/*
+============
+Cvar_ExtRefused
+
+For extensions (hooks.h): whether a settings screen may not show a cvar,
+by its name whether or not it exists: a secret, a protected one, or a CD
+key
+============
+*/
+qboolean Cvar_ExtRefused( const char *var_name ) {
+	cvar_t	*var = Cvar_FindVar( var_name );
+	cvar_t	unmade;
+
+	// Team Arena's cdkey and cdkeychecksum, and cl_cdkey
+	if ( Q_stristr( var_name, "cdkey" ) ) {
+		return qtrue;
+	}
+	if ( !var ) {
+		Com_Memset( &unmade, 0, sizeof( unmade ) );
+		unmade.name = (char *)var_name;
+		var = &unmade;
+	}
+	return ( var->flags & CVAR_PROTECTED ) || Cvar_IsSecret( var, Cvar_Declaration( var_name ) );
 }
 
 /*

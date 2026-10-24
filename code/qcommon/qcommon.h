@@ -840,7 +840,7 @@ typedef struct {
 	const char	*tier;		// "basic", "notable", "all"
 	const char	*type;		// "bool", "enum", "bits", "int", "number", "text", "password"
 	const char	*unit;		// what a number counts, as said after it: "frames a second", "ms"
-	const char	*applies;	// "at once", "next map", "restart"; NULL: as its flags say
+	const char	*applies;	// "at once", "next map", "vid_restart", "snd_restart", "restart"; NULL: as its flags say
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
