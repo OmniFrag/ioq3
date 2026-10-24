@@ -375,6 +375,38 @@ int		CL_ExtModuleChecksum( extModule_t module );
 // (0 while unknown)
 const char	*CL_ExtDownloadState( int *count, int *size );
 
+// the server's name as connect was given it, a demo's during playback, ""
+// while disconnected
+const char	*CL_ExtServerName( void );
+// the server's message while connecting (full, banned, a bad password), ""
+// for none and once the server has answered, with the challenge and
+// connect packets sent
+const char	*CL_ExtServerMessage( int *connectPackets );
+// the latest snapshot's round trip in milliseconds, 999 with none and in a
+// demo
+int		CL_ExtPing( void );
+// the latest snapshot's number, which counts the server's packets (any
+// lost on the way among them), and its server time; 0 for both before one
+// in the game
+int		CL_ExtSnapshotNumber( int *serverTime );
+// the last frame's real time in milliseconds, which a pause doesn't stop
+int		CL_ExtFrameTime( void );
+// the chat line: to whom, and what the player is typing there
+typedef enum {
+	EXT_CHAT_NONE,		// closed
+	EXT_CHAT_ALL,		// messagemode
+	EXT_CHAT_TEAM,		// messagemode2
+	EXT_CHAT_TELL		// messagemode3 and 4: to the player aimed at or the last attacker
+} extChatMode_t;
+extChatMode_t	CL_ExtChatLine( const char **text );
+// the microphone's level, 0 to 1; 0 without VoIP
+float		CL_ExtVoipPower( void );
+// the demo recording, "" for none, with its size so far
+const char	*CL_ExtDemoRecording( int *bytes );
+// the paks that couldn't be downloaded, a line each, with how many: the
+// count goes on past the lines that fit
+const char	*CL_ExtDownloadFailures( int *count );
+
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or
 // one whose client has just left, and while no map runs.
