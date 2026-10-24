@@ -103,6 +103,62 @@ const char *CL_ExtDownloadState( int *count, int *size ) {
 	return name;
 }
 
+const char *CL_ExtServerName( void ) {
+	return clc.state >= CA_CONNECTING && clc.state != CA_CINEMATIC ? clc.servername : "";
+}
+
+// only until the server answers, as the ui's connect screen shows it: a
+// print from the server later, an rcon reply among them, lands there too
+const char *CL_ExtServerMessage( int *connectPackets ) {
+	qboolean	connecting = clc.state >= CA_CONNECTING && clc.state < CA_CONNECTED;
+
+	*connectPackets = connecting ? clc.connectPacketCount : 0;
+	return connecting ? clc.serverMessage : "";
+}
+
+// a demo sends no packets, so CL_ParseSnapshot's ping is cls.realtime there
+int CL_ExtPing( void ) {
+	return clc.state == CA_ACTIVE && cl.snap.valid && !clc.demoplaying ? cl.snap.ping : 999;
+}
+
+int CL_ExtSnapshotNumber( int *serverTime ) {
+	qboolean	valid = clc.state == CA_ACTIVE && cl.snap.valid;
+
+	*serverTime = valid ? cl.snap.serverTime : 0;
+	return valid ? cl.snap.messageNum : 0;
+}
+
+int CL_ExtFrameTime( void ) {
+	return cls.realFrametime;
+}
+
+extChatMode_t CL_ExtChatLine( const char **text ) {
+	if ( !( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) ) {
+		*text = "";
+		return EXT_CHAT_NONE;
+	}
+	*text = chatField.buffer;
+	return chat_playerNum != -1 ? EXT_CHAT_TELL : chat_team ? EXT_CHAT_TEAM : EXT_CHAT_ALL;
+}
+
+float CL_ExtVoipPower( void ) {
+#ifdef USE_VOIP
+	return clc.voipPower;
+#else
+	return 0;
+#endif
+}
+
+const char *CL_ExtDemoRecording( int *bytes ) {
+	*bytes = clc.demorecording && clc.demofile ? FS_FTell( clc.demofile ) : 0;
+	return clc.demorecording ? clc.demoName : "";
+}
+
+const char *CL_ExtDownloadFailures( int *count ) {
+	*count = clc.downloadFailed;
+	return clc.downloadFailures;
+}
+
 /*
 ==================
 CL_ModuleRegister, CL_ModuleRegisterFont
