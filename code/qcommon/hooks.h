@@ -294,6 +294,9 @@ void	Hooks_DemoPlayback( qboolean playing );
 void	Hooks_RendererStarted( void );
 void	Hooks_RendererStopping( qboolean destroyWindow );
 void	Hooks_Draw( extDrawPoint_t point, int stereo );
+// whether an active extension has a draw hook, so ui_speeds times the
+// draw points only then
+qboolean	Hooks_WantDraw( void );
 // a key's down: the number, from 1, of the extension that took it, which
 // its repeats and its up go to (Hooks_KeyTo); 0 when none did
 int	Hooks_KeyDown( int key, unsigned time );

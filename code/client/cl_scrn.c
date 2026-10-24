@@ -754,15 +754,33 @@ screen when connect is set, over the loading screen when loading is
 */
 static void SCR_DrawUI( qboolean connect, qboolean loading ) {
 	if ( cl_uiSpeeds ) {
-		CL_UISpeedsUI( qtrue );
+		CL_UISpeedsSpan( UISPEEDS_SPAN_UI, qtrue );
 	}
 	VM_Call( uivm, UI_REFRESH, cls.realtime );
 	if ( connect ) {
 		VM_Call( uivm, UI_DRAW_CONNECT_SCREEN, loading );
 	}
 	if ( cl_uiSpeeds ) {
-		CL_UISpeedsUI( qfalse );
+		CL_UISpeedsSpan( UISPEEDS_SPAN_UI, qfalse );
 	}
+}
+
+/*
+==================
+SCR_DrawExtensions
+
+The engine extensions' drawing at a draw point, which ui_speeds times while
+an active extension has a draw hook
+==================
+*/
+static void SCR_DrawExtensions( extDrawPoint_t point, int stereo ) {
+	if ( !cl_uiSpeeds || !Hooks_WantDraw() ) {
+		Hooks_Draw( point, stereo );
+		return;
+	}
+	CL_UISpeedsSpan( UISPEEDS_SPAN_EXTENSIONS, qtrue );
+	Hooks_Draw( point, stereo );
+	CL_UISpeedsSpan( UISPEEDS_SPAN_EXTENSIONS, qfalse );
 }
 
 /*
@@ -810,7 +828,7 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			// connecting clients will only show the connection dialog
 			// refresh to update the time
 			SCR_DrawUI( qtrue, qfalse );
-			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
+			SCR_DrawExtensions( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_LOADING:
 		case CA_PRIMED:
@@ -821,13 +839,13 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			// flash away too briefly on local or lan games
 			// refresh to update the time
 			SCR_DrawUI( qtrue, qtrue );
-			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
+			SCR_DrawExtensions( EXT_DRAW_GAME, stereoFrame );
 			break;
 		case CA_ACTIVE:
 			// always supply STEREO_CENTER as vieworg offset is now done by the engine.
 			CL_CGameRendering(stereoFrame);
 			// under the recording line and the voice meter
-			Hooks_Draw( EXT_DRAW_GAME, stereoFrame );
+			SCR_DrawExtensions( EXT_DRAW_GAME, stereoFrame );
 			SCR_DrawDemoRecording();
 #ifdef USE_VOIP
 			SCR_DrawVoipMeter();
@@ -840,11 +858,11 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	if ( Key_GetCatcher( ) & KEYCATCH_UI && uivm ) {
 		SCR_DrawUI( qfalse, qfalse );
 	}
-	Hooks_Draw( EXT_DRAW_MENU, stereoFrame );
+	SCR_DrawExtensions( EXT_DRAW_MENU, stereoFrame );
 
 	// console draws next
 	Con_DrawConsole ();
-	Hooks_Draw( EXT_DRAW_TOP, stereoFrame );
+	SCR_DrawExtensions( EXT_DRAW_TOP, stereoFrame );
 
 	// debug graph can be drawn on top of anything
 	if ( cl_debuggraph->integer || cl_timegraph->integer || cl_debugMove->integer ) {
