@@ -39,6 +39,8 @@ static int	hooks_depth[MAX_ENGINE_EXTENSIONS];
 static qboolean	hooks_printing;
 // an active extension wants the modules' renderer calls
 static qboolean	hooks_wantModuleRender;
+// an active extension has a draw hook
+static qboolean	hooks_wantDraw;
 
 /*
 ===============
@@ -100,6 +102,9 @@ void Hooks_Init( void ) {
 			if ( engineExtensions[i]->moduleRender ) {
 				hooks_wantModuleRender = qtrue;
 			}
+			if ( engineExtensions[i]->draw ) {
+				hooks_wantDraw = qtrue;
+			}
 		}
 	}
 	// no wait before the extensions' first frames say how long they allow
@@ -156,6 +161,7 @@ calls them as the quit command does
 void Hooks_Signal( void ) {
 	hooks_activeCount = 0;
 	hooks_wantModuleRender = qfalse;
+	hooks_wantDraw = qfalse;
 }
 
 /*
@@ -172,6 +178,7 @@ void Hooks_Shutdown( const char *reason ) {
 	hooks_activeCount = 0;
 	hooks_idleMsec = -1;
 	hooks_wantModuleRender = qfalse;
+	hooks_wantDraw = qfalse;
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		// not into one whose own hook is quitting
 		if ( hooks_active[i] && engineExtensions[i]->shutdown && !hooks_depth[i] ) {
@@ -290,6 +297,10 @@ void Hooks_RendererStopping( qboolean destroyWindow ) {
 
 void Hooks_Draw( extDrawPoint_t point, int stereo ) {
 	HOOKS_CALL( draw, ( point, stereo ) );
+}
+
+qboolean Hooks_WantDraw( void ) {
+	return hooks_wantDraw;
 }
 
 // offers an event to each active extension that has hook, with its
