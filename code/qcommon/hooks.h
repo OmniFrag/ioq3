@@ -483,4 +483,19 @@ qboolean	SV_ExtRemoveBan( int index );
 // and everyone reason; returns how many
 int		SV_ExtDropBanned( const char *reason );
 
+// A cvar, for extensions (qcommon/cvar.c): when a change to it takes
+// effect, by the game's declarations or else its flags, as cvar help says
+typedef enum {
+	EXT_APPLIES_NOW,		// at once, or never for a read only cvar
+	EXT_APPLIES_VID_RESTART,	// at vid_restart
+	EXT_APPLIES_SND_RESTART,	// at snd_restart
+	EXT_APPLIES_MAP,		// at the next map
+	EXT_APPLIES_RESTART		// when the program starts again
+} extCvarApplies_t;
+
+extCvarApplies_t	Cvar_ExtApplies( const cvar_t *var );
+// whether a settings screen may not show a cvar, which needn't exist: a
+// secret (one cvar_dump leaves out), a protected one, or a CD key
+qboolean	Cvar_ExtRefused( const char *var_name );
+
 #endif
