@@ -23,7 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 // The parts timed: the cgame's 2D, from the return of the first scene it
 // renders in CG_DRAW_ACTIVE_FRAME (its 3D view) to the frame's end, or the
-// whole frame where it renders none; the ui's drawing; the renderer's
+// whole frame where it renders none; the ui's drawing; the engine
+// extensions' at each draw point, while one has a draw hook; the renderer's
 // front end, through wrappers that stand in for its 2D draws; and the back
 // end's 2D commands (RE_TimeBackEnd2D). While ui_speeds is 0, the wrappers
 // are out of the renderer's table and the back end doesn't time, so each
@@ -39,6 +40,7 @@ enum {
 	UISPEEDS_FRAME,
 	UISPEEDS_CGAME,
 	UISPEEDS_UI,
+	UISPEEDS_EXTENSIONS,
 	UISPEEDS_FRONT_END,
 	UISPEEDS_COMMANDS,
 	UISPEEDS_BACK_END,
@@ -46,8 +48,15 @@ enum {
 	UISPEEDS_PARTS
 };
 
+// CL_UISpeedsEndFrame adds each span to the part at UISPEEDS_CGAME plus its
+// number
+#define UISPEEDS_SPAN_CGAME	0	// before client.h's spans
+typedef char uisSpansInPartsOrder[ UISPEEDS_UI - UISPEEDS_CGAME == UISPEEDS_SPAN_UI &&
+	UISPEEDS_EXTENSIONS - UISPEEDS_CGAME == UISPEEDS_SPAN_EXTENSIONS &&
+	UISPEEDS_FRONT_END - UISPEEDS_CGAME == UISPEEDS_SPANS ? 1 : -1 ];
+
 static const char *partNames[UISPEEDS_PARTS] = {
-	"frame", "cgame 2D", "ui 2D", "front end 2D", "2D commands", "back end 2D", "GPU 2D"
+	"frame", "cgame 2D", "ui 2D", "extensions 2D", "front end 2D", "2D commands", "back end 2D", "GPU 2D"
 };
 
 // a module's drawing this frame, less the clock reads of the calls timed
@@ -83,7 +92,7 @@ typedef struct {
 static struct {
 	int64_t		lastEnd;	// the last frame's end, 0 before the first
 	qboolean	inCgame, sceneSeen;
-	uisSpan_t	cgame, ui;
+	uisSpan_t	spans[UISPEEDS_SPANS];	// in the parts' order, from UISPEEDS_CGAME
 	uisSampled_t	pictures;	// pictures and colors
 	uisSampled_t	retained;	// retained geometry, clip masks and layers
 	int64_t		batches;	// every batch of triangles
@@ -209,7 +218,7 @@ static void Speeds_RenderScene( const refdef_t *fd ) {
 	real.RenderScene( fd );
 	if ( f.inCgame && !f.sceneSeen ) {
 		f.sceneSeen = qtrue;
-		SpanBegin( &f.cgame );
+		SpanBegin( &f.spans[UISPEEDS_SPAN_CGAME] );
 	}
 }
 
@@ -354,11 +363,10 @@ void CL_UISpeedsEndFrame( void ) {
 	gpuTimer = be.gpuTimer;
 	if ( f.lastEnd ) {
 		UISpeeds_Add( &parts[UISPEEDS_FRAME], now - f.lastEnd );
-		if ( f.cgame.drawn ) {
-			UISpeeds_Add( &parts[UISPEEDS_CGAME], f.cgame.total );
-		}
-		if ( f.ui.drawn ) {
-			UISpeeds_Add( &parts[UISPEEDS_UI], f.ui.total );
+		for ( i = 0; i < UISPEEDS_SPANS; i++ ) {
+			if ( f.spans[i].drawn ) {
+				UISpeeds_Add( &parts[UISPEEDS_CGAME + i], f.spans[i].total );
+			}
 		}
 		// a frame where a kind went untimed is left out
 		frontEnd = UISpeeds_Corrected( f.batches, f.batchesTimed, clockCost );
@@ -391,25 +399,27 @@ void CL_UISpeedsCgame( qboolean begin ) {
 	if ( begin ) {
 		f.inCgame = qtrue;
 		f.sceneSeen = qfalse;
-		SpanBegin( &f.cgame );
+		SpanBegin( &f.spans[UISPEEDS_SPAN_CGAME] );
 		return;
 	}
-	SpanEnd( &f.cgame );
+	SpanEnd( &f.spans[UISPEEDS_SPAN_CGAME] );
 	f.inCgame = qfalse;
 }
 
 /*
 ====================
-CL_UISpeedsUI
+CL_UISpeedsSpan
 
-Brackets the ui's drawing
+Brackets the ui's drawing (UISPEEDS_SPAN_UI) or the engine extensions' at
+a draw point (UISPEEDS_SPAN_EXTENSIONS): their own work, such as a UI's
+layout and scripts, and the 2D they draw
 ====================
 */
-void CL_UISpeedsUI( qboolean begin ) {
+void CL_UISpeedsSpan( uiSpeedsSpan_t span, qboolean begin ) {
 	if ( begin ) {
-		SpanBegin( &f.ui );
+		SpanBegin( &f.spans[span] );
 	} else {
-		SpanEnd( &f.ui );
+		SpanEnd( &f.spans[span] );
 	}
 }
 
@@ -430,6 +440,7 @@ void CL_UISpeedsInit( void ) {
 	ui_speeds = Cvar_Get( "ui_speeds", "0", CVAR_TEMP );
 	Cvar_SetDescription( ui_speeds, "Timers for the HUD's and menus' 2D, on the CPU and the GPU\n"
 		"1 times each frame's 2D in its parts: the cgame's, from its 3D view's return to the end of its frame, "
-		"the ui's, and the renderer's front end and back end, on the GPU too where it has timer queries. "
+		"the ui's, the engine extensions' at each draw point while one has a draw hook, "
+		"and the renderer's front end and back end, on the GPU too where it has timer queries. "
 		"Setting it back to 0, and the end of each match or demo, print their median, p95, max and mean per frame." );
 }

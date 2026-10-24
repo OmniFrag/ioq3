@@ -701,7 +701,13 @@ void	CL_UISpeedsRendererLoaded( void );
 void	CL_UISpeedsFrame( void );
 void	CL_UISpeedsEndFrame( void );
 void	CL_UISpeedsCgame( qboolean begin );
-void	CL_UISpeedsUI( qboolean begin );
+// ui_speeds' timed spans, in its parts' order
+typedef enum {
+	UISPEEDS_SPAN_UI = 1,	// 0 is the cgame's, which CL_UISpeedsCgame brackets
+	UISPEEDS_SPAN_EXTENSIONS,
+	UISPEEDS_SPANS
+} uiSpeedsSpan_t;
+void	CL_UISpeedsSpan( uiSpeedsSpan_t span, qboolean begin );
 void	CL_UISpeedsReport( qboolean print );
 
 //
