@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		15
+#define	REF_API_VERSION		16
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
