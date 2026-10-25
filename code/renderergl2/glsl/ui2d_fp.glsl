@@ -18,6 +18,7 @@ uniform vec4   u_PaintBox;		// x, y, width, height
 uniform vec4   u_PaintRadii;	// top left, top right, bottom right, bottom left
 uniform float  u_PaintFeather;
 uniform float  u_MsdfRange;		// the field's range in texels
+uniform vec2   u_MsdfSourceTexel;	// a premultiplied raster's texel the glyph stands in for, in texels; 0 for none
 uniform vec2   u_TextureSize;
 #endif
 
@@ -73,13 +74,19 @@ float RoundedBox(vec2 p)
 	return clamp(0.5 - d / soft, 0.0, 1.0);
 }
 
-// how much of a glyph a multi-channel distance field covers: the median
-// of its channels, its range scaled to the pixels it's drawn at along the
-// narrower axis, so a glyph stretched unevenly (a console's 8x16 cell of a
-// square design) stays smooth across its squeezed edges
-float Msdf(vec4 texel)
+// a multi-channel distance field's distance: the median of its channels,
+// 0.5 on the outline, more inside
+float Median(vec4 texel)
 {
-	float d = max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));
+	return max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));
+}
+
+// how much of a glyph the field covers at a distance d: its range scaled
+// to the pixels it's drawn at along the narrower axis, so a glyph stretched
+// unevenly (a console's 8x16 cell of a square design) stays smooth across
+// its squeezed edges
+float Msdf(float d)
+{
 	vec2 unitRange = vec2(u_MsdfRange) / u_TextureSize;
 	vec2 screenRange = unitRange / fwidth(var_TexCoord);
 	float pixelRange = max(min(screenRange.x, screenRange.y), 1.0);
@@ -95,7 +102,28 @@ void main()
 #if defined(USE_PAINT)
 	if (u_PaintKind == 4)
 	{
-		gl_FragColor = color * Msdf(texture2D(u_DiffuseMap, var_TexCoord));
+		vec4 texel = texture2D(u_DiffuseMap, var_TexCoord);
+
+		// a raster with premultiplied colors drawn as straight alpha, which
+		// the glyph stands in for, draws its color times its coverage again:
+		// darker toward the outline, from full one of its texels inside to
+		// half on it. From the field's true distance (alpha), round at
+		// corners as the raster's coverage is, the texel's width across the
+		// outline from the field's own slope, so it doesn't shimmer as the
+		// screen's would
+		if (u_MsdfSourceTexel.x > 0.0)
+		{
+			vec2 one = 1.0 / u_TextureSize;
+			vec2 normal = vec2(texture2D(u_DiffuseMap, var_TexCoord + vec2(one.x, 0.0)).a - texel.a,
+				texture2D(u_DiffuseMap, var_TexCoord + vec2(0.0, one.y)).a - texel.a);
+			float slope = dot(normal, normal);
+			float width = slope > 1e-8 ? length(u_MsdfSourceTexel * normal) * inversesqrt(slope)
+				: 0.5 * (u_MsdfSourceTexel.x + u_MsdfSourceTexel.y);
+
+			color.rgb *= smoothstep(-width, width, (texel.a - 0.5) * u_MsdfRange);
+		}
+
+		gl_FragColor = color * Msdf(Median(texel));
 		return;
 	}
 #endif

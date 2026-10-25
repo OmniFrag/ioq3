@@ -431,6 +431,15 @@ static qboolean R_CheckShape2D( const paint2D_t *paint ) {
 			ri.Printf( PRINT_WARNING, "CreatePaint2D: a distance field's range of %g\n", paint->msdfRange );
 			return qfalse;
 		}
+		for ( i = 0; i < 2; i++ ) {
+			if ( !isfinite( paint->msdfSourceTexel[i] ) || paint->msdfSourceTexel[i] < 0 ||
+				paint->msdfSourceTexel[i] > paint->msdfRange / 2 ||
+				( paint->msdfSourceTexel[i] == 0 ) != ( paint->msdfSourceTexel[!i] == 0 ) ) {
+				ri.Printf( PRINT_WARNING, "CreatePaint2D: a source texel of %g by %g, not both 0 or both up to half "
+					"the range\n", paint->msdfSourceTexel[0], paint->msdfSourceTexel[1] );
+				return qfalse;
+			}
+		}
 		return qtrue;
 	}
 	for ( i = 0; i < 4; i++ ) {

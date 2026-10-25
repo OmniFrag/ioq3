@@ -164,6 +164,12 @@ typedef struct {
 	byte			stopColor[MAX_PAINT2D_STOPS][4];	// premultiplied
 	float			box[4], radii[4], feather;		// rounded box: rectangle, corner radii, edge softness
 	float			msdfRange;						// MSDF: the field's range in the texture's pixels
+	// MSDF: a texel, across and down in the texture's pixels, of a raster the
+	// glyph stands in for, with premultiplied colors drawn as straight alpha:
+	// its color falls toward the outline as that raster's coverage does, to
+	// half on it, a band one such texel wide (0, 0 for none). Measured with
+	// msdfRange, which must then be the field's own range
+	float			msdfSourceTexel[2];
 } paint2D_t;
 
 // how CompositeLayers2D puts a layer onto another

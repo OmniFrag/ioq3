@@ -33,7 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static struct {
 	GLint		vertexPremultiplied, colorScale, textureMode;
 	GLint		paintKind, paintRepeat, paintP0, paintP1, numStops, stopPos, stopColor;
-	GLint		paintBox, paintRadii, paintFeather, msdfRange, textureSize;
+	GLint		paintBox, paintRadii, paintFeather, msdfRange, msdfSourceTexel, textureSize;
 
 	int			lastPremultiplied, lastTextureMode, lastTextureWidth, lastTextureHeight;
 	float		lastColorScale;
@@ -238,6 +238,7 @@ void R_InitUI2D( void ) {
 	ui2d.paintRadii = qglGetUniformLocation( program, "u_PaintRadii" );
 	ui2d.paintFeather = qglGetUniformLocation( program, "u_PaintFeather" );
 	ui2d.msdfRange = qglGetUniformLocation( program, "u_MsdfRange" );
+	ui2d.msdfSourceTexel = qglGetUniformLocation( program, "u_MsdfSourceTexel" );
 	ui2d.textureSize = qglGetUniformLocation( program, "u_TextureSize" );
 
 	// GL starts them at 0: what's set first is set
@@ -366,6 +367,7 @@ static void RB_Paint2D( const paint2D_t *paint, const texture2D_t *texture ) {
 		qglUniform1f( ui2d.paintFeather, paint->feather );
 	} else if ( paint->kind == PAINT2D_MSDF ) {
 		qglUniform1f( ui2d.msdfRange, paint->msdfRange );
+		qglUniform2f( ui2d.msdfSourceTexel, paint->msdfSourceTexel[0], paint->msdfSourceTexel[1] );
 	} else {
 		for ( i = 0; i < paint->numStops * 4; i++ ) {
 			colors[i] = paint->stopColor[i / 4][i % 4] / 255.0f;
