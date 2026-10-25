@@ -74,13 +74,15 @@ float RoundedBox(vec2 p)
 }
 
 // how much of a glyph a multi-channel distance field covers: the median
-// of its channels, its range scaled to the pixels it's drawn at
+// of its channels, its range scaled to the pixels it's drawn at along the
+// narrower axis, so a glyph stretched unevenly (a console's 8x16 cell of a
+// square design) stays smooth across its squeezed edges
 float Msdf(vec4 texel)
 {
 	float d = max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));
 	vec2 unitRange = vec2(u_MsdfRange) / u_TextureSize;
-	vec2 screenTexSize = 1.0 / fwidth(var_TexCoord);
-	float pixelRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);
+	vec2 screenRange = unitRange / fwidth(var_TexCoord);
+	float pixelRange = max(min(screenRange.x, screenRange.y), 1.0);
 
 	return clamp(pixelRange * (d - 0.5) + 0.5, 0.0, 1.0);
 }
