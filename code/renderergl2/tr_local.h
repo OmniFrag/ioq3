@@ -1510,6 +1510,7 @@ typedef struct {
 	int			scissorRect2D[4];
 
 	FBO_t *last2DFBO;
+	int		last2DWidth, last2DHeight;	// its size then: a framebuffer may take another's attachments
 	qboolean    colorMask[4];
 	qboolean    depthFill;
 	float       greyscale;

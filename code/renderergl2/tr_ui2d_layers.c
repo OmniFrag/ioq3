@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // size and samples, sharing its depth and stencil, so a clip mask holds
 // across them; resolved into a texture to be composited, through the
 // ui2dfilter program's passes (glsl/ui2dfilter_*) over the composite's
-// box alone
+// box alone; and saved into UI textures (SaveLayer2D)
 
 #include "tr_local.h"
 #include "tr_fbo.h"
@@ -54,11 +54,12 @@ static struct {
 	// single-sampled, each level half the size of the one before; three
 	// at each, for a drop shadow's
 	target2D_t	scratch[BLUR_LEVELS][3];
+	FBO_t		saveFbo;					// a saved layer's texture is drawn through
 } ui2dLayers;
 
 // the ui2dfilter program's uniforms that GLSL_InitUniforms doesn't know
 static struct {
-	GLint	filterMode, colorMatrix, colorOffset, blurDirection, blurRadius, blurWeights;
+	GLint	filterMode, colorMatrix, colorOffset, blurDirection, blurRadius, blurWeights, maskMap, maskTransform, maskChannel;
 } filterUniforms;
 
 // ui2dfilter's u_FilterMode
@@ -66,7 +67,8 @@ enum {
 	FILTERMODE_COPY,
 	FILTERMODE_COLOR_MATRIX,
 	FILTERMODE_BLUR,
-	FILTERMODE_SHADOW
+	FILTERMODE_SHADOW,
+	FILTERMODE_MASK
 };
 
 static const vec4_t	transparent = { 0, 0, 0, 0 };
@@ -174,6 +176,7 @@ void R_ShutdownLayers2D( void ) {
 			R_FreeTarget2D( &ui2dLayers.scratch[i][j] );
 		}
 	}
+	R_FreeFbo2D( &ui2dLayers.saveFbo );
 	Com_Memset( &ui2dLayers, 0, sizeof( ui2dLayers ) );
 }
 
@@ -197,6 +200,11 @@ void R_InitLayers2D( void ) {
 	filterUniforms.blurDirection = qglGetUniformLocation( program, "u_BlurDirection" );
 	filterUniforms.blurRadius = qglGetUniformLocation( program, "u_BlurRadius" );
 	filterUniforms.blurWeights = qglGetUniformLocation( program, "u_BlurWeights" );
+	filterUniforms.maskMap = qglGetUniformLocation( program, "u_MaskMap" );
+	filterUniforms.maskTransform = qglGetUniformLocation( program, "u_MaskTransform" );
+	filterUniforms.maskChannel = qglGetUniformLocation( program, "u_MaskChannel" );
+	GLSL_BindProgram( &tr.ui2dFilterShader );
+	qglUniform1i( filterUniforms.maskMap, TB_LIGHTMAP );
 }
 
 
@@ -266,6 +274,29 @@ static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t
 
 /*
 ===============
+RB_Quad2D
+
+Draws src through the ui2dfilter program in a mode, as a quad into the
+bound framebuffer, in its 2D projection
+===============
+*/
+static void RB_Quad2D( image_t *src, int mode, const vec4_t color, vec4_t verts[4], vec2_t texCoords[4], int blend ) {
+	vec2_t	invTexRes;
+
+	VectorSet2( invTexRes, 1.0f / src->width, 1.0f / src->height );
+	GLSL_BindProgram( &tr.ui2dFilterShader );
+	GLSL_SetUniformMat4( &tr.ui2dFilterShader, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.projection );
+	GLSL_SetUniformVec4( &tr.ui2dFilterShader, UNIFORM_COLOR, color );
+	GLSL_SetUniformVec2( &tr.ui2dFilterShader, UNIFORM_INVTEXRES, invTexRes );
+	qglUniform1i( filterUniforms.filterMode, mode );
+	GL_BindToTMU( src, TB_COLORMAP );
+	GL_State( GLS_DEPTHTEST_DISABLE | blend );
+	GL_Cull( CT_TWO_SIDED );
+	RB_InstantQuad2( verts, texCoords );
+}
+
+/*
+===============
 RB_Pass2D
 
 Draws src over dst with the ui2dfilter program in a mode, whose other
@@ -280,7 +311,6 @@ static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, c
 	float	ox = offset ? offset[0] * scale : 0, oy = offset ? offset[1] * scale : 0;
 	vec4_t	verts[4], c;
 	vec2_t	texCoords[4] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };	// rows bottom up
-	vec2_t	invTexRes;
 	int		x = floorf( box[0] * scale ), y = floorf( box[1] * scale );
 
 	FBO_Bind( dst );
@@ -297,17 +327,7 @@ static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, c
 	} else {
 		VectorSet4( c, 1, 1, 1, 1 );
 	}
-	VectorSet2( invTexRes, 1.0f / src->width, 1.0f / src->height );
-
-	GLSL_BindProgram( &tr.ui2dFilterShader );
-	GLSL_SetUniformMat4( &tr.ui2dFilterShader, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.projection );
-	GLSL_SetUniformVec4( &tr.ui2dFilterShader, UNIFORM_COLOR, c );
-	GLSL_SetUniformVec2( &tr.ui2dFilterShader, UNIFORM_INVTEXRES, invTexRes );
-	qglUniform1i( filterUniforms.filterMode, mode );
-	GL_BindToTMU( src, TB_COLORMAP );
-	GL_State( GLS_DEPTHTEST_DISABLE | blend );
-	GL_Cull( CT_TWO_SIDED );
-	RB_InstantQuad2( verts, texCoords );
+	RB_Quad2D( src, mode, c, verts, texCoords, blend );
 }
 
 #define BLEND_OVER		( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA )
@@ -404,6 +424,30 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 		break;
 	}
 
+	case FILTER2D_MASK: {
+		texture2D_t	*mask = R_GetTexture2D( filter->texture, qtrue );
+		float		w = ui2dLayers.width, h = ui2dLayers.height;
+
+		if ( !mask ) {
+			// its texture's gone: nothing shows through it
+			RB_Pass2D( src, &dst->fbo, FILTERMODE_COPY, transparent, box, NULL, BLEND_REPLACE );
+			break;
+		}
+		// the mask's texture coordinates from the pass's, whose rows go up
+		GLSL_BindProgram( &tr.ui2dFilterShader );
+		qglUniform4f( filterUniforms.maskTransform, w / mask->image.width, -h / mask->image.height,
+			-p[0] / mask->image.width, ( h - p[1] ) / mask->image.height );
+		// an A8 texture's coverage is in red where it's R8
+		if ( mask->image.dataFormat == GL_RED ) {
+			qglUniform4f( filterUniforms.maskChannel, 1, 0, 0, 0 );
+		} else {
+			qglUniform4f( filterUniforms.maskChannel, 0, 0, 0, 1 );
+		}
+		GL_BindToTMU( &mask->image, TB_LIGHTMAP );
+		RB_Pass2D( src, &dst->fbo, FILTERMODE_MASK, NULL, box, NULL, BLEND_REPLACE );
+		break;
+	}
+
 	case FILTER2D_OPACITY:
 	default:
 		VectorSet4( color, p[0], p[0], p[0], p[0] );
@@ -458,15 +502,15 @@ static int RB_CompositeBox2D( const layer2DCommand_t *cmd, int box[4] ) {
 
 /*
 ===============
-RB_LayerImage2D
+RB_LayerFbo2D
 
-A layer's picture within box, as a texture: resolved from its samples,
-and for the 2D target, its own render image. The filters read past the
-box by about their reach, so as much more is resolved, as a layer without
-samples has it
+A framebuffer with a layer's picture within box in its texture: resolved
+from its samples, and for the 2D target, its own render image. The
+filters read past the box by about their reach, so as much more is
+resolved, as a layer without samples has it
 ===============
 */
-static image_t *RB_LayerImage2D( int layer, const int box[4], int reach ) {
+static FBO_t *RB_LayerFbo2D( int layer, const int box[4], int reach ) {
 	FBO_t	*fbo = layer ? &ui2dLayers.layers[layer - 1].fbo : tr.renderFbo;
 	FBO_t	*resolve = layer ? &ui2dLayers.layers[layer - 1].resolveFbo : tr.msaaResolveFbo;
 	ivec4_t	glBox;
@@ -481,9 +525,84 @@ static image_t *RB_LayerImage2D( int layer, const int box[4], int reach ) {
 		// GL's rows go up
 		VectorSet4( glBox, x0, ui2dLayers.height - y1, x1 - x0, y1 - y0 );
 		FBO_FastBlit( fbo, glBox, resolve, glBox, GL_COLOR_BUFFER_BIT, GL_NEAREST );
-		return resolve->colorImage[0];
+		return resolve;
 	}
-	return fbo->colorImage[0];
+	return fbo;
+}
+
+/*
+===============
+RB_SaveLayer2D
+
+A layer's box into a UI texture, as colors in display units: the 2D draws
+at tr.frameLight, which the texture gets again as it's drawn. Its rows go
+down where GL's go up
+===============
+*/
+static void RB_SaveLayer2D( const layer2DCommand_t *cmd ) {
+	texture2D_t	*t = R_GetTexture2D( cmd->texture, qtrue );
+	const int	*b = cmd->box;
+	FBO_t		*src = NULL, *dst = &ui2dLayers.saveFbo;
+	vec4_t		verts[4], color;
+	vec2_t		texCoords[4];
+	float		w, h, s0, s1, t0, t1;
+	int			x0, y0, x1, y1, area[4];
+
+	if ( !t ) {
+		return;
+	}
+	if ( !ui2dLayers.depth ) {
+		RB_FitLayers2D();
+	}
+	x0 = (int)MAX( 0, b[0] );
+	y0 = (int)MAX( 0, b[1] );
+	x1 = (int)MIN( ui2dLayers.width, (int64_t)b[0] + b[2] );
+	y1 = (int)MIN( ui2dLayers.height, (int64_t)b[1] + b[3] );
+	if ( x1 > x0 && y1 > y0 ) {
+		VectorSet4( area, x0, y0, x1 - x0, y1 - y0 );
+		src = RB_LayerFbo2D( MIN( cmd->source, ui2dLayers.depth ), area, 0 );
+	}
+
+	if ( !dst->frameBuffer ) {
+		Q_strncpyz( dst->name, "*layer2DSave", sizeof( dst->name ) );
+		qglGenFramebuffers( 1, &dst->frameBuffer );
+	}
+	dst->width = t->image.width;
+	dst->height = t->image.height;
+	FBO_AttachImage( dst, &t->image, GL_COLOR_ATTACHMENT0, 0 );
+	FBO_Bind( dst );
+	RB_SetGL2D();
+	// the texture was made uncleared: what's off the target is transparent,
+	// all of it when the whole box is
+	if ( !src || x0 != b[0] || y0 != b[1] || x1 - x0 != b[2] || y1 - y0 != b[3] ) {
+		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+	}
+
+	if ( src ) {
+		// the part of the box on the target, in the texture's rows
+		qglScissor( x0 - b[0], y0 - b[1], x1 - x0, y1 - y0 );
+
+		// the box's top row to the texture's first, GL's last of the quad's
+		w = dst->width;
+		h = dst->height;
+		s0 = b[0] / (float)ui2dLayers.width;
+		s1 = ( b[0] + w ) / ui2dLayers.width;
+		t0 = 1 - b[1] / (float)ui2dLayers.height;
+		t1 = 1 - ( b[1] + h ) / ui2dLayers.height;
+		VectorSet4( verts[0], 0, 0, 0, 1 );
+		VectorSet4( verts[1], w, 0, 0, 1 );
+		VectorSet4( verts[2], w, h, 0, 1 );
+		VectorSet4( verts[3], 0, h, 0, 1 );
+		VectorSet2( texCoords[0], s0, t1 );
+		VectorSet2( texCoords[1], s1, t1 );
+		VectorSet2( texCoords[2], s1, t0 );
+		VectorSet2( texCoords[3], s0, t0 );
+		VectorSet4( color, 1 / tr.frameLight, 1 / tr.frameLight, 1 / tr.frameLight, 1 );
+		RB_Quad2D( src->colorImage[0], FILTERMODE_COPY, color, verts, texCoords, BLEND_REPLACE );
+	}
+
+	qglNamedFramebufferTexture2DEXT( dst->frameBuffer, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0 );
+	dst->colorImage[0] = NULL;
 }
 
 /*
@@ -553,7 +672,7 @@ const void *RB_Layer2D( const void *data ) {
 		if ( !box[2] || !box[3] ) {
 			break;
 		}
-		image = RB_LayerImage2D( cmd->source, box, reach );
+		image = RB_LayerFbo2D( cmd->source, box, reach )->colorImage[0];
 		// a last opacity goes into the composite
 		if ( numFilters && cmd->filters[numFilters - 1].kind == FILTER2D_OPACITY ) {
 			float	alpha = cmd->filters[--numFilters].params[0];
@@ -573,6 +692,10 @@ const void *RB_Layer2D( const void *data ) {
 		}
 		break;
 	}
+
+	case LAYER2D_SAVE:
+		RB_SaveLayer2D( cmd );
+		break;
 	}
 
 	RB_ResetScissor2D();

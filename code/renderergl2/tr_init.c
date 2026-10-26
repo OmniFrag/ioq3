@@ -1920,6 +1920,8 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.PopLayer2D = R_PopLayer2D;
 	re.CreateFilter2D = R_CreateFilter2D;
 	re.DeleteFilter2D = R_DeleteFilter2D;
+	re.SaveLayer2D = R_SaveLayer2D;
+	re.CreateMaskFilter2D = R_CreateMaskFilter2D;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 

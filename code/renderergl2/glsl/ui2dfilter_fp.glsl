@@ -1,8 +1,10 @@
 uniform sampler2D u_DiffuseMap;
+uniform sampler2D u_MaskMap;
 
 // the UI's layers' passes (tr_ui2d_layers.c), on premultiplied colors: 0
 // the texture times u_Color, 1 a color matrix, 2 a blur along
-// u_BlurDirection, 3 its alpha in u_Color, for a shadow
+// u_BlurDirection, 3 its alpha in u_Color, for a shadow, 4 the texture
+// times u_MaskMap's coverage, placed by u_MaskTransform and clear around it
 uniform int    u_FilterMode;
 uniform vec4   u_Color;
 uniform vec2   u_InvTexRes;
@@ -11,6 +13,8 @@ uniform vec4   u_ColorOffset;
 uniform vec2   u_BlurDirection;
 uniform int    u_BlurRadius;
 uniform float  u_BlurWeights[13];
+uniform vec4   u_MaskTransform;
+uniform vec4   u_MaskChannel;		// which of u_MaskMap's holds its coverage
 
 varying vec2   var_TexCoord;
 
@@ -42,6 +46,13 @@ void main()
 	}
 	else if (u_FilterMode == 3)
 		gl_FragColor = u_Color * texel.a;
+	else if (u_FilterMode == 4)
+	{
+		vec2 m = var_TexCoord * u_MaskTransform.xy + u_MaskTransform.zw;
+		vec2 inside = step(vec2(0.0), m) * step(m, vec2(1.0));
+
+		gl_FragColor = texel * dot(texture2D(u_MaskMap, m), u_MaskChannel) * inside.x * inside.y;
+	}
 	else
 		gl_FragColor = texel * u_Color;
 }
