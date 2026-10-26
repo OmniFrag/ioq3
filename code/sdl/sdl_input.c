@@ -51,6 +51,8 @@ static qboolean mouseClickedIn = qfalse;
 static float mouseMotionRemainder[2];
 static float mouseWheelRemainder;
 static int mouseWheelTime;
+// the system's cursor hidden over the window, for an engine extension's own
+static qboolean extCursorHidden = qfalse;
 
 static cvar_t *in_mouse             = NULL;
 
@@ -438,6 +440,28 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 
 		mouseActive = qfalse;
 	}
+}
+
+/*
+===============
+IN_HideSystemCursor
+
+An engine extension that shows a cursor of its own (CL_ExtSetPointerMode)
+draws it where the pointer is, so the system's is hidden over the window
+meanwhile (IN_Frame says when), and shown again after. On the web, SDL
+hides it with the canvas's CSS cursor.
+===============
+*/
+static void IN_HideSystemCursor( qboolean hide )
+{
+	if( hide == extCursorHidden )
+		return;
+
+	if( hide )
+		SDL_HideCursor( );
+	else
+		SDL_ShowCursor( );
+	extCursorHidden = hide;
 }
 
 // We translate axes movement into keypresses
@@ -1701,6 +1725,11 @@ void IN_Frame( void )
 			IN_ActivateMouse( pointer.grab );
 		else
 			IN_DeactivateMouse( cls.glconfig.isFullscreen );
+		// an extension's cursor, while the mouse is read (the window
+		// focused) and unheld (as it is with the extension's cursor), with
+		// the pointer over the window
+		IN_HideSystemCursor( pointer.read && facts.cursor &&
+			( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_MOUSE_FOCUS ) );
 		Present_Captured( IN_Captured( ) );
 	}
 
@@ -1823,6 +1852,7 @@ void IN_Shutdown( void )
 	SDL_StopTextInput( SDL_window );
 
 	IN_DeactivateMouse( cls.glconfig.isFullscreen );
+	IN_HideSystemCursor( qfalse );
 	mouseAvailable = qfalse;
 
 	IN_ShutdownJoystick( );
