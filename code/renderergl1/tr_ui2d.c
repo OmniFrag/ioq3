@@ -259,6 +259,8 @@ static void RB_Draw2DArrays( const draw2DState_t *state, const polyVert2D_t *ver
 	GL_TexEnv( GL_MODULATE );
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA |
 		( premul ? GLS_SRCBLEND_ONE : GLS_SRCBLEND_SRC_ALPHA ) );
+	// a UI's triangles turn either way, whatever the last shader culled
+	GL_Cull( CT_TWO_SIDED );
 
 	R_Transform2DMatrix( state, matrix );
 	qglMatrixMode( GL_MODELVIEW );
