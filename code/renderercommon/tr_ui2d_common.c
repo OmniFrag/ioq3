@@ -205,10 +205,13 @@ int R_TexelBytes2D( tex2DFormat_t format ) {
 
 /*
 ===============
-R_CreateTexture2D
+R_MakeTexture2D
+
+A texture, from pixels, or transparent black; or with drawnInto and no
+pixels, as GL makes it, for the back end to draw all of
 ===============
 */
-int R_CreateTexture2D( int width, int height, tex2DFormat_t format, const byte *pixels ) {
+static int R_MakeTexture2D( int width, int height, tex2DFormat_t format, const byte *pixels, qboolean drawnInto ) {
 	texture2D_t	*t;
 	int			handle;
 
@@ -231,8 +234,18 @@ int R_CreateTexture2D( int width, int height, tex2DFormat_t format, const byte *
 	t->image.width = t->image.uploadWidth = width;
 	t->image.height = t->image.uploadHeight = height;
 	t->format = format;
+	t->drawnInto = drawnInto;
 	r_renderer2D.createTexture( t, pixels );
 	return handle;
+}
+
+/*
+===============
+R_CreateTexture2D
+===============
+*/
+int R_CreateTexture2D( int width, int height, tex2DFormat_t format, const byte *pixels ) {
+	return R_MakeTexture2D( width, height, format, pixels, qfalse );
 }
 
 /*
@@ -670,17 +683,26 @@ void R_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DState_t *state 
 R_Delete2D
 
 Deletes a texture, geometry or paint after the commands queued before;
-when the command buffer is full, after drawing them
+when the command buffer is full, after drawing them. A texture's mask
+filters show nothing from then on, not whatever later takes its handle
 ===============
 */
 static void R_Delete2D( handle2DKind_t kind, int handle ) {
 	slot2D_t			*slot = R_GetSlot2D( kind, handle, qfalse );
 	delete2DCommand_t	*cmd;
+	int					i;
 
 	if ( !slot ) {
 		return;
 	}
 	slot->deleted = qtrue;
+	for ( i = 0; kind == HANDLE2D_TEXTURE && i < MAX_FILTERS2D; i++ ) {
+		filterSlot_t	*f = filterSlots[i];
+
+		if ( f && f->filter.kind == FILTER2D_MASK && f->filter.texture == handle ) {
+			f->filter.texture = 0;
+		}
+	}
 
 	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
 	if ( cmd ) {
@@ -707,6 +729,24 @@ void R_DeletePaint2D( int paint ) {
 
 /*
 ===============
+R_Layers2DReady
+
+Whether the store's open and the renderer has layers, which the layer and
+filter calls need
+===============
+*/
+static qboolean R_Layers2DReady( void ) {
+	caps2D_t	caps;
+
+	if ( !store2DOpen ) {
+		return qfalse;
+	}
+	r_renderer2D.caps( &caps );
+	return caps.layers;
+}
+
+/*
+===============
 R_CreateFilter2D
 
 A filter by its name, with as many numbers as it takes (tr_public.h)
@@ -724,14 +764,9 @@ int R_CreateFilter2D( const char *name, const float *params, int numParams ) {
 		{ "color-matrix", FILTER2D_COLOR_MATRIX, 20 }
 	};
 	filterSlot_t	*slot;
-	caps2D_t		caps;
 	int				i, k;
 
-	if ( !store2DOpen || !name ) {
-		return 0;
-	}
-	r_renderer2D.caps( &caps );
-	if ( !caps.layers ) {
+	if ( !name || !R_Layers2DReady() ) {
 		return 0;
 	}
 	for ( k = 0; k < (int)ARRAY_LEN( kinds ) && Q_stricmp( name, kinds[k].name ); k++ ) {
@@ -797,13 +832,7 @@ R_PushLayer2D and R_PopLayer2D
 ===============
 */
 int R_PushLayer2D( void ) {
-	caps2D_t	caps;
-
-	if ( !store2DOpen ) {
-		return 0;
-	}
-	r_renderer2D.caps( &caps );
-	if ( !caps.layers ) {
+	if ( !R_Layers2DReady() ) {
 		return 0;
 	}
 	if ( layerDepth == MAX_LAYERS2D ) {
@@ -879,6 +908,63 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 	} else {
 		Com_Memset( &cmd->state, 0, sizeof( cmd->state ) );
 	}
+}
+
+/*
+===============
+R_SaveLayer2D
+
+A new texture of box, filled from the top layer when the command's turn
+comes in the back end (tr_public.h)
+===============
+*/
+int R_SaveLayer2D( const int box[4] ) {
+	layer2DCommand_t	*cmd;
+	int					texture;
+
+	if ( !box || !R_Layers2DReady() ) {
+		return 0;
+	}
+	texture = R_MakeTexture2D( box[2], box[3], TEX2D_RGBA8_PREMUL, NULL, qtrue );
+	if ( !texture ) {
+		return 0;
+	}
+	cmd = R_QueueLayer2D( LAYER2D_SAVE );
+	if ( !cmd ) {
+		// no command has it yet
+		R_FreeSlot2D( HANDLE2D_TEXTURE, texture, qtrue );
+		return 0;
+	}
+	cmd->source = layerDepth;
+	cmd->texture = texture;
+	Com_Memcpy( cmd->box, box, sizeof( cmd->box ) );
+	return texture;
+}
+
+/*
+===============
+R_CreateMaskFilter2D
+===============
+*/
+int R_CreateMaskFilter2D( int texture, int x, int y ) {
+	filterSlot_t	*slot;
+
+	if ( !R_Layers2DReady() ) {
+		return 0;
+	}
+	if ( !R_GetTexture2D( texture, qfalse ) ) {
+		ri.Printf( PRINT_WARNING, "CreateMaskFilter2D: no texture %i\n", texture );
+		return 0;
+	}
+	slot = calloc( 1, sizeof( *slot ) );
+	if ( !slot ) {
+		return 0;
+	}
+	slot->filter.kind = FILTER2D_MASK;
+	slot->filter.texture = texture;
+	slot->filter.params[0] = x;
+	slot->filter.params[1] = y;
+	return R_AddSlot2D( HANDLE2D_FILTER, slot );
 }
 
 /*

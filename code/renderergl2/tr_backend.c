@@ -622,12 +622,6 @@ void	RB_SetGL2D (void) {
 	mat4_t matrix;
 	int width, height;
 
-	if (backEnd.projection2D && backEnd.last2DFBO == glState.currentFBO)
-		return;
-
-	backEnd.projection2D = qtrue;
-	backEnd.last2DFBO = glState.currentFBO;
-
 	if (glState.currentFBO)
 	{
 		width = glState.currentFBO->width;
@@ -638,6 +632,15 @@ void	RB_SetGL2D (void) {
 		width = glConfig.vidWidth;
 		height = glConfig.vidHeight;
 	}
+
+	if (backEnd.projection2D && backEnd.last2DFBO == glState.currentFBO && backEnd.last2DWidth == width &&
+		backEnd.last2DHeight == height)
+		return;
+
+	backEnd.projection2D = qtrue;
+	backEnd.last2DFBO = glState.currentFBO;
+	backEnd.last2DWidth = width;
+	backEnd.last2DHeight = height;
 
 	// set 2D virtual screen size
 	qglViewport( 0, 0, width, height );

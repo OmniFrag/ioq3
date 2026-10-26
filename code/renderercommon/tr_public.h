@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		16
+#define	REF_API_VERSION		17
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -230,6 +230,18 @@ typedef struct {
 	//   color-matrix	20 numbers, a 4x5 matrix by rows, on straight colors from 0 to 1
 	int		(*CreateFilter2D)( const char *name, const float *params, int numParams );
 	void	(*DeleteFilter2D)( int filter );
+	// A UI texture of box (x, y, width and height in the 2D target's
+	// pixels) as the top layer has it when the call's turn comes among the
+	// frame's draws: premultiplied, transparent where the box is off the
+	// target; 0 where caps2D_t has no layers, or there's no room for it.
+	// Drawn and deleted as any other (CreateTexture2D)
+	int		(*SaveLayer2D)( const int box[4] );
+	// A filter that keeps a layer composited through it where the texture
+	// is opaque: the source times the texture's alpha (an A8 texture's
+	// coverage), the texture's top left at x, y in the target's pixels,
+	// and nothing outside it. Once the texture's deleted, the composites
+	// queued after show nothing through the filter
+	int		(*CreateMaskFilter2D)( int texture, int x, int y );
 } refexport_t;
 
 //

@@ -233,6 +233,7 @@ typedef struct {
 	qboolean		deleted;
 	image_t			image;			// not in the renderer's table of images
 	tex2DFormat_t	format;
+	qboolean		drawnInto;		// SaveLayer2D's: the back end draws every pixel, so it's made uncleared
 } texture2D_t;
 
 typedef enum {
@@ -248,7 +249,8 @@ typedef enum {
 	FILTER2D_OPACITY,		// alpha
 	FILTER2D_BLUR,			// sigma
 	FILTER2D_DROP_SHADOW,	// red, green, blue, alpha, x, y, sigma
-	FILTER2D_COLOR_MATRIX	// a 4x5 matrix by rows
+	FILTER2D_COLOR_MATRIX,	// a 4x5 matrix by rows
+	FILTER2D_MASK			// texture's x and y (CreateMaskFilter2D)
 } filter2DKind_t;
 
 #define MAX_FILTER2D_PARAMS	20
@@ -256,6 +258,7 @@ typedef enum {
 typedef struct {
 	filter2DKind_t	kind;
 	float			params[MAX_FILTER2D_PARAMS];
+	int				texture;		// a mask's
 } filter2D_t;
 
 // the 2D state's flags that tr_ui2d_common.c's draws take, past the
@@ -294,7 +297,8 @@ typedef struct {
 typedef enum {
 	LAYER2D_PUSH,
 	LAYER2D_POP,
-	LAYER2D_COMPOSITE
+	LAYER2D_COMPOSITE,
+	LAYER2D_SAVE		// source's box into texture
 } layer2DOp_t;
 
 // filters, once they're checked, are copied in
@@ -306,6 +310,7 @@ typedef struct {
 	draw2DState_t	state;
 	int				numFilters;
 	filter2D_t		filters[MAX_FILTERS2D_PER_COMPOSITE];
+	int				texture, box[4];	// LAYER2D_SAVE's
 } layer2DCommand_t;
 
 // followed by width * height pixels in the texture's format
@@ -357,6 +362,8 @@ void				R_CompositeLayers2D( int source, int destination, int blendMode, const i
 void				R_PopLayer2D( void );
 int					R_CreateFilter2D( const char *name, const float *params, int numParams );
 void				R_DeleteFilter2D( int filter );
+int					R_SaveLayer2D( const int box[4] );
+int					R_CreateMaskFilter2D( int texture, int x, int y );
 // the frame's layers are popped as it ends (RE_EndFrame)
 void				R_EndFrame2D( void );
 // an immediate batch with TRIS2D_RETAINED_FLAGS
