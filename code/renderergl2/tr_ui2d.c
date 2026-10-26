@@ -137,6 +137,9 @@ static void R_CreateTexture2DGL( texture2D_t *t, const byte *pixels ) {
 	qglTextureParameteriEXT( image->texnum, GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
 	qglTextureParameteriEXT( image->texnum, GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
 
+	if ( t->drawnInto && !pixels ) {
+		return;
+	}
 	if ( !pixels ) {
 		clear = ri.Hunk_AllocateTempMemory( bytes );
 		Com_Memset( clear, 0, bytes );
