@@ -59,7 +59,7 @@ static struct {
 
 // the ui2dfilter program's uniforms that GLSL_InitUniforms doesn't know
 static struct {
-	GLint	filterMode, colorMatrix, colorOffset, blurDirection, blurRadius, blurWeights, maskMap, maskTransform, maskChannel;
+	GLint	filterMode, colorMatrix, colorOffset, colorScale, blurDirection, blurRadius, blurWeights, maskMap, maskTransform, maskChannel;
 } filterUniforms;
 
 // ui2dfilter's u_FilterMode
@@ -197,6 +197,7 @@ void R_InitLayers2D( void ) {
 	filterUniforms.filterMode = qglGetUniformLocation( program, "u_FilterMode" );
 	filterUniforms.colorMatrix = qglGetUniformLocation( program, "u_ColorMatrix" );
 	filterUniforms.colorOffset = qglGetUniformLocation( program, "u_ColorOffset" );
+	filterUniforms.colorScale = qglGetUniformLocation( program, "u_ColorScale" );
 	filterUniforms.blurDirection = qglGetUniformLocation( program, "u_BlurDirection" );
 	filterUniforms.blurRadius = qglGetUniformLocation( program, "u_BlurRadius" );
 	filterUniforms.blurWeights = qglGetUniformLocation( program, "u_BlurWeights" );
@@ -407,8 +408,9 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 
 	switch ( filter->kind ) {
 	case FILTER2D_DROP_SHADOW:
-		// the shadow, moved, then what casts it over it
-		VectorSet4( color, p[0], p[1], p[2], p[3] );
+		// the shadow, moved, then what casts it over it, its color at the
+		// 2D's light as a vertex color would be
+		VectorSet4( color, p[0] * tr.frameLight, p[1] * tr.frameLight, p[2] * tr.frameLight, p[3] );
 		RB_Pass2D( shadow, &dst->fbo, FILTERMODE_SHADOW, color, box, &p[4], BLEND_OVER );
 		RB_Pass2D( src, &dst->fbo, FILTERMODE_COPY, NULL, box, NULL, BLEND_OVER );
 		break;
@@ -420,6 +422,7 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 		GLSL_BindProgram( &tr.ui2dFilterShader );
 		qglUniformMatrix4fv( filterUniforms.colorMatrix, 1, GL_FALSE, m );
 		qglUniform4f( filterUniforms.colorOffset, p[4], p[9], p[14], p[19] );
+		qglUniform1f( filterUniforms.colorScale, tr.frameLight );
 		RB_Pass2D( src, &dst->fbo, FILTERMODE_COLOR_MATRIX, NULL, box, NULL, BLEND_REPLACE );
 		break;
 	}
