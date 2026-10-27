@@ -403,6 +403,11 @@ typedef struct {
 	int			numfavoriteservers;
 	serverInfo_t	favoriteServers[MAX_OTHER_SERVERS];
 
+	// cl_recentServers' servers, as of its modificationCount
+	int			numrecentservers;
+	serverInfo_t	recentServers[MAX_RECENT_SERVERS];
+	int			recentServersModified;
+
 	int pingUpdateSource;		// source currently pinging or updating
 
 	// update server info
@@ -438,6 +443,7 @@ extern	refexport_t		re;		// interface to refresh .dll
 // cvars
 //
 extern	cvar_t	*cl_nodelta;
+extern	cvar_t	*cl_recentServers;
 extern	cvar_t	*cl_debugMove;
 extern	cvar_t	*cl_noprint;
 extern	cvar_t	*cl_timegraph;
@@ -789,7 +795,10 @@ void CL_ShutdownUI( void );
 int Key_GetCatcher( void );
 void Key_SetCatcher( int catcher );
 void LAN_LoadCachedServers( void );
+void LAN_RecentServer( const char *name, netadr_t adr );
+void LAN_LoadRecentServers( void );
 serverInfo_t *CL_GetServerList( int source, int **count, int *max );
+void CL_InitServerInfo( serverInfo_t *server, netadr_t *address );
 void LAN_SaveServersToCache( void );
 
 

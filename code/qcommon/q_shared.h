@@ -1440,6 +1440,7 @@ typedef struct qtime_s {
 #define AS_MPLAYER		1
 #define AS_GLOBAL			2
 #define AS_FAVORITES	3
+#define AS_RECENT		4	// the servers this client joined lately, newest first (cl_recentServers)
 
 
 // cinematic states
@@ -1465,6 +1466,7 @@ typedef enum _flag_status {
 
 #define	MAX_GLOBAL_SERVERS				4096
 #define	MAX_OTHER_SERVERS					128
+#define	MAX_RECENT_SERVERS					8	// AS_RECENT's
 #define MAX_PINGREQUESTS					32
 #define MAX_SERVERSTATUSREQUESTS	16
 

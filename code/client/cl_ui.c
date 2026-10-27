@@ -155,10 +155,7 @@ static int LAN_AddServer(int source, const char *name, const char *address) {
 			}
 		}
 		if (i >= *count) {
-			servers[*count].adr = adr;
-			servers[*count].g_humanplayers = -1;
-			servers[*count].contentKnown = qfalse;
-			servers[*count].contentReady = qfalse;
+			CL_InitServerInfo(&servers[*count], &adr);
 			Q_strncpyz(servers[*count].hostName, name, sizeof(servers[*count].hostName));
 			servers[*count].visible = qtrue;
 			(*count)++;
@@ -195,6 +192,111 @@ static void LAN_RemoveServer(int source, const char *addr) {
 	}
 }
 
+
+/*
+====================
+LAN_IsNumericAddress
+
+An address as NET_AdrToStringwPort writes one, which NET_StringToAdr reads
+without a name lookup: IPv4's digits and dots, or IPv6's hex digits and
+colons in brackets, perhaps with a zone
+====================
+*/
+static qboolean LAN_IsNumericAddress( const char *address ) {
+	const char *end;
+
+	if ( address[0] != '[' ) {
+		return address[0] && strspn( address, "0123456789.:" ) == strlen( address );
+	}
+	end = address + 1 + strspn( address + 1, "0123456789abcdefABCDEF:." );
+	return ( *end == ']' || *end == '%' ) && memchr( address + 1, ':', end - address - 1 );
+}
+
+/*
+====================
+LAN_LoadRecentServers
+
+AS_RECENT's list from cl_recentServers when it changed: each entry the
+name connect was given and the address it resolved to, as "name@address",
+or the address alone where the two are the same. Only numeric addresses
+are taken, as the client writes them, so this never waits for a name
+lookup
+====================
+*/
+void LAN_LoadRecentServers( void ) {
+	char *p, *entry, *address;
+
+	if ( cls.recentServersModified == cl_recentServers->modificationCount ) {
+		return;
+	}
+	cls.recentServersModified = cl_recentServers->modificationCount;
+	cls.numrecentservers = 0;
+	p = cl_recentServers->string;
+	while ( *( entry = COM_Parse( &p ) ) ) {
+		address = strchr( entry, '@' );
+		if ( address ) {
+			*address++ = '\0';
+		} else {
+			address = entry;
+		}
+		if ( LAN_IsNumericAddress( address ) ) {
+			LAN_AddServer( AS_RECENT, entry, address );
+		}
+	}
+}
+
+/*
+====================
+LAN_RecentServer
+
+A server connect reached, first in cl_recentServers: by the name it was
+given and the address it resolved to. An older entry for the address
+goes, and the oldest past MAX_RECENT_SERVERS
+====================
+*/
+void LAN_RecentServer( const char *name, netadr_t adr ) {
+	char list[MAX_CVAR_VALUE_STRING * 4], address[NET_ADDRSTRMAXLEN], given[MAX_QPATH];
+	char *p, *entry, *at;
+	int kept = 1;
+
+	if ( NET_IsLocalAddress( adr ) ) {
+		return;
+	}
+	Q_strncpyz( address, NET_AdrToStringwPort( adr ), sizeof( address ) );
+	// joined again by its address alone, as a server browser joins one: the
+	// name it was given before stays
+	if ( !Q_stricmp( name, address ) ) {
+		p = cl_recentServers->string;
+		while ( *( entry = COM_Parse( &p ) ) ) {
+			at = strchr( entry, '@' );
+			if ( at && at != entry && !Q_stricmp( at + 1, address ) ) {
+				*at = '\0';
+				Q_strncpyz( given, entry, sizeof( given ) );
+				name = given;
+				break;
+			}
+		}
+	}
+	// a name that can't be parsed back, or the address itself, isn't kept
+	if ( !Q_stricmp( name, address ) || strlen( name ) >= MAX_QPATH || strpbrk( name, " \"@;\\" ) ) {
+		Q_strncpyz( list, address, sizeof( list ) );
+	} else {
+		Com_sprintf( list, sizeof( list ), "%s@%s", name, address );
+	}
+	// the client wrote each entry's address as it writes this one
+	p = cl_recentServers->string;
+	while ( kept < MAX_RECENT_SERVERS && *( entry = COM_Parse( &p ) ) ) {
+		at = strchr( entry, '@' );
+		if ( !Q_stricmp( at ? at + 1 : entry, address ) ) {
+			continue;
+		}
+		if ( strlen( list ) + 1 + strlen( entry ) < sizeof( list ) ) {
+			Q_strcat( list, sizeof( list ), va( " %s", entry ) );
+			kept++;
+		}
+	}
+	Cvar_Set( "cl_recentServers", list );
+}
 
 /*
 ====================
