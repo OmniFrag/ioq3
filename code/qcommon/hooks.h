@@ -409,6 +409,61 @@ const char	*CL_ExtDemoRecording( int *bytes );
 // count goes on past the lines that fit
 const char	*CL_ExtDownloadFailures( int *count );
 
+// What a demo file holds, for a demo browser (client/cl_demoinfo.c)
+#define MAX_DEMOINFO_CONFIGSTRINGS	8	// that a caller may ask for
+#define MAX_DEMOINFO_STRING		128	// of each one's value kept
+
+typedef enum {
+	DEMOINFO_REFUSED,	// not a demo the client plays: its protocol, its place, no gamestate
+	DEMOINFO_WALKING,	// the gamestate's fields are known; the rest is being read
+	DEMOINFO_DONE		// all of it
+} demoInfoState_t;
+
+typedef struct {
+	char		name[MAX_NAME_LENGTH];	// "" for a slot nobody holds
+	int		team;			// the game's, from its configstring's "t"
+	qboolean	bot;			// its configstring has a skill
+} demoPlayer_t;
+
+// ints and chars only, so a module's struct can share its layout (the UI
+// service's call 835)
+typedef struct {
+	demoInfoState_t	state;
+	int		protocol;		// from the name's .dm_NN
+	int		size;			// the file's
+	int		mtime;			// its date, in seconds from 1970, or its pak's; 0 unknown
+	char		date[32];		// mtime in local time, "2026-10-27 13:05"; "" unknown
+	// the first gamestate's
+	char		map[MAX_QPATH];
+	char		hostname[64];
+	int		gametype;
+	int		clientNum;		// the recorder's
+	char		recorder[MAX_NAME_LENGTH];
+	// the players, as the gamestate names them, then as they were at the
+	// end once the walk is done
+	demoPlayer_t	player[MAX_CLIENTS];
+	int		players, bots;
+	// once the walk is done: the length from the first snapshot to the
+	// last, -1 when unknown (past the walk's limit); whether a message was
+	// damaged, the length then being up to it; and the configstrings
+	// asked for, as they were at the end
+	int		lengthMsec;
+	qboolean	damaged;
+	char		configstrings[MAX_DEMOINFO_CONFIGSTRINGS][MAX_DEMOINFO_STRING];
+} demoInfo_t;
+
+// A demo, by its path from the game directory (demos/<name>.dm_NN, in a
+// folder of demos/ too), as the file system finds it: at once the state
+// and the fields its gamestate gives, and the rest once its walk is done,
+// a slice a frame. configstrings names at most MAX_DEMOINFO_CONFIGSTRINGS,
+// whose last values come in the same order (the game's scores, say),
+// those set by a "cs" command (one long enough to need bcs never is). A
+// demo of a protocol the client doesn't play, outside demos/, or without a
+// gamestate it can read is refused, the protocol before anything is read.
+// Results are kept, so asking each frame costs a lookup. The walks go on
+// while demos are asked for, and stop a second after the last ask
+demoInfoState_t	CL_ExtDemoInfo( const char *name, const int *configstrings, int numConfigstrings, demoInfo_t *info );
+
 // A client of the server, for extensions (server/sv_main.c, sv_game.c).
 // Each gives its "none" for a number out of range, a slot nobody holds or
 // one whose client has just left, and while no map runs.

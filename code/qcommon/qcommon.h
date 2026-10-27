@@ -95,6 +95,7 @@ void MSG_WriteDeltaEntity( msg_t *msg, struct entityState_s *from, struct entity
 						   , qboolean force );
 void MSG_ReadDeltaEntity( msg_t *msg, entityState_t *from, entityState_t *to, 
 						 int number );
+qboolean MSG_DeltaEntityValid( msg_t *msg );
 
 void MSG_WriteDeltaPlayerstate( msg_t *msg, struct playerState_s *from, struct playerState_s *to );
 void MSG_ReadDeltaPlayerstate( msg_t *msg, struct playerState_s *from, struct playerState_s *to );
@@ -1154,6 +1155,10 @@ qboolean	FS_LastFileIsGameContent( void );
 // pk3 or a pk3dir, not a game directory
 const char	*FS_LastFilePath( const char *qpath );
 // where the last file found was, its path or its pak's
+qboolean	FS_LastFileStat( const char *qpath, int64_t *size, int64_t *mtime );
+// and that place's size and modification time: the file's, or its pak's
+qboolean	FS_IsDemoExt( const char *filename, int namelen );
+// whether a name's extension is a demo's of a protocol the client plays
 const char	*FS_LastFileContent( void );
 // the pk3 or pk3dir the last file read is in ("pak0.pk3"), or ""
 
