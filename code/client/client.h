@@ -789,6 +789,7 @@ void CL_ShutdownUI( void );
 int Key_GetCatcher( void );
 void Key_SetCatcher( int catcher );
 void LAN_LoadCachedServers( void );
+serverInfo_t *CL_GetServerList( int source, int **count, int *max );
 void LAN_SaveServersToCache( void );
 
 
