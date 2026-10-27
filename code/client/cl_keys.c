@@ -1468,6 +1468,13 @@ void CL_CharEvent( int key ) {
 		return;
 	}
 
+	// past 255 only the extensions take one: the fields below hold bytes,
+	// and the ui reads key | K_CHAR_FLAG, which such a codepoint runs into
+	// (Cyrillic's U+0430 would come as '0')
+	if ( key > 255 ) {
+		return;
+	}
+
 	// distribute the key down event to the appropriate handler
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
 	{
