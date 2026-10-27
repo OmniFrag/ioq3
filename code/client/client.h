@@ -377,9 +377,11 @@ typedef struct {
 	module2D_t	ui2D;
 	module2D_t	cgame2D;
 
-	// an engine extension shows a cursor, or has a text field with focus,
-	// and where it is, if it said (CL_ExtSetPointerMode, CL_ExtSetTextFocus)
+	// an engine extension shows a cursor, drawn by itself or the system's,
+	// or has a text field with focus, and where it is, if it said
+	// (CL_ExtSetPointerMode, CL_ExtSetTextFocus)
 	qboolean	extCursor;
+	qboolean	extCursorDrawn;
 	qboolean	extTextFocus;
 	int			extTextArea[4];
 
