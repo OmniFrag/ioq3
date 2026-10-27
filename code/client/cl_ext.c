@@ -53,8 +53,9 @@ void CL_ExtensionsStarted( void ) {
 }
 
 // the platform reads it each frame (IN_Frame)
-void CL_ExtSetPointerMode( qboolean cursor ) {
+void CL_ExtSetPointerMode( qboolean cursor, qboolean drawn ) {
 	cls.extCursor = cursor;
+	cls.extCursorDrawn = drawn;
 }
 
 // no area is an empty one, which the platform doesn't pass on

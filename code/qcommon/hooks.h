@@ -356,9 +356,11 @@ void		CL_ExtSafeArea( int rect[4] );
 // (keycodes.h)
 int		CL_ExtKeyCatcher( void );
 // Whether an extension shows a cursor: with qtrue the pointer is no longer
-// held as view motion while the game reads it, the system's cursor shows,
-// and its position comes to the pointerEvent hook. qfalse gives it back
-void		CL_ExtSetPointerMode( qboolean cursor );
+// held as view motion while the game reads it, and its position comes to
+// the pointerEvent hook; and whether the extension draws that cursor
+// itself where the pointer is, so the system's hides over the window, or
+// the system's shows. qfalse gives the pointer back
+void		CL_ExtSetPointerMode( qboolean cursor, qboolean drawn );
 // Whether an extension's text field has focus, and where it is in pixels
 // (x, y, width, height; NULL for anywhere), so text input runs, a phone's
 // keyboard shows and an input method places its window there
