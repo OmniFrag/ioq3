@@ -923,6 +923,28 @@ void MSG_WriteDeltaEntity( msg_t *msg, struct entityState_s *from, struct entity
 
 /*
 ==================
+MSG_DeltaEntityValid
+
+Whether the delta entity next in the message, its number already read,
+has a field count MSG_ReadDeltaEntity takes, which drops the game for one
+it doesn't; the message is left where it was. For a reader of files that
+refuses a damaged one instead (cl_demoinfo.c)
+==================
+*/
+qboolean MSG_DeltaEntityValid( msg_t *msg ) {
+	int		readcount = msg->readcount, bit = msg->bit, lc = 0;
+
+	// not removed, then a delta: its field count
+	if ( MSG_ReadBits( msg, 1 ) == 0 && MSG_ReadBits( msg, 1 ) == 1 ) {
+		lc = MSG_ReadByte( msg );
+	}
+	msg->readcount = readcount;
+	msg->bit = bit;
+	return lc >= 0 && lc <= (int)ARRAY_LEN( entityStateFields );
+}
+
+/*
+==================
 MSG_ReadDeltaEntity
 
 The entity number has already been read from the message, which

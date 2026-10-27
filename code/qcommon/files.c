@@ -1859,6 +1859,25 @@ const char *FS_LastFilePath( const char *qpath ) {
 
 /*
 ===========
+FS_LastFileStat
+
+The size and modification time of where the last file FS_FOpenFileRead
+found, qpath, is: the file's own, or its pak's; qfalse if it found none
+===========
+*/
+qboolean FS_LastFileStat( const char *qpath, int64_t *size, int64_t *mtime ) {
+	if ( !fs_lastFileSearch ) {
+		return qfalse;
+	}
+	if ( fs_lastFileSearch->pack ) {
+		return Content_FileStat( fs_lastFileSearch->pack->pakFilename, size, mtime );
+	}
+	return Content_FileStat( FS_BuildOSPath( fs_lastFileSearch->dir->path, fs_lastFileSearch->dir->gamedir, qpath ),
+		size, mtime );
+}
+
+/*
+===========
 FS_LastFileContent
 
 The pk3 or pk3dir the last file FS_FOpenFileRead found is in, such as

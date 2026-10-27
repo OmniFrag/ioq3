@@ -3969,6 +3969,9 @@ void CL_Frame ( int msec ) {
 	// the fast download's decisions (SV_Frame polls the pak index's hashing)
 	CL_ContentFrame();
 
+	// the demo browser's demos, read a slice a frame
+	CL_DemoInfoFrame();
+
 	// for the menus, which show the cap com_maxfps -1 and -2 hold there
 	if ( cl_movesByFrame->integer != CL_MovesByFrame() ) {
 		Cvar_SetValue( "cl_movesByFrame", CL_MovesByFrame() );
@@ -4910,6 +4913,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("record", CL_Record_f);
 	Cmd_AddCommand ("demo", CL_PlayDemo_f);
 	Cmd_SetCommandCompletionFunc( "demo", CL_CompleteDemoName );
+	Cmd_AddCommand ("demoinfo", CL_DemoInfo_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -4993,6 +4997,7 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	Cmd_RemoveCommand ("disconnect");
 	Cmd_RemoveCommand ("record");
 	Cmd_RemoveCommand ("demo");
+	Cmd_RemoveCommand ("demoinfo");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");
