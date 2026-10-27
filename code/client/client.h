@@ -590,6 +590,11 @@ int64_t CL_ContentService( void );
 void CL_ContentReset( qboolean disconnect );
 void CL_ContentClearProgress( void );
 
+// cl_demoinfo.c: a slice of the demo browser's walk through a demo
+// (CL_ExtDemoInfo), and the demoinfo command
+void CL_DemoInfoFrame( void );
+void CL_DemoInfo_f( void );
+
 void CL_SetContentKeys( char *info, qboolean known, uint64_t required, qboolean ready );
 // a server's content keys, as the ui reads them
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
