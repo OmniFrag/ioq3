@@ -3237,7 +3237,7 @@ void CL_InitServerInfo( serverInfo_t *server, netadr_t *address ) {
 	server->gameType = 0;
 	server->netType = 0;
 	server->punkbuster = 0;
-	server->g_humanplayers = 0;
+	server->g_humanplayers = -1;
 	server->g_needpass = 0;
 	server->contentKnown = qfalse;
 	server->contentRequired = 0;
@@ -5109,6 +5109,8 @@ static void CL_SetPingContent( char *info ) {
 }
 
 static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
+	const char *humans;
+
 	if (server) {
 		if (info) {
 			server->clients = atoi(Info_ValueForKey(info, "clients"));
@@ -5121,7 +5123,9 @@ static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
 			server->minPing = atoi(Info_ValueForKey(info, "minping"));
 			server->maxPing = atoi(Info_ValueForKey(info, "maxping"));
 			server->punkbuster = atoi(Info_ValueForKey(info, "punkbuster"));
-			server->g_humanplayers = atoi(Info_ValueForKey(info, "g_humanplayers"));
+			// -1 for a server that doesn't count its human players
+			humans = Info_ValueForKey(info, "g_humanplayers");
+			server->g_humanplayers = *humans ? atoi(humans) : -1;
 			server->g_needpass = atoi(Info_ValueForKey(info, "g_needpass"));
 			CL_SetServerContent( server, info );
 		}
