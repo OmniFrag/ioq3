@@ -175,6 +175,7 @@ static int LAN_AddServer(int source, const char *name, const char *address) {
 		}
 		if (i >= *count) {
 			servers[*count].adr = adr;
+			servers[*count].g_humanplayers = -1;
 			servers[*count].contentKnown = qfalse;
 			servers[*count].contentReady = qfalse;
 			Q_strncpyz(servers[*count].hostName, name, sizeof(servers[*count].hostName));
@@ -322,7 +323,9 @@ static void LAN_GetServerInfo( int source, int n, char *buf, int buflen ) {
 		Info_SetValueForKey( info, "addr", NET_AdrToStringwPort(server->adr));
 		Info_SetValueForKey( info, "punkbuster", va("%i", server->punkbuster));
 		Info_SetValueForKey( info, "g_needpass", va("%i", server->g_needpass));
-		Info_SetValueForKey( info, "g_humanplayers", va("%i", server->g_humanplayers));
+		if ( server->g_humanplayers >= 0 ) {
+			Info_SetValueForKey( info, "g_humanplayers", va("%i", server->g_humanplayers));
+		}
 		CL_SetContentKeys( info, server->contentKnown, server->contentRequired, server->contentReady );
 		Q_strncpyz(buf, info, buflen);
 	} else {
