@@ -41,6 +41,10 @@ cvar_t	*cl_useMumble;
 cvar_t	*cl_mumbleScale;
 #endif
 
+// masters that only the client asks, in globalservers 0
+#define MAX_EXTRA_MASTERS	8
+static cvar_t	*cl_masters;
+
 #ifdef USE_VOIP
 cvar_t	*cl_voipUseVAD;
 cvar_t	*cl_voipVADThreshold;
@@ -4771,6 +4775,13 @@ void CL_Init( void ) {
 
 	cl_guidServerUniq = Cvar_Get ("cl_guidServerUniq", "1", CVAR_ARCHIVE | CVAR_PROTECTED);
 
+	// protected, so a server can't point the browser at a master of its own
+	cl_masters = Cvar_Get( "cl_masters", "master.maverickservers.com master0.excessiveplus.net dpmaster.deathmask.net",
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED );
+	Cvar_SetDescription( cl_masters,
+		"More master servers the server browser asks, up to 8 addresses separated by spaces. Only this client asks "
+		"them: no server lists itself on them" );
+
 	// ~ and `, as keys and characters
 	cl_consoleKeys = Cvar_Get( "cl_consoleKeys", "~ ` 0x7e 0x60", CVAR_ARCHIVE);
 
@@ -5496,55 +5507,15 @@ void CL_LocalServers_f( void ) {
 
 /*
 ==================
-CL_GlobalServers_f
+CL_RequestServers
 
-Originally master 0 was Internet and master 1 was MPlayer.
-ioquake3 2008; added support for requesting five separate master servers using 0-4.
-ioquake3 2017; made master 0 fetch all master servers and 1-5 request a single master server.
+Asks a master for its list of servers
 ==================
 */
-void CL_GlobalServers_f( void ) {
+static void CL_RequestServers( const char *masteraddress, const char *protocol, const char *keywords ) {
 	netadr_t	to;
-	int			count, i, masterNum;
-	char		command[1024], *masteraddress;
-	
-	if ((count = Cmd_Argc()) < 3 || (masterNum = atoi(Cmd_Argv(1))) < 0 || masterNum > MAX_MASTER_SERVERS)
-	{
-		Com_Printf("usage: globalservers <master# 0-%d> <protocol> [keywords]\n", MAX_MASTER_SERVERS);
-		return;	
-	}
-
-	// request from all master servers
-	if ( masterNum == 0 ) {
-		int numAddress = 0;
-
-		for ( i = 1; i <= MAX_MASTER_SERVERS; i++ ) {
-			sprintf(command, "sv_master%d", i);
-			masteraddress = Cvar_VariableString(command);
-
-			if(!*masteraddress)
-				continue;
-
-			numAddress++;
-
-			Com_sprintf(command, sizeof(command), "globalservers %d %s %s\n", i, Cmd_Argv(2), Cmd_ArgsFrom(3));
-			Cbuf_AddText(command);
-		}
-
-		if ( !numAddress ) {
-			Com_Printf( "CL_GlobalServers_f: Error: No master server addresses.\n");
-		}
-		return;
-	}
-
-	sprintf(command, "sv_master%d", masterNum);
-	masteraddress = Cvar_VariableString(command);
-	
-	if(!*masteraddress)
-	{
-		Com_Printf( "CL_GlobalServers_f: Error: No master server address given.\n");
-		return;	
-	}
+	int			i;
+	char		command[1024];
 
 	// reset the list, waiting for response
 	// -1 is used to distinguish a "no response"
@@ -5553,7 +5524,7 @@ void CL_GlobalServers_f( void ) {
 	
 	if(!i)
 	{
-		Com_Printf( "CL_GlobalServers_f: Error: could not resolve address of master %s\n", masteraddress);
+		Com_Printf( "CL_RequestServers: Error: could not resolve address of master %s\n", masteraddress);
 		return;	
 	}
 	else if(i == 2)
@@ -5572,28 +5543,97 @@ void CL_GlobalServers_f( void ) {
 		if(v4enabled)
 		{
 			Com_sprintf(command, sizeof(command), "getserversExt %s %s",
-				com_gamename->string, Cmd_Argv(2));
+				com_gamename->string, protocol);
 		}
 		else
 		{
 			Com_sprintf(command, sizeof(command), "getserversExt %s %s ipv6",
-				com_gamename->string, Cmd_Argv(2));
+				com_gamename->string, protocol);
 		}
 	}
 	else if ( !Q_stricmp( com_gamename->string, LEGACY_MASTER_GAMENAME ) )
 		Com_sprintf(command, sizeof(command), "getservers %s",
-			Cmd_Argv(2));
+			protocol);
 	else
 		Com_sprintf(command, sizeof(command), "getservers %s %s",
-			com_gamename->string, Cmd_Argv(2));
+			com_gamename->string, protocol);
 
-	for (i=3; i < count; i++)
+	if (*keywords)
 	{
 		Q_strcat(command, sizeof(command), " ");
-		Q_strcat(command, sizeof(command), Cmd_Argv(i));
+		Q_strcat(command, sizeof(command), keywords);
 	}
 
 	NET_OutOfBandPrint( NS_SERVER, to, "%s", command );
+}
+
+/*
+==================
+CL_GlobalServers_f
+
+Originally master 0 was Internet and master 1 was MPlayer.
+ioquake3 2008; added support for requesting five separate master servers using 0-4.
+ioquake3 2017; made master 0 fetch all master servers and 1-5 request a single master server.
+Master 0 also asks cl_masters' addresses, which only the client knows.
+==================
+*/
+void CL_GlobalServers_f( void ) {
+	int			i, masterNum, extra;
+	char		command[1024], protocol[MAX_TOKEN_CHARS], keywords[MAX_STRING_CHARS];
+	char		masters[MAX_STRING_CHARS], *masteraddress, *list;
+	
+	if (Cmd_Argc() < 3 || (masterNum = atoi(Cmd_Argv(1))) < 0 || masterNum > MAX_MASTER_SERVERS)
+	{
+		Com_Printf("usage: globalservers <master# 0-%d> <protocol> [keywords]\n", MAX_MASTER_SERVERS);
+		return;	
+	}
+	// copied, as is cl_masters: each request prints, and a print hook may
+	// run another command or set a cvar
+	Q_strncpyz( protocol, Cmd_Argv( 2 ), sizeof( protocol ) );
+	Q_strncpyz( keywords, Cmd_ArgsFrom( 3 ), sizeof( keywords ) );
+
+	// request from all master servers
+	if ( masterNum == 0 ) {
+		int numAddress = 0;
+
+		for ( i = 1; i <= MAX_MASTER_SERVERS; i++ ) {
+			sprintf(command, "sv_master%d", i);
+			masteraddress = Cvar_VariableString(command);
+
+			if(!*masteraddress)
+				continue;
+
+			numAddress++;
+			CL_RequestServers( masteraddress, protocol, keywords );
+		}
+
+		Q_strncpyz( masters, cl_masters->string, sizeof( masters ) );
+		list = masters;
+		for ( extra = 0; *( masteraddress = COM_Parse( &list ) ); extra++ ) {
+			if ( extra == MAX_EXTRA_MASTERS ) {
+				Com_Printf( "CL_GlobalServers_f: only the first %d of cl_masters are asked\n", MAX_EXTRA_MASTERS );
+				break;
+			}
+			numAddress++;
+			CL_RequestServers( masteraddress, protocol, keywords );
+		}
+
+		if ( !numAddress ) {
+			Com_Printf( "CL_GlobalServers_f: Error: No master server addresses.\n");
+		}
+		return;
+	}
+
+	sprintf(command, "sv_master%d", masterNum);
+	masteraddress = Cvar_VariableString(command);
+	
+	if(!*masteraddress)
+	{
+		Com_Printf( "CL_GlobalServers_f: Error: No master server address given.\n");
+		return;	
+	}
+
+	CL_RequestServers( masteraddress, protocol, keywords );
 }
 
 
