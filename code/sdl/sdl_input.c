@@ -69,6 +69,9 @@ static int windowSizeSaveTime = 0;	// IN_SaveWindowSize once resizing settles
 static qboolean windowResized = qfalse;
 
 static int in_eventTime = 0;
+
+// a composition was queued since text input started, so one ends with it
+static qboolean in_composing = qfalse;
 static int64_t in_newestInput = 0;	// the newest key or mouse event, in Sys_Nanoseconds
 
 static SDL_Window *SDL_window = NULL;
@@ -1370,10 +1373,13 @@ void IN_ProcessEvent( const SDL_Event *e )
 
 		case SDL_EVENT_TEXT_EDITING:
 			// an input method's composition, which only an engine
-			// extension's field reads
-			if( cls.extTextFocus )
+			// extension reads: its own field's, or the ui's, whose
+			// composition it gives the ui to show (the UI service's)
+			if( cls.extTextFocus || cls.uiTextFocus )
 			{
 				char *copy = CopyString( e->edit.text ? e->edit.text : "" );
+
+				in_composing = copy[0] != '\0';
 
 				Com_QueueEvent( time, SE_TEXT_EDITING, e->edit.start, e->edit.length, strlen( copy ) + 1, copy );
 			}
@@ -1690,7 +1696,18 @@ void IN_Frame( void )
 	if( CL_WantsTextInput( ) != SDL_TextInputActive( SDL_window ) )
 	{
 		if( SDL_TextInputActive( SDL_window ) )
+		{
 			SDL_StopTextInput( SDL_window );
+			// a composition ends with text input, which the system may not
+			// say once the field's focus is gone (SDL_EVENT_TEXT_EDITING
+			// is queued only while a field has it); the console's, which
+			// queues none, is as it was
+			if( in_composing )
+			{
+				Com_QueueEvent( in_eventTime, SE_TEXT_EDITING, 0, 0, 1, CopyString( "" ) );
+				in_composing = qfalse;
+			}
+		}
 		else
 			SDL_StartTextInput( SDL_window );
 	}
