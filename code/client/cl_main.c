@@ -3244,6 +3244,33 @@ void CL_InitServerInfo( serverInfo_t *server, netadr_t *address ) {
 	server->contentReady = qfalse;
 }
 
+/*
+===================
+CL_GetServerList
+
+A source's servers, its count and the most its list holds; NULL for an
+unknown source
+===================
+*/
+serverInfo_t *CL_GetServerList( int source, int **count, int *max ) {
+	switch (source) {
+		case AS_LOCAL :
+			*count = &cls.numlocalservers;
+			*max = MAX_OTHER_SERVERS;
+			return cls.localServers;
+		case AS_MPLAYER:
+		case AS_GLOBAL :
+			*count = &cls.numglobalservers;
+			*max = MAX_GLOBAL_SERVERS;
+			return cls.globalServers;
+		case AS_FAVORITES :
+			*count = &cls.numfavoriteservers;
+			*max = MAX_OTHER_SERVERS;
+			return cls.favoriteServers;
+	}
+	return NULL;
+}
+
 #define MAX_SERVERSPERPACKET	256
 
 /*
