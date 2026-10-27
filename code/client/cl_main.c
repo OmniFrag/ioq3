@@ -62,6 +62,7 @@ cvar_t	*cl_renderer;
 #endif
 
 cvar_t	*cl_nodelta;
+cvar_t	*cl_recentServers;
 cvar_t	*cl_debugMove;
 
 cvar_t	*cl_noprint;
@@ -3267,6 +3268,11 @@ serverInfo_t *CL_GetServerList( int source, int **count, int *max ) {
 			*count = &cls.numfavoriteservers;
 			*max = MAX_OTHER_SERVERS;
 			return cls.favoriteServers;
+		case AS_RECENT :
+			LAN_LoadRecentServers();
+			*count = &cls.numrecentservers;
+			*max = MAX_RECENT_SERVERS;
+			return cls.recentServers;
 	}
 	return NULL;
 }
@@ -3657,6 +3663,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 		clc.state = CA_CONNECTED;
 		clc.lastPacketSentTime = -9999;		// send first packet immediately
+		LAN_RecentServer( clc.servername, clc.serverAddress );
 		return;
 	}
 
@@ -4653,6 +4660,22 @@ void CL_Sayto_f( void ) {
 }
 
 /*
+==================
+CL_RecentServersClear_f
+
+Forgets the servers this client joined (cl_recentServers)
+==================
+*/
+static void CL_RecentServersClear_f( void ) {
+	// the player's, as the setting is private, not game code's
+	if ( Cmd_IsRestricted() ) {
+		Com_Printf( "recentservers_clear: not from game code\n" );
+		return;
+	}
+	Cvar_Set( "cl_recentServers", "" );
+}
+
+/*
 ====================
 CL_Init
 ====================
@@ -4809,6 +4832,13 @@ void CL_Init( void ) {
 		"More master servers the server browser asks, up to 8 addresses separated by spaces. Only this client asks "
 		"them: no server lists itself on them" );
 
+	// private and protected, as it's a history of where the player played:
+	// a server's game code can neither read it nor change it
+	cl_recentServers = Cvar_Get( "cl_recentServers", "", CVAR_ARCHIVE_ND | CVAR_PROTECTED | CVAR_PRIVATE );
+	Cvar_SetDescription( cl_recentServers,
+		"The servers this client joined lately, newest first, which the server browser lists. "
+		"Empty it, or use recentservers_clear, to forget them" );
+
 	// ~ and `, as keys and characters
 	cl_consoleKeys = Cvar_Get( "cl_consoleKeys", "~ ` 0x7e 0x60", CVAR_ARCHIVE);
 
@@ -4886,6 +4916,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);
 	Cmd_AddCommand ("globalservers", CL_GlobalServers_f);
+	Cmd_AddCommand ("recentservers_clear", CL_RecentServersClear_f);
 	Cmd_AddCommand ("rcon", CL_Rcon_f);
 	Cmd_SetCommandCompletionFunc( "rcon", CL_CompleteRcon );
 	Cmd_AddCommand ("ping", CL_Ping_f );
@@ -4968,6 +4999,7 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	Cmd_RemoveCommand ("reconnect");
 	Cmd_RemoveCommand ("localservers");
 	Cmd_RemoveCommand ("globalservers");
+	Cmd_RemoveCommand ("recentservers_clear");
 	Cmd_RemoveCommand ("rcon");
 	Cmd_RemoveCommand ("ping");
 	Cmd_RemoveCommand ("serverstatus");
@@ -5161,26 +5193,18 @@ static void CL_SetServerInfo(serverInfo_t *server, const char *info, int ping) {
 }
 
 static void CL_SetServerInfoByAddress(netadr_t from, const char *info, int ping) {
-	int i;
+	static const int sources[] = { AS_LOCAL, AS_GLOBAL, AS_FAVORITES, AS_RECENT };
+	serverInfo_t *servers;
+	int i, j, *count, max;
 
-	for (i = 0; i < MAX_OTHER_SERVERS; i++) {
-		if (NET_CompareAdr(from, cls.localServers[i].adr)) {
-			CL_SetServerInfo(&cls.localServers[i], info, ping);
+	for (j = 0; j < (int)ARRAY_LEN(sources); j++) {
+		servers = CL_GetServerList(sources[j], &count, &max);
+		for (i = 0; i < max; i++) {
+			if (NET_CompareAdr(from, servers[i].adr)) {
+				CL_SetServerInfo(&servers[i], info, ping);
+			}
 		}
 	}
-
-	for (i = 0; i < MAX_GLOBAL_SERVERS; i++) {
-		if (NET_CompareAdr(from, cls.globalServers[i].adr)) {
-			CL_SetServerInfo(&cls.globalServers[i], info, ping);
-		}
-	}
-
-	for (i = 0; i < MAX_OTHER_SERVERS; i++) {
-		if (NET_CompareAdr(from, cls.favoriteServers[i].adr)) {
-			CL_SetServerInfo(&cls.favoriteServers[i], info, ping);
-		}
-	}
-
 }
 
 /*
@@ -5706,7 +5730,10 @@ void CL_GetPing( int n, char *buf, int buflen, int *pingtime )
 		}
 	}
 
-	CL_SetServerInfoByAddress(cl_pinglist[n].adr, cl_pinglist[n].info, cl_pinglist[n].time);
+	// the info only once the server answered: until then the slot holds the
+	// last server's, which would name this one after it
+	CL_SetServerInfoByAddress(cl_pinglist[n].adr, cl_pinglist[n].time ? cl_pinglist[n].info : NULL,
+		cl_pinglist[n].time);
 
 	*pingtime = time;
 }
@@ -5866,6 +5893,7 @@ void CL_Ping_f( void ) {
 	memcpy( &pingptr->adr, &to, sizeof (netadr_t) );
 	pingptr->start = Sys_Milliseconds();
 	pingptr->time  = 0;
+	pingptr->info[0] = '\0';	// none of the slot's last server's
 
 	CL_SetServerInfoByAddress(pingptr->adr, NULL, 0);
 		
@@ -5881,10 +5909,11 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 	int			slots, i;
 	char		buff[MAX_STRING_CHARS];
 	int			pingTime;
-	int			max;
+	int			max, *count;
 	qboolean status = qfalse;
+	serverInfo_t *server = CL_GetServerList(source, &count, &max);
 
-	if (source < 0 || source > AS_FAVORITES) {
+	if (!server) {
 		return qfalse;
 	}
 
@@ -5892,24 +5921,7 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 
 	slots = CL_GetPingQueueCount();
 	if (slots < MAX_PINGREQUESTS) {
-		serverInfo_t *server = NULL;
-
-		switch (source) {
-			case AS_LOCAL :
-				server = &cls.localServers[0];
-				max = cls.numlocalservers;
-			break;
-			case AS_GLOBAL :
-				server = &cls.globalServers[0];
-				max = cls.numglobalservers;
-			break;
-			case AS_FAVORITES :
-				server = &cls.favoriteServers[0];
-				max = cls.numfavoriteservers;
-			break;
-			default:
-				return qfalse;
-		}
+		max = *count;
 		for (i = 0; i < max; i++) {
 			if (server[i].visible) {
 				if (server[i].ping == -1) {
@@ -5935,6 +5947,7 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 							}
 						}
 						memcpy(&cl_pinglist[j].adr, &server[i].adr, sizeof(netadr_t));
+						cl_pinglist[j].info[0] = '\0';
 						cl_pinglist[j].start = Sys_Milliseconds();
 						cl_pinglist[j].time = 0;
 						NET_OutOfBandPrint( NS_CLIENT, cl_pinglist[j].adr, "%s", CL_GetInfoRequest() );
@@ -5945,7 +5958,7 @@ qboolean CL_UpdateVisiblePings_f(int source) {
 				// the ping packet got lost
 				else if (server[i].ping == 0) {
 					// if we are updating global servers
-					if (source == AS_GLOBAL) {
+					if (server == cls.globalServers) {
 						//
 						if ( cls.numGlobalServerAddresses > 0 ) {
 							// overwrite this server with one from the additional global servers
