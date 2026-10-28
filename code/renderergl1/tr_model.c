@@ -261,12 +261,11 @@ asked for again.
 qhandle_t RE_RegisterModel( const char *name ) {
 	model_t		*mod;
 	qhandle_t	hModel;
-	qboolean	orgNameFailed = qfalse;
-	int			orgLoader = -1;
 	int			i;
-	char		localName[ MAX_QPATH ];
-	const char	*ext;
-	char		altName[ MAX_QPATH ];
+	const char	*exts[ARRAY_LEN( modelLoaders )];
+	char		names[ARRAY_LEN( modelLoaders )][MAX_QPATH];
+	int			formats[ARRAY_LEN( modelLoaders )], tiers[ARRAY_LEN( modelLoaders )];
+	int			numNames;
 
 	if ( !name || !name[0] ) {
 		ri.Printf( PRINT_ALL, "RE_RegisterModel: NULL name\n" );
@@ -308,71 +307,27 @@ qhandle_t RE_RegisterModel( const char *name ) {
 	mod->numLods = 0;
 
 	//
-	// load the files
+	// load the files: the name, then its other formats, every format in
+	// the file system's tier 0 before any in tier 1
 	//
-	Q_strncpyz( localName, name, MAX_QPATH );
-
-	ext = COM_GetExtension( localName );
-
-	if( *ext )
-	{
-		// Look for the correct loader and use it
-		for( i = 0; i < numModelLoaders; i++ )
-		{
-			if( !Q_stricmp( ext, modelLoaders[ i ].ext ) )
-			{
-				// Load
-				R_ResetModel( mod );
-				hModel = modelLoaders[ i ].ModelLoader( localName, mod );
-				break;
-			}
-		}
-
-		// A loader was found
-		if( i < numModelLoaders )
-		{
-			if( !hModel )
-			{
-				// Loader failed, most likely because the file isn't there;
-				// try again without the extension
-				orgNameFailed = qtrue;
-				orgLoader = i;
-				COM_StripExtension( name, localName, MAX_QPATH );
-			}
-			else
-			{
-				// Something loaded
-				return mod->index;
-			}
-		}
+	for ( i = 0; i < numModelLoaders; i++ ) {
+		exts[i] = modelLoaders[i].ext;
 	}
+	numNames = COM_FormatNames( name, exts, numModelLoaders, names, formats );
 
-	// Try and find a suitable match using all
-	// the model formats supported
-	for( i = 0; i < numModelLoaders; i++ )
-	{
-		if (i == orgLoader)
-			continue;
-
-		Com_sprintf( altName, sizeof (altName), "%s.%s", localName, modelLoaders[ i ].ext );
-
-		// Load
+	for ( i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, -1 ); i >= 0;
+			i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, i ) ) {
 		R_ResetModel( mod );
-		hModel = modelLoaders[ i ].ModelLoader( altName, mod );
-
-		if( hModel )
-		{
-			if( orgNameFailed )
-			{
-				ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n",
-						name, altName );
+		hModel = modelLoaders[formats[i]].ModelLoader( names[i], mod );
+		if ( hModel ) {
+			if ( i > 0 && !Q_stricmp( names[0], name ) ) {
+				ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n", name, names[i] );
 			}
-
-			break;
+			return hModel;
 		}
 	}
 
-	return hModel;
+	return 0;
 }
 
 /*

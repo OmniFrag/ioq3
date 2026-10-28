@@ -955,76 +955,32 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, char *f
 {
 	// fileName, MAX_QPATH long, is set to each file tried, so it names the
 	// one that loaded
-	qboolean orgNameFailed = qfalse;
-	int orgLoader = -1;
-	int i;
-	char localName[ MAX_QPATH ];
-	const char *ext;
-	char *altName;
+	const char	*exts[ARRAY_LEN( imageLoaders )];
+	char		names[ARRAY_LEN( imageLoaders )][MAX_QPATH];
+	int			formats[ARRAY_LEN( imageLoaders )], tiers[ARRAY_LEN( imageLoaders )];
+	int			numNames, i;
 
 	*pic = NULL;
 	*width = 0;
 	*height = 0;
+	Q_strncpyz( fileName, name, MAX_QPATH );
 
-	Q_strncpyz( localName, name, MAX_QPATH );
-
-	ext = COM_GetExtension( localName );
-
-	if( *ext )
-	{
-		// Look for the correct loader and use it
-		for( i = 0; i < numImageLoaders; i++ )
-		{
-			if( !Q_stricmp( ext, imageLoaders[ i ].ext ) )
-			{
-				// Load
-				Q_strncpyz( fileName, localName, MAX_QPATH );
-				imageLoaders[ i ].ImageLoader( localName, pic, width, height );
-				break;
-			}
-		}
-
-		// A loader was found
-		if( i < numImageLoaders )
-		{
-			if( *pic == NULL )
-			{
-				// Loader failed, most likely because the file isn't there;
-				// try again without the extension
-				orgNameFailed = qtrue;
-				orgLoader = i;
-				COM_StripExtension( name, localName, MAX_QPATH );
-			}
-			else
-			{
-				// Something loaded
-				return;
-			}
-		}
+	for ( i = 0; i < numImageLoaders; i++ ) {
+		exts[i] = imageLoaders[i].ext;
 	}
+	numNames = COM_FormatNames( name, exts, numImageLoaders, names, formats );
 
-	// Try and find a suitable match using all
-	// the image formats supported
-	for( i = 0; i < numImageLoaders; i++ )
-	{
-		if (i == orgLoader)
-			continue;
-
-		altName = va( "%s.%s", localName, imageLoaders[ i ].ext );
-		Q_strncpyz( fileName, altName, MAX_QPATH );
-
-		// Load
-		imageLoaders[ i ].ImageLoader( altName, pic, width, height );
-
-		if( *pic )
-		{
-			if( orgNameFailed )
-			{
-				ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n",
-						name, altName );
+	// the name, then the others: every format in the file system's tier 0
+	// before any in tier 1
+	for ( i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, -1 ); i >= 0;
+			i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, i ) ) {
+		Q_strncpyz( fileName, names[i], MAX_QPATH );
+		imageLoaders[formats[i]].ImageLoader( names[i], pic, width, height );
+		if ( *pic ) {
+			if ( i > 0 && !Q_stricmp( names[0], name ) ) {
+				ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n", name, names[i] );
 			}
-
-			break;
+			return;
 		}
 	}
 }

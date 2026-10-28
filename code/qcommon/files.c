@@ -82,8 +82,9 @@ To save disk space and speed loading, directory trees can be collapsed into zip 
 The files use a ".pk3" extension to prevent users from unzipping them accidentally, but
 otherwise the are simply normal uncompressed zip files.  A game directory can have multiple
 zip files of the form "pak0.pk3", "pak1.pk3", etc.  Zip files are searched in decending order
-from the highest number to the lowest, and will always take precedence over the filesystem.
-This allows a pk3 distributed as a patch to override all existing data.
+from the highest number to the lowest.  A game directory's loose files are searched before
+its zip files, and a zip file that sorts later overrides the files of earlier ones, so a pk3
+distributed as a patch overrides all existing data.
 
 Because we will have updated executables freely available online, there is no point to
 trying to restrict demo / oem versions of the game with code changes.  Demo / oem versions
@@ -92,7 +93,9 @@ automatically restricts where game media can come from to prevent add-ons from w
 
 File search order: when FS_FOpenFileRead gets called it will go through the fs_searchpaths
 structure and stop on the first successful hit. fs_searchpaths is built with successive
-calls to FS_AddGameDirectory
+calls to FS_AddGameDirectory. Each entry has a tier, and the lookups walk the entries of
+tier 0 in that order, then those of tier 1 (FS_NextSearch); the path's own order, which
+the pure lists walk, stays as built
 
 Additionally, we search in several subdirectories:
 current game is the current mode
@@ -280,6 +283,7 @@ typedef struct searchpath_s {
 
 	pack_t		*pack;		// only one of pack / dir will be non NULL
 	directory_t	*dir;
+	int			tier;		// the lookups' rank, below FS_TIERS (FS_NextSearch)
 } searchpath_t;
 
 static	char		fs_gamedir[MAX_OSPATH];	// this will be a single file name with no separators
@@ -302,6 +306,7 @@ static	cvar_t		*fs_basepath;
 static	cvar_t		*fs_basegame;
 static	cvar_t		*fs_gamedirvar;
 static	searchpath_t	*fs_searchpaths;
+static	int			fs_lastTier;			// the highest tier an entry has
 static	int			fs_readCount;			// total bytes read
 static	int			fs_loadCount;			// total files read
 static	int			fs_loadStack;			// total files in memory
@@ -1520,6 +1525,51 @@ static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename ) {
 
 /*
 ===========
+FS_NextSearch
+
+The search path's entry after search in the lookups' order, or the first
+for NULL: tier 0's entries in the path's order, then tier 1's; NULL after
+the last
+===========
+*/
+static searchpath_t *FS_NextSearch( const searchpath_t *search ) {
+	int				tier = search ? search->tier : 0;
+	searchpath_t	*next = search ? search->next : fs_searchpaths;
+
+	for ( ; tier <= fs_lastTier; tier++, next = fs_searchpaths ) {
+		for ( ; next; next = next->next ) {
+			if ( next->tier == tier ) {
+				return next;
+			}
+		}
+	}
+	return NULL;
+}
+
+/*
+===========
+FS_PureRefusesDirFile
+
+Whether, connected to a pure server, a file can't be read from a
+directory: any but configs, menus and demos
+===========
+*/
+static qboolean FS_PureRefusesDirFile( const char *filename ) {
+	int		len;
+
+	if ( !fs_numServerPaks ) {
+		return qfalse;
+	}
+	len = strlen( filename );
+	return !FS_IsExt( filename, ".cfg", len ) &&		// for config files
+		!FS_IsExt( filename, ".menu", len ) &&		// menu files
+		!FS_IsExt( filename, ".game", len ) &&		// menu files
+		!FS_IsExt( filename, ".dat", len ) &&		// for journal files
+		!FS_IsDemoExt( filename, len );			// demos
+}
+
+/*
+===========
 FS_FOpenFileReadDir
 
 Tries opening file "filename" in searchpath "search"
@@ -1722,23 +1772,15 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 		// if we are running restricted, the only files we
 		// will allow to come from the directory are .cfg files
-		len = strlen(filename);
 		// FIXME TTimo I'm not sure about the fs_numServerPaks test
 		// if you are using FS_ReadFile to find out if a file exists,
 		//   this test can make the search fail although the file is in the directory
 		// I had the problem on https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=8
 		// turned out I used FS_FileExists_HomeData instead
-		if(!unpure && fs_numServerPaks)
+		if(!unpure && FS_PureRefusesDirFile(filename))
 		{
-			if(!FS_IsExt(filename, ".cfg", len) &&		// for config files
-			   !FS_IsExt(filename, ".menu", len) &&		// menu files
-			   !FS_IsExt(filename, ".game", len) &&		// menu files
-			   !FS_IsExt(filename, ".dat", len) &&		// for journal files
-			   !FS_IsDemoExt(filename, len))			// demos
-			{
-				*file = 0;
-				return -1;
-			}
+			*file = 0;
+			return -1;
 		}
 
 		dir = search->dir;
@@ -1913,7 +1955,7 @@ static long FS_FOpenFileReadAs(const char *filename, fileHandle_t *file, qboolea
 
 	fs_lastFileSearch = NULL;
 	isLocalConfig = FS_IsLocalConfig( filename );
-	for(search = fs_searchpaths; search; search = search->next)
+	for(search = FS_NextSearch(NULL); search; search = FS_NextSearch(search))
 	{
 		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
 		// files and pk3dirs, which come with the game, a mod or a download
@@ -1967,6 +2009,40 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 }
 
 /*
+===========
+FS_FileTier
+
+The tier of the entry FS_FOpenFileRead would read a file from, or -1 for
+none, without marking a pak referenced: so a loop over a name's
+extensions can try each in tier 0 before any in tier 1
+(COM_NextByTier). While every entry is in tier 0, it's 0 without a
+look, whether the file is there or not, so the loop costs what it did
+===========
+*/
+int FS_FileTier( const char *filename )
+{
+	searchpath_t	*search;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+	if ( !fs_lastTier ) {
+		return 0;
+	}
+
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		if ( search->dir && FS_PureRefusesDirFile( filename ) ) {
+			continue;
+		}
+		if ( FS_FOpenFileReadDir( filename, search, NULL, qfalse, qfalse ) > 0 &&
+			( !search->pack || FS_PakIsPure( search->pack ) ) ) {
+			return search->tier;
+		}
+	}
+	return -1;
+}
+
+/*
 =================
 FS_FindVM
 
@@ -1997,10 +2073,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 	Com_sprintf(qvmName, sizeof(qvmName), "vm/%s.qvm", name);
 
 	lastSearch = *startSearch;
-	if(*startSearch == NULL)
-		search = fs_searchpaths;
-	else
-		search = lastSearch->next;
+	search = FS_NextSearch(lastSearch);
 
 	while(search)
 	{
@@ -2052,7 +2125,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 
 				if(!FS_FilenameCompare(lastSearch->pack->pakPathname, pack->pakPathname))
 				{
-					search = search->next;
+					search = FS_NextSearch(search);
 					continue;
 				}
 			}
@@ -2065,7 +2138,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 			}
 		}
 
-		search = search->next;
+		search = FS_NextSearch(search);
 	}
 
 	return -1;
@@ -2345,7 +2418,7 @@ int	FS_FileIsInPAK(const char *filename, int *pChecksum ) {
 	// search through the path, one element at a time
 	//
 
-	for ( search = fs_searchpaths ; search ; search = search->next ) {
+	for ( search = FS_NextSearch( NULL ) ; search ; search = FS_NextSearch( search ) ) {
 		//
 		if (search->pack) {
 			hash = FS_HashFileName(filename, search->pack->hashSize);
@@ -3052,7 +3125,7 @@ char **FS_ListFilteredFiles( const char *path, const char *extension,
 	//
 	// search through the path, one element at a time, adding to list
 	//
-	for (search = fs_searchpaths ; search ; search = search->next) {
+	for (search = FS_NextSearch(NULL) ; search ; search = FS_NextSearch(search)) {
 		// is the element a pak file?
 		if (search->pack) {
 
@@ -3776,7 +3849,7 @@ void FS_Which_f( void ) {
 	}
 
 	// just wants to see if file is there
-	for(search = fs_searchpaths; search; search = search->next)
+	for(search = FS_NextSearch(NULL); search; search = FS_NextSearch(search))
 	{
 		if(FS_Which(filename, search))
 			return;

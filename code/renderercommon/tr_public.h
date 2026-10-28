@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		17
+#define	REF_API_VERSION		18
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -302,6 +302,11 @@ typedef struct {
 	void	(*FS_FreeFileList)( char **filelist );
 	void	(*FS_WriteFile)( const char *qpath, const void *buffer, int size );
 	qboolean (*FS_FileExists)( const char *file );
+	// the tier of the search path entry a read of the file takes, or -1
+	// for none (FS_FileTier): a renderer tries a name's every format in
+	// tier 0 before any in tier 1 (COM_NextByTier), and joins tier 0's
+	// shader text before tier 1's
+	int		(*FS_FileTier)( const char *name );
 
 	// cinematic stuff
 	void	(*CIN_UploadCinematic)(int handle);

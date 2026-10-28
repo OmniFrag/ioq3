@@ -2979,6 +2979,7 @@ a single large text block that can be scanned for shader names
 static void ScanAndLoadShaderFiles( void )
 {
 	char **shaderFiles;
+	int tiers[MAX_SHADER_FILES], tier;
 	char *buffers[MAX_SHADER_FILES] = {0};
 	char *p;
 	int numShaderFiles;
@@ -3008,6 +3009,10 @@ static void ScanAndLoadShaderFiles( void )
 		char filename[MAX_QPATH];
 
 		Com_sprintf( filename, sizeof( filename ), "scripts/%s", shaderFiles[i] );
+		// a file the tiers miss joins last rather than not at all
+		tiers[i] = ri.FS_FileTier( filename );
+		if ( tiers[i] < 0 )
+			tiers[i] = FS_TIERS - 1;
 		ri.Printf( PRINT_DEVELOPER, "...loading '%s'\n", filename );
 		summand = ri.FS_ReadFile( filename, (void **)&buffers[i] );
 		
@@ -3062,16 +3067,26 @@ static void ScanAndLoadShaderFiles( void )
 	s_shaderText[ 0 ] = '\0';
 	textEnd = s_shaderText;
  
+	// tier 0's files, then tier 1's, so a definition in tier 0 comes first
+	// and wins; each tier's in reverse list order
+	for ( tier = 0; tier < FS_TIERS; tier++ )
+	{
+		for ( i = numShaderFiles - 1; i >= 0 ; i-- )
+		{
+			if ( !buffers[i] || tiers[i] != tier )
+				continue;
+
+			strcat( textEnd, buffers[i] );
+			strcat( textEnd, "\n" );
+			textEnd += strlen( textEnd );
+		}
+	}
+
 	// free in reverse order, so the temp files are all dumped
 	for ( i = numShaderFiles - 1; i >= 0 ; i-- )
 	{
-		if ( !buffers[i] )
-			continue;
-
-		strcat( textEnd, buffers[i] );
-		strcat( textEnd, "\n" );
-		textEnd += strlen( textEnd );
-		ri.FS_FreeFile( buffers[i] );
+		if ( buffers[i] )
+			ri.FS_FreeFile( buffers[i] );
 	}
 
 	COM_Compress( s_shaderText );
