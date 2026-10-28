@@ -313,6 +313,8 @@ static	int			fs_lastTier;			// the highest tier an entry has
 // its BSP loads from (FS_SetCurrentMap)
 static	char		fs_currentMap[MAX_QPATH];
 static	const searchpath_t	*fs_mapSearch;
+static	int			fs_rankings;			// how many times a read's copy may have moved (FS_Ranking)
+static	unsigned	fs_pathSignature;		// of the search path as last ranked (FS_PathSignature)
 static	cvar_t		*fs_mapPakScope;
 static	cvar_t		*fs_globalPaks;
 static	int			fs_readCount;			// total bytes read
@@ -2035,6 +2037,25 @@ static qboolean FS_SearchHasFile( const searchpath_t *search, const char *filena
 
 /*
 ===========
+FS_FileSearch
+
+The entry a read of a file would come from, or NULL
+===========
+*/
+static const searchpath_t *FS_FileSearch( const char *filename )
+{
+	const searchpath_t	*search;
+
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		if ( FS_SearchHasFile( search, filename ) ) {
+			return search;
+		}
+	}
+	return NULL;
+}
+
+/*
+===========
 FS_FileTier
 
 The tier of the entry FS_FOpenFileRead would read a file from, or -1 for
@@ -2046,7 +2067,7 @@ look, whether the file is there or not, so the loop costs what it did
 */
 int FS_FileTier( const char *filename )
 {
-	searchpath_t	*search;
+	const searchpath_t	*search;
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
@@ -2054,13 +2075,8 @@ int FS_FileTier( const char *filename )
 	if ( !fs_lastTier ) {
 		return 0;
 	}
-
-	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
-		if ( FS_SearchHasFile( search, filename ) ) {
-			return search->tier;
-		}
-	}
-	return -1;
+	search = FS_FileSearch( filename );
+	return search ? search->tier : -1;
 }
 
 /*
@@ -4723,6 +4739,28 @@ static qboolean FS_MapPack( const searchpath_t *search ) {
 
 /*
 ================
+FS_PathSignature
+
+A hash of the search path's entries, in order: each pak's path,
+checksum and tier, each directory's path and tier
+================
+*/
+static unsigned FS_PathSignature( void ) {
+	const searchpath_t	*search;
+	const char			*c;
+	unsigned			hash = 5381;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		for ( c = search->pack ? search->pack->pakFilename : search->dir->fullpath; *c; c++ ) {
+			hash = hash * 33 + (unsigned char)*c;
+		}
+		hash = ( hash * 33 + ( search->pack ? search->pack->checksum : 0 ) ) * 33 + search->tier;
+	}
+	return hash;
+}
+
+/*
+================
 FS_RankPaks
 
 Puts the map packs the current map doesn't use in tier 1, so they only
@@ -4738,6 +4776,7 @@ static void FS_RankPaks( void ) {
 	searchpath_t	*search;
 	const pack_t	*own;
 	char			bsp[MAX_QPATH];
+	unsigned		signature;
 
 	fs_mapSearch = NULL;
 	if ( fs_currentMap[0] ) {
@@ -4756,6 +4795,54 @@ static void FS_RankPaks( void ) {
 			!( own && search->pack && search->pack->checksum == own->checksum ) && FS_MapPack( search );
 		fs_lastTier = MAX( fs_lastTier, search->tier );
 	}
+
+	// a path built or ranked otherwise may have moved what a read finds
+	signature = FS_PathSignature();
+	fs_rankings += signature != fs_pathSignature;
+	fs_pathSignature = signature;
+}
+
+/*
+================
+FS_Ranking
+
+How many times the copy a read takes may have moved, as the search path
+was built otherwise or reordered, an entry's tier changed, or a pure
+server's pak list changed: a cache of what it read (the sound caches)
+checks where a file comes from again once it's changed, as a map's own
+pak replaces a file only on its map
+================
+*/
+int FS_Ranking( void ) {
+	return fs_rankings;
+}
+
+/*
+===========
+FS_FileSource
+
+Where a read of a file would come from now: its pak's or directory's
+path, "" for none. Marks no pak referenced
+===========
+*/
+static const char *FS_SearchSource( const searchpath_t *search ) {
+	return !search ? "" : search->pack ? search->pack->pakFilename : search->dir->fullpath;
+}
+
+const char *FS_FileSource( const char *filename ) {
+	return FS_SearchSource( FS_FileSearch( filename ) );
+}
+
+/*
+===========
+FS_LastFileSource
+
+FS_FileSource's answer for the last file FS_FOpenFileRead found, without
+looking again
+===========
+*/
+const char *FS_LastFileSource( void ) {
+	return FS_SearchSource( fs_lastFileSearch );
 }
 
 /*
@@ -5081,6 +5168,8 @@ static void FS_ReorderPurePaks( void )
 			p_previous = &s->next;
 		}
 	}
+	// the order a read takes may have changed (FS_Ranking)
+	fs_rankings += fs_reordered;
 }
 
 /*
@@ -5891,7 +5980,7 @@ exception of .cfg and .dat files.
 =====================
 */
 void FS_PureServerSetLoadedPaks( const char *pakSums, const char *pakNames ) {
-	int		i, c, d;
+	int		i, c, d, sum, moved;
 
 	Cmd_TokenizeString( pakSums );
 
@@ -5900,11 +5989,16 @@ void FS_PureServerSetLoadedPaks( const char *pakSums, const char *pakNames ) {
 		c = MAX_SEARCH_PATHS;
 	}
 
+	moved = c != fs_numServerPaks;
 	fs_numServerPaks = c;
 
 	for ( i = 0 ; i < c ; i++ ) {
-		fs_serverPaks[i] = atoi( Cmd_Argv( i ) );
+		sum = atoi( Cmd_Argv( i ) );
+		moved |= sum != fs_serverPaks[i];
+		fs_serverPaks[i] = sum;
 	}
+	// the paks a read may take changed (FS_Ranking)
+	fs_rankings += moved;
 
 	if (fs_numServerPaks) {
 		Com_DPrintf( "Connected to a pure server.\n" );

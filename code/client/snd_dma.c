@@ -356,7 +356,8 @@ Creates a default buzz sound if the file can't be loaded
 ==================
 */
 sfxHandle_t	S_Base_RegisterSound( const char *name, qboolean compressed ) {
-	sfx_t	*sfx;
+	sfx_t		*sfx;
+	qboolean	loaded;
 
 	compressed = qfalse;
 	if (!s_soundStarted) {
@@ -368,12 +369,16 @@ sfxHandle_t	S_Base_RegisterSound( const char *name, qboolean compressed ) {
 		return 0;
 	}
 
-	if ( sfx->soundData
+	loaded = sfx->soundData != NULL;
 #ifdef USE_WEB_AUDIO
-		// the page keeps the samples, so soundData stays NULL
-		|| sfx->inMemory
+	// the page keeps the samples, so soundData stays NULL
+	loaded |= sfx->inMemory;
 #endif
-		) {
+	if ( loaded && S_CodecSourceMoved( sfx->soundName, &sfx->source ) ) {
+		S_FreeSoundData( sfx );
+		loaded = qfalse;
+	}
+	if ( loaded ) {
 		if ( sfx->defaultSound ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: could not find %s - using default\n", sfx->soundName );
 			return 0;
@@ -420,6 +425,7 @@ void S_memoryLoad(sfx_t	*sfx) {
 //		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't load sound: %s\n", sfx->soundName );
 		sfx->defaultSound = qtrue;
 	}
+	S_CodecNoteSource( &sfx->source );
 	sfx->inMemory = qtrue;
 }
 

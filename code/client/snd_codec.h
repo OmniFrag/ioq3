@@ -71,6 +71,17 @@ void S_CodecInit( void );
 void S_CodecShutdown( void );
 void S_CodecRegister(snd_codec_t *codec);
 void *S_CodecLoad(const char *filename, snd_info_t *info);
+
+// where a cached sound's file came from, kept to load it again when the
+// paks' ranking for another map has moved it (FS_Ranking)
+typedef struct
+{
+	int		hash;			// of the file it was read from and where, 0 for none
+	int		ranking;		// FS_Ranking when it was found
+} snd_source_t;
+
+void S_CodecNoteSource(snd_source_t *source);
+qboolean S_CodecSourceMoved(const char *filename, snd_source_t *source);
 snd_stream_t *S_CodecOpenStream(const char *filename);
 void S_CodecCloseStream(snd_stream_t *stream);
 int S_CodecReadStream(snd_stream_t *stream, int bytes, void *buffer);
