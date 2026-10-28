@@ -139,6 +139,7 @@ typedef struct alSfx_s
 	qboolean	isDefaultChecked;		// Sound has been check if it isDefault
 	qboolean	inMemory;				// Sound is stored in memory
 	qboolean	isLocked;				// Sound is locked (can not be unloaded)
+	snd_source_t	source;				// where its file came from
 	int				lastUsedTime;		// Time last used
 
 	int				loopCnt;		// number of loops using this sfx
@@ -375,6 +376,7 @@ static void S_AL_BufferLoad(sfxHandle_t sfx, qboolean cache)
 
 	// Try to load
 	data = S_CodecLoad(curSfx->filename, &info);
+	S_CodecNoteSource(&curSfx->source);
 	if(!data)
 	{
 		S_AL_BufferUseDefault(sfx);
@@ -518,6 +520,8 @@ void S_AL_BufferShutdown( void )
 	alBuffersInitialised = qfalse;
 }
 
+static void S_AL_SrcKillSfx(sfxHandle_t sfx);
+
 /*
 =================
 S_AL_RegisterSound
@@ -527,6 +531,16 @@ static
 sfxHandle_t S_AL_RegisterSound( const char *sample, qboolean compressed )
 {
 	sfxHandle_t sfx = S_AL_BufferFind(sample);
+	alSfx_t *curSfx = &knownSfx[sfx];
+
+	if((curSfx->inMemory || curSfx->isDefault) && sfx != default_sfx &&
+		S_CodecSourceMoved(curSfx->filename, &curSfx->source))
+	{
+		// a buffer a source still has can't be deleted
+		S_AL_SrcKillSfx(sfx);
+		S_AL_BufferUnload(sfx);
+		curSfx->isDefault = curSfx->isDefaultChecked = qfalse;
+	}
 
 	if((!knownSfx[sfx].inMemory) && (!knownSfx[sfx].isDefault))
 		S_AL_BufferLoad(sfx, s_alPrecache->integer);
@@ -1020,6 +1034,24 @@ static void S_AL_SrcKill(srcHandle_t src)
 	curSource->isLocked = qfalse;
 	curSource->isTracking = qfalse;
 	curSource->local = qfalse;
+}
+
+/*
+=================
+S_AL_SrcKillSfx
+
+Kills the sources playing a sound effect, or holding it as stopped loops
+=================
+*/
+static void S_AL_SrcKillSfx(sfxHandle_t sfx)
+{
+	int i;
+
+	for(i = 0; i < srcCount; i++)
+	{
+		if(srcList[i].isActive && srcList[i].sfx == sfx)
+			S_AL_SrcKill(i);
+	}
 }
 
 /*

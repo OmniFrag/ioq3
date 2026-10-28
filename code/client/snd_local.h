@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "snd_public.h"
+#include "snd_codec.h"
 
 #define	PAINTBUFFER_SIZE		4096					// this is in samples
 
@@ -58,6 +59,7 @@ typedef struct sfx_s {
 	int 			soundLength;
 	int			soundChannels;
 	char 			soundName[MAX_QPATH];
+	snd_source_t	source;					// where its file came from
 	int				lastTimeUsed;
 	struct sfx_s	*next;
 } sfx_t;
