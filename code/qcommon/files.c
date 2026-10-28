@@ -5577,6 +5577,27 @@ static const pack_t *FS_FindPak0( const char *gameName, unsigned int checksum ) 
 
 /*
 ================
+FS_FindInstalledPak
+
+The search path's first installed pak, not one of the content cache's,
+named name ("<game>/<name>", as the referenced paks are named), or NULL
+================
+*/
+static const pack_t *FS_FindInstalledPak( const char *name ) {
+	const searchpath_t	*path;
+	const pack_t		*pak;
+
+	for( path = fs_searchpaths; path; path = path->next ) {
+		pak = path->pack;
+		if( pak && !pak->cached && !FS_FilenameCompare( va( "%s/%s", pak->pakGamename, pak->pakBasename ), name ) ) {
+			return pak;
+		}
+	}
+	return NULL;
+}
+
+/*
+================
 FS_RetailPak
 
 Whether the pak a download names ("<game>/<name>", as the referenced paks
@@ -5587,17 +5608,27 @@ tests' OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM adds a checksum
 ================
 */
 qboolean FS_RetailPak( const char *download, char *retail, int size ) {
-	searchpath_t	*path;
-	const pack_t	*pak;
+	const pack_t	*pak = FS_FindInstalledPak( download );
 
-	for( path = fs_searchpaths; path; path = path->next ) {
-		pak = path->pack;
-		if( pak && !FS_FilenameCompare( va( "%s/%s", pak->pakGamename, pak->pakBasename ), download ) ) {
-			return FS_RetailPakChecksum( va( "%s/%s.pk3", pak->pakGamename, pak->pakBasename ),
-				pak->checksum, retail, size );
-		}
-	}
-	return qfalse;
+	return pak && FS_RetailPakChecksum( va( "%s/%s.pk3", pak->pakGamename, pak->pakBasename ),
+		pak->checksum, retail, size );
+}
+
+/*
+================
+FS_InstalledPakNamed
+
+Whether an installed pak has the name a download gives
+("<game>/<name>.pk3"), whatever its contents: a download of that name is
+then another version of it, which goes into the content cache beside it
+and never replaces it
+================
+*/
+qboolean FS_InstalledPakNamed( const char *download ) {
+	char	name[MAX_QPATH];
+
+	COM_StripExtension( download, name, sizeof( name ) );
+	return FS_FindInstalledPak( name ) != NULL;
 }
 
 /*

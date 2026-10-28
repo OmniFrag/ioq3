@@ -2256,15 +2256,16 @@ void CL_DownloadsComplete( void ) {
 	CL_ContentClearProgress();
 
 	// a pak the server uses is still missing: say which, and why, all at
-	// once, keeping the ones that did arrive for the next connect
+	// once, keeping the ones that did arrive for the next connect. A title,
+	// then a line each, which the error screen shows as lines
 	if ( clc.downloadFailed ) {
 		if ( clc.downloadRestart ) {
 			clc.downloadRestart = qfalse;
 			FS_Restart( clc.checksumFeed );
 		}
-		Com_Error( ERR_DROP, "Couldn't download %d of the server's paks:\n%s%s", clc.downloadFailed,
-			clc.downloadFailures, clc.downloadFailuresUnlisted ?
-			va( "and %d more\n", clc.downloadFailuresUnlisted ) : "" );
+		Com_Error( ERR_DROP, "%s%s%s", clc.downloadFailed == 1 ? "Couldn't download one of the server's paks" :
+			va( "Couldn't download %d of the server's paks", clc.downloadFailed ), clc.downloadFailures,
+			clc.downloadFailuresUnlisted ? va( "\nand %d more", clc.downloadFailuresUnlisted ) : "" );
 	}
 
 #ifdef USE_HTTP
@@ -2340,15 +2341,20 @@ void CL_DownloadsComplete( void ) {
 =================
 CL_AddDownloadFailure
 
-Notes a pak that couldn't be downloaded, for CL_DownloadsComplete to list:
-the server's name for it and why, on one line, or for one of the game's
-own paks, which to add
+Notes a pak that couldn't be downloaded, for CL_DownloadsComplete to list
+under its title, on a line of its own, each after a newline: for one of
+the game's own paks, which to add; for one the player has another version
+of under its name, that the server's is different; otherwise the server's
+name for it; and why. httpStatus is
+the HTTP status sv_dlURL's site answered with, or 0: "not found" says it
+all, so the URL is left to the console's warning
 =================
 */
-void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason ) {
+void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason, int httpStatus ) {
 	char		why[MAX_STRING_CHARS], retail[MAX_QPATH];
 	const char	*line;
 	int			length = 0;
+	qboolean	notFound = httpStatus == 404 || httpStatus == 410;
 
 	// a server's refusal runs over several lines
 	for ( ; *reason && length < (int)sizeof( why ) - 1; reason++ ) {
@@ -2368,9 +2374,13 @@ void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char 
 	Com_Printf( S_COLOR_YELLOW "WARNING: couldn't download %s: %s\n", name, why );
 
 	if ( FS_RetailPakChecksum( name, checksum, retail, sizeof( retail ) ) ) {
-		line = va( "%s is one of the game's own paks: add %s from your own copy of the game.\n", name, retail );
+		line = va( "\n%s is one of the game's own paks: add %s from your own copy of the game.", name, retail );
+	} else if ( FS_InstalledPakNamed( name ) ) {
+		line = notFound ?
+			va( "\nThe server uses a different version of %s than yours, and its download site doesn't have it.", name ) :
+			va( "\nThe server uses a different version of %s than yours, and it couldn't be downloaded: %s", name, why );
 	} else {
-		line = va( "%s: %s\n", name, why );
+		line = va( "\n%s: %s", name, notFound ? "the server's download site doesn't have it" : why );
 	}
 	clc.downloadFailed++;
 	if ( strlen( clc.downloadFailures ) + strlen( line ) < sizeof( clc.downloadFailures ) ) {
@@ -2876,6 +2886,7 @@ cache couldn't keep it, or was too large for the cache
 */
 static qboolean CL_EndDownload( const char *failure ) {
 	char	why[MAX_STRING_CHARS], remoteName[MAX_OSPATH], localName[MAX_OSPATH], tmp[MAX_OSPATH];
+	int		httpStatus = 0;
 
 	if ( !*clc.downloadName ) {
 		return qfalse;
@@ -2914,10 +2925,11 @@ static qboolean CL_EndDownload( const char *failure ) {
 		CL_BeginDownload( remoteName );
 		return qtrue;
 	}
+	httpStatus = clc.downloadHTTP ? clc.downloadHTTPStatus : 0;
 	clc.downloadHTTP = qfalse;
 #endif
 	if ( failure ) {
-		CL_AddDownloadFailure( clc.downloadRemoteName, clc.downloadChecksum, failure );
+		CL_AddDownloadFailure( clc.downloadRemoteName, clc.downloadChecksum, failure, httpStatus );
 	}
 
 	CL_ClearDownloadName();
@@ -3982,7 +3994,7 @@ void CL_Frame ( int msec ) {
 		char error[MAX_STRING_CHARS];
 
 		if(clc.downloadHTTP) {
-			if(!CL_HTTP_PerformDownload(error, sizeof(error)))
+			if(!CL_HTTP_PerformDownload(error, sizeof(error), &clc.downloadHTTPStatus))
 				CL_CheckDownloadSize();
 			else if(*error)
 				CL_DownloadFailed(error);

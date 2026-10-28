@@ -55,6 +55,7 @@ typedef struct {
     int                 size;       // Content-Length; 0 when there was none
     int                 length;     // of data
     char                error[1024];    // why it failed, or empty
+    int                 status;     // the HTTP status that failed it, or 0
     byte                data[HTTP_BUFFER_SIZE];
     // the thread's own
     char                url[MAX_STRING_CHARS];
@@ -83,13 +84,14 @@ static void CL_HTTP_Release(httpDownload_t *d)
 
 /*
 =================
-CL_HTTP_Fail
+CL_HTTP_FailStatus
 
-Notes why the download failed; the first reason counts. Calls nothing
-that may print, since it runs on the download's thread too
+Notes why the download failed, and the HTTP status that failed it, or 0;
+the first reason counts. Calls nothing that may print, since it runs on
+the download's thread too
 =================
 */
-static Q_PRINTF_FUNC(2, 3) void CL_HTTP_Fail(httpDownload_t *d, const char *fmt, ...)
+static Q_PRINTF_FUNC(3, 4) void CL_HTTP_FailStatus(httpDownload_t *d, int status, const char *fmt, ...)
 {
     char buffer[1024];
     va_list argptr;
@@ -104,9 +106,12 @@ static Q_PRINTF_FUNC(2, 3) void CL_HTTP_Fail(httpDownload_t *d, const char *fmt,
         Q_strncpyz(d->error, buffer, sizeof(d->error));
         Q_strcat(d->error, sizeof(d->error), " from ");
         Q_strcat(d->error, sizeof(d->error), d->url);
+        d->status = status;
     }
     LeaveCriticalSection(&d->lock);
 }
+
+#define CL_HTTP_Fail(d, ...) CL_HTTP_FailStatus(d, 0, __VA_ARGS__)
 
 /*
 =================
@@ -293,7 +298,7 @@ static HINTERNET CL_HTTP_Open(httpDownload_t *d)
             return hUrl;
         if (httpCode != 301 && httpCode != 302 && httpCode != 303 && httpCode != 307 && httpCode != 308)
         {
-            CL_HTTP_Fail(d, "HTTP code %lu", httpCode);
+            CL_HTTP_FailStatus(d, (int)httpCode, "HTTP code %lu", httpCode);
             break;
         }
 
@@ -492,12 +497,13 @@ Writes out what the thread has read; returns whether the download has
 ended, with error empty if it arrived whole. The caller then cancels it
 =================
 */
-qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
+qboolean CL_HTTP_PerformDownload(char *error, int errorSize, int *status)
 {
     httpDownload_t *d = download;
     qboolean finished;
 
     *error = '\0';
+    *status = 0;
     if (!d)
     {
         Q_strncpyz(error, "no download under way", errorSize);
@@ -526,6 +532,7 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
     // written now
     finished = d->finished || d->error[0];
     Q_strncpyz(error, d->error, errorSize);
+    *status = d->status;
     LeaveCriticalSection(&d->lock);
 
     return finished;
