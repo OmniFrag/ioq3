@@ -2474,15 +2474,38 @@ Loads any of the supported image types into a canonical
 32 bit format.
 =================
 */
+int R_ImageNames( const char *name, char (*names)[MAX_QPATH], int *formats )
+{
+	const char	*ext = COM_GetExtension( name ), *exts[ARRAY_LEN( imageLoaders )];
+	char		stripped[MAX_QPATH];
+	qboolean	compressed = r_ext_compressed_textures->integer != 0, known = qfalse;
+	int			numNames, i;
+
+	for ( i = 0; i < numImageLoaders; i++ ) {
+		exts[i] = imageLoaders[i].ext;
+		known |= !Q_stricmp( ext, exts[i] );
+	}
+	COM_StripExtension( name, stripped, sizeof( stripped ) );
+
+	// the DDS first with compressed textures, else last (format -1);
+	// between, the name and its other formats, an extension that's neither
+	// theirs nor a DDS's taken off
+	numNames = compressed + COM_FormatNames( Q_stricmp( ext, "dds" ) && !known ? stripped : name, exts, numImageLoaders,
+		names + compressed, formats + compressed );
+	i = compressed ? 0 : numNames++;
+	Com_sprintf( names[i], MAX_QPATH, "%s.dds", stripped );
+	formats[i] = -1;
+	return numNames;
+}
+
 void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum *picFormat, int *numMips, char *fileName )
 {
 	// fileName, MAX_QPATH long, is set to each file tried, so it names the
 	// one that loaded
-	const char	*ext = COM_GetExtension( name ), *exts[ARRAY_LEN( imageLoaders )];
-	char		names[ARRAY_LEN( imageLoaders ) + 1][MAX_QPATH], stripped[MAX_QPATH];
-	int			formats[ARRAY_LEN( imageLoaders ) + 1], tiers[ARRAY_LEN( imageLoaders ) + 1];
-	qboolean	compressed = r_ext_compressed_textures->integer != 0, known = qfalse;
-	int			numNames, own, i;
+	char		names[MAX_IMAGE_NAMES][MAX_QPATH];
+	int			formats[MAX_IMAGE_NAMES], tiers[MAX_IMAGE_NAMES];
+	qboolean	compressed = r_ext_compressed_textures->integer != 0;
+	int			numNames, own = compressed, i;
 
 	*pic = NULL;
 	*width = 0;
@@ -2491,21 +2514,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 	*numMips = 0;
 	Q_strncpyz( fileName, name, MAX_QPATH );
 
-	for ( i = 0; i < numImageLoaders; i++ ) {
-		exts[i] = imageLoaders[i].ext;
-		known |= !Q_stricmp( ext, exts[i] );
-	}
-	COM_StripExtension( name, stripped, sizeof( stripped ) );
-
-	// the DDS first with compressed textures, else last; between, the name
-	// and its other formats, an extension that's neither theirs nor a DDS's
-	// taken off
-	own = compressed;
-	numNames = own + COM_FormatNames( Q_stricmp( ext, "dds" ) && !known ? stripped : name, exts, numImageLoaders,
-		names + own, formats + own );
-	i = compressed ? 0 : numNames++;
-	Com_sprintf( names[i], MAX_QPATH, "%s.dds", stripped );
-	formats[i] = -1;
+	numNames = R_ImageNames( name, names, formats );
 
 	// every format in the file system's tier 0 before any in tier 1
 	for ( i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, -1 ); i >= 0;

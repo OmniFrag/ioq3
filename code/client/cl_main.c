@@ -4501,6 +4501,8 @@ void CL_InitRef( void ) {
 	ri.FS_FileIsInPAK = FS_FileIsInPAK;
 	ri.FS_FileExists = FS_FileExists_HomeData;
 	ri.FS_FileTier = FS_FileTier;
+	ri.FS_FileSource = FS_FileSource;
+	ri.FS_LastFileSource = FS_LastFileSource;
 	ri.Cvar_Get = Cvar_Get;
 	ri.Cvar_Set = Cvar_Set;
 	ri.Cvar_SetValue = Cvar_SetValue;

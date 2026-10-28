@@ -143,6 +143,16 @@ static ID_INLINE int R_ScaleViewSide( int side, float scale, int maxSide ) {
 }
 
 float R_NoiseGet4f( float x, float y, float z, double t );
+
+// the shader files as ScanAndLoadShaderFiles reads them (tr_shaderfiles.c)
+void R_ShaderFilesBegin( int count );
+void R_ShaderFileNote( int index, const char *name, int tier, qboolean loaded );
+void R_WhichShader_f( void );
+
+// the names an image is tried by, in R_LoadImage's order, and each one's
+// loader (each renderer's); at most MAX_IMAGE_NAMES
+#define MAX_IMAGE_NAMES	16
+int R_ImageNames( const char *name, char (*names)[MAX_QPATH], int *formats );
 void  R_NoiseInit( void );
 
 image_t     *R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags );
