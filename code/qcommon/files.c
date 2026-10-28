@@ -3515,7 +3515,7 @@ FS_GetModDescription
 */
 void FS_GetModDescription( const char *modDir, char *description, int descriptionLen ) {
 	fileHandle_t	descHandle;
-	char			descPath[MAX_QPATH];
+	char			descPath[MAX_OSPATH];
 	int				nDescLen;
 	FILE			*file;
 
@@ -3592,6 +3592,11 @@ int	FS_GetModList( char *listbuf, int bufsize ) {
 		}
 		// we also drop "baseq3" "." and ".."
 		if (bDrop || Q_stricmp(name, com_basegame->string) == 0 || Q_stricmpn(name, ".", 1) == 0) {
+			continue;
+		}
+		// and a folder named past MAX_QPATH, which fs_game can't be set to
+		if (strlen(name) >= MAX_QPATH) {
+			Com_Printf("Mods: %s's name is longer than %d characters, so it isn't listed\n", name, MAX_QPATH - 1);
 			continue;
 		}
 
@@ -5354,12 +5359,16 @@ FS_InvalidGameDir
 return true if path is a reference to current directory or directory traversal
 or a sub-directory, a hidden directory, or one of the engine's own folders
 (FS_EngineFolder), named as Windows would find it, without final dots and
-spaces
+spaces; or a name past MAX_QPATH, which the game's paths can't hold
 ================
 */
 qboolean FS_InvalidGameDir( const char *gamedir ) {
 	char	name[MAX_QPATH];
 
+	if ( strlen( gamedir ) >= MAX_QPATH ) {
+		Com_Printf( "A game folder's name is at most %d characters: %s\n", MAX_QPATH - 1, gamedir );
+		return qtrue;
+	}
 	Q_strncpyz( name, gamedir, sizeof( name ) );
 	name[FS_NameLength( name, strlen( name ) )] = '\0';
 	if ( gamedir[0] == '.' || strchr( gamedir, '/' ) || strchr( gamedir, '\\' ) || FS_EngineFolder( name ) ) {
