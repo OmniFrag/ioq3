@@ -177,6 +177,26 @@ int COM_NextByTier( int (*fileTier)( const char *name ), char (*names)[MAX_QPATH
 
 /*
 ============
+COM_NextShaderName
+
+The name of the next shader a shader file's text defines, its
+definition passed over; "" past the last
+============
+*/
+char *COM_NextShaderName( char **text )
+{
+	// a copy, as passing over the definition parses on
+	static char	name[MAX_TOKEN_CHARS];
+
+	Q_strncpyz( name, COM_ParseExt( text, qtrue ), sizeof( name ) );
+	if ( name[0] && !SkipBracedSection( text, 0 ) ) {
+		*text = NULL;
+	}
+	return name;
+}
+
+/*
+============
 COM_CompareExtension
 
 string compare the end of the strings and return qtrue if strings match

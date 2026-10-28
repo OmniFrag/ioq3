@@ -3844,12 +3844,15 @@ static void ScanAndLoadShaderFiles( void )
 	if ( !shaderFiles || !numShaderFiles )
 	{
 		ri.Printf( PRINT_WARNING, "WARNING: no shader files found\n" );
+		// none for whichshader, not the last renderer's
+		R_ShaderFilesBegin( 0 );
 		return;
 	}
 
 	if ( numShaderFiles > MAX_SHADER_FILES ) {
 		numShaderFiles = MAX_SHADER_FILES;
 	}
+	R_ShaderFilesBegin( numShaderFiles );
 
 	// load and parse shader files
 	for ( i = 0; i < numShaderFiles; i++ )
@@ -3929,6 +3932,7 @@ static void ScanAndLoadShaderFiles( void )
 		}
 			
 		
+		R_ShaderFileNote( i, filename, tiers[i], buffers[i] != NULL );
 		if (buffers[i])
 			sum += summand;		
 	}
