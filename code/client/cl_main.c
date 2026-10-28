@@ -1904,6 +1904,12 @@ void CL_Connect_f( void ) {
 
 	Com_Printf( "%s resolved to %s\n", clc.servername, serverString);
 
+	// the paks played with the player's own versions are that server's
+	if ( !NET_CompareAdr( clc.serverAddress, cls.ownVersionsServer ) ) {
+		FS_ForgetOwnVersions();
+		cls.ownVersionsNote[0] = '\0';
+	}
+
 	if( cl_guidServerUniq->integer )
 		CL_UpdateGUID( serverString, strlen( serverString ) );
 	else
@@ -2247,6 +2253,44 @@ void CL_Clientinfo_f( void ) {
 
 /*
 =================
+CL_JoinWithOwnVersions
+
+On a non-pure server, which takes any paks, when every pak that couldn't
+be downloaded is one the player has another version of under its name,
+the player joins with their own, as stock ioquake3 does with the game's
+own paks, which it never downloads. They aren't asked for again for the
+rest of that server's connection (FS_PlayOwnVersions), and a note names
+them once the player is in the game. Returns whether the join goes on
+=================
+*/
+static qboolean CL_JoinWithOwnVersions( void ) {
+	char	names[MAX_STRING_CHARS];
+	int		i, count = clc.downloadOwnVersionCount;
+
+	// any other failure, or more than were kept, refuses the join
+	if ( cl_connectedToPureServer || count < clc.downloadFailed ||
+		!FS_PlayOwnVersions( clc.downloadOwnVersions, count ) ) {
+		return qfalse;
+	}
+
+	names[0] = '\0';
+	for ( i = 0; i < count; i++ ) {
+		if ( i ) {
+			Q_strcat( names, sizeof( names ), i == count - 1 ? " and " : ", " );
+		}
+		Q_strcat( names, sizeof( names ), COM_SkipPath( clc.downloadOwnVersions[i].name ) );
+	}
+	cls.ownVersionsServer = clc.serverAddress;
+	Com_sprintf( cls.ownVersionsNote, sizeof( cls.ownVersionsNote ), "Joined with your own %s; the server's version%s "
+		"couldn't be downloaded", names, count == 1 ? "" : "s" );
+	// nothing failed after all, for the facts the extensions read too
+	*clc.downloadFailures = 0;
+	clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
+	return qtrue;
+}
+
+/*
+=================
 CL_DownloadsComplete
 
 Called when all downloading has been completed
@@ -2257,8 +2301,9 @@ void CL_DownloadsComplete( void ) {
 
 	// a pak the server uses is still missing: say which, and why, all at
 	// once, keeping the ones that did arrive for the next connect. A title,
-	// then a line each, which the error screen shows as lines
-	if ( clc.downloadFailed ) {
+	// then a line each, which the error screen shows as lines. Unless the
+	// player has their own version of each and the server isn't pure
+	if ( clc.downloadFailed && !CL_JoinWithOwnVersions() ) {
 		if ( clc.downloadRestart ) {
 			clc.downloadRestart = qfalse;
 			FS_Restart( clc.checksumFeed );
@@ -2344,10 +2389,10 @@ CL_AddDownloadFailure
 Notes a pak that couldn't be downloaded, for CL_DownloadsComplete to list
 under its title, on a line of its own, each after a newline: for one of
 the game's own paks, which to add; for one the player has another version
-of under its name, that the server's is different; otherwise the server's
-name for it; and why. httpStatus is
-the HTTP status sv_dlURL's site answered with, or 0: "not found" says it
-all, so the URL is left to the console's warning
+of under its name, that the server's is different, keeping it for
+CL_JoinWithOwnVersions; otherwise the server's name for it; and why.
+httpStatus is the HTTP status sv_dlURL's site answered with, or 0: "not
+found" says it all, so the URL is left to the console's warning
 =================
 */
 void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason, int httpStatus ) {
@@ -2355,6 +2400,7 @@ void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char 
 	const char	*line;
 	int			length = 0;
 	qboolean	notFound = httpStatus == 404 || httpStatus == 410;
+	qboolean	own = FS_InstalledPakNamed( name );
 
 	// a server's refusal runs over several lines
 	for ( ; *reason && length < (int)sizeof( why ) - 1; reason++ ) {
@@ -2375,12 +2421,18 @@ void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char 
 
 	if ( FS_RetailPakChecksum( name, checksum, retail, sizeof( retail ) ) ) {
 		line = va( "\n%s is one of the game's own paks: add %s from your own copy of the game.", name, retail );
-	} else if ( FS_InstalledPakNamed( name ) ) {
+	} else if ( own ) {
 		line = notFound ?
 			va( "\nThe server uses a different version of %s than yours, and its download site doesn't have it.", name ) :
 			va( "\nThe server uses a different version of %s than yours, and it couldn't be downloaded: %s", name, why );
 	} else {
 		line = va( "\n%s: %s", name, notFound ? "the server's download site doesn't have it" : why );
+	}
+	if ( own && clc.downloadOwnVersionCount < MAX_OWN_VERSIONS ) {
+		missingPak_t	*pak = &clc.downloadOwnVersions[clc.downloadOwnVersionCount++];
+
+		Q_strncpyz( pak->name, name, sizeof( pak->name ) );
+		pak->checksum = checksum;
 	}
 	clc.downloadFailed++;
 	if ( strlen( clc.downloadFailures ) + strlen( line ) < sizeof( clc.downloadFailures ) ) {
@@ -3029,7 +3081,7 @@ static void CL_PrintNeededPaks( void ) {
 static void CL_StartDownloadSet( void ) {
 	CL_ClearDownloadName();
 	*clc.downloadFailures = 0;
-	clc.downloadFailed = clc.downloadFailuresUnlisted = 0;
+	clc.downloadFailed = clc.downloadFailuresUnlisted = clc.downloadOwnVersionCount = 0;
 }
 
 /*

@@ -1277,6 +1277,13 @@ typedef struct {
 // the paks the server references that the client lacks, without a list's
 // length: up to max of them, and how many there are
 int FS_MissingPaks( missingPak_t *paks, int max );
+#define MAX_OWN_VERSIONS	16
+qboolean FS_PlayOwnVersions( const missingPak_t *paks, int count );
+void FS_ForgetOwnVersions( void );
+// a non-pure server's paks, by their download names and checksums, that the
+// player plays with their own versions of, which then aren't asked for: all
+// of them, or none on a pure server or past MAX_OWN_VERSIONS (whether they
+// were kept); and for another server, none
 
 void FS_Remove( const char *osPath );
 void FS_Remove_HomeData( const char *homePath );

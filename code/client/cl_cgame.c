@@ -1106,6 +1106,16 @@ void CL_FirstSnapshot( void ) {
 
 	clc.timeDemoBaseTime = cl.snap.serverTime;
 
+	// the paks played with the player's own versions, said in the console
+	// and on the screen's notify lines once the player is in that server's
+	// game, not a demo's or a local one's after a join that went no further
+	if ( cls.ownVersionsNote[0] ) {
+		if ( !clc.demoplaying && NET_CompareAdr( clc.serverAddress, cls.ownVersionsServer ) ) {
+			Com_Printf( S_COLOR_YELLOW "%s\n", cls.ownVersionsNote );
+		}
+		cls.ownVersionsNote[0] = '\0';
+	}
+
 	// if this is the first frame of active play,
 	// execute the contents of activeAction now
 	// this is to allow scripting a timedemo to start right

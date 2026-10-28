@@ -402,6 +402,13 @@ static int			fs_numServerPaks = 0;
 static unsigned int	fs_serverPaks[MAX_SEARCH_PATHS];				// checksums
 static char			*fs_serverPakNames[MAX_SEARCH_PATHS];			// pk3 names
 
+// the referenced paks a non-pure server couldn't send that the player has
+// another version of, played with that (FS_PlayOwnVersions), by name,
+// "<game>/<name>", and checksum
+static int			fs_numOwnVersions;
+static unsigned int	fs_ownVersions[MAX_OWN_VERSIONS];
+static char			fs_ownVersionNames[MAX_OWN_VERSIONS][MAX_QPATH];
+
 // only used for autodownload, to make sure the client has at least
 // all the pk3 files that are referenced at the server side
 static int			fs_numServerReferencedPaks;
@@ -4151,6 +4158,70 @@ static qboolean FS_PakHashRefused( const pack_t *pak )
 
 /*
 ================
+FS_PlayOwnVersions
+
+Plays a non-pure server's paks, by a download's name ("<game>/<name>.pk3")
+and the checksum the server lists, with the player's own versions of them:
+the server couldn't send them, and a non-pure server takes any. They then
+aren't asked for (FS_ServerPakMissing), so a later gamestate doesn't fetch
+them again, until FS_ForgetOwnVersions. All of them or none: none on a
+server that lists its paks, which takes only those (FS_OwnVersionPlayed),
+or past MAX_OWN_VERSIONS. Returns whether they were kept
+================
+*/
+qboolean FS_PlayOwnVersions( const missingPak_t *paks, int count )
+{
+	int		i;
+
+	if ( fs_numServerPaks || count > MAX_OWN_VERSIONS - fs_numOwnVersions ) {
+		return qfalse;
+	}
+	for ( i = 0; i < count; i++ ) {
+		COM_StripExtension( paks[i].name, fs_ownVersionNames[fs_numOwnVersions], sizeof( fs_ownVersionNames[0] ) );
+		fs_ownVersions[fs_numOwnVersions++] = paks[i].checksum;
+	}
+	return qtrue;
+}
+
+/*
+================
+FS_ForgetOwnVersions
+
+For another server: the paks played with the player's own versions are
+asked for again
+================
+*/
+void FS_ForgetOwnVersions( void )
+{
+	fs_numOwnVersions = 0;
+}
+
+/*
+================
+FS_OwnVersionPlayed
+
+Whether a non-pure server's pak refName ("<game>/<name>") with the
+checksum is played with the player's own version (FS_PlayOwnVersions);
+never on a pure server, which takes only its own
+================
+*/
+static qboolean FS_OwnVersionPlayed( const char *refName, unsigned int checksum )
+{
+	int		i;
+
+	if ( fs_numServerPaks ) {
+		return qfalse;
+	}
+	for ( i = 0; i < fs_numOwnVersions; i++ ) {
+		if ( fs_ownVersions[i] == checksum && !FS_FilenameCompare( fs_ownVersionNames[i], refName ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+================
 FS_HasServerPak
 
 Whether the search path has the server's pak refName ("<game>/<name>")
@@ -4463,6 +4534,23 @@ qboolean FS_InvalidGameDir( const char *gamedir ) {
 
 /*
 ================
+FS_ServerPakMissing
+
+Whether the server's referenced pak i is one to fetch: named, not in the
+search path, and not one the player plays with their own version of
+(FS_OwnVersionPlayed)
+================
+*/
+static qboolean FS_ServerPakMissing( int i )
+{
+	const char		*name = fs_serverReferencedPakNames[i];
+	unsigned int	checksum = fs_serverReferencedPaks[i];
+
+	return name && *name && !FS_HasServerPak( name, checksum ) && !FS_OwnVersionPlayed( name, checksum );
+}
+
+/*
+================
 FS_ComparePaks
 
 ----------------
@@ -4490,7 +4578,6 @@ we are not interested in a download string format, we want something human-reada
 ================
 */
 qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
-	qboolean havepak;
 	char *origpos = neededpaks;
 	int i;
 
@@ -4510,10 +4597,7 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 			continue;
 		}
 
-		// Ok, see if we have this pak file
-		havepak = FS_HasServerPak( fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] );
-
-		if ( !havepak && fs_serverReferencedPakNames[i] && *fs_serverReferencedPakNames[i] ) { 
+		if ( FS_ServerPakMissing( i ) ) {
 			// Don't got it
 
 			if (dlstring)
@@ -4583,10 +4667,8 @@ int FS_MissingPaks( missingPak_t *paks, int max ) {
 	int		i, count = 0;
 
 	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
-		if ( !fs_serverReferencedPakNames[i] || !*fs_serverReferencedPakNames[i] ||
-			strlen( fs_serverReferencedPakNames[i] ) + 4 >= sizeof( paks->name ) ||
-			!FS_ValidDownloadName( fs_serverReferencedPakNames[i] ) ||
-			FS_HasServerPak( fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] ) ) {
+		if ( !fs_serverReferencedPakNames[i] || strlen( fs_serverReferencedPakNames[i] ) + 4 >= sizeof( paks->name ) ||
+			!FS_ValidDownloadName( fs_serverReferencedPakNames[i] ) || !FS_ServerPakMissing( i ) ) {
 			continue;
 		}
 		if ( count < max ) {
