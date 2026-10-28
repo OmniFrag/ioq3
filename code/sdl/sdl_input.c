@@ -1230,6 +1230,22 @@ qboolean IN_ModifierHeld( int key )
 	}
 }
 
+/*
+===============
+IN_CapsLock
+
+Whether Caps Lock is on now, as SDL saw the keyboard while the window had
+its focus
+===============
+*/
+qboolean IN_CapsLock( void )
+{
+	if( !SDL_window || !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_INPUT_FOCUS ) )
+		return qfalse;
+
+	return ( SDL_GetModState( ) & SDL_KMOD_CAPS ) ? qtrue : qfalse;
+}
+
 #ifdef SDL_PLATFORM_WINDOWS
 /*
 ===============
