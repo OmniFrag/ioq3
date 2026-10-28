@@ -911,7 +911,7 @@ void Cmd_Exec_f( void ) {
 	Q_strncpyz( filename, Cmd_Argv(1), sizeof( filename ) );
 	COM_DefaultExtension( filename, sizeof( filename ), ".cfg" );
 
-	FS_ReadFile( filename, &f.v);
+	FS_ReadConfig( filename, &f.v );
 	Q_strncpyz( content, FS_LastFileContent(), sizeof( content ) );
 	// a pak's config execs only what's in a pak: refused before anything
 	// takes note of the exec (startup scripts, the predecessor's home)
