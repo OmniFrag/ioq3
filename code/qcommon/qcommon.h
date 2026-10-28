@@ -1184,6 +1184,8 @@ long	FS_ReadFile(const char *qpath, void **buffer);
 // A 0 byte will always be appended at the end, so string ops are safe.
 // the buffer should be considered read-only, because it may be cached
 // for other uses.
+long	FS_ReadConfig( const char *qpath, void **buffer );
+// FS_ReadFile for exec, which passes over a download's configs
 
 void	FS_ForceFlush( fileHandle_t f );
 // forces flush on files we're writing to.

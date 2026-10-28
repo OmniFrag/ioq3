@@ -4470,7 +4470,8 @@ static void Com_SettingsImport_f( void ) {
 	if ( !filename ) {
 		return;
 	}
-	if ( FS_ReadFile( filename, (void **)&text ) < 0 ) {
+	// found as exec finds a config, past a download's
+	if ( FS_ReadConfig( filename, (void **)&text ) < 0 ) {
 		Com_Printf( "Couldn't read %s.\n", filename );
 		return;
 	}
