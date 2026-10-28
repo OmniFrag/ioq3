@@ -1721,6 +1721,7 @@ void IN_Restart( void );
 qboolean IN_GetSafeArea( int rect[4] );
 int64_t IN_NewestInput( void );	// the newest key or mouse event, in Sys_Nanoseconds
 qboolean IN_ModifierHeld( int key );	// K_SHIFT, K_CTRL or K_ALT held now
+qboolean IN_CapsLock( void );	// Caps Lock on now
 
 /*
 ==============================================================
@@ -1753,6 +1754,7 @@ void	QDECL Sys_Error( const char *error, ...) Q_NO_RETURN Q_PRINTF_FUNC(1, 2);
 void	Sys_ErrorExit( int status, const char *message ) Q_NO_RETURN;
 void	Sys_Quit (void) Q_NO_RETURN;
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
+void	Sys_SetClipboardData( const char *text );
 
 void	Sys_Print( const char *msg );
 void	Sys_Notify( const char *state );	// to the service manager, as sd_notify
