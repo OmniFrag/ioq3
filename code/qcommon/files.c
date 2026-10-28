@@ -270,12 +270,14 @@ typedef struct {
 	fileInPack_t*	buildBuffer;				// buffer with the filenames etc.
 	qboolean		cached;						// a download, from the content cache
 	qboolean		defaultCfgNoted;			// its default.cfg read, and said so
+	qboolean		holdsMap, holdsCode;		// a maps/*.bsp; a vm/*.qvm (FS_MapPack)
 } pack_t;
 
 typedef struct {
 	char		path[MAX_OSPATH];		// c:\quake3
 	char		fullpath[MAX_OSPATH];		// c:\quake3\baseq3
 	char		gamedir[MAX_OSPATH];	// baseq3
+	qboolean	holdsMap, holdsCode;	// a pk3dir's, as a pak's
 } directory_t;
 
 typedef struct searchpath_s {
@@ -307,6 +309,12 @@ static	cvar_t		*fs_basegame;
 static	cvar_t		*fs_gamedirvar;
 static	searchpath_t	*fs_searchpaths;
 static	int			fs_lastTier;			// the highest tier an entry has
+// the map the server runs or the client plays, "" for none, and the entry
+// its BSP loads from (FS_SetCurrentMap)
+static	char		fs_currentMap[MAX_QPATH];
+static	const searchpath_t	*fs_mapSearch;
+static	cvar_t		*fs_mapPakScope;
+static	cvar_t		*fs_globalPaks;
 static	int			fs_readCount;			// total bytes read
 static	int			fs_loadCount;			// total files read
 static	int			fs_loadStack;			// total files in memory
@@ -2010,6 +2018,23 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 
 /*
 ===========
+FS_SearchHasFile
+
+Whether a read of a file would find it in a search path entry: one a
+pure server allows, which has it. Marks no pak referenced
+===========
+*/
+static qboolean FS_SearchHasFile( const searchpath_t *search, const char *filename )
+{
+	if ( search->dir && FS_PureRefusesDirFile( filename ) ) {
+		return qfalse;
+	}
+	return FS_FOpenFileReadDir( filename, (searchpath_t *)search, NULL, qfalse, qfalse ) > 0 &&
+		( !search->pack || FS_PakIsPure( search->pack ) );
+}
+
+/*
+===========
 FS_FileTier
 
 The tier of the entry FS_FOpenFileRead would read a file from, or -1 for
@@ -2031,11 +2056,7 @@ int FS_FileTier( const char *filename )
 	}
 
 	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
-		if ( search->dir && FS_PureRefusesDirFile( filename ) ) {
-			continue;
-		}
-		if ( FS_FOpenFileReadDir( filename, search, NULL, qfalse, qfalse ) > 0 &&
-			( !search->pack || FS_PakIsPure( search->pack ) ) ) {
+		if ( FS_SearchHasFile( search, filename ) ) {
 			return search->tier;
 		}
 	}
@@ -2795,6 +2816,12 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 			fs_headerLongs[fs_numHeaderLongs++] = LittleLong(file_info.crc);
 		}
 		Q_strlwr( filename_inzip );
+		// either separator, as the lookups take both (FS_FilenameCompare)
+		pack->holdsMap |= !strncmp( filename_inzip, "maps", 4 ) &&
+			( filename_inzip[4] == '/' || filename_inzip[4] == '\\' ) && !strpbrk( filename_inzip + 5, "/\\" ) &&
+			COM_CompareExtension( filename_inzip, ".bsp" );
+		pack->holdsCode |= !strncmp( filename_inzip, "vm", 2 ) &&
+			( filename_inzip[2] == '/' || filename_inzip[2] == '\\' ) && COM_CompareExtension( filename_inzip, ".qvm" );
 		hash = FS_HashFileName(filename_inzip, pack->hashSize);
 		buildBuffer[i].name = namePtr;
 		strcpy( buildBuffer[i].name, filename_inzip );
@@ -3754,6 +3781,12 @@ void FS_Path_f( void ) {
 	int				i;
 
 	Com_Printf ("We are looking in the current search path:\n");
+	if ( fs_mapSearch ) {
+		Com_Printf( "The map is %s, from %s\n", fs_currentMap,
+			fs_mapSearch->pack ? fs_mapSearch->pack->pakFilename : fs_mapSearch->dir->fullpath );
+	} else if ( fs_currentMap[0] ) {
+		Com_Printf( "The map is %s\n", fs_currentMap );
+	}
 	for (s = fs_searchpaths; s; s = s->next) {
 		if (s->pack) {
 			Com_Printf ("%s (%i files)\n", s->pack->pakFilename, s->pack->numfiles);
@@ -3769,6 +3802,11 @@ void FS_Path_f( void ) {
 			}
 		} else {
 			Com_Printf ("%s%c%s\n", s->dir->path, PATH_SEP, s->dir->gamedir );
+		}
+		if ( s->tier ) {
+			Com_Printf( "    set aside: a map pack this map doesn't use\n" );
+		} else if ( s == fs_mapSearch ) {
+			Com_Printf( "    the map's own\n" );
 		}
 	}
 
@@ -3861,6 +3899,22 @@ void FS_Which_f( void ) {
 
 //===========================================================================
 
+
+/*
+================
+FS_DirHolds
+
+Whether a directory's subdirectory holds a file of an extension
+================
+*/
+static qboolean FS_DirHolds( const char *path, const char *subdir, const char *extension ) {
+	char	**files;
+	int		count;
+
+	files = Sys_ListFiles( va( "%s%c%s", path, PATH_SEP, subdir ), extension, NULL, &count, qfalse );
+	Sys_FreeFileList( files );
+	return count > 0;
+}
 
 static int QDECL paksort( const void *a, const void *b ) {
 	char	*aa, *bb;
@@ -3997,6 +4051,8 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 			Q_strncpyz(search->dir->path, curpath, sizeof(search->dir->path));	// c:\quake3\baseq3
 			Q_strncpyz(search->dir->fullpath, pakfile, sizeof(search->dir->fullpath));	// c:\quake3\baseq3\mypak.pk3dir
 			Q_strncpyz(search->dir->gamedir, pakdirs[pakdirsi], sizeof(search->dir->gamedir)); // mypak.pk3dir
+			search->dir->holdsMap = FS_DirHolds( pakfile, "maps", ".bsp" );
+			search->dir->holdsCode = FS_DirHolds( pakfile, "vm", ".qvm" );
 
 			search->next = fs_searchpaths;
 			fs_searchpaths = search;
@@ -4584,6 +4640,142 @@ void FS_UnmountCachePaks( void )
 
 /*
 ================
+FS_IdPak
+
+Whether a pak is one of id's, by its checksum: Quake III Arena 1.32's,
+Team Arena's or the demo's
+================
+*/
+static qboolean FS_IdPak( const pack_t *pak ) {
+	int		index;
+
+#ifndef STANDALONE
+	if ( pak->checksum == DEMO_PAK0_CHECKSUM ) {
+		return qtrue;
+	}
+#endif
+	return FS_RetailPakGame( pak->checksum, &index ) != NULL;
+}
+
+/*
+================
+FS_GlobalPak
+
+Whether fs_globalPaks names a pak or pk3dir: a name, with or without its
+.pk3, for one in any game directory, or "<game>/<name>" for one in that
+directory, in any case
+================
+*/
+static qboolean FS_GlobalPak( const searchpath_t *search ) {
+	const char	*list = fs_globalPaks->string, *game, *c;
+	char		name[MAX_OSPATH], full[MAX_OSPATH], token[MAX_OSPATH], *end;
+	int			length;
+
+	if ( search->pack ) {
+		game = search->pack->pakGamename;
+		Q_strncpyz( name, search->pack->pakBasename, sizeof( name ) );
+	} else {
+		// a pk3dir's game directory, the last in its path
+		for ( game = c = search->dir->path; *c; c++ ) {
+			if ( *c == '/' || *c == '\\' ) {
+				game = c + 1;
+			}
+		}
+		COM_StripExtension( search->dir->gamedir, name, sizeof( name ) );
+	}
+	Com_sprintf( full, sizeof( full ), "%s/%s", game, name );
+
+	while ( *list ) {
+		for ( length = 0; list[length] && list[length] != ' '; length++ ) {
+		}
+		Q_strncpyz( token, list, MIN( length + 1, (int)sizeof( token ) ) );
+		for ( list += length; *list == ' '; list++ ) {
+		}
+		if ( ( end = strrchr( token, '.' ) ) && ( !Q_stricmp( end, ".pk3" ) || !Q_stricmp( end, ".pk3dir" ) ) ) {
+			*end = '\0';
+		}
+		if ( token[0] && !FS_FilenameCompare( strchr( token, '/' ) ? full : name, token ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+================
+FS_MapPack
+
+Whether a search path entry is a map pack: a pak or pk3dir that holds a
+map, maps/<name>.bsp, but no game code, vm/<name>.qvm, and isn't one of
+id's or one fs_globalPaks names
+================
+*/
+static qboolean FS_MapPack( const searchpath_t *search ) {
+	if ( search->pack ) {
+		if ( !search->pack->holdsMap || search->pack->holdsCode || FS_IdPak( search->pack ) ) {
+			return qfalse;
+		}
+	} else if ( !search->dir->holdsMap || search->dir->holdsCode ) {
+		return qfalse;
+	}
+	return !FS_GlobalPak( search );
+}
+
+/*
+================
+FS_RankPaks
+
+Puts the map packs the current map doesn't use in tier 1, so they only
+fill in files no other entry has, and every other entry in tier 0, as
+they were: with fs_mapPakScope 0, every entry. The map's own pak is the
+one its BSP loads from, the first in the path's order, as a read finds it
+in tier 0 too, with any pak of the same content. A change to
+fs_mapPakScope or fs_globalPaks applies here, at the next map or
+restart of the file system
+================
+*/
+static void FS_RankPaks( void ) {
+	searchpath_t	*search;
+	const pack_t	*own;
+	char			bsp[MAX_QPATH];
+
+	fs_mapSearch = NULL;
+	if ( fs_currentMap[0] ) {
+		Com_sprintf( bsp, sizeof( bsp ), "maps/%s.bsp", fs_currentMap );
+		for ( search = fs_searchpaths; search && !fs_mapSearch; search = search->next ) {
+			if ( FS_SearchHasFile( search, bsp ) ) {
+				fs_mapSearch = search;
+			}
+		}
+	}
+	own = fs_mapSearch ? fs_mapSearch->pack : NULL;
+
+	fs_lastTier = 0;
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		search->tier = fs_mapPakScope->integer && search != fs_mapSearch &&
+			!( own && search->pack && search->pack->checksum == own->checksum ) && FS_MapPack( search );
+		fs_lastTier = MAX( fs_lastTier, search->tier );
+	}
+}
+
+/*
+================
+FS_SetCurrentMap
+
+The map the server runs or the client plays, NULL or "" for none, whose
+own pak leads while the other map packs are set aside (FS_RankPaks). It
+mounts nothing, so the pure lists and checksums stay as they are
+================
+*/
+void FS_SetCurrentMap( const char *map ) {
+	Q_strncpyz( fs_currentMap, map ? map : "", sizeof( fs_currentMap ) );
+	if ( fs_searchpaths ) {
+		FS_RankPaks();
+	}
+}
+
+/*
+================
 FS_AddGameDirectories
 ================
 */
@@ -4830,6 +5022,8 @@ void FS_Shutdown( qboolean closemfp ) {
 	// any FS_ calls will now be an error until reinitialized
 	fs_searchpaths = NULL;
 	fs_lastFileSearch = NULL;
+	fs_mapSearch = NULL;
+	fs_lastTier = 0;
 
 	Cmd_RemoveCommand( "path" );
 	Cmd_RemoveCommand( "dir" );
@@ -5054,6 +5248,23 @@ static void FS_Startup( const char *gameName )
 	fs_packFiles = 0;
 
 	fs_debug = Cvar_Get( "fs_debug", "0", 0 );
+	fs_mapPakScope = Cvar_Get( "fs_mapPakScope", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( fs_mapPakScope, 0, 1, qtrue );
+	Cvar_SetDescription( fs_mapPakScope,
+		"Whether a map pack changes only its own maps\n"
+		"A map pack, a pak file (.pk3) with maps and no game code, can carry its own copies of the game's "
+		"files: shaders, textures, sounds, bot files. On, its copies apply only on its own maps, as their "
+		"author tested them; on every other map it only fills in files nothing else has, so another map's "
+		"look and sounds stay as they were made. Mods, id's paks and paks without maps are unchanged. "
+		"Applies from the next map.\n"
+		"0 = off: every pak counts on every map, as in Quake III\n"
+		"1 = on" );
+	fs_globalPaks = Cvar_Get( "fs_globalPaks", "", CVAR_ARCHIVE );
+	Cvar_SetDescription( fs_globalPaks,
+		"Map packs whose files count on every map, as they did before fs_mapPakScope\n"
+		"Names of pak files, separated by spaces, with or without .pk3, in any case: a name alone for "
+		"that pak in any game directory, \"<directory>/<name>\" (baseq3/ospmaps0) for it in that one. For a "
+		"map pack that also carries files meant for every map. Applies from the next map." );
 	fs_basepath = Cvar_Get ("fs_basepath", Sys_DefaultInstallPath(), CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
 	fs_basegame = Cvar_Get ("fs_basegame", "", CVAR_INIT );
 	fs_homeconfigpath = Cvar_Get ("fs_homeconfigpath", configPath, CVAR_INIT|CVAR_PROTECTED|CVAR_PRIVATE );
@@ -5143,6 +5354,7 @@ static void FS_Startup( const char *gameName )
 	// reorder the pure pk3 files according to server order
 	FS_ReorderPurePaks();
 	FS_NoteServerPaks();
+	FS_RankPaks();
 
 	// when the cached paks mounted were last used
 	Content_Cache_Flush();
