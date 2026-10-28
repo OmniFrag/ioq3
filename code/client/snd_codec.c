@@ -36,74 +36,40 @@ then tries all supported codecs.
 */
 static void *S_CodecGetSound(const char *filename, snd_info_t *info)
 {
-	snd_codec_t *codec;
-	snd_codec_t *orgCodec = NULL;
-	qboolean	orgNameFailed = qfalse;
-	char		localName[ MAX_QPATH ];
-	const char	*ext;
-	char		altName[ MAX_QPATH ];
-	void		*rtn = NULL;
+	// the codecs, at most this many
+	enum { MAX_CODECS = 8 };
+	snd_codec_t	*codec, *byFormat[MAX_CODECS];
+	const char	*exts[MAX_CODECS];
+	char		names[MAX_CODECS][MAX_QPATH];
+	int			formats[MAX_CODECS], tiers[MAX_CODECS];
+	int			numCodecs = 0, numNames, i;
+	void		*rtn;
 
-	Q_strncpyz(localName, filename, MAX_QPATH);
-
-	ext = COM_GetExtension(localName);
-
-	if( *ext )
+	for( codec = codecs; codec && numCodecs < MAX_CODECS; codec = codec->next )
 	{
-		// Look for the correct loader and use it
-		for( codec = codecs; codec; codec = codec->next )
-		{
-			if( !Q_stricmp( ext, codec->ext ) )
-			{
-				// Load
-				if( info )
-					rtn = codec->load(localName, info);
-				else
-					rtn = codec->open(localName);
-				break;
-			}
-		}
-
-		// A loader was found
-		if( codec )
-		{
-			if( !rtn )
-			{
-				// Loader failed, most likely because the file isn't there;
-				// try again without the extension
-				orgNameFailed = qtrue;
-				orgCodec = codec;
-				COM_StripExtension( filename, localName, MAX_QPATH );
-			}
-			else
-			{
-				// Something loaded
-				return rtn;
-			}
-		}
+		byFormat[numCodecs] = codec;
+		exts[numCodecs++] = codec->ext;
 	}
+	numNames = COM_FormatNames( filename, exts, numCodecs, names, formats );
 
-	// Try and find a suitable match using all
-	// the sound codecs supported
-	for( codec = codecs; codec; codec = codec->next )
+	// the name, then its other formats: every format in the file system's
+	// tier 0 before any in tier 1
+	for( i = COM_NextByTier( FS_FileTier, names, numNames, tiers, -1 ); i >= 0;
+			i = COM_NextByTier( FS_FileTier, names, numNames, tiers, i ) )
 	{
-		if( codec == orgCodec )
-			continue;
-
-		Com_sprintf( altName, sizeof (altName), "%s.%s", localName, codec->ext );
-
 		// Load
+		codec = byFormat[formats[i]];
 		if( info )
-			rtn = codec->load(altName, info);
+			rtn = codec->load(names[i], info);
 		else
-			rtn = codec->open(altName);
+			rtn = codec->open(names[i]);
 
 		if( rtn )
 		{
-			if( orgNameFailed )
+			if( i > 0 && !Q_stricmp( names[0], filename ) )
 			{
 				Com_DPrintf(S_COLOR_YELLOW "WARNING: %s not present, using %s instead\n",
-						filename, altName );
+						filename, names[i] );
 			}
 
 			return rtn;
