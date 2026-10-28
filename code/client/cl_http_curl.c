@@ -366,7 +366,7 @@ void CL_HTTP_BeginDownload( const char *remoteURL )
 	}
 }
 
-qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
+qboolean CL_HTTP_PerformDownload(char *error, int errorSize, int *status)
 {
 	CURLMcode res;
 	CURLMsg *msg;
@@ -374,6 +374,7 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
 	int i = 0;
 
 	*error = '\0';
+	*status = 0;
 	res = qcurl_multi_perform(downloadCURLM, &c);
 	while(res == CURLM_CALL_MULTI_PERFORM && i < 100) {
 		res = qcurl_multi_perform(downloadCURLM, &c);
@@ -390,6 +391,8 @@ qboolean CL_HTTP_PerformDownload(char *error, int errorSize)
 
 		qcurl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE,
 			&code);	
+		if(msg->data.result == CURLE_HTTP_RETURNED_ERROR)
+			*status = (int)code;
 		// another of the name's addresses may have connected, and the
 		// download failed for another reason
 		if(refusal[0] && (msg->data.result == CURLE_COULDNT_CONNECT ||
