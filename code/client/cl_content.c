@@ -595,7 +595,7 @@ static void CL_ContentFetchEnded( int fetch, clcFetchState_t state, const char *
 		} else {
 			p->state = PAK_DONE;
 			if ( state == FETCH_FAILED ) {
-				CL_AddDownloadFailure( p->name, p->checksum, why );
+				CL_AddDownloadFailure( p->name, p->checksum, why, 0 );
 			}
 		}
 	}

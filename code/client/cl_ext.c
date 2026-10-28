@@ -157,7 +157,8 @@ const char *CL_ExtDemoRecording( int *bytes ) {
 
 const char *CL_ExtDownloadFailures( int *count ) {
 	*count = clc.downloadFailed;
-	return clc.downloadFailures;
+	// a line each, without the newline that leads each
+	return clc.downloadFailures[0] ? clc.downloadFailures + 1 : clc.downloadFailures;
 }
 
 /*

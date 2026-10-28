@@ -29,7 +29,9 @@ qboolean CL_HTTP_Init( void );
 qboolean CL_HTTP_Available( void );
 void CL_HTTP_Shutdown( void );
 void CL_HTTP_BeginDownload( const char *remoteURL );
-qboolean CL_HTTP_PerformDownload( char *error, int errorSize );
+// whether the download ended; if it failed, error says why, and status is
+// the HTTP status that ended it, or 0 for none
+qboolean CL_HTTP_PerformDownload( char *error, int errorSize, int *status );
 void CL_HTTP_CancelDownload( void );
 
 #endif	// __CL_HTTP_H__

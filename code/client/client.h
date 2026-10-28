@@ -214,12 +214,13 @@ typedef struct {
 	char		downloadName[MAX_OSPATH];
 	unsigned int	downloadChecksum;	// the server's checksum for the pak downloading
 	char		downloadRemoteName[MAX_OSPATH];	// the server's name for it
-	char		downloadFailures[MAX_STRING_CHARS];	// the paks that couldn't be downloaded, a line each
+	char		downloadFailures[MAX_STRING_CHARS];	// the paks that couldn't be downloaded, a newline before each
 	int			downloadFailed;		// how many
 	int			downloadFailuresUnlisted;	// how many of them didn't fit
 #ifdef USE_HTTP
 	qboolean	httpUsed;
 	qboolean	downloadHTTP;	// the pak downloading comes from sv_dlURL
+	int			downloadHTTPStatus;	// the HTTP status its failure came with, or 0
 	int			downloadURLChecked;	// CL_CheckDownloadURL's answer: 1 yes, -1 no, 0 not asked
 	qboolean	downloadURLOwn;		// and whether its host is the game server's address
 	qboolean	disconnectedForHttpDownload;
@@ -555,7 +556,7 @@ void CL_NextDownload(void);
 void CL_DownloadFailed( const char *reason );
 qboolean CL_CheckDownloadSize( void );
 qboolean CL_DownloadAddressAllowed( const netadr_t *adr );
-void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason );
+void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char *reason, int httpStatus );
 void CL_ClearDownloadName( void );
 void CL_StartClassicDownloads( void );
 // the paks in clc.downloadList, the classic way: from sv_dlURL or the
