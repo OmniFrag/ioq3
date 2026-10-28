@@ -1490,25 +1490,20 @@ static qboolean FS_PakHasFile( const pack_t *pak, const char *name ) {
 ===========
 FS_CachePakRefuses
 
-Whether a file is kept from being read in a pak from the content cache, a
-download: its configs, which a server could fill with commands, but for
-default.cfg, which a mod needs, and whose reading from this pak is said
-once a mount
+Whether exec passes over a file in a pak from the content cache, a
+download: any but default.cfg, which a mod needs, and whose reading from
+this pak is said once a mount, since a server could fill a config with
+commands. The game reads the rest as any pak's, a player model's
+animation.cfg among them
 ===========
 */
-static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename, qboolean opening ) {
+static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename ) {
 
-	if ( !COM_CompareExtension( filename, ".cfg" ) ) {
-		return qfalse;
-	}
 	if ( Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) ) {
 		return qtrue;
 	}
-	if ( !opening || pak->defaultCfgNoted ) {
-		return qfalse;
-	}
 	// a search passes over every pak above the one that has it
-	if ( FS_PakHasFile( pak, filename ) ) {
+	if ( !pak->defaultCfgNoted && FS_PakHasFile( pak, filename ) ) {
 		pak->defaultCfgNoted = qtrue;
 		Com_Printf( "Reading default.cfg from %s/%s.pk3, downloaded to the content cache\n",
 			pak->pakGamename, pak->pakBasename );
@@ -1561,15 +1556,6 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 	{
 		if(file == NULL)
 			return qfalse;
-
-		*file = 0;
-		return -1;
-	}
-
-	if(search->pack && search->pack->cached && FS_CachePakRefuses(search->pack, filename, file != NULL))
-	{
-		if(file == NULL)
-			return 0;
 
 		*file = 0;
 		return -1;
@@ -1903,15 +1889,13 @@ const char *FS_LastFileContent( void ) {
 
 /*
 ===========
-FS_FOpenFileRead
+FS_FOpenFileReadAs
 
-Finds the file in the search path.
-Returns filesize and an open FILE pointer.
-Used for streaming data out of either a
-separate file or a ZIP file.
+FS_FOpenFileRead, which for exec passes over the configs in the content
+cache's paks, but default.cfg
 ===========
 */
-long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueFILE)
+static long FS_FOpenFileReadAs(const char *filename, fileHandle_t *file, qboolean uniqueFILE, qboolean isExec)
 {
 	searchpath_t *search;
 	long len;
@@ -1927,6 +1911,9 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
 		// files and pk3dirs, which come with the game, a mod or a download
 		if (isLocalConfig && FS_IsGameContent(search))
+			continue;
+		// and exec runs no config from a download but default.cfg
+		if (isExec && search->pack && search->pack->cached && FS_CachePakRefuses(search->pack, filename))
 			continue;
 
 		len = FS_FOpenFileReadDir(filename, search, file, uniqueFILE, qfalse);
@@ -1955,6 +1942,21 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 		// If we've got here, it doesn't exist
 		return 0;
 	}
+}
+
+/*
+===========
+FS_FOpenFileRead
+
+Finds the file in the search path.
+Returns filesize and an open FILE pointer.
+Used for streaming data out of either a
+separate file or a ZIP file.
+===========
+*/
+long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueFILE)
+{
+	return FS_FOpenFileReadAs(filename, file, uniqueFILE, qfalse);
 }
 
 /*
@@ -2368,14 +2370,15 @@ int	FS_FileIsInPAK(const char *filename, int *pChecksum ) {
 
 /*
 ============
-FS_ReadFileDir
+FS_ReadFileAs
 
 Filename are relative to the quake search path
 a null buffer will just return the file length without loading
 If searchPath is non-NULL search only in that specific search path
+With isExec, the search is exec's (FS_FOpenFileReadAs)
 ============
 */
-long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void **buffer)
+static long FS_ReadFileAs(const char *qpath, void *searchPath, qboolean unpure, qboolean isExec, void **buffer)
 {
 	fileHandle_t	h;
 	searchpath_t	*search;
@@ -2446,7 +2449,7 @@ long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void *
 	if(search == NULL)
 	{
 		// look for it in the filesystem or pack files
-		len = FS_FOpenFileRead(qpath, &h, qfalse);
+		len = FS_FOpenFileReadAs(qpath, &h, qfalse, isExec);
 	}
 	else
 	{
@@ -2516,6 +2519,18 @@ long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void *
 
 /*
 ============
+FS_ReadFileDir
+
+If searchPath is non-NULL search only in that specific search path
+============
+*/
+long FS_ReadFileDir(const char *qpath, void *searchPath, qboolean unpure, void **buffer)
+{
+	return FS_ReadFileAs(qpath, searchPath, unpure, qfalse, buffer);
+}
+
+/*
+============
 FS_ReadFile
 
 Filename are relative to the quake search path
@@ -2525,6 +2540,18 @@ a null buffer will just return the file length without loading
 long FS_ReadFile(const char *qpath, void **buffer)
 {
 	return FS_ReadFileDir(qpath, NULL, qfalse, buffer);
+}
+
+/*
+============
+FS_ReadConfig
+
+FS_ReadFile for exec: it passes over the configs in the content cache's
+paks, but default.cfg, to the next place that has the file
+============
+*/
+long FS_ReadConfig( const char *qpath, void **buffer ) {
+	return FS_ReadFileAs( qpath, NULL, qfalse, qtrue, buffer );
 }
 
 /*
