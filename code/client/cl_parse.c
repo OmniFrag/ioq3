@@ -608,6 +608,9 @@ void CL_ParseGamestate( msg_t *msg ) {
 	// manifest, which the restart mounts them by
 	CL_ContentSetPakHashes();
 	FS_ConditionalRestart(clc.checksumFeed, qfalse);
+	// the gamestate's map, a demo's too: its own pak leads, and the other
+	// map packs are set aside
+	FS_SetCurrentMap( Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO], "mapname" ) );
 
 	// This used to call CL_StartHunkUsers, but now we enter the download state before loading the
 	// cgame

@@ -1593,6 +1593,8 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	// Remove pure paks
 	FS_PureServerSetLoadedPaks("", "");
 	FS_PureServerSetReferencedPaks( "", "" );
+	// and the map: every map pack is set aside
+	FS_SetCurrentMap( NULL );
 	
 	CL_ClearState ();
 

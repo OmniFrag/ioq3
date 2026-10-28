@@ -1164,6 +1164,9 @@ const char	*FS_LastFileContent( void );
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // returns 1 if a file is in the PAK file, otherwise -1
+void	FS_SetCurrentMap( const char *map );
+// the map the server runs or the client plays, NULL for none: its own pak
+// leads, and the other map packs only fill in what nothing else has
 int		FS_FileTier( const char *filename );
 // the tier of the entry FS_FOpenFileRead would read a file from, or -1 for
 // none; 0 without a look while every entry is in tier 0
