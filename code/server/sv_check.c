@@ -143,7 +143,7 @@ they set and the mods
 ==================
 */
 void SV_CheckReport( void ) {
-	char		mods[MAX_STRING_CHARS];
+	char		mods[16 * 1024];
 	int			count, i;
 	const char	*mod;
 
