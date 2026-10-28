@@ -747,6 +747,11 @@ char	*COM_SkipPath( char *pathname );
 const char	*COM_GetExtension( const char *name );
 void	COM_StripExtension(const char *in, char *out, int destsize);
 qboolean COM_CompareExtension(const char *in, const char *ext);
+int		COM_FormatNames( const char *name, const char *const *exts, int numExts, char (*names)[MAX_QPATH], int *formats );
+// the file system's tiers: its lookups walk tier 0's search path entries,
+// then tier 1's (FS_FileTier)
+#define	FS_TIERS	2
+int		COM_NextByTier( int (*fileTier)( const char *name ), char (*names)[MAX_QPATH], int numNames, int *tiers, int prev );
 void	COM_DefaultExtension( char *path, int maxSize, const char *extension );
 
 void	COM_BeginParseSession( const char *name );

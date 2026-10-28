@@ -110,6 +110,73 @@ void COM_StripExtension( const char *in, char *out, int destsize )
 
 /*
 ============
+COM_FormatNames
+
+The names a loader of several formats tries for a file, in its order: the
+name itself when its extension is one of exts, then the name without that
+extension, with each other one of exts in their order; a name with no
+extension of exts keeps it, and gets each of exts after it. Each name's
+index in exts goes in formats, and names and formats hold numExts each.
+Returns how many
+============
+*/
+int COM_FormatNames( const char *name, const char *const *exts, int numExts, char (*names)[MAX_QPATH], int *formats )
+{
+	const char	*ext = COM_GetExtension( name );
+	char		base[MAX_QPATH];
+	int			own = -1, count = 0, i;
+
+	for ( i = 0; *ext && i < numExts; i++ ) {
+		if ( !Q_stricmp( ext, exts[i] ) ) {
+			own = i;
+			break;
+		}
+	}
+	if ( own >= 0 ) {
+		Q_strncpyz( names[count], name, MAX_QPATH );
+		formats[count++] = own;
+		COM_StripExtension( name, base, sizeof( base ) );
+	} else {
+		Q_strncpyz( base, name, sizeof( base ) );
+	}
+	for ( i = 0; i < numExts; i++ ) {
+		if ( i != own ) {
+			Com_sprintf( names[count], MAX_QPATH, "%s.%s", base, exts[i] );
+			formats[count++] = i;
+		}
+	}
+	return count;
+}
+
+/*
+============
+COM_NextByTier
+
+The next of a loader's names (COM_FormatNames) to try after prev, or the
+first for -1: those in a file system's tier 0 in their order, then those
+in each tier after; -1 past the last. fileTier gives a name's tier, -1
+for none, asked once a name, as the walk first reaches it, into tiers
+============
+*/
+int COM_NextByTier( int (*fileTier)( const char *name ), char (*names)[MAX_QPATH], int numNames, int *tiers, int prev )
+{
+	int		tier = prev < 0 ? 0 : tiers[prev], i = prev + 1;
+
+	for ( ; tier < FS_TIERS; tier++, i = 0 ) {
+		for ( ; i < numNames; i++ ) {
+			if ( tier == 0 ) {
+				tiers[i] = fileTier( names[i] );
+			}
+			if ( tiers[i] == tier ) {
+				return i;
+			}
+		}
+	}
+	return -1;
+}
+
+/*
+============
 COM_CompareExtension
 
 string compare the end of the strings and return qtrue if strings match

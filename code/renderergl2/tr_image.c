@@ -2478,103 +2478,54 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, GLenum 
 {
 	// fileName, MAX_QPATH long, is set to each file tried, so it names the
 	// one that loaded
-	qboolean orgNameFailed = qfalse;
-	int orgLoader = -1;
-	int i;
-	char base[ MAX_QPATH ];
-	char localName[ MAX_QPATH ];
-	char ddsName[ MAX_QPATH ];
-	const char *ext;
-	char *altName;
+	const char	*ext = COM_GetExtension( name ), *exts[ARRAY_LEN( imageLoaders )];
+	char		names[ARRAY_LEN( imageLoaders ) + 1][MAX_QPATH], stripped[MAX_QPATH];
+	int			formats[ARRAY_LEN( imageLoaders ) + 1], tiers[ARRAY_LEN( imageLoaders ) + 1];
+	qboolean	compressed = r_ext_compressed_textures->integer != 0, known = qfalse;
+	int			numNames, own, i;
 
 	*pic = NULL;
 	*width = 0;
 	*height = 0;
 	*picFormat = GL_RGBA8;
 	*numMips = 0;
+	Q_strncpyz( fileName, name, MAX_QPATH );
 
-	Q_strncpyz(localName, name, sizeof(localName));
-	ext = COM_GetExtension(localName);
-	COM_StripExtension(name, base, sizeof(base));
+	for ( i = 0; i < numImageLoaders; i++ ) {
+		exts[i] = imageLoaders[i].ext;
+		known |= !Q_stricmp( ext, exts[i] );
+	}
+	COM_StripExtension( name, stripped, sizeof( stripped ) );
 
-	// Build DDS name
-	Q_strncpyz(ddsName, base, sizeof(ddsName));
-	Q_strcat(ddsName, sizeof(ddsName), ".dds");
+	// the DDS first with compressed textures, else last; between, the name
+	// and its other formats, an extension that's neither theirs nor a DDS's
+	// taken off
+	own = compressed;
+	numNames = own + COM_FormatNames( Q_stricmp( ext, "dds" ) && !known ? stripped : name, exts, numImageLoaders,
+		names + own, formats + own );
+	i = compressed ? 0 : numNames++;
+	Com_sprintf( names[i], MAX_QPATH, "%s.dds", stripped );
+	formats[i] = -1;
 
-	if (r_ext_compressed_textures->integer) {
-		// Try DDS first
-		Q_strncpyz(fileName, ddsName, MAX_QPATH);
-		R_LoadDDS(ddsName, pic, width, height, picFormat, numMips);
-		if (*pic) return;
-
-		// Then try explicitly requested extension (if not DDS)
-		if (ext && *ext && Q_stricmp(ext, "dds")) {
-			for (i = 0; i < numImageLoaders; i++) {
-				if (!Q_stricmp(ext, imageLoaders[i].ext)) {
-					Q_strncpyz(fileName, localName, MAX_QPATH);
-					imageLoaders[i].ImageLoader(localName, pic, width, height);
-					if (*pic) return;
-					orgNameFailed = qtrue;
-					orgLoader = i;
-					break;
-				}
-			}
-			COM_StripExtension(name, localName, sizeof(localName));
+	// every format in the file system's tier 0 before any in tier 1
+	for ( i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, -1 ); i >= 0;
+			i = COM_NextByTier( ri.FS_FileTier, names, numNames, tiers, i ) ) {
+		Q_strncpyz( fileName, names[i], MAX_QPATH );
+		if ( formats[i] < 0 ) {
+			R_LoadDDS( names[i], pic, width, height, picFormat, numMips );
+		} else {
+			imageLoaders[formats[i]].ImageLoader( names[i], pic, width, height );
 		}
-
-		// Then probe all supported formats except the failed one
-		for (i = 0; i < numImageLoaders; i++) {
-			if (i == orgLoader)
-				continue;
-			altName = va("%s.%s", localName, imageLoaders[i].ext);
-			Q_strncpyz(fileName, altName, MAX_QPATH);
-			imageLoaders[i].ImageLoader(altName, pic, width, height);
-			if (*pic) {
-				if (orgNameFailed)
-					ri.Printf(PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n", name, altName);
-				return;
-			}
+		if ( !*pic ) {
+			continue;
 		}
-
+		if ( formats[i] < 0 && !compressed ) {
+			ri.Printf( PRINT_DEVELOPER, "WARNING: falling back to compressed texture %s when r_ext_compressed_textures=0\n",
+				names[i] );
+		} else if ( formats[i] >= 0 && i > own && !Q_stricmp( names[own], name ) ) {
+			ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n", name, names[i] );
+		}
 		return;
-	}
-
-	// Explicit non-dds extension requested, so try its image loader
-	if (ext && *ext && Q_stricmp(ext, "dds")) {
-		for (i = 0; i < numImageLoaders; i++) {
-			if (!Q_stricmp(ext, imageLoaders[i].ext)) {
-				Q_strncpyz(fileName, localName, MAX_QPATH);
-				imageLoaders[i].ImageLoader(localName, pic, width, height);
-				if (*pic) return;
-				orgNameFailed = qtrue;
-				orgLoader = i;
-				break;
-			}
-		}
-		COM_StripExtension(name, localName, sizeof(localName));
-	}
-
-	// Try all other uncompressed formats
-	for (i = 0; i < numImageLoaders; i++) {
-		if (i == orgLoader)
-			continue;
-		if (!Q_stricmp(imageLoaders[i].ext, "dds"))
-			continue;
-		altName = va("%s.%s", localName, imageLoaders[i].ext);
-		Q_strncpyz(fileName, altName, MAX_QPATH);
-		imageLoaders[i].ImageLoader(altName, pic, width, height);
-		if (*pic) {
-			if (orgNameFailed)
-				ri.Printf(PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n", name, altName);
-			return;
-		}
-	}
-
-	// Finally, allow DDS fallback even when compressed textures are off
-	if (!*pic) {
-		Q_strncpyz(fileName, ddsName, MAX_QPATH);
-		R_LoadDDS(ddsName, pic, width, height, picFormat, numMips);
-		if (*pic) ri.Printf(PRINT_DEVELOPER, "WARNING: falling back to compressed texture %s when r_ext_compressed_textures=0\n", ddsName);
 	}
 }
 

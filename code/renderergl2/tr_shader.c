@@ -3827,6 +3827,7 @@ a single large text block that can be scanned for shader names
 static void ScanAndLoadShaderFiles( void )
 {
 	char **shaderFiles;
+	int tiers[MAX_SHADER_FILES], tier;
 	char *buffers[MAX_SHADER_FILES] = {NULL};
 	char *p;
 	int numShaderFiles;
@@ -3855,19 +3856,32 @@ static void ScanAndLoadShaderFiles( void )
 	{
 		char filename[MAX_QPATH];
 
-		// look for a .mtr file first
+		// look for a .mtr file first, in the file system's tier 0 before
+		// any in tier 1
 		{
-			char *ext;
-			Com_sprintf( filename, sizeof( filename ), "scripts/%s", shaderFiles[i] );
-			if ( (ext = strrchr(filename, '.')) )
+			char names[2][MAX_QPATH], *ext;
+			int nameTiers[2], n;
+
+			Com_sprintf( names[1], sizeof( names[1] ), "scripts/%s", shaderFiles[i] );
+			Q_strncpyz( names[0], names[1], sizeof( names[0] ) );
+			if ( (ext = strrchr(names[0], '.')) )
 			{
 				strcpy(ext, ".mtr");
 			}
 
-			if ( ri.FS_ReadFile( filename, NULL ) <= 0 )
+			for ( n = COM_NextByTier( ri.FS_FileTier, names, 2, nameTiers, -1 ); n >= 0;
+				n = COM_NextByTier( ri.FS_FileTier, names, 2, nameTiers, n ) )
 			{
-				Com_sprintf( filename, sizeof( filename ), "scripts/%s", shaderFiles[i] );
+				// the .shader, listed, needs no look
+				if ( n == 1 || ri.FS_ReadFile( names[n], NULL ) > 0 )
+					break;
 			}
+			// the .shader, when neither is there to say so
+			if ( n < 0 )
+				n = 1;
+			Q_strncpyz( filename, names[n], sizeof( filename ) );
+			// a file the tiers miss joins last rather than not at all
+			tiers[i] = nameTiers[n] < 0 ? FS_TIERS - 1 : nameTiers[n];
 		}
 		
 		ri.Printf( PRINT_DEVELOPER, "...loading '%s'\n", filename );
@@ -3924,16 +3938,26 @@ static void ScanAndLoadShaderFiles( void )
 	s_shaderText[ 0 ] = '\0';
 	textEnd = s_shaderText;
  
+	// tier 0's files, then tier 1's, so a definition in tier 0 comes first
+	// and wins; each tier's in reverse list order
+	for ( tier = 0; tier < FS_TIERS; tier++ )
+	{
+		for ( i = numShaderFiles - 1; i >= 0 ; i-- )
+		{
+			if ( !buffers[i] || tiers[i] != tier )
+				continue;
+
+			strcat( textEnd, buffers[i] );
+			strcat( textEnd, "\n" );
+			textEnd += strlen( textEnd );
+		}
+	}
+
 	// free in reverse order, so the temp files are all dumped
 	for ( i = numShaderFiles - 1; i >= 0 ; i-- )
 	{
-		if ( !buffers[i] )
-			continue;
-
-		strcat( textEnd, buffers[i] );
-		strcat( textEnd, "\n" );
-		textEnd += strlen( textEnd );
-		ri.FS_FreeFile( buffers[i] );
+		if ( buffers[i] )
+			ri.FS_FreeFile( buffers[i] );
 	}
 
 	COM_Compress( s_shaderText );
