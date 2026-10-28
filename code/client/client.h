@@ -217,6 +217,11 @@ typedef struct {
 	char		downloadFailures[MAX_STRING_CHARS];	// the paks that couldn't be downloaded, a newline before each
 	int			downloadFailed;		// how many
 	int			downloadFailuresUnlisted;	// how many of them didn't fit
+	// of them, the ones the player has another version of under the name,
+	// which a non-pure server is joined with (CL_JoinWithOwnVersions); fewer
+	// than downloadFailed when any other failed, or more than these
+	missingPak_t	downloadOwnVersions[MAX_OWN_VERSIONS];
+	int			downloadOwnVersionCount;
 #ifdef USE_HTTP
 	qboolean	httpUsed;
 	qboolean	downloadHTTP;	// the pak downloading comes from sv_dlURL
@@ -420,6 +425,12 @@ typedef struct {
 
 	netadr_t	rconAddress;
 	int			rconTime;		// cls.realtime of the last rcon sent
+
+	// the server whose paks the player plays with their own versions of
+	// (FS_PlayOwnVersions), which a connect to another forgets, and the note
+	// that says so once the player is in the game
+	netadr_t	ownVersionsServer;
+	char		ownVersionsNote[MAX_STRING_CHARS];
 
 	// rendering info
 	glconfig_t	glconfig;
