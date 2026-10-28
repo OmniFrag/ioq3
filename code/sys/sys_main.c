@@ -198,6 +198,21 @@ char *Sys_GetClipboardData(void)
 #endif
 }
 
+/*
+==================
+Sys_SetClipboardData
+
+The system's clipboard set to text, as a copy or a cut in a text field
+puts it there
+==================
+*/
+void Sys_SetClipboardData( const char *text )
+{
+#ifndef DEDICATED
+	SDL_SetClipboardText( text );
+#endif
+}
+
 #define PID_SERVER_PREFIX PRODUCT_NAME "_server"
 
 /*
