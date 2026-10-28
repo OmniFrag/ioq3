@@ -3184,6 +3184,48 @@ void FS_FreeFileList( char **list ) {
 
 /*
 ================
+FS_WarnListCut
+
+Warns, once for each list in each game directory, that a caller's buffer
+held only the first names of a list: the game's lists of maps, bots and
+models otherwise come up short without a word
+================
+*/
+static void FS_WarnListCut( const char *path, const char *extension, int listed, int total, int bufsize ) {
+	static char	warned[64][MAX_OSPATH];
+	static int	numWarned;
+	char		key[MAX_OSPATH];
+	const char	*list;
+	int			i;
+
+	// a VM may pass no extension, which FS_ListFiles takes as ""
+	if ( !extension ) {
+		extension = "";
+	}
+	list = *path ? va( "%s/*%s", path, extension ) : va( "*%s", extension );
+	// not by the buffer's size, which a list of demos leaves to what's left
+	Q_strncpyz( key, va( "%s %s", FS_GetCurrentGameDir(), list ), sizeof( key ) );
+	for ( i = 0; i < numWarned; i++ ) {
+		if ( !Q_stricmp( warned[i], key ) ) {
+			return;
+		}
+	}
+	// past the table, no more: a warning on every call would be noise
+	if ( numWarned == (int)ARRAY_LEN( warned ) ) {
+		return;
+	}
+	Q_strncpyz( warned[numWarned++], key, sizeof( warned[0] ) );
+	if ( total < 0 ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the list of %s holds only the first %i, in %i bytes\n",
+			path, listed, bufsize );
+	} else {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the list of %s holds %i of %i names, in %i bytes\n",
+			list, listed, total, bufsize );
+	}
+}
+
+/*
+================
 FS_GetFileList
 ================
 */
@@ -3209,6 +3251,7 @@ int	FS_GetFileList(  const char *path, const char *extension, char *listbuf, int
 			nTotal += nLen;
 		}
 		else {
+			FS_WarnListCut( path, extension, i, nFiles, bufsize );
 			nFiles = i;
 			break;
 		}
@@ -3410,6 +3453,7 @@ int	FS_GetModList( char *listbuf, int bufsize ) {
 				nTotal += nLen + nDescLen;
 				nMods++;
 			} else {
+				FS_WarnListCut( "mods", "", nMods, -1, bufsize );
 				break;
 			}
 		}
