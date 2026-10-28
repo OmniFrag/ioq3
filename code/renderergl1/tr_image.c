@@ -951,13 +951,23 @@ Loads any of the supported image types into a canonical
 32 bit format.
 =================
 */
+int R_ImageNames( const char *name, char (*names)[MAX_QPATH], int *formats )
+{
+	const char	*exts[ARRAY_LEN( imageLoaders )];
+	int			i;
+
+	for ( i = 0; i < numImageLoaders; i++ ) {
+		exts[i] = imageLoaders[i].ext;
+	}
+	return COM_FormatNames( name, exts, numImageLoaders, names, formats );
+}
+
 void R_LoadImage( const char *name, byte **pic, int *width, int *height, char *fileName )
 {
 	// fileName, MAX_QPATH long, is set to each file tried, so it names the
 	// one that loaded
-	const char	*exts[ARRAY_LEN( imageLoaders )];
-	char		names[ARRAY_LEN( imageLoaders )][MAX_QPATH];
-	int			formats[ARRAY_LEN( imageLoaders )], tiers[ARRAY_LEN( imageLoaders )];
+	char		names[MAX_IMAGE_NAMES][MAX_QPATH];
+	int			formats[MAX_IMAGE_NAMES], tiers[MAX_IMAGE_NAMES];
 	int			numNames, i;
 
 	*pic = NULL;
@@ -965,10 +975,7 @@ void R_LoadImage( const char *name, byte **pic, int *width, int *height, char *f
 	*height = 0;
 	Q_strncpyz( fileName, name, MAX_QPATH );
 
-	for ( i = 0; i < numImageLoaders; i++ ) {
-		exts[i] = imageLoaders[i].ext;
-	}
-	numNames = COM_FormatNames( name, exts, numImageLoaders, names, formats );
+	numNames = R_ImageNames( name, names, formats );
 
 	// the name, then the others: every format in the file system's tier 0
 	// before any in tier 1

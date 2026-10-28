@@ -251,6 +251,7 @@ typedef struct fileInPack_s {
 	char					*name;		// name of the file
 	unsigned long			pos;		// file info position in zip
 	unsigned long			len;		// uncompress file size
+	unsigned long			crc;		// its contents' CRC-32 (pakconflicts)
 	struct	fileInPack_s*	next;		// next file in the hash
 } fileInPack_t;
 
@@ -1494,18 +1495,24 @@ qboolean FS_IsDemoExt(const char *filename, int namelen)
 
 /*
 ================
-FS_PakHasFile
+FS_PakEntry
+
+A pak's entry for a file, or NULL
 ================
 */
-static qboolean FS_PakHasFile( const pack_t *pak, const char *name ) {
+static const fileInPack_t *FS_PakEntry( const pack_t *pak, const char *name ) {
 	const fileInPack_t	*file;
 
 	for ( file = pak->hashTable[FS_HashFileName( name, pak->hashSize )]; file; file = file->next ) {
 		if ( !FS_FilenameCompare( file->name, name ) ) {
-			return qtrue;
+			return file;
 		}
 	}
-	return qfalse;
+	return NULL;
+}
+
+static qboolean FS_PakHasFile( const pack_t *pak, const char *name ) {
+	return FS_PakEntry( pak, name ) != NULL;
 }
 
 /*
@@ -2751,6 +2758,20 @@ Creates a new pak_t in the search chain for the contents
 of a zip file.
 =================
 */
+/*
+=================
+FS_IsMapFile
+
+Whether a pak's file is a map, maps/<name>.bsp, with either separator, as
+the lookups take both (FS_FilenameCompare)
+=================
+*/
+static qboolean FS_IsMapFile( const char *name )
+{
+	return !Q_stricmpn( name, "maps", 4 ) && ( name[4] == '/' || name[4] == '\\' ) && !strpbrk( name + 5, "/\\" ) &&
+		COM_CompareExtension( name, ".bsp" );
+}
+
 static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 {
 	fileInPack_t	*buildBuffer;
@@ -2833,9 +2854,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 		}
 		Q_strlwr( filename_inzip );
 		// either separator, as the lookups take both (FS_FilenameCompare)
-		pack->holdsMap |= !strncmp( filename_inzip, "maps", 4 ) &&
-			( filename_inzip[4] == '/' || filename_inzip[4] == '\\' ) && !strpbrk( filename_inzip + 5, "/\\" ) &&
-			COM_CompareExtension( filename_inzip, ".bsp" );
+		pack->holdsMap |= FS_IsMapFile( filename_inzip );
 		pack->holdsCode |= !strncmp( filename_inzip, "vm", 2 ) &&
 			( filename_inzip[2] == '/' || filename_inzip[2] == '\\' ) && COM_CompareExtension( filename_inzip, ".qvm" );
 		hash = FS_HashFileName(filename_inzip, pack->hashSize);
@@ -2845,6 +2864,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 		// store the file position in the zip
 		buildBuffer[i].pos = unzGetOffset(uf);
 		buildBuffer[i].len = file_info.uncompressed_size;
+		buildBuffer[i].crc = file_info.crc;
 		buildBuffer[i].next = pack->hashTable[hash];
 		pack->hashTable[hash] = &buildBuffer[i];
 		unzGoToNextFile(uf);
@@ -3792,9 +3812,164 @@ FS_Path_f
 
 ============
 */
+
+static qboolean FS_IdPak( const pack_t *pak );
+static qboolean FS_GlobalPak( const searchpath_t *search );
+static qboolean FS_HoldsMapOnly( const searchpath_t *search );
+
+/*
+================
+FS_EntryGame
+
+A search path entry's game directory: a pak's or pk3dir's, or the
+directory itself
+================
+*/
+static const char *FS_EntryGame( const searchpath_t *search ) {
+	const char	*game, *c;
+
+	if ( search->pack ) {
+		return search->pack->pakGamename;
+	}
+	if ( !FS_IsExt( search->dir->gamedir, ".pk3dir", strlen( search->dir->gamedir ) ) ) {
+		return search->dir->gamedir;
+	}
+	// a pk3dir's, the last in its path
+	for ( game = c = search->dir->path; *c; c++ ) {
+		if ( *c == '/' || *c == '\\' ) {
+			game = c + 1;
+		}
+	}
+	return game;
+}
+
+/*
+================
+FS_EntryFolder
+
+The folder a search path entry is in, a game directory under a root
+================
+*/
+static const char *FS_EntryFolder( const searchpath_t *search ) {
+	if ( search->pack ) {
+		return search->pack->pakPathname;
+	}
+	return FS_IsGameContent( search ) ? search->dir->path : search->dir->fullpath;
+}
+
+/*
+================
+FS_SearchSource
+
+A search path entry, as path and which name it: a pak's file, or a
+directory's path; "" for none
+================
+*/
+static const char *FS_SearchSource( const searchpath_t *search ) {
+	return !search ? "" : search->pack ? search->pack->pakFilename : search->dir->fullpath;
+}
+
+// where a pak or pk3dir with maps and no game code counts (FS_MapPackPlace)
+typedef enum {
+	MAPPACK_NONE,		// it isn't one: id's, or has game code or no map
+	MAPPACK_OWN,		// the current map's own
+	MAPPACK_SET_ASIDE,	// one the current map doesn't use
+	MAPPACK_GLOBAL,		// named by fs_globalPaks, so on every map
+	MAPPACK_UNSCOPED	// fs_mapPakScope 0, so on every map
+} mapPackPlace_t;
+
+static mapPackPlace_t FS_MapPackPlace( const searchpath_t *search ) {
+	if ( !FS_HoldsMapOnly( search ) ) {
+		return MAPPACK_NONE;
+	}
+	// set aside by this map's ranking, though the settings since say
+	// otherwise from the next
+	if ( search->tier ) {
+		return MAPPACK_SET_ASIDE;
+	}
+	if ( FS_GlobalPak( search ) ) {
+		return MAPPACK_GLOBAL;
+	}
+	return fs_mapPakScope->integer ? MAPPACK_OWN : MAPPACK_UNSCOPED;
+}
+
+/*
+================
+FS_EntryKind
+
+What path says a pak or pk3dir is, and so where its files count; NULL for
+a game directory
+================
+*/
+static const char *FS_EntryKind( const searchpath_t *search ) {
+	if ( search->pack && FS_IdPak( search->pack ) ) {
+		return "id's";
+	}
+	switch ( FS_MapPackPlace( search ) ) {
+	case MAPPACK_OWN: return "a map pack, this map's own";
+	case MAPPACK_SET_ASIDE: return "set aside: a map pack this map doesn't use";
+	case MAPPACK_GLOBAL: return "a map pack fs_globalPaks counts on every map";
+	case MAPPACK_UNSCOPED: return "a map pack, counted on every map with fs_mapPakScope 0";
+	default: break;
+	}
+	if ( !FS_IsGameContent( search ) ) {
+		return NULL;
+	}
+	if ( Q_stricmp( FS_EntryGame( search ), com_basegame->string ) ) {
+		return "the mod's";
+	}
+	return ( search->pack ? search->pack->holdsMap : search->dir->holdsMap ) ?
+		"with game code, counted on every map" : "without maps, counted on every map";
+}
+
+/*
+================
+FS_LostReason
+
+Why a read takes one copy of a file before another (which)
+================
+*/
+static const char *FS_LostReason( const searchpath_t *loser, const searchpath_t *winner, const char *filename ) {
+	const char	*game = FS_EntryGame( winner );
+
+	if ( loser->pack && !FS_PakIsPure( loser->pack ) ) {
+		return "not on the pure server's list";
+	}
+	if ( loser->dir && FS_PureRefusesDirFile( filename ) ) {
+		return "a pure server reads it only from its paks";
+	}
+	if ( loser->tier > winner->tier ) {
+		if ( !fs_currentMap[0] ) {
+			return "set aside: a map pack, and there's no map";
+		}
+		if ( !fs_mapSearch || !fs_mapSearch->pack ) {
+			return va( "set aside: a map pack, and %s isn't in one", fs_currentMap );
+		}
+		return va( "set aside: a map pack, and %s is in %s.pk3", fs_currentMap, fs_mapSearch->pack->pakBasename );
+	}
+	// both on the pure server's list, which it reordered (FS_ReorderPurePaks)
+	if ( fs_reordered && loser->pack && winner->pack ) {
+		return "later in the pure server's list";
+	}
+	// a download takes the home folder's name (FS_AddCachePaks), but not
+	// its place
+	if ( loser->pack && loser->pack->cached && !( winner->pack && winner->pack->cached ) &&
+		!Q_stricmp( FS_EntryGame( loser ), game ) ) {
+		return "a download, below the folder's installed paks";
+	}
+	if ( !Q_stricmp( FS_EntryFolder( loser ), FS_EntryFolder( winner ) ) ) {
+		return FS_IsGameContent( winner ) ? "a later name in the same folder" : "the folder's loose files come before its paks";
+	}
+	if ( Q_stricmp( FS_EntryGame( loser ), game ) ) {
+		return va( "below the %s folder%s", game, Q_stricmp( game, com_basegame->string ) ? ", the mod's" : "" );
+	}
+	return va( "%s is searched first", FS_EntryFolder( winner ) );
+}
+
 void FS_Path_f( void ) {
 	searchpath_t	*s;
 	int				i;
+	const char		*kind;
 
 	Com_Printf ("We are looking in the current search path:\n");
 	if ( fs_mapSearch ) {
@@ -3819,10 +3994,8 @@ void FS_Path_f( void ) {
 		} else {
 			Com_Printf ("%s%c%s\n", s->dir->path, PATH_SEP, s->dir->gamedir );
 		}
-		if ( s->tier ) {
-			Com_Printf( "    set aside: a map pack this map doesn't use\n" );
-		} else if ( s == fs_mapSearch ) {
-			Com_Printf( "    the map's own\n" );
+		if ( ( kind = FS_EntryKind( s ) ) != NULL ) {
+			Com_Printf( "    %s\n", kind );
 		}
 	}
 
@@ -3887,7 +4060,7 @@ FS_Which_f
 ============
 */
 void FS_Which_f( void ) {
-	searchpath_t	*search;
+	const searchpath_t	*search, *winner;
 	char		*filename;
 
 	filename = Cmd_Argv(1);
@@ -3902,14 +4075,19 @@ void FS_Which_f( void ) {
 		filename++;
 	}
 
-	// just wants to see if file is there
-	for(search = FS_NextSearch(NULL); search; search = FS_NextSearch(search))
-	{
-		if(FS_Which(filename, search))
-			return;
+	// the copy a read takes, then every other and why it loses
+	winner = FS_FileSearch( filename );
+	if ( !winner ) {
+		Com_Printf( "File not found: \"%s\"\n", filename );
+	} else {
+		FS_Which( filename, (void *)winner );
 	}
-
-	Com_Printf("File not found: \"%s\"\n", filename);
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		if ( search != winner && FS_FOpenFileReadDir( filename, (searchpath_t *)search, NULL, qfalse, qfalse ) > 0 ) {
+			Com_Printf( "    also in \"%s\": %s\n", FS_SearchSource( search ),
+				winner ? FS_LostReason( search, winner, filename ) : "not on the pure server's list" );
+		}
+	}
 }
 
 
@@ -4683,20 +4861,14 @@ directory, in any case
 ================
 */
 static qboolean FS_GlobalPak( const searchpath_t *search ) {
-	const char	*list = fs_globalPaks->string, *game, *c;
+	const char	*list = fs_globalPaks->string, *game;
 	char		name[MAX_OSPATH], full[MAX_OSPATH], token[MAX_OSPATH], *end;
 	int			length;
 
+	game = FS_EntryGame( search );
 	if ( search->pack ) {
-		game = search->pack->pakGamename;
 		Q_strncpyz( name, search->pack->pakBasename, sizeof( name ) );
 	} else {
-		// a pk3dir's game directory, the last in its path
-		for ( game = c = search->dir->path; *c; c++ ) {
-			if ( *c == '/' || *c == '\\' ) {
-				game = c + 1;
-			}
-		}
 		COM_StripExtension( search->dir->gamedir, name, sizeof( name ) );
 	}
 	Com_sprintf( full, sizeof( full ), "%s/%s", game, name );
@@ -4723,18 +4895,18 @@ FS_MapPack
 
 Whether a search path entry is a map pack: a pak or pk3dir that holds a
 map, maps/<name>.bsp, but no game code, vm/<name>.qvm, and isn't one of
-id's or one fs_globalPaks names
+id's (FS_HoldsMapOnly), or one fs_globalPaks names
 ================
 */
-static qboolean FS_MapPack( const searchpath_t *search ) {
+static qboolean FS_HoldsMapOnly( const searchpath_t *search ) {
 	if ( search->pack ) {
-		if ( !search->pack->holdsMap || search->pack->holdsCode || FS_IdPak( search->pack ) ) {
-			return qfalse;
-		}
-	} else if ( !search->dir->holdsMap || search->dir->holdsCode ) {
-		return qfalse;
+		return search->pack->holdsMap && !search->pack->holdsCode && !FS_IdPak( search->pack );
 	}
-	return !FS_GlobalPak( search );
+	return search->dir->holdsMap && !search->dir->holdsCode;
+}
+
+static qboolean FS_MapPack( const searchpath_t *search ) {
+	return FS_HoldsMapOnly( search ) && !FS_GlobalPak( search );
 }
 
 /*
@@ -4825,10 +4997,6 @@ Where a read of a file would come from now: its pak's or directory's
 path, "" for none. Marks no pak referenced
 ===========
 */
-static const char *FS_SearchSource( const searchpath_t *search ) {
-	return !search ? "" : search->pack ? search->pack->pakFilename : search->dir->fullpath;
-}
-
 const char *FS_FileSource( const char *filename ) {
 	return FS_SearchSource( FS_FileSearch( filename ) );
 }
@@ -4858,6 +5026,226 @@ void FS_SetCurrentMap( const char *map ) {
 	Q_strncpyz( fs_currentMap, map ? map : "", sizeof( fs_currentMap ) );
 	if ( fs_searchpaths ) {
 		FS_RankPaks();
+	}
+}
+
+
+// id's paks in the path's order, at most this many (FS_IdPaks)
+#define MAX_ID_PAKS	32
+
+/*
+================
+FS_IdPaks
+
+The search path's entries of id's paks, in its order
+================
+*/
+static int FS_IdPaks( const searchpath_t **ids ) {
+	const searchpath_t	*search;
+	int					count = 0;
+
+	for ( search = fs_searchpaths; search && count < MAX_ID_PAKS; search = search->next ) {
+		if ( search->pack && FS_IdPak( search->pack ) ) {
+			ids[count++] = search;
+		}
+	}
+	return count;
+}
+
+/*
+================
+FS_IdCopy
+
+The first of id's paks with a file, and its entry there; NULL for none
+================
+*/
+static const searchpath_t *FS_IdCopy( const searchpath_t **ids, int numIds, const char *name,
+	const fileInPack_t **entry ) {
+	int		i;
+
+	for ( i = 0; i < numIds; i++ ) {
+		if ( ( *entry = FS_PakEntry( ids[i]->pack, name ) ) != NULL ) {
+			return ids[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+================
+FS_ShaderNames
+
+The shaders a shader file of a search path entry defines, at most max
+================
+*/
+static int FS_ShaderNames( const searchpath_t *search, const char *name, char (*names)[MAX_QPATH], int max ) {
+	char	*text, *p, *token;
+	int		count = 0;
+
+	if ( FS_ReadFileDir( name, (void *)search, qtrue, (void **)&text ) <= 0 ) {
+		return 0;
+	}
+	for ( p = text; count < max && ( token = COM_NextShaderName( &p ) )[0]; ) {
+		Q_strncpyz( names[count++], token, MAX_QPATH );
+	}
+	FS_FreeFile( text );
+	return count;
+}
+
+/*
+================
+FS_PrintDroppedShaders
+
+Of the shaders id's copy of a shader file defines, those a pak's copy
+leaves out
+================
+*/
+static void FS_PrintDroppedShaders( const searchpath_t *search, const searchpath_t *id, const char *name ) {
+	enum { MAX_NAMES = 1024 };
+	char	(*ours)[MAX_QPATH] = Z_Malloc( 2 * MAX_NAMES * MAX_QPATH ), (*ids)[MAX_QPATH] = ours + MAX_NAMES;
+	int		numOurs = FS_ShaderNames( search, name, ours, MAX_NAMES );
+	int		numIds = FS_ShaderNames( id, name, ids, MAX_NAMES ), dropped = 0, i, j;
+
+	for ( i = 0; i < numIds; i++ ) {
+		for ( j = 0; j < numOurs && Q_stricmp( ids[i], ours[j] ); j++ ) {
+		}
+		if ( j == numOurs ) {
+			Com_Printf( "%s%s", dropped ? ", " : ", leaving out ", ids[i] );
+			dropped++;
+		}
+	}
+	Z_Free( ours );
+}
+
+/*
+================
+FS_PakConflicts
+
+How many of a pak's files one of id's paks also has, with other contents;
+with print, lists them, and of a shader file the shaders it leaves out of
+id's copy
+================
+*/
+static int FS_PakConflicts( const searchpath_t *search, const searchpath_t **ids, int numIds, qboolean print ) {
+	const pack_t		*pak = search->pack;
+	const fileInPack_t	*id;
+	const searchpath_t	*idSearch;
+	int					count = 0, i;
+
+	for ( i = 0; i < pak->numfiles; i++ ) {
+		const fileInPack_t	*file = &pak->buildBuffer[i];
+
+		if ( !file->len || !( idSearch = FS_IdCopy( ids, numIds, file->name, &id ) ) || id->crc == file->crc ) {
+			continue;
+		}
+		count++;
+		if ( print ) {
+			Com_Printf( "    %s", file->name );
+			if ( !Q_stricmpn( file->name, "scripts/", 8 ) && COM_CompareExtension( file->name, ".shader" ) ) {
+				FS_PrintDroppedShaders( search, idSearch, file->name );
+			}
+			Com_Printf( "\n" );
+		}
+	}
+	return count;
+}
+
+/*
+================
+FS_PakConflictsWhere
+
+Where an installed pak's copies of id's files count
+================
+*/
+static const char *FS_PakConflictsWhere( const searchpath_t *search ) {
+	static char	where[MAX_STRING_CHARS];
+	const pack_t	*pak = search->pack;
+	char		map[MAX_QPATH];
+	int			i, maps = 0;
+
+	switch ( FS_MapPackPlace( search ) ) {
+	case MAPPACK_NONE: return "on every map";
+	case MAPPACK_GLOBAL: return "on every map (fs_globalPaks)";
+	case MAPPACK_UNSCOPED: return "on every map (fs_mapPakScope 0)";
+	default: break;
+	}
+	Q_strncpyz( where, "only on its own maps:", sizeof( where ) );
+	for ( i = 0; i < pak->numfiles; i++ ) {
+		const char	*name = pak->buildBuffer[i].name;
+
+		if ( !FS_IsMapFile( name ) ) {
+			continue;
+		}
+		if ( maps++ < 8 ) {
+			COM_StripExtension( name + 5, map, sizeof( map ) );
+			Q_strcat( where, sizeof( where ), va( " %s", map ) );
+		}
+	}
+	if ( maps > 8 ) {
+		Q_strcat( where, sizeof( where ), va( " and %d more", maps - 8 ) );
+	}
+	return where;
+}
+
+/*
+================
+FS_PakConflicts_f
+
+pakconflicts: each installed pak's copies of id's files that differ from
+id's, and where they count
+================
+*/
+static void FS_PakConflicts_f( void ) {
+	const searchpath_t	*search, *ids[MAX_ID_PAKS];
+	int					numIds = FS_IdPaks( ids ), count, paks = 0;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( !search->pack || search->pack->cached || FS_IdPak( search->pack ) ||
+			!( count = FS_PakConflicts( search, ids, numIds, qfalse ) ) ) {
+			continue;
+		}
+		Com_Printf( "%s: %d of id's files, %s\n", search->pack->pakFilename, count, FS_PakConflictsWhere( search ) );
+		FS_PakConflicts( search, ids, numIds, qtrue );
+		paks++;
+	}
+	if ( !paks ) {
+		Com_Printf( "No installed pak has its own copy of one of id's files\n" );
+	}
+}
+
+/*
+================
+FS_NoteMapPackConflicts
+
+Says once, at the first start, how many installed map packs have their
+own copies of id's files
+================
+*/
+static void FS_NoteMapPackConflicts( void ) {
+	static qboolean	noted;
+	const searchpath_t	*search, *ids[MAX_ID_PAKS];
+	int					numIds, count = 0;
+
+	if ( noted ) {
+		return;
+	}
+	noted = qtrue;
+	numIds = FS_IdPaks( ids );
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack && !search->pack->cached && FS_MapPack( search ) &&
+			FS_PakConflicts( search, ids, numIds, qfalse ) ) {
+			count++;
+		}
+	}
+	if ( !count ) {
+		return;
+	}
+	if ( fs_mapPakScope->integer ) {
+		Com_Printf( "%d map pack%s copies of id's files; %s only on %s own maps (pakconflicts lists them)\n",
+			count, count == 1 ? " carries" : "s carry", count == 1 ? "it applies" : "they apply", count == 1 ? "its" : "their" );
+	} else {
+		Com_Printf( "%d map pack%s copies of id's files, which with fs_mapPakScope 0 apply on every map (pakconflicts lists them)\n",
+			count, count == 1 ? " carries" : "s carry" );
 	}
 }
 
@@ -5117,6 +5505,7 @@ void FS_Shutdown( qboolean closemfp ) {
 	Cmd_RemoveCommand( "fdir" );
 	Cmd_RemoveCommand( "touchFile" );
 	Cmd_RemoveCommand( "which" );
+	Cmd_RemoveCommand( "pakconflicts" );
 
 #ifdef FS_MISSING
 	if (closemfp) {
@@ -5438,12 +5827,14 @@ static void FS_Startup( const char *gameName )
 	Cmd_AddCommand ("fdir", FS_NewDir_f );
 	Cmd_AddCommand ("touchFile", FS_TouchFile_f );
 	Cmd_AddCommand ("which", FS_Which_f );
+	Cmd_AddCommand ("pakconflicts", FS_PakConflicts_f );
 
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=506
 	// reorder the pure pk3 files according to server order
 	FS_ReorderPurePaks();
 	FS_NoteServerPaks();
 	FS_RankPaks();
+	FS_NoteMapPackConflicts();
 
 	// when the cached paks mounted were last used
 	Content_Cache_Flush();

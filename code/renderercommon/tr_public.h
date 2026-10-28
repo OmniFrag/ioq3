@@ -307,6 +307,10 @@ typedef struct {
 	// tier 0 before any in tier 1 (COM_NextByTier), and joins tier 0's
 	// shader text before tier 1's
 	int		(*FS_FileTier)( const char *name );
+	// where a read of the file would come from, and where the last one
+	// came from: its pak's or directory's path, or "" (whichshader)
+	const char	*(*FS_FileSource)( const char *name );
+	const char	*(*FS_LastFileSource)( void );
 
 	// cinematic stuff
 	void	(*CIN_UploadCinematic)(int handle);
