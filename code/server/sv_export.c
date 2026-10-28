@@ -906,7 +906,7 @@ static void SV_AddFinish( void ) {
 	const exportItem_t		*item = &exportJob.items[0];
 	const exportTarget_t	*target = &item->targets[EXPORT_BY_NAME];
 	const char				*home = Cvar_VariableString( "fs_homedatapath" ), *root, *refused;
-	char					part[MAX_OSPATH + 8], overrides[MAX_STRING_CHARS];
+	char					part[MAX_OSPATH + 8];
 	unsigned int			checksum;
 	pakRecord_t				record;
 
@@ -926,7 +926,7 @@ static void SV_AddFinish( void ) {
 	}
 
 	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
-	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, overrides, sizeof( overrides ) );
+	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, NULL, 0 );
 	if ( !refused && checksum != addPak.checksum ) {
 		refused = "it changed while it was copied";
 	}

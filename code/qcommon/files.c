@@ -2772,6 +2772,18 @@ static qboolean FS_IsMapFile( const char *name )
 		COM_CompareExtension( name, ".bsp" );
 }
 
+/*
+=================
+FS_IsShaderFile
+
+Whether a pak's file is a shader file, scripts/<name>.shader
+=================
+*/
+static qboolean FS_IsShaderFile( const char *name )
+{
+	return !Q_stricmpn( name, "scripts/", 8 ) && COM_CompareExtension( name, ".shader" );
+}
+
 static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 {
 	fileInPack_t	*buildBuffer;
@@ -2898,6 +2910,11 @@ static void FS_FreePak(pack_t *thepak)
 
 #define PAK_ADD_OVERRIDES		20		// files of another pak one overrides before it's said
 
+static qboolean FS_HoldsMapOnly( const searchpath_t *search );
+static const char *FS_PakConflictsWhere( const searchpath_t *search );
+static int FS_DroppedShaders( const searchpath_t *search, const searchpath_t *other, const char *name,
+	qboolean print );
+
 /*
 =================
 FS_AddPakEntryRefused
@@ -2951,22 +2968,27 @@ a zip that loads as a pak, none of whose entries could reach outside the
 game's directories, is encrypted or is native code, by its name or its
 first bytes, within CONTENT_MAX_PAK_SIZE unpacked; and not one of the
 game's own. NULL, with the pak's checksum, or why it's refused. In
-overrides, the paks of the search path it would take code (a QVM in vm/) or
-more than PAK_ADD_OVERRIDES files from, said as a warning, or ""
+overrides, the paks of the search path it would take code (a QVM in vm/),
+more than PAK_ADD_OVERRIDES files or a shader from, where its copy of a
+shader file leaves some out, and of a map pack where its files count, said
+as a warning, or ""; with overrides NULL, none of that is looked at
 =================
 */
 const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
 	unsigned int *checksum, char *overrides, int overridesSize ) {
 	pack_t			*pak;
 	const searchpath_t	*search;
+	searchpath_t	added;
 	unz_file_info	info;
 	char			entry[MAX_ZPATH], retail[MAX_QPATH];
 	const char		*why = NULL, *code;
 	byte			first[4];
 	uint64_t		unpacked = 0;
-	int				i, got, count;
+	int				i, got, count, dropped;
 
-	overrides[0] = '\0';
+	if ( overrides ) {
+		overrides[0] = '\0';
+	}
 	pak = FS_LoadZipFile( ospath, name );
 	if ( !pak ) {
 		return "it isn't a zip that loads as a pak";
@@ -3033,31 +3055,59 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	}
 
 	// the paks it would override: the game's paks before it by name, and
-	// those of the base game under a mod
-	for ( search = fs_searchpaths; search && !why; search = search->next ) {
+	// those of the base game under a mod; its shader files read as an
+	// entry of the search path's
+	Com_Memset( &added, 0, sizeof( added ) );
+	added.pack = pak;
+	Q_strncpyz( pak->pakGamename, gameDir, sizeof( pak->pakGamename ) );
+	for ( search = fs_searchpaths; search && overrides && !why; search = search->next ) {
 		const pack_t	*other = search->pack;
 
 		if ( !other || !( ( !Q_stricmp( other->pakGamename, gameDir ) && Q_stricmp( other->pakBasename, name ) < 0 )
 			|| ( Q_stricmp( gameDir, com_basegame->string ) && !Q_stricmp( other->pakGamename, com_basegame->string ) ) ) ) {
 			continue;
 		}
-		// the files they share, looked up from the one with fewer
-		count = 0;
+		// the files they share, looked up from the one with fewer, by the
+		// new pak's names, which have no backslashes; not folders
+		count = dropped = 0;
 		code = NULL;
 		for ( i = 0; i < MIN( pak->numfiles, other->numfiles ); i++ ) {
-			const char	*file = pak->numfiles <= other->numfiles ? pak->buildBuffer[i].name : other->buildBuffer[i].name;
+			const fileInPack_t	*ours, *theirs;
+			const char			*file;
 
-			if ( FS_PakHasFile( pak->numfiles <= other->numfiles ? other : pak, file ) ) {
-				count++;
-				if ( !code && !Q_strncmp( file, "vm/", 3 ) && COM_CompareExtension( file, ".qvm" ) ) {
-					code = file;
-				}
+			if ( pak->numfiles <= other->numfiles ) {
+				ours = &pak->buildBuffer[i];
+				theirs = FS_PakEntry( other, ours->name );
+			} else {
+				theirs = &other->buildBuffer[i];
+				ours = FS_PakEntry( pak, theirs->name );
+			}
+			if ( !ours || !theirs || !ours->name[0] || ours->name[strlen( ours->name ) - 1] == '/' ) {
+				continue;
+			}
+			file = ours->name;
+			count++;
+			if ( !code && !Q_strncmp( file, "vm/", 3 ) && COM_CompareExtension( file, ".qvm" ) ) {
+				code = file;
+			}
+			// a copy the same as the other's, by its CRC, leaves nothing out
+			if ( FS_IsShaderFile( file ) && ours->crc != theirs->crc ) {
+				dropped += FS_DroppedShaders( &added, search, file, qfalse );
 			}
 		}
-		if ( code || count > PAK_ADD_OVERRIDES ) {
-			Q_strcat( overrides, overridesSize, va( "%s%s.pk3 overrides %d files of %s/%s.pk3%s%s", overrides[0] ? "; " : "",
-				name, count, other->pakGamename, other->pakBasename, code ? ", including " : "", code ? code : "" ) );
+		if ( code || dropped || count > PAK_ADD_OVERRIDES ) {
+			Q_strcat( overrides, overridesSize, va( "%s%s.pk3 overrides %d file%s of %s/%s.pk3%s%s", overrides[0] ? "; " : "",
+				name, count, count == 1 ? "" : "s", other->pakGamename, other->pakBasename, code ? ", including " : "",
+				code ? code : "" ) );
+			if ( dropped ) {
+				Q_strcat( overrides, overridesSize, va( ", and its shader files leave out %d of that pak's shaders",
+					dropped ) );
+			}
 		}
+	}
+	// a map pack's count only on its own maps, from the next map
+	if ( overrides && overrides[0] && FS_HoldsMapOnly( &added ) ) {
+		Q_strcat( overrides, overridesSize, va( "; as a map pack, its files count %s", FS_PakConflictsWhere( &added ) ) );
 	}
 	FS_FreePak( pak );
 	return why;
@@ -3815,7 +3865,6 @@ FS_Path_f
 
 static qboolean FS_IdPak( const pack_t *pak );
 static qboolean FS_GlobalPak( const searchpath_t *search );
-static qboolean FS_HoldsMapOnly( const searchpath_t *search );
 
 /*
 ================
@@ -5094,27 +5143,31 @@ static int FS_ShaderNames( const searchpath_t *search, const char *name, char (*
 
 /*
 ================
-FS_PrintDroppedShaders
+FS_DroppedShaders
 
-Of the shaders id's copy of a shader file defines, those a pak's copy
-leaves out
+Of the shaders another entry's copy of a shader file defines, how many a
+pak's copy leaves out; with print, lists them
 ================
 */
-static void FS_PrintDroppedShaders( const searchpath_t *search, const searchpath_t *id, const char *name ) {
+static int FS_DroppedShaders( const searchpath_t *search, const searchpath_t *other, const char *name,
+	qboolean print ) {
 	enum { MAX_NAMES = 1024 };
-	char	(*ours)[MAX_QPATH] = Z_Malloc( 2 * MAX_NAMES * MAX_QPATH ), (*ids)[MAX_QPATH] = ours + MAX_NAMES;
+	char	(*ours)[MAX_QPATH] = Z_Malloc( 2 * MAX_NAMES * MAX_QPATH ), (*theirs)[MAX_QPATH] = ours + MAX_NAMES;
 	int		numOurs = FS_ShaderNames( search, name, ours, MAX_NAMES );
-	int		numIds = FS_ShaderNames( id, name, ids, MAX_NAMES ), dropped = 0, i, j;
+	int		numTheirs = FS_ShaderNames( other, name, theirs, MAX_NAMES ), dropped = 0, i, j;
 
-	for ( i = 0; i < numIds; i++ ) {
-		for ( j = 0; j < numOurs && Q_stricmp( ids[i], ours[j] ); j++ ) {
+	for ( i = 0; i < numTheirs; i++ ) {
+		for ( j = 0; j < numOurs && Q_stricmp( theirs[i], ours[j] ); j++ ) {
 		}
 		if ( j == numOurs ) {
-			Com_Printf( "%s%s", dropped ? ", " : ", leaving out ", ids[i] );
+			if ( print ) {
+				Com_Printf( "%s%s", dropped ? ", " : ", leaving out ", theirs[i] );
+			}
 			dropped++;
 		}
 	}
 	Z_Free( ours );
+	return dropped;
 }
 
 /*
@@ -5141,8 +5194,8 @@ static int FS_PakConflicts( const searchpath_t *search, const searchpath_t **ids
 		count++;
 		if ( print ) {
 			Com_Printf( "    %s", file->name );
-			if ( !Q_stricmpn( file->name, "scripts/", 8 ) && COM_CompareExtension( file->name, ".shader" ) ) {
-				FS_PrintDroppedShaders( search, idSearch, file->name );
+			if ( FS_IsShaderFile( file->name ) ) {
+				FS_DroppedShaders( search, idSearch, file->name, qtrue );
 			}
 			Com_Printf( "\n" );
 		}
