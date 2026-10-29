@@ -1185,6 +1185,38 @@ static int SetStageDlights( void )
 	return n;
 }
 
+// a lit, vertex-colored or generic stage's program for this draw (with
+// dlights, the variant that takes them, only where they light this surface,
+// so one with none near runs the program it always did)
+static shaderProgram_t *StageProgram( int stage, qboolean dlights )
+{
+	shaderStage_t *pStage = tess.xstages[stage];
+
+	if ( pStage->glslShaderGroup == tr.lightallShader ) {
+		return &tr.lightallShader[GLSL_LightallStageIndex( pStage,
+			backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity, glState.boneAnimation,
+			( backEnd.viewParms.flags & VPF_USESUNLIGHT ) != 0, dlights )];
+	}
+	return GLSL_GetGenericShaderProgram( stage, dlights );
+}
+
+// whether every stage of the surface that takes the dlights has its program's
+// dlight variant compiled (GLSL_InitStageDlightPrograms, at registration): a
+// shader registered since, a bone-animated model's, which none are made for,
+// or r_forceSun turned on takes the projected dlight instead, never a compile
+// in the frame
+static qboolean StageDlightProgramsReady( void )
+{
+	int stage;
+
+	for ( stage = 0; stage < MAX_SHADER_STAGES && tess.xstages[stage]; stage++ ) {
+		if ( tess.xstages[stage]->dlightTo != DLIGHTTO_NONE && !StageProgram( stage, qtrue )->program ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
 // numDlights: the surface's dlights (SetStageDlights) join the stages that
 // take them (shaderStage_t's dlightTo), or 0
 static void RB_IterateStagesGeneric( shaderCommands_t *input, int numDlights )
@@ -1269,48 +1301,14 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input, int numDlights )
 				sp = &tr.genericShader[shaderAttribs];
 			}
 		}
-		else if (pStage->glslShaderGroup == tr.lightallShader)
-		{
-			int index = pStage->glslShaderIndex;
-
-			if (backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity)
-			{
-				if (glState.boneAnimation)
-				{
-					index |= LIGHTDEF_ENTITY_BONE_ANIMATION;
-				}
-				else
-				{
-					index |= LIGHTDEF_ENTITY_VERTEX_ANIMATION;
-				}
-			}
-
-			if (r_sunlightMode->integer && (backEnd.viewParms.flags & VPF_USESUNLIGHT) && (index & LIGHTDEF_LIGHTTYPE_MASK))
-			{
-				index |= LIGHTDEF_USE_SHADOWMAP;
-			}
-
-			if (r_lightmap->integer && ((index & LIGHTDEF_LIGHTTYPE_MASK) == LIGHTDEF_USE_LIGHTMAP))
-			{
-				index = LIGHTDEF_USE_TCGEN_AND_TCMOD;
-			}
-
-			// the variant with the dlights only where they light this surface,
-			// so one with none near runs the program it always did
-			if (dlights)
-			{
-				index |= LIGHTDEF_USE_DLIGHTS;
-			}
-
-			sp = &pStage->glslShaderGroup[index];
-
-			backEnd.pc.c_lightallDraws++;
-		}
 		else
 		{
-			sp = GLSL_GetGenericShaderProgram(stage, dlights);
+			sp = StageProgram(stage, dlights);
 
-			backEnd.pc.c_genericDraws++;
+			if (pStage->glslShaderGroup == tr.lightallShader)
+				backEnd.pc.c_lightallDraws++;
+			else
+				backEnd.pc.c_genericDraws++;
 		}
 
 		GLSL_BindProgram(sp);
@@ -1815,9 +1813,9 @@ void RB_StageIteratorGeneric( void )
 	// call shader function
 	//
 	dlit = tess.dlightBits && r_lightmap->integer == 0 ? tess.shader->dlightPath : DLIGHT_NONE;
-	// no stage dlight programs for a bone-animated model's (GLSL_InitGPUShaders):
-	// the projected dlight, as stock
-	if ( dlit == DLIGHT_STAGE && glState.boneAnimation ) {
+	// the projected dlight where the stages' can't: none once a variant failed,
+	// nor this draw's where its variant wasn't compiled at registration
+	if ( dlit == DLIGHT_STAGE && ( !tr.stageDlights || !StageDlightProgramsReady() ) ) {
 		dlit = DLIGHT_PROJECTED;
 	}
 	RB_IterateStagesGeneric( input, dlit == DLIGHT_STAGE ? SetStageDlights() : 0 );
