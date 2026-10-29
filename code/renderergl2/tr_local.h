@@ -1572,7 +1572,7 @@ typedef struct {
 	int						frameSceneNum;	// zeroed at RE_BeginFrame
 
 	qboolean				worldMapLoaded;
-	qboolean				stageDlights;	// the dlights' programs for the stages compiled (DLIGHT_STAGE)
+	qboolean				stageDlights;	// the stages' dlights on (DLIGHT_STAGE): the GPU fits them and no variant failed
 	qboolean				worldDeluxeMapping;
 	vec2_t                  autoExposureMinMax;
 	vec3_t                  toneMinAvgMaxLevel;
@@ -2357,6 +2357,11 @@ void GLSL_SetUniformMat4BoneMatrix(shaderProgram_t *program, int uniformNum, /*c
 void GLSL_SetUniformVec4Dlights(shaderProgram_t *program, int uniformNum, const vec4_t *v, int count);
 
 shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights);
+int GLSL_GenericStageIndex(const shader_t *shader, const shaderStage_t *pStage, qboolean fog,
+	qboolean vertexAnimation, qboolean boneAnimation, qboolean dlights);
+int GLSL_LightallStageIndex(const shaderStage_t *pStage, qboolean entity, qboolean boneAnimation,
+	qboolean sun, qboolean dlights);
+void GLSL_InitStageDlightPrograms(void);
 
 /*
 ============================================================
