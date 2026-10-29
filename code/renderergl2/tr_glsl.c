@@ -1048,7 +1048,7 @@ static qboolean GLSL_StageDlightsFit( void )
 
 // one of the programs: dlights, a stage dlight program, whose failing to
 // compile or link turns the stages' dlights off (the projected dlight lights
-// those surfaces instead, once the shaders are made) rather than stopping
+// those surfaces instead, RB_StageIteratorGeneric) rather than stopping
 static int GLSL_InitOptionalGPUShader(shaderProgram_t *program, const char *name, int attribs,
 	const GLchar *extra, const char *fallback_vp, const char *fallback_fp, qboolean dlights)
 {
@@ -1064,6 +1064,256 @@ static int GLSL_InitOptionalGPUShader(shaderProgram_t *program, const char *name
 		tr.stageDlights = qfalse;
 	}
 	return result;
+}
+
+static qboolean GLSL_InitGenericProgram(int i)
+{
+	char extradefines[1024];
+	int attribs;
+
+	if ((i & GENERICDEF_USE_VERTEX_ANIMATION) && (i & GENERICDEF_USE_BONE_ANIMATION))
+		return qfalse;
+
+	if ((i & GENERICDEF_USE_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
+		return qfalse;
+
+	// compiled already, or the stages' dlights off (GLSL_StageDlightsFit, a
+	// variant that failed)
+	if (tr.genericShader[i].program || ((i & GENERICDEF_USE_DLIGHT) && !tr.stageDlights))
+		return qfalse;
+
+	attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_LIGHTCOORD | ATTR_NORMAL | ATTR_COLOR;
+	extradefines[0] = '\0';
+
+	if (i & GENERICDEF_USE_DEFORM_VERTEXES)
+		Q_strcat(extradefines, 1024, "#define USE_DEFORM_VERTEXES\n");
+
+	if (i & GENERICDEF_USE_TCGEN_AND_TCMOD)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_TCGEN\n");
+		Q_strcat(extradefines, 1024, "#define USE_TCMOD\n");
+	}
+
+	if (i & GENERICDEF_USE_VERTEX_ANIMATION)
+	{
+		if (!glRefConfig.gpuVertexAnimation)
+			return qfalse;
+
+		Q_strcat(extradefines, 1024, "#define USE_VERTEX_ANIMATION\n");
+		attribs |= ATTR_POSITION2 | ATTR_NORMAL2;
+	}
+	else if (i & GENERICDEF_USE_BONE_ANIMATION)
+	{
+		Q_strcat(extradefines, 1024, va("#define USE_BONE_ANIMATION\n#define MAX_GLSL_BONES %d\n", glRefConfig.glslMaxAnimatedBones));
+		attribs |= ATTR_BONE_INDEXES | ATTR_BONE_WEIGHTS;
+	}
+
+	if (i & GENERICDEF_USE_FOG)
+		Q_strcat(extradefines, 1024, "#define USE_FOG\n");
+
+	if (i & GENERICDEF_USE_RGBAGEN)
+		Q_strcat(extradefines, 1024, "#define USE_RGBAGEN\n");
+
+	if (i & GENERICDEF_USE_DLIGHT)
+		Q_strcat(extradefines, 1024, va("#define USE_DLIGHT\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
+			MAX_GENERIC_DLIGHTS, tr.frameLight));
+
+	if (!GLSL_InitOptionalGPUShader(&tr.genericShader[i], "generic", attribs, extradefines,
+		fallbackShader_generic_vp, fallbackShader_generic_fp, (i & GENERICDEF_USE_DLIGHT) != 0))
+	{
+		if (i & GENERICDEF_USE_DLIGHT)
+			return qfalse;
+		ri.Error(ERR_FATAL, "Could not load generic shader!");
+	}
+
+	GLSL_InitUniforms(&tr.genericShader[i]);
+
+	GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_DIFFUSEMAP, TB_DIFFUSEMAP);
+	GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_LIGHTMAP,   TB_LIGHTMAP);
+
+	GLSL_FinishGPUShader(&tr.genericShader[i]);
+
+	return qtrue;
+}
+
+static qboolean GLSL_InitLightallProgram(int i)
+{
+	char extradefines[1024];
+	int attribs;
+
+	int lightType = i & LIGHTDEF_LIGHTTYPE_MASK;
+	qboolean fastLight = !(r_normalMapping->integer || r_specularMapping->integer);
+
+	// skip impossible combos
+	if ((i & LIGHTDEF_USE_PARALLAXMAP) && !r_parallaxMapping->integer)
+		return qfalse;
+
+	if ((i & LIGHTDEF_USE_SHADOWMAP) && (!lightType || !r_sunlightMode->integer))
+		return qfalse;
+
+	if ((i & LIGHTDEF_ENTITY_VERTEX_ANIMATION) && (i & LIGHTDEF_ENTITY_BONE_ANIMATION))
+		return qfalse;
+
+	if ((i & LIGHTDEF_ENTITY_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
+		return qfalse;
+
+	// compiled already, or the stages' dlights off (GLSL_StageDlightsFit, a
+	// variant that failed)
+	if (tr.lightallShader[i].program || ((i & LIGHTDEF_USE_DLIGHTS) && !tr.stageDlights))
+		return qfalse;
+
+	attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_COLOR | ATTR_NORMAL;
+
+	extradefines[0] = '\0';
+
+	if (r_dlightMode->integer >= 2)
+		Q_strcat(extradefines, 1024, "#define USE_SHADOWMAP\n");
+
+	if (glRefConfig.swizzleNormalmap)
+		Q_strcat(extradefines, 1024, "#define SWIZZLE_NORMALMAP\n");
+
+	// the surface's dlights join its light (DLIGHTTO_LIGHTALL): the
+	// lightmap's, the vertexes', or an unlit stage's vertex color
+	if (i & LIGHTDEF_USE_DLIGHTS)
+		Q_strcat(extradefines, 1024, va("#define USE_DLIGHTS\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
+			MAX_GENERIC_DLIGHTS, tr.frameLight));
+
+	if (lightType)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_LIGHT\n");
+
+		if (fastLight)
+			Q_strcat(extradefines, 1024, "#define USE_FAST_LIGHT\n");
+
+		switch (lightType)
+		{
+			case LIGHTDEF_USE_LIGHTMAP:
+				Q_strcat(extradefines, 1024, "#define USE_LIGHTMAP\n");
+				if (r_deluxeMapping->integer && !fastLight)
+					Q_strcat(extradefines, 1024, "#define USE_DELUXEMAP\n");
+				attribs |= ATTR_LIGHTCOORD | ATTR_LIGHTDIRECTION;
+				break;
+			case LIGHTDEF_USE_LIGHT_VECTOR:
+				Q_strcat(extradefines, 1024, "#define USE_LIGHT_VECTOR\n");
+				break;
+			case LIGHTDEF_USE_LIGHT_VERTEX:
+				Q_strcat(extradefines, 1024, "#define USE_LIGHT_VERTEX\n");
+				attribs |= ATTR_LIGHTDIRECTION;
+				break;
+			default:
+				break;
+		}
+
+		if (r_normalMapping->integer)
+		{
+			Q_strcat(extradefines, 1024, "#define USE_NORMALMAP\n");
+
+			attribs |= ATTR_TANGENT;
+
+			if ((i & LIGHTDEF_USE_PARALLAXMAP) && !(i & LIGHTDEF_ENTITY_VERTEX_ANIMATION) && !(i & LIGHTDEF_ENTITY_BONE_ANIMATION) && r_parallaxMapping->integer)
+			{
+				Q_strcat(extradefines, 1024, "#define USE_PARALLAXMAP\n");
+				if (r_parallaxMapping->integer > 1)
+					Q_strcat(extradefines, 1024, "#define USE_RELIEFMAP\n");
+
+				if (r_parallaxMapShadows->integer)
+					Q_strcat(extradefines, 1024, "#define USE_PARALLAXMAP_SHADOWS\n");
+
+				Q_strcat(extradefines, 1024, va("#define r_parallaxMapOffset %f\n", r_parallaxMapOffset->value));
+			}
+		}
+
+		if (r_specularMapping->integer)
+			Q_strcat(extradefines, 1024, "#define USE_SPECULARMAP\n");
+
+		if (r_cubeMapping->integer)
+		{
+			Q_strcat(extradefines, 1024, "#define USE_CUBEMAP\n");
+			if (r_cubeMapping->integer == 2)
+				Q_strcat(extradefines, 1024, "#define USE_BOX_CUBEMAP_PARALLAX\n");
+		}
+		else if (r_deluxeSpecular->value > 0.000001f)
+		{
+			Q_strcat(extradefines, 1024, va("#define r_deluxeSpecular %f\n", r_deluxeSpecular->value));
+		}
+
+		switch (r_glossType->integer)
+		{
+			case 0:
+			default:
+				Q_strcat(extradefines, 1024, "#define GLOSS_IS_GLOSS\n");
+				break;
+			case 1:
+				Q_strcat(extradefines, 1024, "#define GLOSS_IS_SMOOTHNESS\n");
+				break;
+			case 2:
+				Q_strcat(extradefines, 1024, "#define GLOSS_IS_ROUGHNESS\n");
+				break;
+			case 3:
+				Q_strcat(extradefines, 1024, "#define GLOSS_IS_SHININESS\n");
+				break;
+		}
+	}
+
+	if (i & LIGHTDEF_USE_SHADOWMAP)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_SHADOWMAP\n");
+
+		if (r_sunlightMode->integer == 1)
+			Q_strcat(extradefines, 1024, "#define SHADOWMAP_MODULATE\n");
+		else if (r_sunlightMode->integer == 2)
+			Q_strcat(extradefines, 1024, "#define USE_PRIMARY_LIGHT\n");
+	}
+
+	if (i & LIGHTDEF_USE_TCGEN_AND_TCMOD)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_TCGEN\n");
+		Q_strcat(extradefines, 1024, "#define USE_TCMOD\n");
+	}
+
+	if (i & LIGHTDEF_ENTITY_VERTEX_ANIMATION)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_MODELMATRIX\n");
+
+		if (glRefConfig.gpuVertexAnimation)
+		{
+			Q_strcat(extradefines, 1024, "#define USE_VERTEX_ANIMATION\n");
+			attribs |= ATTR_POSITION2 | ATTR_NORMAL2;
+
+			if (r_normalMapping->integer)
+			{
+				attribs |= ATTR_TANGENT2;
+			}
+		}
+	}
+	else if (i & LIGHTDEF_ENTITY_BONE_ANIMATION)
+	{
+		Q_strcat(extradefines, 1024, "#define USE_MODELMATRIX\n");
+		Q_strcat(extradefines, 1024, va("#define USE_BONE_ANIMATION\n#define MAX_GLSL_BONES %d\n", glRefConfig.glslMaxAnimatedBones));
+		attribs |= ATTR_BONE_INDEXES | ATTR_BONE_WEIGHTS;
+	}
+
+	if (!GLSL_InitOptionalGPUShader(&tr.lightallShader[i], "lightall", attribs, extradefines,
+		fallbackShader_lightall_vp, fallbackShader_lightall_fp, (i & LIGHTDEF_USE_DLIGHTS) != 0))
+	{
+		if (i & LIGHTDEF_USE_DLIGHTS)
+			return qfalse;
+		ri.Error(ERR_FATAL, "Could not load lightall shader!");
+	}
+
+	GLSL_InitUniforms(&tr.lightallShader[i]);
+
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_DIFFUSEMAP,  TB_DIFFUSEMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_LIGHTMAP,    TB_LIGHTMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_NORMALMAP,   TB_NORMALMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_DELUXEMAP,   TB_DELUXEMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_SPECULARMAP, TB_SPECULARMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_SHADOWMAP,   TB_SHADOWMAP);
+	GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_CUBEMAP,     TB_CUBEMAP);
+
+	GLSL_FinishGPUShader(&tr.lightallShader[i]);
+
+	return qtrue;
 }
 
 void GLSL_InitGPUShaders(void)
@@ -1092,75 +1342,16 @@ void GLSL_InitGPUShaders(void)
 	}
 
 	for (i = 0; i < GENERICDEF_COUNT; i++)
-	{	
-		if ((i & GENERICDEF_USE_VERTEX_ANIMATION) && (i & GENERICDEF_USE_BONE_ANIMATION))
-			continue;
-
-		if ((i & GENERICDEF_USE_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
-			continue;
-
-		// a stage's light with the dlights on it (GLSL_StageDlightsFit);
-		// never a stage fog adjusts, nor a bone-animated model's
-		// (ComputeDlightPath, RB_StageIteratorGeneric)
-		if ((i & GENERICDEF_USE_DLIGHT) && (!tr.stageDlights || (i & (GENERICDEF_USE_FOG | GENERICDEF_USE_BONE_ANIMATION))))
-			continue;
-
-		attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_LIGHTCOORD | ATTR_NORMAL | ATTR_COLOR;
-		extradefines[0] = '\0';
-
-		if (i & GENERICDEF_USE_DEFORM_VERTEXES)
-			Q_strcat(extradefines, 1024, "#define USE_DEFORM_VERTEXES\n");
-
-		if (i & GENERICDEF_USE_TCGEN_AND_TCMOD)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_TCGEN\n");
-			Q_strcat(extradefines, 1024, "#define USE_TCMOD\n");
-		}
-
-		if (i & GENERICDEF_USE_VERTEX_ANIMATION)
-		{
-			if (!glRefConfig.gpuVertexAnimation)
-				continue;
-
-			Q_strcat(extradefines, 1024, "#define USE_VERTEX_ANIMATION\n");
-			attribs |= ATTR_POSITION2 | ATTR_NORMAL2;
-		}
-		else if (i & GENERICDEF_USE_BONE_ANIMATION)
-		{
-			Q_strcat(extradefines, 1024, va("#define USE_BONE_ANIMATION\n#define MAX_GLSL_BONES %d\n", glRefConfig.glslMaxAnimatedBones));
-			attribs |= ATTR_BONE_INDEXES | ATTR_BONE_WEIGHTS;
-		}
-
-		if (i & GENERICDEF_USE_FOG)
-			Q_strcat(extradefines, 1024, "#define USE_FOG\n");
-
-		if (i & GENERICDEF_USE_RGBAGEN)
-			Q_strcat(extradefines, 1024, "#define USE_RGBAGEN\n");
-
-		if (i & GENERICDEF_USE_DLIGHT)
-			Q_strcat(extradefines, 1024, va("#define USE_DLIGHT\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
-				MAX_GENERIC_DLIGHTS, tr.frameLight));
-
-		if (!GLSL_InitOptionalGPUShader(&tr.genericShader[i], "generic", attribs, extradefines,
-			fallbackShader_generic_vp, fallbackShader_generic_fp, (i & GENERICDEF_USE_DLIGHT) != 0))
-		{
-			if (i & GENERICDEF_USE_DLIGHT)
-				continue;
-			ri.Error(ERR_FATAL, "Could not load generic shader!");
-		}
-
-		GLSL_InitUniforms(&tr.genericShader[i]);
-
-		GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_DIFFUSEMAP, TB_DIFFUSEMAP);
-		GLSL_SetUniformInt(&tr.genericShader[i], UNIFORM_LIGHTMAP,   TB_LIGHTMAP);
-
-		GLSL_FinishGPUShader(&tr.genericShader[i]);
-
-		numGenShaders++;
+	{
+		// the dlights' variants at map load, for the shaders that take them
+		// (GLSL_InitStageDlightPrograms)
+		if (!(i & GENERICDEF_USE_DLIGHT) && GLSL_InitGenericProgram(i))
+			numGenShaders++;
 	}
 
 
 	attribs = ATTR_POSITION | ATTR_TEXCOORD;
+	extradefines[0] = '\0';
 
 	if (!GLSL_InitGPUShader(&tr.textureColorShader, "texturecolor", attribs, qtrue, extradefines, qtrue, fallbackShader_texturecolor_vp, fallbackShader_texturecolor_fp))
 	{
@@ -1292,180 +1483,10 @@ void GLSL_InitGPUShaders(void)
 
 	for (i = 0; i < LIGHTDEF_COUNT; i++)
 	{
-		int lightType = i & LIGHTDEF_LIGHTTYPE_MASK;
-		qboolean fastLight = !(r_normalMapping->integer || r_specularMapping->integer);
-
-		// skip impossible combos
-		if ((i & LIGHTDEF_USE_PARALLAXMAP) && !r_parallaxMapping->integer)
-			continue;
-
-		if ((i & LIGHTDEF_USE_SHADOWMAP) && (!lightType || !r_sunlightMode->integer))
-			continue;
-
-		if ((i & LIGHTDEF_ENTITY_VERTEX_ANIMATION) && (i & LIGHTDEF_ENTITY_BONE_ANIMATION))
-			continue;
-
-		if ((i & LIGHTDEF_ENTITY_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
-			continue;
-
-		// the stages' dlights (GLSL_StageDlightsFit), never with ForwardDlight's
-		// own light vector, nor for a bone-animated model's
-		if ((i & LIGHTDEF_USE_DLIGHTS) && (!tr.stageDlights || lightType == LIGHTDEF_USE_LIGHT_VECTOR
-			|| (i & LIGHTDEF_ENTITY_BONE_ANIMATION)))
-			continue;
-
-		attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_COLOR | ATTR_NORMAL;
-
-		extradefines[0] = '\0';
-
-		if (r_dlightMode->integer >= 2)
-			Q_strcat(extradefines, 1024, "#define USE_SHADOWMAP\n");
-
-		if (glRefConfig.swizzleNormalmap)
-			Q_strcat(extradefines, 1024, "#define SWIZZLE_NORMALMAP\n");
-
-		// the surface's dlights join its light (DLIGHTTO_LIGHTALL): the
-		// lightmap's, the vertexes', or an unlit stage's vertex color
-		if (i & LIGHTDEF_USE_DLIGHTS)
-			Q_strcat(extradefines, 1024, va("#define USE_DLIGHTS\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
-				MAX_GENERIC_DLIGHTS, tr.frameLight));
-
-		if (lightType)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_LIGHT\n");
-
-			if (fastLight)
-				Q_strcat(extradefines, 1024, "#define USE_FAST_LIGHT\n");
-
-			switch (lightType)
-			{
-				case LIGHTDEF_USE_LIGHTMAP:
-					Q_strcat(extradefines, 1024, "#define USE_LIGHTMAP\n");
-					if (r_deluxeMapping->integer && !fastLight)
-						Q_strcat(extradefines, 1024, "#define USE_DELUXEMAP\n");
-					attribs |= ATTR_LIGHTCOORD | ATTR_LIGHTDIRECTION;
-					break;
-				case LIGHTDEF_USE_LIGHT_VECTOR:
-					Q_strcat(extradefines, 1024, "#define USE_LIGHT_VECTOR\n");
-					break;
-				case LIGHTDEF_USE_LIGHT_VERTEX:
-					Q_strcat(extradefines, 1024, "#define USE_LIGHT_VERTEX\n");
-					attribs |= ATTR_LIGHTDIRECTION;
-					break;
-				default:
-					break;
-			}
-
-			if (r_normalMapping->integer)
-			{
-				Q_strcat(extradefines, 1024, "#define USE_NORMALMAP\n");
-
-				attribs |= ATTR_TANGENT;
-
-				if ((i & LIGHTDEF_USE_PARALLAXMAP) && !(i & LIGHTDEF_ENTITY_VERTEX_ANIMATION) && !(i & LIGHTDEF_ENTITY_BONE_ANIMATION) && r_parallaxMapping->integer)
-				{
-					Q_strcat(extradefines, 1024, "#define USE_PARALLAXMAP\n");
-					if (r_parallaxMapping->integer > 1)
-						Q_strcat(extradefines, 1024, "#define USE_RELIEFMAP\n");
-
-					if (r_parallaxMapShadows->integer)
-						Q_strcat(extradefines, 1024, "#define USE_PARALLAXMAP_SHADOWS\n");
-
-					Q_strcat(extradefines, 1024, va("#define r_parallaxMapOffset %f\n", r_parallaxMapOffset->value));
-				}
-			}
-
-			if (r_specularMapping->integer)
-				Q_strcat(extradefines, 1024, "#define USE_SPECULARMAP\n");
-
-			if (r_cubeMapping->integer)
-			{
-				Q_strcat(extradefines, 1024, "#define USE_CUBEMAP\n");
-				if (r_cubeMapping->integer == 2)
-					Q_strcat(extradefines, 1024, "#define USE_BOX_CUBEMAP_PARALLAX\n");
-			}
-			else if (r_deluxeSpecular->value > 0.000001f)
-			{
-				Q_strcat(extradefines, 1024, va("#define r_deluxeSpecular %f\n", r_deluxeSpecular->value));
-			}
-
-			switch (r_glossType->integer)
-			{
-				case 0:
-				default:
-					Q_strcat(extradefines, 1024, "#define GLOSS_IS_GLOSS\n");
-					break;
-				case 1:
-					Q_strcat(extradefines, 1024, "#define GLOSS_IS_SMOOTHNESS\n");
-					break;
-				case 2:
-					Q_strcat(extradefines, 1024, "#define GLOSS_IS_ROUGHNESS\n");
-					break;
-				case 3:
-					Q_strcat(extradefines, 1024, "#define GLOSS_IS_SHININESS\n");
-					break;
-			}
-		}
-
-		if (i & LIGHTDEF_USE_SHADOWMAP)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_SHADOWMAP\n");
-
-			if (r_sunlightMode->integer == 1)
-				Q_strcat(extradefines, 1024, "#define SHADOWMAP_MODULATE\n");
-			else if (r_sunlightMode->integer == 2)
-				Q_strcat(extradefines, 1024, "#define USE_PRIMARY_LIGHT\n");
-		}
-
-		if (i & LIGHTDEF_USE_TCGEN_AND_TCMOD)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_TCGEN\n");
-			Q_strcat(extradefines, 1024, "#define USE_TCMOD\n");
-		}
-
-		if (i & LIGHTDEF_ENTITY_VERTEX_ANIMATION)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_MODELMATRIX\n");
-
-			if (glRefConfig.gpuVertexAnimation)
-			{
-				Q_strcat(extradefines, 1024, "#define USE_VERTEX_ANIMATION\n");
-				attribs |= ATTR_POSITION2 | ATTR_NORMAL2;
-
-				if (r_normalMapping->integer)
-				{
-					attribs |= ATTR_TANGENT2;
-				}
-			}
-		}
-		else if (i & LIGHTDEF_ENTITY_BONE_ANIMATION)
-		{
-			Q_strcat(extradefines, 1024, "#define USE_MODELMATRIX\n");
-			Q_strcat(extradefines, 1024, va("#define USE_BONE_ANIMATION\n#define MAX_GLSL_BONES %d\n", glRefConfig.glslMaxAnimatedBones));
-			attribs |= ATTR_BONE_INDEXES | ATTR_BONE_WEIGHTS;
-		}
-
-		if (!GLSL_InitOptionalGPUShader(&tr.lightallShader[i], "lightall", attribs, extradefines,
-			fallbackShader_lightall_vp, fallbackShader_lightall_fp, (i & LIGHTDEF_USE_DLIGHTS) != 0))
-		{
-			if (i & LIGHTDEF_USE_DLIGHTS)
-				continue;
-			ri.Error(ERR_FATAL, "Could not load lightall shader!");
-		}
-
-		GLSL_InitUniforms(&tr.lightallShader[i]);
-
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_DIFFUSEMAP,  TB_DIFFUSEMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_LIGHTMAP,    TB_LIGHTMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_NORMALMAP,   TB_NORMALMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_DELUXEMAP,   TB_DELUXEMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_SPECULARMAP, TB_SPECULARMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_SHADOWMAP,   TB_SHADOWMAP);
-		GLSL_SetUniformInt(&tr.lightallShader[i], UNIFORM_CUBEMAP,     TB_CUBEMAP);
-
-		GLSL_FinishGPUShader(&tr.lightallShader[i]);
-
-		numLightShaders++;
+		// the dlights' variants at map load, for the shaders that take them
+		// (GLSL_InitStageDlightPrograms)
+		if (!(i & LIGHTDEF_USE_DLIGHTS) && GLSL_InitLightallProgram(i))
+			numLightShaders++;
 	}
 
 	for (i = 0; i < SHADOWMAPDEF_COUNT; i++)
@@ -1822,16 +1843,14 @@ void GLSL_BindProgram(shaderProgram_t * program)
 }
 
 
-// dlights: the stage takes the surface's dlights (GENERICDEF_USE_DLIGHT)
-shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights)
+// a stage's generic program for a draw: fog, the vertex or bone animation,
+// and dlights, the surface's dlights the stage takes (GENERICDEF_USE_DLIGHT);
+// the draw (GLSL_GetGenericShaderProgram) and the map load's dlight variants
+// (GLSL_InitStageDlightPrograms) both pick by it
+int GLSL_GenericStageIndex(const shader_t *shader, const shaderStage_t *pStage, qboolean fog,
+	qboolean vertexAnimation, qboolean boneAnimation, qboolean dlights)
 {
-	shaderStage_t *pStage = tess.xstages[stage];
 	int shaderAttribs = dlights ? GENERICDEF_USE_DLIGHT : 0;
-
-	if (tess.fogNum && pStage->adjustColorsForFog)
-	{
-		shaderAttribs |= GENERICDEF_USE_FOG;
-	}
 
 	switch (pStage->rgbGen)
 	{
@@ -1857,18 +1876,23 @@ shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights)
 		shaderAttribs |= GENERICDEF_USE_TCGEN_AND_TCMOD;
 	}
 
-	if (tess.shader->numDeforms && !ShaderRequiresCPUDeforms(tess.shader))
+	if (fog)
 	{
-		shaderAttribs |= GENERICDEF_USE_DEFORM_VERTEXES;
+		shaderAttribs |= GENERICDEF_USE_FOG;
 	}
 
-	if (glState.vertexAnimation)
+	if (vertexAnimation)
 	{
 		shaderAttribs |= GENERICDEF_USE_VERTEX_ANIMATION;
 	}
-	else if (glState.boneAnimation)
+	else if (boneAnimation)
 	{
 		shaderAttribs |= GENERICDEF_USE_BONE_ANIMATION;
+	}
+
+	if (shader->numDeforms && !ShaderRequiresCPUDeforms(shader))
+	{
+		shaderAttribs |= GENERICDEF_USE_DEFORM_VERTEXES;
 	}
 
 	if (pStage->bundle[0].numTexMods)
@@ -1876,5 +1900,112 @@ shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights)
 		shaderAttribs |= GENERICDEF_USE_TCGEN_AND_TCMOD;
 	}
 
-	return &tr.genericShader[shaderAttribs];
+	return shaderAttribs;
+}
+
+shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights)
+{
+	shaderStage_t *pStage = tess.xstages[stage];
+
+	return &tr.genericShader[GLSL_GenericStageIndex(tess.shader, pStage, tess.fogNum && pStage->adjustColorsForFog,
+		glState.vertexAnimation, glState.boneAnimation, dlights)];
+}
+
+// a lit or vertex-colored lightall stage's program for a draw: its own, with
+// a non-world entity's animation and the sun's shadow map; with dlights, the
+// variant that takes them; the draw and GLSL_InitStageDlightPrograms both
+// pick by it
+int GLSL_LightallStageIndex(const shaderStage_t *pStage, qboolean entity, qboolean boneAnimation,
+	qboolean sun, qboolean dlights)
+{
+	int index = pStage->glslShaderIndex;
+
+	if (entity)
+	{
+		index |= boneAnimation ? LIGHTDEF_ENTITY_BONE_ANIMATION : LIGHTDEF_ENTITY_VERTEX_ANIMATION;
+	}
+
+	if (r_sunlightMode->integer && sun && (index & LIGHTDEF_LIGHTTYPE_MASK))
+	{
+		index |= LIGHTDEF_USE_SHADOWMAP;
+	}
+
+	// a draw with the dlights has r_lightmap 0 (RB_StageIteratorGeneric), so the
+	// variants compiled with r_lightmap on are its own still
+	if (!dlights && r_lightmap->integer && ((index & LIGHTDEF_LIGHTTYPE_MASK) == LIGHTDEF_USE_LIGHTMAP))
+	{
+		index = LIGHTDEF_USE_TCGEN_AND_TCMOD;
+	}
+
+	if (dlights)
+	{
+		index |= LIGHTDEF_USE_DLIGHTS;
+	}
+
+	return index;
+}
+
+/*
+** GLSL_InitStageDlightPrograms
+
+Compiles the dlights' variants (GENERICDEF_USE_DLIGHT, LIGHTDEF_USE_DLIGHTS)
+of the stages that take them in the shaders registered by now, at the end of
+a map's or a vid_restart's registration (RE_EndRegistration), so startup
+compiles none and the loading screen only the map's few. Each comes in the
+draws the stage can have: a lightall stage's on the world and on an entity
+(a brush model's door, say), with the sun's shadow map where the map has the
+sun (RE_RenderScene's VPF_USESUNLIGHT); a generic stage's with a model's
+vertex animation unless it's the world's (a model's shaders take no
+lightmap, and a custom shader cgame gives one is LIGHTMAP_2D). A draw whose
+variant isn't compiled, a shader registered later, or r_forceSun or
+r_depthPrepass turned on, takes the projected dlight until the next
+registration (RB_StageIteratorGeneric).
+*/
+void GLSL_InitStageDlightPrograms(void)
+{
+	int i, j, startTime, compiled = 0;
+	qboolean sun = r_depthPrepass->value && (tr.sunShadows || r_forceSun->integer);
+
+	if (!tr.stageDlights)
+	{
+		return;
+	}
+	startTime = ri.Milliseconds();
+	for (i = 0; i < tr.numShaders; i++)
+	{
+		shader_t *shader = tr.shaders[i];
+
+		if (shader->dlightPath != DLIGHT_STAGE)
+		{
+			continue;
+		}
+		for (j = 0; j < MAX_SHADER_STAGES && shader->stages[j]; j++)
+		{
+			shaderStage_t *pStage = shader->stages[j];
+			int entity, sunlit, animated;
+
+			if (pStage->dlightTo == DLIGHTTO_NONE)
+			{
+				continue;
+			}
+			if (pStage->glslShaderGroup == tr.lightallShader)
+			{
+				for (entity = 0; entity < 2; entity++)
+					for (sunlit = 0; sunlit < 1 + sun; sunlit++)
+						compiled += GLSL_InitLightallProgram(GLSL_LightallStageIndex(pStage, entity, qfalse, sunlit, qtrue));
+			}
+			else
+			{
+				int onModels = shader->lightmapIndex == LIGHTMAP_NONE || shader->lightmapIndex == LIGHTMAP_2D;
+
+				for (animated = 0; animated < 1 + onModels; animated++)
+					compiled += GLSL_InitGenericProgram(GLSL_GenericStageIndex(shader, pStage, qfalse, animated, qfalse, qtrue));
+			}
+		}
+	}
+	if (compiled)
+	{
+		ri.Printf(PRINT_ALL, "compiled %i GLSL programs for the stages' dlights in %5.2f seconds\n",
+			compiled, (ri.Milliseconds() - startTime) / 1000.0);
+	}
 }
