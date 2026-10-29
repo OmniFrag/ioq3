@@ -1071,6 +1071,51 @@ void Sys_SigHandler( int signal )
 
 /*
 =================
+Sys_AppendCommandLine
+
+Adds text, length bytes before va cut it, to the command line if it fits
+whole. Else the command it would end goes to lost, from its + on, rather
+than run without its end (a password set to nothing), unless text starts a
+command itself; and text and all after it too. lostBytes counts what lost
+can't hold as well. Both are MAX_STRING_CHARS
+=================
+*/
+static void Sys_AppendCommandLine( char *commandLine, char *lost, int *lostBytes, const char *text, int length )
+{
+	char      *cut, *p;
+	qboolean  quoted = qfalse;
+
+	if( !*lostBytes && strlen( commandLine ) + length < MAX_STRING_CHARS )
+	{
+		Q_strcat( commandLine, MAX_STRING_CHARS, text );
+		return;
+	}
+
+	if( !*lostBytes )
+	{
+		cut = commandLine + strlen( commandLine );
+		if( !Com_SplitsCommandLine( text[ 0 ], qfalse ) )
+		{
+			// as Com_ParseCommandLine splits it
+			cut = commandLine;
+			for( p = commandLine; *p; p++ )
+			{
+				if( *p == '"' )
+					quoted = !quoted;
+				if( Com_SplitsCommandLine( *p, quoted ) )
+					cut = p;
+			}
+		}
+		Q_strncpyz( lost, cut, MAX_STRING_CHARS );
+		*lostBytes = (int)strlen( cut );
+		*cut = '\0';
+	}
+	Q_strcat( lost, MAX_STRING_CHARS, text );
+	*lostBytes += length;
+}
+
+/*
+=================
 Sys_Start
 =================
 */
@@ -1080,6 +1125,9 @@ static void Sys_Start( int argc, char **argv )
 	char  executable[ MAX_OSPATH ];
 	// Com_StartupVariable reads it after Com_Init
 	static char  commandLine[ MAX_STRING_CHARS ] = { 0 };
+	// what didn't fit in it, which Com_Init warns of
+	static char  lost[ MAX_STRING_CHARS ] = { 0 };
+	int   lostBytes = 0;
 #ifdef PROTOCOL_HANDLER
 	char *protocolCommand = NULL;
 #endif
@@ -1167,22 +1215,15 @@ static void Sys_Start( int argc, char **argv )
 			continue;
 
 		containsSpaces = strchr(argv[i], ' ') != NULL;
-		if (containsSpaces)
-			Q_strcat( commandLine, sizeof( commandLine ), "\"" );
-
-		Q_strcat( commandLine, sizeof( commandLine ), argv[ i ] );
-
-		if (containsSpaces)
-			Q_strcat( commandLine, sizeof( commandLine ), "\"" );
-
-		Q_strcat( commandLine, sizeof( commandLine ), " " );
+		Sys_AppendCommandLine( commandLine, lost, &lostBytes, va( containsSpaces ? "\"%s\" " : "%s ", argv[ i ] ),
+			(int)strlen( argv[ i ] ) + ( containsSpaces ? 3 : 1 ) );
 	}
 
 #ifdef PROTOCOL_HANDLER
 	if ( protocolCommand != NULL )
 	{
-		Q_strcat( commandLine, sizeof( commandLine ), "+" );
-		Q_strcat( commandLine, sizeof( commandLine ), protocolCommand );
+		Sys_AppendCommandLine( commandLine, lost, &lostBytes, va( "+%s", protocolCommand ),
+			(int)strlen( protocolCommand ) + 1 );
 		free( protocolCommand );
 	}
 #endif
@@ -1193,7 +1234,7 @@ static void Sys_Start( int argc, char **argv )
 	signal( SIGINT, Sys_SigHandler );
 
 	CON_Init( );
-	Com_Init( commandLine );
+	Com_Init( commandLine, lost, lostBytes );
 	NET_Init( );
 
 	// its PID file carries the port it opened (Sys_PIDFileName), and its

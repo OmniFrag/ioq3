@@ -326,14 +326,14 @@ Com_HideSecret
 A command line's line as the log shows it: each command in it (the first,
 and any after a ;, which runs as well) that sets a password (rconpassword,
 g_password, sv_privatePassword) with its value hidden. A private cvar's,
-a path say, is the admin's to see here
+a path say, is the admin's to see here. Returns whether it hid one
 =============
 */
-static void Com_HideSecret( const char *line, char *text, int size ) {
+static qboolean Com_HideSecret( const char *line, char *text, int size ) {
 	static const char *setters[] = { "set", "seta", "sets", "setu" };
 	char		name[MAX_TOKEN_CHARS];
 	const char	*end, *next;
-	qboolean	quoted;
+	qboolean	quoted, hid = qfalse;
 	int			i, length;
 
 	text[0] = '\0';
@@ -360,6 +360,7 @@ static void Com_HideSecret( const char *line, char *text, int size ) {
 		Q_strncpyz( text + length, line, MIN( size - length, (int)( end - line ) + 1 ) );
 		if ( end != next ) {
 			Q_strcat( text, size, " (hidden)" );
+			hid = qtrue;
 		}
 		if ( *next == ';' ) {
 			Q_strcat( text, size, ";" );
@@ -370,7 +371,68 @@ static void Com_HideSecret( const char *line, char *text, int size ) {
 	for ( length = strlen( text ); length > 0 && text[length - 1] == ' '; length-- ) {
 		text[length - 1] = '\0';
 	}
+	return hid;
 }
+
+/*
+==================
+Com_SplitsCommandLine
+
+Whether c, outside quotes or in, starts a console line
+==================
+*/
+qboolean Com_SplitsCommandLine( char c, qboolean quoted ) {
+	return ( c == '+' && !quoted ) || c == '\n' || c == '\r';
+}
+
+/*
+==================
+Com_HideSecrets
+
+Com_HideSecret for each console line in line, joined by " +" as the
+command line had them; returns how many weren't empty. In one line (merged
+past MAX_CONSOLE_LINES), what follows a password is its value, so hidden
+too
+==================
+*/
+static int Com_HideSecrets( const char *line, qboolean oneLine, char *text, int size ) {
+	static char	piece[MAX_STRING_CHARS * 2], hidden[MAX_STRING_CHARS * 2];
+	qboolean	quoted = qfalse, secret = qfalse;
+	int			length = 0, pieces = 0;
+
+	text[0] = '\0';
+	for ( ;; line++ ) {
+		if ( *line == '"' ) {
+			quoted = !quoted;
+		}
+		if ( *line && !Com_SplitsCommandLine( *line, quoted ) ) {
+			if ( length < (int)sizeof( piece ) - 1 ) {
+				piece[length++] = *line;
+			}
+			continue;
+		}
+		piece[length] = '\0';
+		length = 0;
+		if ( secret ) {
+			pieces += piece[strspn( piece, " " )] != '\0';
+		} else {
+			secret = Com_HideSecret( piece, hidden, sizeof( hidden ) ) && oneLine;
+			if ( hidden[0] ) {
+				if ( pieces++ ) {
+					Q_strcat( text, size, " +" );
+				}
+				Q_strcat( text, size, hidden );
+			}
+		}
+		if ( !*line ) {
+			return pieces;
+		}
+	}
+}
+
+// what of the command line didn't run as given (Com_WarnCommandLine), for
+// the log's start too
+static char	com_commandLineWarning[MAX_STRING_CHARS * 4];
 
 /*
 =============
@@ -389,6 +451,7 @@ static void Com_LogStart( const struct tm *now ) {
 	char			date[32];
 	const char		*p;
 	int				i;
+	qboolean		start = qtrue;
 
 	if ( marked ) {
 		return;
@@ -398,7 +461,7 @@ static void Com_LogStart( const struct tm *now ) {
 	strftime( date, sizeof( date ), "%Y-%m-%d %H:%M:%S", now );
 	Com_sprintf( line, sizeof( line ), "==== %s: %s %s started:", date, Q3_VERSION, PLATFORM_STRING );
 	for ( i = 0; i < com_numConsoleLines; i++ ) {
-		Com_HideSecret( com_consoleLines[i], command, sizeof( command ) );
+		Com_HideSecrets( com_consoleLines[i], qtrue, command, sizeof( command ) );
 		if ( command[0] ) {
 			Q_strcat( line, sizeof( line ), i ? " +" : " " );
 			Q_strcat( line, sizeof( line ), command );
@@ -409,6 +472,8 @@ static void Com_LogStart( const struct tm *now ) {
 		p += Q_FilterTerminalText( command, sizeof( command ), p );
 		Com_LogWrite( command );
 	}
+	// stamped as the log's other lines are
+	Com_PrintLines( com_commandLineWarning, &start, 1, Com_LogWrite );
 }
 
 /*
@@ -784,6 +849,52 @@ quake3 set test blah + map test
 #define	MAX_CONSOLE_LINES	32
 int		com_numConsoleLines;
 char	*com_consoleLines[MAX_CONSOLE_LINES];
+// whether commands past MAX_CONSOLE_LINES ran as the last line's arguments
+static qboolean	com_commandsMerged;
+
+/*
+==================
+Com_WarnCommandLine
+
+Says what of the command line didn't run as given, as it's parsed, before
+anything can blank its lines (Com_SafeMode) or stop the start: commands past
+MAX_CONSOLE_LINES, run as the last one's arguments, and the commands lost,
+lostBytes in all, past its size (Sys_Start); passwords hidden, as in the
+log's start, which has the warning too
+==================
+*/
+static void Com_WarnCommandLine( const char *lost, int lostBytes ) {
+	static char	text[MAX_STRING_CHARS * 2], warning[MAX_STRING_CHARS * 2];
+	const char	*line;
+	int			i, kept = 0, merged;
+
+	com_commandLineWarning[0] = '\0';
+	if ( com_commandsMerged ) {
+		// the commands that ran: the lines with one, the text before the
+		// first + among them, and the last line's own; the rest of that line
+		// is its arguments
+		for ( i = 0; i < com_numConsoleLines; i++ ) {
+			line = com_consoleLines[i] + strspn( com_consoleLines[i], " " );
+			kept += *line && !Com_SplitsCommandLine( *line, qfalse );
+		}
+		merged = Com_HideSecrets( com_consoleLines[com_numConsoleLines - 1], qtrue, text, sizeof( text ) );
+		merged -= ( *line && !Com_SplitsCommandLine( *line, qfalse ) );
+		Com_sprintf( warning, sizeof( warning ),
+			"WARNING: the command line keeps %d commands, so %d more ran as the last one's arguments: +%s\n",
+			kept, merged, text );
+		Com_Printf( S_COLOR_YELLOW "%s", warning );
+		Q_strcat( com_commandLineWarning, sizeof( com_commandLineWarning ), warning );
+	}
+	if ( lostBytes ) {
+		Com_HideSecrets( lost, qfalse, text, sizeof( text ) );
+		Com_sprintf( warning, sizeof( warning ),
+			"WARNING: the command line keeps %d bytes, so it dropped the last %d, these commands: %s%s%s\n",
+			MAX_STRING_CHARS - 1, lostBytes, lost[0] == '+' ? "+" : "", text,
+			lostBytes > (int)strlen( lost ) ? " ..." : "" );
+		Com_Printf( S_COLOR_YELLOW "%s", warning );
+		Q_strcat( com_commandLineWarning, sizeof( com_commandLineWarning ), warning );
+	}
+}
 
 /*
 ==================
@@ -803,9 +914,12 @@ void Com_ParseCommandLine( char *commandLine ) {
         }
         // look for a + separating character
         // if commandLine came from a file, we might have real line seperators
-        if ( (*commandLine == '+' && !inq) || *commandLine == '\n'  || *commandLine == '\r' ) {
+        if ( Com_SplitsCommandLine( *commandLine, inq ) ) {
+            // the rest runs as the last line's arguments
             if ( com_numConsoleLines == MAX_CONSOLE_LINES ) {
-                return;
+                com_commandsMerged = qtrue;
+                commandLine++;
+                continue;
             }
             com_consoleLines[com_numConsoleLines] = commandLine + 1;
             com_numConsoleLines++;
@@ -3867,7 +3981,7 @@ static const cvarDefault_t com_touchProfile[] = {
 Com_Init
 =================
 */
-void Com_Init( char *commandLine ) {
+void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	char	*s;
 	int	qport;
 
@@ -3897,6 +4011,7 @@ void Com_Init( char *commandLine ) {
 	// prepare enough of the subsystems to handle
 	// cvar and command buffer management
 	Com_ParseCommandLine( commandLine );
+	Com_WarnCommandLine( lost, lostBytes );
 
 //	Swap_Init ();
 	Cbuf_Init ();
