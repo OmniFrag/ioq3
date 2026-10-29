@@ -57,6 +57,8 @@ GLvoid APIENTRY GLDSA_ProgramUniform4fEXT(GLuint program, GLint location,
 	GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 GLvoid APIENTRY GLDSA_ProgramUniform1fvEXT(GLuint program, GLint location,
 	GLsizei count, const GLfloat *value);
+GLvoid APIENTRY GLDSA_ProgramUniform4fvEXT(GLuint program, GLint location,
+	GLsizei count, const GLfloat *value);
 GLvoid APIENTRY GLDSA_ProgramUniformMatrix4fvEXT(GLuint program, GLint location,
 	GLsizei count, GLboolean transpose,
 	const GLfloat *value);

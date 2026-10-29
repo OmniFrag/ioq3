@@ -210,6 +210,21 @@ vec3 CalcSpecular(vec3 specular, float NH, float EH, float roughness)
 }
 
 
+#if defined(USE_DLIGHTS)
+// the dlights on the surface, two vec4s each: the origin, in the model's
+// space, and 1 / radius; the color. They join the light the lightmap or the
+// vertexes bring, which the diffuse then multiplies (DLIGHTTO_LIGHTALL)
+uniform int       u_NumDlights;
+#if defined(GL_ES) && defined(GL_FRAGMENT_PRECISION_HIGH)
+#define DLIGHT_PRECISION highp
+#else
+#define DLIGHT_PRECISION
+#endif
+uniform DLIGHT_PRECISION vec4 u_Dlights[2 * MAX_GENERIC_DLIGHTS];
+varying DLIGHT_PRECISION vec3 var_DlightPosition;
+varying vec3      var_DlightNormal;
+#endif
+
 float CalcLightAttenuation(float point, float normDist)
 {
 	// zero light at 1.0, approximating q3 style
@@ -225,6 +240,38 @@ float CalcLightAttenuation(float point, float normDist)
 
 	return attenuation;
 }
+
+#if defined(USE_DLIGHTS)
+// the dlights join the light arriving, in its units: a lightmap's, which
+// the stage's color scales, or the vertexes' (or a vertex color's), which
+// the color is, so they're added beside it, scaled as rgbGen vertex scales
+// that light (tr.frameLight, ComputeShaderColors)
+  #if defined(USE_LIGHTMAP)
+	#define DLIGHT_SCALE var_Color.rgb
+  #else
+	#define DLIGHT_SCALE vec3(DLIGHT_VERTEX_SCALE)
+  #endif
+
+vec3 CalcDlights()
+{
+	vec3 DN = normalize(!gl_FrontFacing ? var_DlightNormal : -var_DlightNormal);
+	vec3 dlights = vec3(0.0);
+
+	for (int i = 0; i < MAX_GENERIC_DLIGHTS; i++)
+	{
+		if (i >= u_NumDlights)
+			break;
+
+		// in radii, so the square stays in range at medium precision
+		vec3 DL = (u_Dlights[2 * i].xyz - var_DlightPosition) * u_Dlights[2 * i].w;
+		float invLength = inversesqrt(max(dot(DL, DL), 1e-4));
+		dlights += u_Dlights[2 * i + 1].rgb * (CalcLightAttenuation(1.0, invLength * invLength)
+			* clamp(dot(DN, DL) * invLength, 0.0, 1.0));
+	}
+
+	return dlights;
+}
+#endif
 
 #if defined(USE_BOX_CUBEMAP_PARALLAX)
 vec4 hitCube(vec3 ray, vec3 pos, vec3 invSize, float lod, samplerCube tex)
@@ -508,6 +555,18 @@ void main()
 	gl_FragColor.rgb += lightColor * reflectance * NL2;
   #endif
 
+  #if defined(USE_DLIGHTS)
+	{
+		// in linear light, before the PBR path leaves it: the diffuse and
+		// the color are squared there, and the dlights are, as the lightmap is
+		vec3 dlights = CalcDlights();
+    #if defined(USE_PBR)
+		dlights *= dlights;
+    #endif
+		gl_FragColor.rgb += diffuse.rgb * DLIGHT_SCALE * dlights;
+	}
+  #endif
+
   #if defined(USE_PBR)
 	gl_FragColor.rgb = sqrt(gl_FragColor.rgb);
   #endif
@@ -515,6 +574,9 @@ void main()
 #else
 
 	gl_FragColor.rgb = diffuse.rgb * lightColor;
+  #if defined(USE_DLIGHTS)
+	gl_FragColor.rgb += diffuse.rgb * DLIGHT_SCALE * CalcDlights();
+  #endif
 
 #endif
 

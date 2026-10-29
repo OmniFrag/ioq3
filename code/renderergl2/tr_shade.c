@@ -500,6 +500,7 @@ static void ProjectDlightTexture( void ) {
 	float	radius;
 	int deformGen;
 	vec5_t deformParams;
+	shaderProgram_t *sp;
 
 	if ( !backEnd.refdef.num_dlights ) {
 		return;
@@ -507,9 +508,13 @@ static void ProjectDlightTexture( void ) {
 
 	ComputeDeformValues(&deformGen, deformParams);
 
+	// with r_dlightMode, light the surfaces ForwardDlight can't as it lights
+	// the rest, rather than with the projected texture
+	sp = &tr.dlightShader[(deformGen == DGEN_NONE ? 0 : DLIGHTDEF_USE_DEFORM_VERTEXES)
+		| (r_dlightMode->integer ? DLIGHTDEF_PER_PIXEL : 0)];
+
 	for ( l = 0 ; l < backEnd.refdef.num_dlights ; l++ ) {
 		dlight_t	*dl;
-		shaderProgram_t *sp;
 		vec4_t vector;
 
 		if ( !( tess.dlightBits & ( 1 << l ) ) ) {
@@ -520,8 +525,6 @@ static void ProjectDlightTexture( void ) {
 		VectorCopy( dl->transformed, origin );
 		radius = dl->radius;
 		scale = 1.0f / radius;
-
-		sp = &tr.dlightShader[deformGen == DGEN_NONE ? 0 : 1];
 
 		backEnd.pc.c_dlightDraws++;
 
@@ -550,7 +553,9 @@ static void ProjectDlightTexture( void ) {
 		vector[3] = scale;
 		GLSL_SetUniformVec4(sp, UNIFORM_DLIGHTINFO, vector);
 	  
-		GL_BindToTMU( tr.dlightImage, TB_COLORMAP );
+		if ( !r_dlightMode->integer ) {
+			GL_BindToTMU( tr.dlightImage, TB_COLORMAP );
+		}
 
 		// include GLS_DEPTHFUNC_EQUAL so alpha tested surfaces don't add light
 		// where they aren't rendered
@@ -1157,7 +1162,32 @@ static unsigned int RB_CalcShaderVertexAttribs( shaderCommands_t *input )
 	return vertexAttribs;
 }
 
-static void RB_IterateStagesGeneric( shaderCommands_t *input )
+// the surface's dlights for the stages that take them (DLIGHT_STAGE), two
+// vec4s each: the origin, in the model's space, and 1 / radius; the color
+static vec4_t stageDlights[2 * MAX_GENERIC_DLIGHTS];
+
+// packs the surface's dlights into stageDlights; how many
+static int SetStageDlights( void )
+{
+	int l, n = 0;
+
+	for ( l = 0; l < backEnd.refdef.num_dlights; l++ ) {
+		dlight_t *dl = &backEnd.refdef.dlights[l];
+
+		if ( !( tess.dlightBits & ( 1 << l ) ) ) {
+			continue;
+		}
+		VectorCopy( dl->transformed, stageDlights[2 * n] );
+		stageDlights[2 * n][3] = 1.0f / dl->radius;
+		VectorCopy( dl->color, stageDlights[2 * n + 1] );
+		n++;
+	}
+	return n;
+}
+
+// numDlights: the surface's dlights (SetStageDlights) join the stages that
+// take them (shaderStage_t's dlightTo), or 0
+static void RB_IterateStagesGeneric( shaderCommands_t *input, int numDlights )
 {
 	int stage;
 	
@@ -1178,11 +1208,15 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 		shaderStage_t *pStage = input->xstages[stage];
 		shaderProgram_t *sp;
 		vec4_t texMatrix[8];
+		qboolean dlights;
 
 		if ( !pStage )
 		{
 			break;
 		}
+
+		// this stage takes the surface's dlights, in its program's variant
+		dlights = numDlights && pStage->dlightTo != DLIGHTTO_NONE;
 
 		if (backEnd.depthFill)
 		{
@@ -1261,13 +1295,20 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 				index = LIGHTDEF_USE_TCGEN_AND_TCMOD;
 			}
 
+			// the variant with the dlights only where they light this surface,
+			// so one with none near runs the program it always did
+			if (dlights)
+			{
+				index |= LIGHTDEF_USE_DLIGHTS;
+			}
+
 			sp = &pStage->glslShaderGroup[index];
 
 			backEnd.pc.c_lightallDraws++;
 		}
 		else
 		{
-			sp = GLSL_GetGenericShaderProgram(stage);
+			sp = GLSL_GetGenericShaderProgram(stage, dlights);
 
 			backEnd.pc.c_genericDraws++;
 		}
@@ -1279,6 +1320,16 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 		GLSL_SetUniformVec3(sp, UNIFORM_LOCALVIEWORIGIN, backEnd.or.viewOrigin);
 
 		GLSL_SetUniformFloat(sp, UNIFORM_VERTEXLERP, glState.vertexAttribsInterpolation);
+
+		if (dlights)
+		{
+			GLSL_SetUniformInt(sp, UNIFORM_NUMDLIGHTS, numDlights);
+			GLSL_SetUniformVec4Dlights(sp, UNIFORM_DLIGHTS, stageDlights, 2 * numDlights);
+			if (pStage->glslShaderGroup != tr.lightallShader)
+			{
+				GLSL_SetUniformInt(sp, UNIFORM_DLIGHTTO, pStage->dlightTo);
+			}
+		}
 
 		if (glState.boneAnimation)
 		{
@@ -1654,6 +1705,7 @@ void RB_StageIteratorGeneric( void )
 {
 	shaderCommands_t *input;
 	unsigned int vertexAttribs = 0;
+	dlightPath_t dlit;
 
 	input = &tess;
 	
@@ -1725,7 +1777,7 @@ void RB_StageIteratorGeneric( void )
 	//
 	if (backEnd.depthFill)
 	{
-		RB_IterateStagesGeneric( input );
+		RB_IterateStagesGeneric( input, 0 );
 
 		//
 		// reset polygon offset
@@ -1762,7 +1814,13 @@ void RB_StageIteratorGeneric( void )
 	//
 	// call shader function
 	//
-	RB_IterateStagesGeneric( input );
+	dlit = tess.dlightBits && r_lightmap->integer == 0 ? tess.shader->dlightPath : DLIGHT_NONE;
+	// no stage dlight programs for a bone-animated model's (GLSL_InitGPUShaders):
+	// the projected dlight, as stock
+	if ( dlit == DLIGHT_STAGE && glState.boneAnimation ) {
+		dlit = DLIGHT_PROJECTED;
+	}
+	RB_IterateStagesGeneric( input, dlit == DLIGHT_STAGE ? SetStageDlights() : 0 );
 
 	//
 	// pshadows!
@@ -1776,17 +1834,10 @@ void RB_StageIteratorGeneric( void )
 	// 
 	// now do any dynamic lighting needed
 	//
-	if ( tess.dlightBits && tess.shader->sort <= SS_OPAQUE && r_lightmap->integer == 0
-		&& !(tess.shader->surfaceFlags & (SURF_NODLIGHT | SURF_SKY) ) ) {
-		if (tess.shader->numUnfoggedPasses == 1 && tess.xstages[0]->glslShaderGroup == tr.lightallShader
-			&& (tess.xstages[0]->glslShaderIndex & LIGHTDEF_LIGHTTYPE_MASK) && r_dlightMode->integer)
-		{
-			ForwardDlight();
-		}
-		else
-		{
-			ProjectDlightTexture();
-		}
+	if ( dlit == DLIGHT_FORWARD ) {
+		ForwardDlight();
+	} else if ( dlit == DLIGHT_PROJECTED ) {
+		ProjectDlightTexture();
 	}
 
 	//

@@ -75,6 +75,12 @@ uniform float u_PrimaryLightRadius;
 
 varying vec4   var_TexCoords;
 
+#if defined(USE_DLIGHTS)
+// in the model's space, as the dlights' origins are
+varying vec3   var_DlightPosition;
+varying vec3   var_DlightNormal;
+#endif
+
 varying vec4   var_Color;
 #if defined(USE_LIGHT_VECTOR) && !defined(USE_FAST_LIGHT)
 varying vec4   var_ColorAmbient;
@@ -213,6 +219,11 @@ void main()
 #endif
 
 	gl_Position = u_ModelViewProjectionMatrix * vec4(position, 1.0);
+
+#if defined(USE_DLIGHTS)
+	var_DlightPosition = position;
+	var_DlightNormal = normal;
+#endif
 
 #if defined(USE_MODELMATRIX)
 	position  = (u_ModelMatrix * vec4(position, 1.0)).xyz;

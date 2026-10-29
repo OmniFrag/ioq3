@@ -185,6 +185,7 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 	GLE(void, Uniform4f, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) \
 	GLE(void, Uniform1i, GLint location, GLint v0) \
 	GLE(void, Uniform1fv, GLint location, GLsizei count, const GLfloat *value) \
+	GLE(void, Uniform4fv, GLint location, GLsizei count, const GLfloat *value) \
 	GLE(void, UniformMatrix4fv, GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) \
 	GLE(void, ValidateProgram, GLuint program) \
 	GLE(void, VertexAttribPointer, GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer) \
@@ -322,6 +323,7 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 	GLE(GLvoid, ProgramUniform3fEXT, GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2) \
 	GLE(GLvoid, ProgramUniform4fEXT, GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) \
 	GLE(GLvoid, ProgramUniform1fvEXT, GLuint program, GLint location, GLsizei count, const GLfloat *value) \
+	GLE(GLvoid, ProgramUniform4fvEXT, GLuint program, GLint location, GLsizei count, const GLfloat *value) \
 	GLE(GLvoid, ProgramUniformMatrix4fvEXT, GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) \
 	GLE(GLvoid, NamedRenderbufferStorageEXT, GLuint renderbuffer, GLenum internalformat, GLsizei width, GLsizei height) \
 	GLE(GLvoid, NamedRenderbufferStorageMultisampleEXT, GLuint renderbuffer, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) \
