@@ -147,6 +147,7 @@ cvar_t  *r_baseGloss;
 cvar_t  *r_glossType;
 cvar_t  *r_mergeLightmaps;
 cvar_t  *r_dlightMode;
+cvar_t  *r_dlightStages;
 cvar_t  *r_pshadowDist;
 cvar_t  *r_imageUpsample;
 cvar_t  *r_imageUpsampleMaxSize;
@@ -295,6 +296,14 @@ static void InitOpenGL( void )
 			qglGetIntegerv( GL_MAX_VERTEX_UNIFORM_COMPONENTS, &temp );
 		}
 		glRefConfig.glslMaxAnimatedBones = Com_Clamp( 0, IQM_MAX_JOINTS, ( temp - 160 ) / 16 );
+
+		// for the stages' dlights; a limit a profile doesn't have reads 0
+		temp = 0;
+		qglGetIntegerv( qglesMajorVersion ? GL_MAX_FRAGMENT_UNIFORM_VECTORS : GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &temp );
+		glRefConfig.maxFragmentUniformComponents = qglGetError() == GL_NO_ERROR ? temp * ( qglesMajorVersion ? 4 : 1 ) : 0;
+		temp = 0;
+		qglGetIntegerv( qglesMajorVersion ? GL_MAX_VARYING_VECTORS : GL_MAX_VARYING_COMPONENTS, &temp );
+		glRefConfig.maxVaryingComponents = qglGetError() == GL_NO_ERROR ? temp * ( qglesMajorVersion ? 4 : 1 ) : 0;
 		if ( glRefConfig.glslMaxAnimatedBones < 12 ) {
 			glRefConfig.glslMaxAnimatedBones = 0;
 		}
@@ -1405,6 +1414,9 @@ void R_Register( void )
 	r_glossType = ri.Cvar_Get("r_glossType", "1", CVAR_ARCHIVE | CVAR_LATCH);
 	// dynamic lights shaded per pixel where a surface allows it
 	r_dlightMode = ri.Cvar_Get( "r_dlightMode", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	r_dlightStages = ri.Cvar_Get( "r_dlightStages", "1", CVAR_CHEAT | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_dlightStages, "0 lights every surface ForwardDlight doesn't with the projected dlight, "
+		"as on a GPU that can't hold the stages' dlights; for testing that fallback" );
 	r_pshadowDist = ri.Cvar_Get( "r_pshadowDist", "128", CVAR_ARCHIVE );
 	r_mergeLightmaps = ri.Cvar_Get( "r_mergeLightmaps", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_imageUpsample = ri.Cvar_Get( "r_imageUpsample", "0", CVAR_ARCHIVE | CVAR_LATCH );
@@ -1552,6 +1564,7 @@ void R_Register( void )
 	ri.Cmd_AddCommand( "whichshader", R_WhichShader_f );
 	ri.Cmd_AddCommand( "skinlist", R_SkinList_f );
 	ri.Cmd_AddCommand( "modellist", R_Modellist_f );
+	ri.Cmd_AddCommand( "dlightpaths", R_DlightPaths_f );
 	ri.Cmd_AddCommand( "modelist", R_ModeList_f );
 	ri.Cmd_AddCommand( "screenshot", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotJPEG", R_ScreenShotJPEG_f );
@@ -1786,6 +1799,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	ri.Cmd_RemoveCommand( "whichshader" );
 	ri.Cmd_RemoveCommand( "skinlist" );
 	ri.Cmd_RemoveCommand( "modellist" );
+	ri.Cmd_RemoveCommand( "dlightpaths" );
 	ri.Cmd_RemoveCommand( "modelist" );
 	ri.Cmd_RemoveCommand( "screenshot" );
 	ri.Cmd_RemoveCommand( "screenshotJPEG" );

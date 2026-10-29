@@ -70,6 +70,11 @@ uniform mat4 u_BoneMatrix[MAX_GLSL_BONES];
 #endif
 
 varying vec2   var_DiffuseTex;
+
+#if defined(USE_DLIGHT)
+varying vec3   var_Position;
+varying vec3   var_Normal;
+#endif
 varying vec4   var_Color;
 
 #if defined(USE_DEFORM_VERTEXES)
@@ -245,6 +250,11 @@ void main()
 #endif
 
 	gl_Position = u_ModelViewProjectionMatrix * vec4(position, 1.0);
+
+#if defined(USE_DLIGHT)
+	var_Position = position;
+	var_Normal = normal;
+#endif
 
 #if defined(USE_TCGEN)
 	vec2 tex = GenTexCoords(u_TCGen0, position, normal, u_TCGen0Vector0, u_TCGen0Vector1);

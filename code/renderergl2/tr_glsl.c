@@ -117,6 +117,9 @@ static uniformInfo_t uniformsInfo[] =
 	{ "u_VertColor", GLSL_VEC4 },
 
 	{ "u_DlightInfo",    GLSL_VEC4 },
+	{ "u_NumDlights",    GLSL_INT },
+	{ "u_Dlights",       GLSL_VEC4_DLIGHTS },
+	{ "u_DlightTo",      GLSL_INT },
 	{ "u_LightForward",  GLSL_VEC3 },
 	{ "u_LightUp",       GLSL_VEC3 },
 	{ "u_LightRight",    GLSL_VEC3 },
@@ -419,6 +422,10 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 	Q_strcat(dest, size, "#line 0\n");
 }
 
+// a program the renderer can do without (the stages' dlights): failing to
+// compile or link it is reported, not an error
+static qboolean optionalProgram;
+
 static int GLSL_CompileGPUShader(GLuint program, GLuint *prevShader, const GLchar *buffer, int size, GLenum shaderType)
 {
 	GLint           compiled;
@@ -435,6 +442,12 @@ static int GLSL_CompileGPUShader(GLuint program, GLuint *prevShader, const GLcha
 	qglGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
 	if(!compiled)
 	{
+		if (optionalProgram)
+		{
+			GLSL_PrintLog(shader, GLSL_PRINTLOG_SHADER_INFO, qtrue);
+			qglDeleteShader(shader);
+			return 0;
+		}
 		GLSL_PrintLog(shader, GLSL_PRINTLOG_SHADER_SOURCE, qfalse);
 		GLSL_PrintLog(shader, GLSL_PRINTLOG_SHADER_INFO, qfalse);
 		ri.Error(ERR_DROP, "Couldn't compile shader");
@@ -518,7 +531,7 @@ static int GLSL_LoadGPUShaderText(const char *name, const char *fallback,
 	return result;
 }
 
-static void GLSL_LinkProgram(GLuint program)
+static int GLSL_LinkProgram(GLuint program)
 {
 	GLint           linked;
 
@@ -527,9 +540,12 @@ static void GLSL_LinkProgram(GLuint program)
 	qglGetProgramiv(program, GL_LINK_STATUS, &linked);
 	if(!linked)
 	{
-		GLSL_PrintLog(program, GLSL_PRINTLOG_PROGRAM_INFO, qfalse);
-		ri.Error(ERR_DROP, "shaders failed to link");
+		GLSL_PrintLog(program, GLSL_PRINTLOG_PROGRAM_INFO, optionalProgram);
+		if (!optionalProgram)
+			ri.Error(ERR_DROP, "shaders failed to link");
+		return 0;
 	}
+	return 1;
 }
 
 static void GLSL_ShowProgramUniforms(GLuint program)
@@ -566,8 +582,8 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 
 	if (!(GLSL_CompileGPUShader(program->program, &program->vertexShader, vpCode, strlen(vpCode), GL_VERTEX_SHADER)))
 	{
-		ri.Printf(PRINT_ALL, "GLSL_InitGPUShader2: Unable to load \"%s\" as GL_VERTEX_SHADER\n", name);
-		qglDeleteProgram(program->program);
+		ri.Printf(optionalProgram ? PRINT_DEVELOPER : PRINT_ALL, "GLSL_InitGPUShader2: Unable to load \"%s\" as GL_VERTEX_SHADER\n", name);
+		GLSL_DeleteGPUShader(program);
 		return 0;
 	}
 
@@ -575,8 +591,8 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 	{
 		if(!(GLSL_CompileGPUShader(program->program, &program->fragmentShader, fpCode, strlen(fpCode), GL_FRAGMENT_SHADER)))
 		{
-			ri.Printf(PRINT_ALL, "GLSL_InitGPUShader2: Unable to load \"%s\" as GL_FRAGMENT_SHADER\n", name);
-			qglDeleteProgram(program->program);
+			ri.Printf(optionalProgram ? PRINT_DEVELOPER : PRINT_ALL, "GLSL_InitGPUShader2: Unable to load \"%s\" as GL_FRAGMENT_SHADER\n", name);
+			GLSL_DeleteGPUShader(program);
 			return 0;
 		}
 	}
@@ -626,7 +642,11 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 	if(attribs & ATTR_TANGENT2)
 		qglBindAttribLocation(program->program, ATTR_INDEX_TANGENT2, "attr_Tangent2");
 
-	GLSL_LinkProgram(program->program);
+	if (!GLSL_LinkProgram(program->program))
+	{
+		GLSL_DeleteGPUShader(program);
+		return 0;
+	}
 
 	return 1;
 }
@@ -724,6 +744,9 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 				break;
 			case GLSL_MAT16_BONEMATRIX:
 				size += sizeof(vec_t) * 16 * glRefConfig.glslMaxAnimatedBones;
+				break;
+			case GLSL_VEC4_DLIGHTS:
+				size += sizeof(vec4_t) * 2 * MAX_GENERIC_DLIGHTS;
 				break;
 			default:
 				break;
@@ -911,6 +934,32 @@ void GLSL_SetUniformMat4(shaderProgram_t *program, int uniformNum, const mat4_t 
 	qglProgramUniformMatrix4fvEXT(program->program, uniforms[uniformNum], 1, GL_FALSE, matrix);
 }
 
+// count vec4s of a stage's dlights, two each: origin and 1 / radius, color
+void GLSL_SetUniformVec4Dlights(shaderProgram_t *program, int uniformNum, const vec4_t *v, int count)
+{
+	GLint *uniforms = program->uniforms;
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
+
+	if (uniforms[uniformNum] == -1) {
+		return;
+	}
+
+	if (uniformsInfo[uniformNum].type != GLSL_VEC4_DLIGHTS || count > 2 * MAX_GENERIC_DLIGHTS)
+	{
+		ri.Printf( PRINT_WARNING, "GLSL_SetUniformVec4Dlights: wrong type or count for uniform %i in program %s\n", uniformNum, program->name);
+		return;
+	}
+
+	if (!memcmp(v, compare, count * sizeof(vec4_t)))
+	{
+		return;
+	}
+
+	Com_Memcpy(compare, v, count * sizeof(vec4_t));
+
+	qglProgramUniform4fvEXT(program->program, uniforms[uniformNum], count, &v[0][0]);
+}
+
 void GLSL_SetUniformMat4BoneMatrix(shaderProgram_t *program, int uniformNum, /*const*/ mat4_t *matrix, int numMatricies)
 {
 	GLint *uniforms = program->uniforms;
@@ -970,6 +1019,53 @@ void GLSL_DeleteGPUShader(shaderProgram_t *program)
 	}
 }
 
+/*
+** GLSL_StageDlightsFit
+
+Whether the programs the stages' dlights take can go ahead (tr.stageDlights,
+DLIGHT_STAGE in ComputeDlightPath): r_dlightMode and r_dlightStages on, and
+room for what their variants add, MAX_GENERIC_DLIGHTS dlights of two vec4
+uniforms and two more varyings, beside lightall's own. Those are about 10
+vectors of uniforms and 10 of varyings; the 64 vectors asked beside the
+dlights' are headroom, on purpose. A limit the GL reports as 0 counts as room:
+a program that doesn't fit then fails to link, and GLSL_InitOptionalGPUShader turns
+them off as this does.
+*/
+static qboolean GLSL_StageDlightsFit( void )
+{
+	int fragment = glRefConfig.maxFragmentUniformComponents, varyings = glRefConfig.maxVaryingComponents;
+
+	if ( !r_dlightMode->integer || !r_dlightStages->integer ) {
+		return qfalse;
+	}
+	if ( ( fragment > 0 && fragment < 4 * ( 2 * MAX_GENERIC_DLIGHTS + 64 ) ) || ( varyings > 0 && varyings < 4 * 12 ) ) {
+		ri.Printf( PRINT_DEVELOPER, "WARNING: the GPU's limits (%d fragment uniform and %d varying components) "
+			"can't hold the stages' dlights: the projected dlight lights those surfaces\n", fragment, varyings );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+// one of the programs: dlights, a stage dlight program, whose failing to
+// compile or link turns the stages' dlights off (the projected dlight lights
+// those surfaces instead, once the shaders are made) rather than stopping
+static int GLSL_InitOptionalGPUShader(shaderProgram_t *program, const char *name, int attribs,
+	const GLchar *extra, const char *fallback_vp, const char *fallback_fp, qboolean dlights)
+{
+	int result;
+
+	optionalProgram = dlights;
+	result = GLSL_InitGPUShader(program, name, attribs, qtrue, extra, qtrue, fallback_vp, fallback_fp);
+	optionalProgram = qfalse;
+	if (!result && dlights && tr.stageDlights)
+	{
+		ri.Printf( PRINT_DEVELOPER, "WARNING: a %s program for the stages' dlights didn't compile or link: "
+			"the projected dlight lights those surfaces\n", name );
+		tr.stageDlights = qfalse;
+	}
+	return result;
+}
+
 void GLSL_InitGPUShaders(void)
 {
 	int             startTime, endTime;
@@ -983,6 +1079,8 @@ void GLSL_InitGPUShaders(void)
 	R_IssuePendingRenderCommands();
 
 	startTime = ri.Milliseconds();
+
+	tr.stageDlights = GLSL_StageDlightsFit();
 
 	// OpenGL ES may not have enough attributes to fit ones used for vertex animation
 	if ( glRefConfig.maxVertexAttribs > ATTR_INDEX_NORMAL2 ) {
@@ -999,6 +1097,12 @@ void GLSL_InitGPUShaders(void)
 			continue;
 
 		if ((i & GENERICDEF_USE_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
+			continue;
+
+		// a stage's light with the dlights on it (GLSL_StageDlightsFit);
+		// never a stage fog adjusts, nor a bone-animated model's
+		// (ComputeDlightPath, RB_StageIteratorGeneric)
+		if ((i & GENERICDEF_USE_DLIGHT) && (!tr.stageDlights || (i & (GENERICDEF_USE_FOG | GENERICDEF_USE_BONE_ANIMATION))))
 			continue;
 
 		attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_LIGHTCOORD | ATTR_NORMAL | ATTR_COLOR;
@@ -1033,8 +1137,15 @@ void GLSL_InitGPUShaders(void)
 		if (i & GENERICDEF_USE_RGBAGEN)
 			Q_strcat(extradefines, 1024, "#define USE_RGBAGEN\n");
 
-		if (!GLSL_InitGPUShader(&tr.genericShader[i], "generic", attribs, qtrue, extradefines, qtrue, fallbackShader_generic_vp, fallbackShader_generic_fp))
+		if (i & GENERICDEF_USE_DLIGHT)
+			Q_strcat(extradefines, 1024, va("#define USE_DLIGHT\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
+				MAX_GENERIC_DLIGHTS, tr.frameLight));
+
+		if (!GLSL_InitOptionalGPUShader(&tr.genericShader[i], "generic", attribs, extradefines,
+			fallbackShader_generic_vp, fallbackShader_generic_fp, (i & GENERICDEF_USE_DLIGHT) != 0))
 		{
+			if (i & GENERICDEF_USE_DLIGHT)
+				continue;
 			ri.Error(ERR_FATAL, "Could not load generic shader!");
 		}
 
@@ -1147,12 +1258,21 @@ void GLSL_InitGPUShaders(void)
 
 	for (i = 0; i < DLIGHTDEF_COUNT; i++)
 	{
+		// r_dlightMode is latched: ProjectDlightTexture only uses one kind
+		if (!!(i & DLIGHTDEF_PER_PIXEL) != !!r_dlightMode->integer)
+			continue;
+
 		attribs = ATTR_POSITION | ATTR_NORMAL | ATTR_TEXCOORD;
 		extradefines[0] = '\0';
 
 		if (i & DLIGHTDEF_USE_DEFORM_VERTEXES)
 		{
 			Q_strcat(extradefines, 1024, "#define USE_DEFORM_VERTEXES\n");
+		}
+
+		if (i & DLIGHTDEF_PER_PIXEL)
+		{
+			Q_strcat(extradefines, 1024, "#define USE_PER_PIXEL\n");
 		}
 
 		if (!GLSL_InitGPUShader(&tr.dlightShader[i], "dlight", attribs, qtrue, extradefines, qtrue, fallbackShader_dlight_vp, fallbackShader_dlight_fp))
@@ -1188,6 +1308,12 @@ void GLSL_InitGPUShaders(void)
 		if ((i & LIGHTDEF_ENTITY_BONE_ANIMATION) && !glRefConfig.glslMaxAnimatedBones)
 			continue;
 
+		// the stages' dlights (GLSL_StageDlightsFit), never with ForwardDlight's
+		// own light vector, nor for a bone-animated model's
+		if ((i & LIGHTDEF_USE_DLIGHTS) && (!tr.stageDlights || lightType == LIGHTDEF_USE_LIGHT_VECTOR
+			|| (i & LIGHTDEF_ENTITY_BONE_ANIMATION)))
+			continue;
+
 		attribs = ATTR_POSITION | ATTR_TEXCOORD | ATTR_COLOR | ATTR_NORMAL;
 
 		extradefines[0] = '\0';
@@ -1197,6 +1323,12 @@ void GLSL_InitGPUShaders(void)
 
 		if (glRefConfig.swizzleNormalmap)
 			Q_strcat(extradefines, 1024, "#define SWIZZLE_NORMALMAP\n");
+
+		// the surface's dlights join its light (DLIGHTTO_LIGHTALL): the
+		// lightmap's, the vertexes', or an unlit stage's vertex color
+		if (i & LIGHTDEF_USE_DLIGHTS)
+			Q_strcat(extradefines, 1024, va("#define USE_DLIGHTS\n#define MAX_GENERIC_DLIGHTS %d\n#define DLIGHT_VERTEX_SCALE %f\n",
+				MAX_GENERIC_DLIGHTS, tr.frameLight));
 
 		if (lightType)
 		{
@@ -1313,8 +1445,11 @@ void GLSL_InitGPUShaders(void)
 			attribs |= ATTR_BONE_INDEXES | ATTR_BONE_WEIGHTS;
 		}
 
-		if (!GLSL_InitGPUShader(&tr.lightallShader[i], "lightall", attribs, qtrue, extradefines, qtrue, fallbackShader_lightall_vp, fallbackShader_lightall_fp))
+		if (!GLSL_InitOptionalGPUShader(&tr.lightallShader[i], "lightall", attribs, extradefines,
+			fallbackShader_lightall_vp, fallbackShader_lightall_fp, (i & LIGHTDEF_USE_DLIGHTS) != 0))
 		{
+			if (i & LIGHTDEF_USE_DLIGHTS)
+				continue;
 			ri.Error(ERR_FATAL, "Could not load lightall shader!");
 		}
 
@@ -1687,10 +1822,11 @@ void GLSL_BindProgram(shaderProgram_t * program)
 }
 
 
-shaderProgram_t *GLSL_GetGenericShaderProgram(int stage)
+// dlights: the stage takes the surface's dlights (GENERICDEF_USE_DLIGHT)
+shaderProgram_t *GLSL_GetGenericShaderProgram(int stage, qboolean dlights)
 {
 	shaderStage_t *pStage = tess.xstages[stage];
-	int shaderAttribs = 0;
+	int shaderAttribs = dlights ? GENERICDEF_USE_DLIGHT : 0;
 
 	if (tess.fogNum && pStage->adjustColorsForFog)
 	{
