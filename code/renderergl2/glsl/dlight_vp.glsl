@@ -13,7 +13,12 @@ uniform float  u_Time;
 uniform vec4   u_Color;
 uniform mat4   u_ModelViewProjectionMatrix;
 
+#if defined(USE_PER_PIXEL)
+varying vec3   var_LightDir;
+varying vec3   var_Normal;
+#else
 varying vec2   var_Tex1;
+#endif
 varying vec4   var_Color;
 
 #if defined(USE_DEFORM_VERTEXES)
@@ -84,9 +89,16 @@ void main()
 		
 	vec3 dist = u_DlightInfo.xyz - position;
 
+#if defined(USE_PER_PIXEL)
+	// in radii, so that its square stays in range at medium precision
+	var_LightDir = dist * u_DlightInfo.a;
+	var_Normal = normal;
+	var_Color = u_Color;
+#else
 	var_Tex1 = dist.xy * u_DlightInfo.a + vec2(0.5);
 	float dlightmod = step(0.0, dot(dist, normal));
 	dlightmod *= clamp(2.0 * (1.0 - abs(dist.z) * u_DlightInfo.a), 0.0, 1.0);
 	
 	var_Color = u_Color * dlightmod;
+#endif
 }

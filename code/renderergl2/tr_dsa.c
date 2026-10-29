@@ -212,6 +212,13 @@ GLvoid APIENTRY GLDSA_ProgramUniform1fvEXT(GLuint program, GLint location,
 	qglUniform1fv(location, count, value);
 }
 
+GLvoid APIENTRY GLDSA_ProgramUniform4fvEXT(GLuint program, GLint location,
+	GLsizei count, const GLfloat *value)
+{
+	GL_UseProgram(program);
+	qglUniform4fv(location, count, value);
+}
+
 GLvoid APIENTRY GLDSA_ProgramUniformMatrix4fvEXT(GLuint program, GLint location,
 	GLsizei count, GLboolean transpose,
 	const GLfloat *value)
