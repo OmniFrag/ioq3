@@ -1585,7 +1585,9 @@ void Hunk_Log( void);
 void Com_TouchMemory( void );
 
 // commandLine should not include the executable name (argv[0])
-void Com_Init( char *commandLine );
+void Com_Init( char *commandLine, const char *lost, int lostBytes );
+// whether c, in quotes or not, starts a console line of the command line
+qboolean Com_SplitsCommandLine( char c, qboolean quoted );
 void Com_OpenPipeFile( void );
 qboolean Com_FrameDue( void );
 qboolean Com_WaitFrame( void );
