@@ -48,6 +48,13 @@ void Sys_DestroyFullscreenButton( void );
 // number given
 int Sys_VBlankWakes( void *window, int64_t *wakes );
 #endif
+// glx_vblank.c, where SYS_GLX_VBLANK_CLOCK (Linux and the BSDs' clients,
+// linux.cmake): the last blanks the driver recorded for the window drawn to
+// on this thread, up to COM_SYNC_WAKES, oldest first: their times in
+// Sys_Nanoseconds and their counts; the number given, 0 where the context
+// has no such record. It's used only where com_vblankClock asks, as no
+// display has measured it yet, so SYS_VBLANK_CLOCK's defaults aren't theirs
+int Sys_GLXBlanks( int64_t *times, int64_t *counts );
 #endif
 
 // Console

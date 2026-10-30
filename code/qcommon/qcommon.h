@@ -1853,6 +1853,8 @@ void	Com_SyncRetry( comSyncFallback_t *fallback, int64_t now );
 // at a map load, low latency is tried again if it gave up (Com_SyncRetry)
 void	Com_FrameSyncRetry( void );
 qboolean	Com_VBlankFit( const int64_t *wakes, int count, int64_t now, int64_t *vblank, int64_t *period );
+qboolean	Com_VBlankCounted( const int64_t *times, const int64_t *counts, int count, int64_t now, int64_t refresh,
+		int64_t *vblank, int64_t *period );
 
 qboolean Sys_RandomBytes( byte *string, int len );
 
