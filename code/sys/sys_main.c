@@ -1508,9 +1508,10 @@ static SDL_Window *Sys_GameWindow( void )
 =================
 Sys_VBlankClock
 
-On Windows, from a thread that waits for each blank of the display the
-window is on (win_vblank.c), fitted to a grid (Com_VBlankFit). Under X11,
-where com_vblankClock asks, from the driver's record of the blanks
+The blanks of the display the window is on: on Windows from a thread that
+waits for each (win_vblank.c), on macOS from a display link
+(mac_vblank.m), fitted to a grid (Com_VBlankFit); under X11, where
+com_vblankClock asks, from the driver's record of the blanks
 (glx_vblank.c, Com_VBlankCounted). None elsewhere
 =================
 */
@@ -1520,12 +1521,17 @@ qboolean Sys_VBlankClock( int64_t *vblank, int64_t *period )
 	SDL_Window *window = Sys_GameWindow( );
 	int64_t wakes[ COM_SYNC_WAKES ];
 	int count;
+#ifdef SDL_PLATFORM_WINDOWS
+	const char *native = SDL_PROP_WINDOW_WIN32_HWND_POINTER;
+#else
+	const char *native = SDL_PROP_WINDOW_COCOA_WINDOW_POINTER;
+#endif
 
 	if( !window )
 	{
 		return qfalse;
 	}
-	count = Sys_VBlankWakes( SDL_GetPointerProperty( SDL_GetWindowProperties( window ), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL ), wakes );
+	count = Sys_VBlankWakes( SDL_GetPointerProperty( SDL_GetWindowProperties( window ), native, NULL ), wakes );
 
 	return Com_VBlankFit( wakes, count, Sys_Nanoseconds( ), vblank, period );
 #elif defined( SYS_GLX_VBLANK_CLOCK )

@@ -43,9 +43,12 @@ void IN_ProcessEvent( const union SDL_Event *e );
 // win_caption.c: a button in the window's title bar that goes fullscreen
 void Sys_CreateFullscreenButton( void *window, void ( *pressed )( void ) );
 void Sys_DestroyFullscreenButton( void );
-// win_vblank.c: when a thread woke for the last blanks of the display the
-// window is on, up to COM_SYNC_WAKES, oldest first, in Sys_Nanoseconds; the
-// number given
+#endif
+#if defined( SDL_PLATFORM_WINDOWS ) || defined( SDL_PLATFORM_MACOS )
+// win_vblank.c and mac_vblank.m: the last blanks of the display the window
+// (an HWND or an NSWindow) is on, up to COM_SYNC_WAKES, oldest first, in
+// Sys_Nanoseconds: when a thread woke for each (Windows), or the blanks a
+// display link gave (macOS); the number given
 int Sys_VBlankWakes( void *window, int64_t *wakes );
 #endif
 // glx_vblank.c, where SYS_GLX_VBLANK_CLOCK (Linux and the BSDs' clients,
@@ -53,7 +56,7 @@ int Sys_VBlankWakes( void *window, int64_t *wakes );
 // on this thread, up to COM_SYNC_WAKES, oldest first: their times in
 // Sys_Nanoseconds and their counts; the number given, 0 where the context
 // has no such record. It's used only where com_vblankClock asks, as no
-// display has measured it yet, so SYS_VBLANK_CLOCK's defaults aren't theirs
+// display has measured it yet, so SYS_VBLANK_DEFAULT's defaults aren't theirs
 int Sys_GLXBlanks( int64_t *times, int64_t *counts );
 #endif
 

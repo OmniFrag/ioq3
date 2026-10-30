@@ -1788,12 +1788,20 @@ qboolean	Sys_VBlankClock( int64_t *vblank, int64_t *period );
 #endif
 
 // where the platform has a clock for the display's vertical blanks
-// (Sys_VBlankClock), frames start just before them by default
-// (com_lowLatencyVsync 1, and r_swapInterval 1 for the vsync it needs);
-// elsewhere native builds keep vsync off by default, as low latency would be
-// plain vsync (a browser always syncs)
-#if defined( _WIN32 ) && !defined( DEDICATED )
+// (Sys_VBlankClock)
+#if ( defined( _WIN32 ) || defined( __APPLE__ ) ) && !defined( DEDICATED )
 #define	SYS_VBLANK_CLOCK
+#endif
+
+// where frames start just before the blanks by default (com_lowLatencyVsync
+// 1, and r_swapInterval 1 for the vsync it needs): Windows, as measured.
+// Elsewhere native builds keep vsync off by default: low latency would be
+// plain vsync without a clock, X11's clock waits for com_vblankClock until
+// it's measured, and macOS keeps it off because its window server never
+// lets a frame tear and low latency costs the same there (a browser always
+// syncs)
+#if defined( _WIN32 ) && !defined( DEDICATED )
+#define	SYS_VBLANK_DEFAULT
 #endif
 
 // com_maxfps's values besides a number of frames a second and 0 (no cap):
