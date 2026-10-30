@@ -58,6 +58,12 @@ cvar_t *r_sdlDriver;
 cvar_t *r_preferOpenGLES;
 cvar_t *r_gpuSync;
 cvar_t *r_modeFullscreen;
+// the engine's: 2 while frames start just before the display's blank
+static cvar_t *com_frameSync;
+// the engine's: 1 while vsync is off for its 125 hold; modified until the
+// swap interval follows it
+static cvar_t *com_vsyncHold;
+static void GLimp_SetSwapInterval( void );
 
 // a new r_mode for the window, which waits while it's fullscreen
 static qboolean windowSizePending;
@@ -859,7 +865,6 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	int windowWidth, windowHeight, pixelWidth, pixelHeight;
 	float density = 1.0f;
-	int swapInterval;
 
 	ri.Printf( PRINT_ALL, "Initializing OpenGL display\n");
 
@@ -1234,26 +1239,7 @@ attempts:
 		qglClear( GL_COLOR_BUFFER_BIT );
 		SDL_GL_SwapWindow( SDL_window );
 
-#ifdef __EMSCRIPTEN__
-		// A browser shows frames on the display's refreshes: 0 would run
-		// them on timers instead, some drawn and never shown.
-		swapInterval = MAX( 1, r_swapInterval->integer );
-#else
-		swapInterval = r_swapInterval->integer;
-#endif
-		if( !SDL_GL_SetSwapInterval( swapInterval ) )
-		{
-			ri.Printf( PRINT_DEVELOPER, "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
-		}
-
-		// the interval that took, which isn't the one asked for when the
-		// driver refused it (a driver's settings can also override it
-		// unseen, which the frame cap allows for)
-		if( !SDL_GL_GetSwapInterval( &swapInterval ) )
-		{
-			swapInterval = 0;
-		}
-		ri.Cvar_Set( "r_swapIntervalActive", va( "%d", swapInterval ) );
+		GLimp_SetSwapInterval( );
 
 		SDL_GL_GetAttribute( SDL_GL_RED_SIZE, &realColorBits[0] );
 		SDL_GL_GetAttribute( SDL_GL_GREEN_SIZE, &realColorBits[1] );
@@ -1547,6 +1533,8 @@ void GLimp_Init( qboolean fixedFunction )
 	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_preferOpenGLES = ri.Cvar_Get( "r_preferOpenGLES", "-1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_gpuSync = ri.Cvar_Get( "r_gpuSync", "1", CVAR_ARCHIVE );
+	com_frameSync = ri.Cvar_Get( "com_frameSync", "0", CVAR_ROM );
+	com_vsyncHold = ri.Cvar_Get( "com_vsyncHold", "0", CVAR_ROM );
 	ri.Cvar_SetDescription( r_gpuSync, "Wait after each swap for the GPU to finish the frame before, so that no more than one frame is queued and frames "
 		"show as soon after they're drawn as they can. Needs OpenGL 3.2, or GL_ARB_sync." );
 	ri.Cvar_SetDescription( ri.Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM ),
@@ -1756,6 +1744,64 @@ qboolean GLimp_SetFullscreen( qboolean fullscreen )
 
 /*
 ===============
+GLimp_SetSwapInterval
+
+Sets the context's swap interval: r_swapInterval, or none while the engine
+holds 125 frames a second for the classic jumps (com_vsyncHold). It changes
+at once, without a vid_restart, as the hold starts and ends.
+r_swapIntervalActive is the interval that took, which isn't the one asked
+for when the driver refused it (a driver's settings can also override it
+unseen, which the frame cap allows for).
+===============
+*/
+static void GLimp_SetSwapInterval( void )
+{
+	int swapInterval;
+
+#ifdef __EMSCRIPTEN__
+	// A browser shows frames on the display's refreshes: 0 would run them
+	// on timers instead, some drawn and never shown.
+	swapInterval = MAX( 1, r_swapInterval->integer );
+#else
+	swapInterval = com_vsyncHold->integer ? 0 : r_swapInterval->integer;
+#endif
+	com_vsyncHold->modified = qfalse;
+
+	if( !SDL_GL_SetSwapInterval( swapInterval ) )
+	{
+		ri.Printf( PRINT_DEVELOPER, "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
+	}
+	if( !SDL_GL_GetSwapInterval( &swapInterval ) )
+	{
+		swapInterval = 0;
+	}
+	ri.Cvar_Set( "r_swapIntervalActive", va( "%d", swapInterval ) );
+}
+
+#ifndef __EMSCRIPTEN__
+/*
+===============
+GLimp_FinishFence
+
+Waits for a fence, if wait, for 100 ms at most, and deletes it
+===============
+*/
+static void GLimp_FinishFence( GLsync *fence, qboolean wait )
+{
+	if( *fence )
+	{
+		if( wait )
+		{
+			qglClientWaitSync( *fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100 * 1000000 );
+		}
+		qglDeleteSync( *fence );
+		*fence = NULL;
+	}
+}
+#endif
+
+/*
+===============
 GLimp_EndFrame
 
 Responsible for doing a swapbuffers
@@ -1763,6 +1809,31 @@ Responsible for doing a swapbuffers
 */
 void GLimp_EndFrame( void )
 {
+	// A frame started just before the display's blank (com_frameSync 2)
+	// waits for its drawing to end before its swap, and the engine times
+	// it to then (ri.FrameDrawn), so it learns how long frames take, and
+	// whether this one was in time. Timed after the swap, the frame would
+	// take in the wait for the blank, where the swap waits for it, or
+	// where the driver waits on the GPU, as NVIDIA's OpenGL on Windows does
+	// before a fence after the swap: measured on Joe's PC (2026-10-29), the
+	// frames then started a refresh early to make room for it. Without
+	// fences (r_gpuSync 0, or none), it's timed as the CPU is done with it.
+	qboolean waited = qfalse;
+
+#ifndef __EMSCRIPTEN__
+	if( com_frameSync->integer == 2 )
+	{
+		if( r_gpuSync->integer && qglFenceSync )
+		{
+			GLsync drawnFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
+
+			GLimp_FinishFence( &drawnFence, qtrue );
+			waited = qtrue;
+		}
+		ri.FrameDrawn( );
+	}
+#endif
+
 	// don't flip if drawing to front buffer
 	if ( Q_stricmp( r_drawBuffer->string, "GL_FRONT" ) != 0 )
 	{
@@ -1780,15 +1851,7 @@ void GLimp_EndFrame( void )
 	// whenever the GPU takes longer than one, and halve the frame rate.
 	// Without fences, there, reading a pixel waits for the frame.
 #ifndef __EMSCRIPTEN__
-	if( frameFence )
-	{
-		if( r_gpuSync->integer )
-		{
-			qglClientWaitSync( frameFence, GL_SYNC_FLUSH_COMMANDS_BIT, 100 * 1000000 );
-		}
-		qglDeleteSync( frameFence );
-		frameFence = NULL;
-	}
+	GLimp_FinishFence( &frameFence, r_gpuSync->integer );
 #else
 	// one not looked at belongs to a frame drawn without asking
 	if( previousFrameFence )
@@ -1805,7 +1868,14 @@ void GLimp_EndFrame( void )
 	}
 #endif
 
-	if( r_gpuSync->integer && qglFenceSync )
+	// the 125 hold started or ended since the last swap
+	if( com_vsyncHold->modified )
+	{
+		GLimp_SetSwapInterval( );
+	}
+
+	// a frame waited for already needs no fence for the next
+	if( r_gpuSync->integer && qglFenceSync && !waited )
 	{
 		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
 	}

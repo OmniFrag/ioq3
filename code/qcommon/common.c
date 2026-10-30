@@ -104,6 +104,10 @@ cvar_t	*com_minimized;
 cvar_t	*com_maxfpsMinimized;
 #ifndef DEDICATED
 cvar_t	*com_swapIntervalActive;
+static cvar_t	*com_lowLatencyVsync;
+static cvar_t	*com_frameSync;
+static cvar_t	*com_fakeVBlank;
+static cvar_t	*com_vsyncHold;
 #endif
 cvar_t	*com_abnormalExit;
 cvar_t	*com_standalone;
@@ -137,6 +141,8 @@ int		time_backend;		// renderer backend time
 int		time_late;			// the frame's start after it was due
 int		time_inputAge;		// the newest input's age as the usercmd is built
 int		time_swap;			// since the last frame's swap
+int64_t	com_frameSwapTime;
+int64_t	com_frameDrawnTime;
 
 int			com_frameTime;
 int			com_frameNumber;
@@ -4169,6 +4175,27 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 #ifndef DEDICATED
 	// the renderer's, set when it makes the window
 	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
+#ifdef SYS_VBLANK_CLOCK
+	com_lowLatencyVsync = Cvar_Get( "com_lowLatencyVsync", "1", CVAR_ARCHIVE_ND );
+#else
+	com_lowLatencyVsync = Cvar_Get( "com_lowLatencyVsync", "0", CVAR_ARCHIVE_ND );
+#endif
+	Cvar_CheckRange( com_lowLatencyVsync, 0, 1, qtrue );
+	Cvar_SetDescription( com_lowLatencyVsync, "With vsync (r_swapInterval 1), start each frame just before the display's next refresh, "
+		"as late as the last frames allow, so it shows the newest input. Needs a frame cap at or above the refresh rate, and a clock "
+		"for the display's refreshes (Windows); plain vsync otherwise. com_frameSync says which is in effect." );
+	com_frameSync = Cvar_Get( "com_frameSync", "0", CVAR_ROM );
+	Cvar_SetDescription( com_frameSync, "How frames meet the display now: 0 not synced (vsync off), 1 synced (vsync), "
+		"2 synced with each frame started just before the refresh (com_lowLatencyVsync)." );
+	com_vsyncHold = Cvar_Get( "com_vsyncHold", "0", CVAR_ROM );
+	Cvar_SetDescription( com_vsyncHold, "1 while vsync is off for the 125 hold, whatever r_swapInterval says: com_maxfps -1 and -2 "
+		"hold 125 on a server that moves the player by the frame, for the classic jumps, which vsync would hold to the display's "
+		"rate, or make judder on a display faster than 125 Hz." );
+	com_fakeVBlank = Cvar_Get( "com_fakeVBlank", "0", 0 );
+	Cvar_CheckRange( com_fakeVBlank, -1000, 1000, qtrue );
+	Cvar_SetDescription( com_fakeVBlank, "For testing frame pacing where the display has no vsync or clock (Xvfb): "
+		"a display of this many refreshes a second, which frames are synced to; negative, the same without a clock "
+		"for its refreshes. 0 for the real display." );
 #endif
 	Cvar_Get("com_errorMessage", "", CVAR_ROM | CVAR_NORESTART);
 	Cvar_Get("com_errorCode", "", CVAR_ROM | CVAR_NORESTART);
@@ -4711,6 +4738,62 @@ static int Com_FrameMinMsec( void ) {
 static int64_t	com_frameLastDue;	// when the last client frame was due, in Sys_Nanoseconds
 static qboolean	com_frameWaited;	// whether the wait for the next slept (com_speeds' late)
 
+// frames synced to the display's blanks (com_lowLatencyVsync)
+static comFrameSync_t	com_sync;
+static comSyncFallback_t	com_syncFallback;
+static int64_t	com_syncStart;		// when the next frame starts, or 0 while they aren't synced
+static int		time_syncSlack;		// com_speeds: the frame's swap before its blank, in microseconds
+static int		time_syncMargin;	// and the margin after it, or -1 for none
+
+/*
+=================
+Com_DisplayRefresh
+
+The refresh interval of the display the game is on, in nanoseconds, 0 if
+unknown: com_fakeVBlank's display's, for testing, or the real one's
+=================
+*/
+static int64_t Com_DisplayRefresh( void ) {
+	if(com_fakeVBlank->integer)
+		return 1000000000 / abs(com_fakeVBlank->integer);
+
+	return Sys_RefreshInterval();
+}
+
+/*
+=================
+Com_SwapInterval
+
+The swap interval the driver gave (r_swapIntervalActive): com_fakeVBlank's
+display is synced every refresh, but during the 125 hold (com_vsyncHold)
+=================
+*/
+static int Com_SwapInterval( void ) {
+	if(com_fakeVBlank->integer)
+		return !com_vsyncHold->integer;
+
+	return com_swapIntervalActive->integer;
+}
+
+/*
+=================
+Com_VBlankClock
+
+The display's blanks (Sys_VBlankClock), or com_fakeVBlank's, from 0; none
+for a negative com_fakeVBlank
+=================
+*/
+static qboolean Com_VBlankClock( int64_t *vblank, int64_t *period ) {
+	if(com_fakeVBlank->integer)
+	{
+		*vblank = 0;
+		*period = Com_DisplayRefresh();
+		return com_fakeVBlank->integer > 0;
+	}
+
+	return Sys_VBlankClock(vblank, period);
+}
+
 /*
 =================
 Com_PacedFrames
@@ -4728,33 +4811,36 @@ static qboolean Com_PacedFrames( void ) {
 Com_FrameInterval
 
 How long a client frame takes at least, in nanoseconds: at most 1000
-frames a second, since game time is in whole milliseconds
+frames a second, since game time is in whole milliseconds. displayPaced
+says whether the display paces the frames, through vsync, rather than a cap
 =================
 */
-static int64_t Com_FrameInterval( void ) {
-	int64_t	interval = 1000000;
+static int64_t Com_FrameInterval( qboolean *displayPaced ) {
+	int64_t	interval = 1000000, background = 0;
 	int64_t	cap, refresh, display;
+	int		swapInterval = Com_SwapInterval();
 
 	// the display's refresh interval, read only where a cap follows it or
 	// vsync waits for it
-	display = com_maxfps->integer < 0 || com_swapIntervalActive->integer ? Sys_RefreshInterval() : 0;
+	display = com_maxfps->integer < 0 || swapInterval ? Com_DisplayRefresh() : 0;
 	cap = Com_MaxFpsInterval(com_maxfps->integer, display, CL_MovesByFrame());
-	if(cap > 0)
-	{
 #ifdef __EMSCRIPTEN__
-		refresh = 0;	// the cap is rounded to whole refreshes below
+	refresh = 0;	// the cap is rounded to whole refreshes below
 #else
-		// a swap interval of n shows a frame every n refreshes (-1 is
-		// adaptive vsync, every refresh)
-		refresh = display * abs(com_swapIntervalActive->integer);
+	// a swap interval of n shows a frame every n refreshes (-1 is adaptive
+	// vsync, every refresh)
+	refresh = display * abs(swapInterval);
 #endif
 
-		// With vsync, the swap waits for the display: a cap at or above its
-		// refresh rate would only drop frames it could show, so the display
-		// paces them. One below it paces them as without vsync, for a
-		// display of variable refresh rate, say, or to save power. Where
-		// the refresh rate isn't known, the cap is kept.
-		if(!refresh || cap > refresh + refresh / 1000)
+	// With vsync, the swap waits for the display: a cap at or above its
+	// refresh rate would only drop frames it could show, so the display
+	// paces them, as it does with no cap. One below it paces them as
+	// without vsync, for a display of variable refresh rate, say, or to
+	// save power. Where the refresh rate isn't known, the cap is kept.
+	*displayPaced = refresh && cap <= refresh + refresh / 1000;
+	if(cap > 0)
+	{
+		if(!*displayPaced)
 			interval = MAX(interval, cap);
 		// A driver's settings can turn vsync off unseen: then frames are
 		// kept to a tenth faster than the display, which a swap that waits
@@ -4765,9 +4851,14 @@ static int64_t Com_FrameInterval( void ) {
 
 	// in the background, slower, but never faster than com_maxfps
 	if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
-		interval = MAX(interval, Com_CapInterval(com_maxfpsMinimized->integer));
+		background = Com_CapInterval(com_maxfpsMinimized->integer);
 	else if(com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
-		interval = MAX(interval, Com_CapInterval(com_maxfpsUnfocused->integer));
+		background = Com_CapInterval(com_maxfpsUnfocused->integer);
+	if(background > interval)
+	{
+		interval = background;
+		*displayPaced = qfalse;
+	}
 
 	// a listen server's frames are the client's: no cap, the player's or the
 	// background's, may keep them further apart than the server's, or its
@@ -4804,11 +4895,21 @@ the interval as it is now, so that a changed cap, or the game coming back
 from the background, takes effect at once, not after a frame at the old
 rate. Counted from when the last frame was due, not when it started, a rate
 that isn't a whole number of milliseconds a frame keeps its average, and a
-frame that started late is made up by the next.
+frame that started late is made up by the next. A frame synced to the
+display's blanks is due when it was planned to start (Com_ClientFrameEnded),
+while the display paces the frames. interval, if not NULL, gets the interval
 =================
 */
-static int64_t Com_NextFrameDue( void ) {
-	return com_frameLastDue + Com_FrameInterval();
+static int64_t Com_NextFrameDue( int64_t *interval ) {
+	qboolean	displayPaced;
+	int64_t	frameInterval = Com_FrameInterval(&displayPaced);
+
+	if(interval)
+		*interval = frameInterval;
+	if(com_syncStart && displayPaced)
+		return com_syncStart;
+
+	return com_frameLastDue + frameInterval;
 }
 
 /*
@@ -4823,8 +4924,8 @@ so frames of whole milliseconds each move game time by exactly that much.
 =================
 */
 static void Com_ClientFrameStarted( int64_t frameStart ) {
-	int64_t	interval = Com_FrameInterval();
-	int64_t	due = com_frameLastDue + interval;
+	int64_t	interval;
+	int64_t	due = Com_NextFrameDue(&interval);
 
 	// one that started before it was due, as a wait cut short by an error
 	// does, is on time: -1 is com_speeds' none
@@ -4849,6 +4950,109 @@ static void Com_ClientFrameStarted( int64_t frameStart ) {
 
 /*
 =================
+Com_FrameDone
+
+When the client frame that started at frameStart was done: the end of its
+drawing, where the renderer said (ri.FrameDrawn), or the end of its swap; 0
+if it swapped no frame
+=================
+*/
+static int64_t Com_FrameDone( int64_t frameStart ) {
+	if(com_frameDrawnTime > frameStart)
+		return com_frameDrawnTime;
+	if(com_frameSwapTime > frameStart)
+		return com_frameSwapTime;
+
+	return 0;
+}
+
+/*
+=================
+Com_FrameSyncRetry
+
+At a map load: low latency, if it gave up (Com_SyncFallBack), is tried
+again at once
+=================
+*/
+void Com_FrameSyncRetry( void ) {
+	Com_SyncRetry(&com_syncFallback, Sys_Nanoseconds());
+}
+
+/*
+=================
+Com_ClientFrameEnded
+
+As a client frame ends, frames start just before the display's next blank
+(com_lowLatencyVsync) where vsync shows a frame every refresh, the display
+paces the frames, and there's a clock for its blanks: a synced frame's swap
+is timed against the blank it aimed for (Com_SyncFrameDone), and the next
+frame's start is planned (Com_SyncNextStart), unless low latency has
+given up for a while (Com_SyncFallBack). Otherwise frames go by the
+interval. com_frameSync says which.
+
+The 125 hold turns vsync off (Com_HoldDropsVsync, com_vsyncHold), which
+the renderer applies after its next swap, and the player's r_swapInterval
+as the hold ends. A browser always syncs.
+=================
+*/
+static void Com_ClientFrameEnded( int64_t frameStart ) {
+	qboolean	displayPaced = qfalse, held = qfalse, synced;
+	int			swapInterval;
+	int			mode;
+	int64_t		vblank = 0, period = 0, done = Com_FrameDone(frameStart), now = Sys_Nanoseconds();
+
+#ifndef __EMSCRIPTEN__
+	held = Com_PacedFrames() && Com_HoldDropsVsync(com_maxfps->integer, CL_MovesByFrame());
+#endif
+	if(com_vsyncHold->integer != held)
+		Cvar_Set("com_vsyncHold", held ? "1" : "0");
+
+	swapInterval = Com_SwapInterval();
+	mode = !!swapInterval;
+
+	// a server's and a timedemo's frames go by the millisecond, never synced,
+	// and where low latency gave up, frames are plain vsync's for a while,
+	// unless the player chooses it again
+	if(com_lowLatencyVsync->modified)
+	{
+		com_lowLatencyVsync->modified = qfalse;
+		Com_SyncRetry(&com_syncFallback, now);
+	}
+	time_syncMargin = -1;
+	if(com_lowLatencyVsync->integer && swapInterval == 1 && Com_PacedFrames() &&
+			!Com_SyncFallenBack(&com_syncFallback, now))
+		Com_FrameInterval(&displayPaced);
+	synced = displayPaced && Com_VBlankClock(&vblank, &period);
+
+	// a frame that was synced, and swapped
+	if(synced && com_syncStart && done)
+	{
+		int		result;
+
+		time_syncSlack = (int)((com_sync.target - done) / 1000);
+		result = Com_SyncFrameDone(&com_sync, frameStart, done, vblank, period);
+		time_syncMargin = (int)(com_sync.margin / 1000);
+		if(Com_SyncFallBack(&com_syncFallback, result, now))
+		{
+			Com_DPrintf("Low-latency vsync is missing refreshes (%i of the last %i frames): plain vsync for %i seconds\n",
+				COM_SYNC_MISS_LIMIT, COM_SYNC_MISS_WINDOW, (int)(com_syncFallback.wait / 1000000000));
+			synced = qfalse;
+		}
+	}
+	else if(synced && !com_syncStart)
+		Com_SyncReset(&com_sync);
+
+	// planned from the time now, after the clock's read, not the frame's end
+	com_syncStart = synced ? Com_SyncNextStart(&com_sync, Sys_Nanoseconds(), vblank, period) : 0;
+	if(synced)
+		mode = 2;
+
+	if(com_frameSync->integer != mode)
+		Cvar_Set("com_frameSync", va("%i", mode));
+}
+
+/*
+=================
 Com_WaitClientFrame
 
 Com_WaitFrame for the client. The network is read here, and a listen
@@ -4865,13 +5069,13 @@ static qboolean Com_WaitClientFrame( void ) {
 	if(com_sv_running->integer)
 		SV_SendQueuedPackets();
 
-	return Sys_Nanoseconds() >= Com_NextFrameDue();
+	return Sys_Nanoseconds() >= Com_NextFrameDue(NULL);
 #else
 	int64_t	left, wait;
 
 	for(;;)
 	{
-		left = Com_NextFrameDue() - Sys_Nanoseconds();
+		left = Com_NextFrameDue(NULL) - Sys_Nanoseconds();
 		wait = left;
 		if(com_sv_running->integer)
 			wait = MIN(wait, SV_SendQueuedPackets() * (int64_t)1000000);
@@ -4899,7 +5103,7 @@ static qboolean Com_WaitClientFrame( void ) {
 			Sys_SleepPrecise(left);
 
 		if(left > 3000000)
-			return Sys_Nanoseconds() >= Com_NextFrameDue();
+			return Sys_Nanoseconds() >= Com_NextFrameDue(NULL);
 	}
 #endif
 }
@@ -4915,7 +5119,7 @@ Whether the next frame is due, without waiting for it
 qboolean Com_FrameDue( void ) {
 #ifndef DEDICATED
 	if(Com_PacedFrames())
-		return Sys_Nanoseconds() >= Com_NextFrameDue();
+		return Sys_Nanoseconds() >= Com_NextFrameDue(NULL);
 #endif
 
 	return !Com_TimeVal(Com_FrameMinMsec());
@@ -5163,6 +5367,10 @@ void Com_Frame( void ) {
 
 	CL_Frame( msec );
 
+	// synced to the display's blanks, the next frame's start is planned
+	// as this one's swap ends
+	Com_ClientFrameEnded( frameStart );
+
 	if ( com_speeds->integer ) {
 		timeAfter = Sys_Milliseconds ();
 	}
@@ -5182,6 +5390,11 @@ void Com_Frame( void ) {
 	//
 	if ( com_speeds->integer ) {
 		int			all, sv, ev, cl;
+		char		sync[32] = "none";
+		int			frameSwap = -1;
+#ifndef DEDICATED
+		int64_t		done = Com_FrameDone( frameStart );
+#endif
 
 		all = timeAfter - timeBeforeServer;
 		sv = timeBeforeEvents - timeBeforeServer;
@@ -5190,12 +5403,25 @@ void Com_Frame( void ) {
 		sv -= time_game;
 		cl -= time_frontend + time_backend;
 
-		// and its pacing, in microseconds (-1 for none): how late it
-		// started, the newest input's age as the usercmd was built, the
-		// time since the last frame's swap; then its game time, and the
-		// time since the last frame started, the cap to cap
-		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i late:%i in:%i sw:%i ms:%i dt:%i\n",
-					 com_frameNumber, all, sv, ev, cl, time_game, time_frontend, time_backend,
+		// and its pacing, in microseconds (-1 for none): from its start,
+		// where it takes input, to the end of its swap (fs; for a frame
+		// started just before the display's blank, the end of its drawing,
+		// before the swap), and for such a frame, that end before
+		// that blank, negative if it missed it, and the margin it leaves
+		// the next (vb, none otherwise); how late it started, the newest
+		// input's age as the usercmd was built, the time since the last
+		// frame's swap; then its game time, and the time since the last
+		// frame started, the cap to cap
+#ifndef DEDICATED
+		if ( time_syncMargin >= 0 ) {
+			Com_sprintf( sync, sizeof( sync ), "%i/%i", time_syncSlack, time_syncMargin );
+		}
+		if ( done ) {
+			frameSwap = (int)( ( done - frameStart ) / 1000 );
+		}
+#endif
+		Com_Printf ("frame:%i all:%3i sv:%3i ev:%3i cl:%3i gm:%3i rf:%3i bk:%3i fs:%i vb:%s late:%i in:%i sw:%i ms:%i dt:%i\n",
+					 com_frameNumber, all, sv, ev, cl, time_game, time_frontend, time_backend, frameSwap, sync,
 					 time_late, time_inputAge, time_swap, msec, (int)( sinceLastFrame / 1000 ) );
 	}	
 

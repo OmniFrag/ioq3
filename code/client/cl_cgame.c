@@ -979,6 +979,9 @@ void CL_InitCGame( void ) {
 
 	// clear anything that got printed
 	Con_ClearNotify ();
+
+	// a new map, loaded: low-latency vsync, if it gave up, tries again
+	Com_FrameSyncRetry();
 }
 
 
