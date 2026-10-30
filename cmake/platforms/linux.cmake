@@ -7,6 +7,12 @@ endif()
 list(APPEND CLIENT_DEFINITIONS USE_ICON)
 list(APPEND RENDERER_DEFINITIONS USE_ICON)
 
+# the display's blanks as GLX's driver records them (com_vblankClock)
+if(NOT EMSCRIPTEN)
+    list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/glx_vblank.c)
+    list(APPEND CLIENT_DEFINITIONS SYS_GLX_VBLANK_CLOCK)
+endif()
+
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE /opt/quake3)
 endif()
