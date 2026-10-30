@@ -1952,6 +1952,8 @@ qboolean Sys_OpenFolderInFileManager( const char *path, qboolean create );
 
 void Sys_RemovePIDFile( void );
 void Sys_InitPIDFile( const char *gamedir );
+void Sys_StopWatchdog( int signal, int seconds );
+void Sys_ForceStop( int signal, int seconds );
 
 /* This is based on the Adaptive Huffman algorithm described in Sayood's Data
  * Compression book.  The ranks are not actually stored, but implicitly defined

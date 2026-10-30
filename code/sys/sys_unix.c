@@ -1691,6 +1691,65 @@ static void Sys_SigReload( int signal )
 
 /*
 ==============
+Sys_StopAlarm
+==============
+*/
+static void Sys_StopAlarm( int signal )
+{
+	Sys_StopTimedOut( );
+}
+
+/*
+==============
+Sys_PlatformStopTimer
+
+The stop's watchdog (Sys_StopWatchdog), by SIGALRM, handled only once
+it's armed: before, a SIGALRM ends the process as it always has. Only
+libcurl's resolver may use it too, and it restores the alarm pending and
+its handler. Safe in a signal's handler
+==============
+*/
+void Sys_PlatformStopTimer( int seconds )
+{
+	signal( SIGALRM, Sys_StopAlarm );
+	alarm( seconds );
+}
+
+/*
+==============
+Sys_PlatformForceStop
+
+Says why, removes the PID file if it's given one, puts the terminal back,
+and ends the process by the stop signal's default action, as if it had
+no handler, so its parent sees the signal. Safe in a signal's handler
+==============
+*/
+void Sys_PlatformForceStop( int stopped, const char *message, const char *pidFile )
+{
+	sigset_t  unblocked;
+
+	if( pidFile )
+		unlink( pidFile );
+	CON_ForceStop( );
+
+	if( write( STDERR_FILENO, message, strlen( message ) ) < 0 )
+	{
+		// nowhere else to say it
+	}
+
+	signal( stopped, SIG_DFL );
+
+	// in its own handler, the signal is blocked
+	sigemptyset( &unblocked );
+	sigaddset( &unblocked, stopped );
+	sigprocmask( SIG_UNBLOCK, &unblocked, NULL );
+
+	raise( stopped );
+	_exit( 128 + stopped );
+}
+
+/*
+==============
 Sys_PlatformInit
 
 Unix specific initialisation

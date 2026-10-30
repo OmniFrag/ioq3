@@ -37,6 +37,15 @@ void CON_Shutdown( void )
 
 /*
 ==================
+CON_ForceStop
+==================
+*/
+void CON_ForceStop( void )
+{
+}
+
+/*
+==================
 CON_Init
 ==================
 */

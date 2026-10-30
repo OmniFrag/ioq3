@@ -59,6 +59,7 @@ int Sys_GLXBlanks( int64_t *times, int64_t *counts );
 
 // Console
 void CON_Shutdown( void );
+void CON_ForceStop( void );
 void CON_Init( void );
 char *CON_Input( void );
 void CON_Print( const char *message );
@@ -80,6 +81,9 @@ void Sys_GLimpInit( void );
 void Sys_PlatformInit( void );
 void Sys_PlatformExit( void );
 void Sys_SigHandler( int signal );
+void Sys_StopTimedOut( void );
+void Sys_PlatformStopTimer( int seconds );
+void Sys_PlatformForceStop( int signal, const char *message, const char *pidFile );
 void Sys_ErrorDialog( const char *error );
 dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title );
 void Sys_AnsiColorPrint( const char *msg );
