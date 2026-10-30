@@ -1355,19 +1355,30 @@ int64_t Sys_RefreshInterval( void )
 {
 	return refreshInterval;
 }
+
+/*
+=================
+Sys_VBlankClock
+
+None: a browser runs frames on its refreshes itself
+=================
+*/
+qboolean Sys_VBlankClock( int64_t *vblank, int64_t *period )
+{
+	return qfalse;
+}
 #else
 /*
 =================
-Sys_RefreshInterval
+Sys_GameWindow
 
-From the display mode of the display the game's window is on: the one
-with the keyboard or the mouse, or failing both, the first
+The game's window: the one with the keyboard or the mouse, or failing
+both, the first
 =================
 */
-int64_t Sys_RefreshInterval( void )
+static SDL_Window *Sys_GameWindow( void )
 {
 	SDL_Window *window = SDL_GetKeyboardFocus( );
-	const SDL_DisplayMode *mode;
 
 	if( !window )
 	{
@@ -1380,6 +1391,48 @@ int64_t Sys_RefreshInterval( void )
 		window = windows ? windows[ 0 ] : NULL;
 		SDL_free( windows );
 	}
+	return window;
+}
+
+/*
+=================
+Sys_VBlankClock
+
+On Windows, from a thread that waits for each blank of the display the
+window is on (win_vblank.c), fitted to a grid (Com_VBlankFit). None yet
+elsewhere
+=================
+*/
+qboolean Sys_VBlankClock( int64_t *vblank, int64_t *period )
+{
+#ifdef SYS_VBLANK_CLOCK
+	SDL_Window *window = Sys_GameWindow( );
+	int64_t wakes[ COM_SYNC_WAKES ];
+	int count;
+
+	if( !window )
+	{
+		return qfalse;
+	}
+	count = Sys_VBlankWakes( SDL_GetPointerProperty( SDL_GetWindowProperties( window ), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL ), wakes );
+
+	return Com_VBlankFit( wakes, count, Sys_Nanoseconds( ), vblank, period );
+#else
+	return qfalse;
+#endif
+}
+
+/*
+=================
+Sys_RefreshInterval
+
+From the display mode of the display the game's window is on
+=================
+*/
+int64_t Sys_RefreshInterval( void )
+{
+	SDL_Window *window = Sys_GameWindow( );
+	const SDL_DisplayMode *mode;
 
 	mode = window ? SDL_GetCurrentDisplayMode( SDL_GetDisplayForWindow( window ) ) : NULL;
 

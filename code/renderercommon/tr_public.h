@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		18
+#define	REF_API_VERSION		19
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -338,6 +338,11 @@ typedef struct {
 
 	// a monotonic clock, for ui_speeds' times
 	int64_t	(*Nanoseconds)( void );
+
+	// the frame's drawing has ended, before its swap: for frames started
+	// just before the display's blank (com_frameSync 2), which are timed
+	// to it, whatever the swap then waits for
+	void	(*FrameDrawn)( void );
 } refimport_t;
 
 

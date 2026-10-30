@@ -12,6 +12,7 @@ list(APPEND SYSTEM_PLATFORM_SOURCES
 list(APPEND CLIENT_PLATFORM_SOURCES
     ${SOURCE_DIR}/sys/con_passive.c
     ${SOURCE_DIR}/sys/win_caption.c
+    ${SOURCE_DIR}/sys/win_vblank.c
 )
 list(APPEND CLIENT_LIBRARIES
     comctl32 # the title bar button's subclass and tooltip

@@ -43,6 +43,10 @@ void IN_ProcessEvent( const union SDL_Event *e );
 // win_caption.c: a button in the window's title bar that goes fullscreen
 void Sys_CreateFullscreenButton( void *window, void ( *pressed )( void ) );
 void Sys_DestroyFullscreenButton( void );
+// win_vblank.c: when a thread woke for the last blanks of the display the
+// window is on, up to COM_SYNC_WAKES, oldest first, in Sys_Nanoseconds; the
+// number given
+int Sys_VBlankWakes( void *window, int64_t *wakes );
 #endif
 #endif
 
