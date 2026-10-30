@@ -413,3 +413,51 @@ qboolean Com_VBlankFit( const int64_t *wakes, int count, int64_t now, int64_t *v
 	*period = p;
 	return qtrue;
 }
+
+/*
+=================
+Com_VBlankCounted
+
+A display's blanks from the driver's own record of them (GLX_OML_sync_control):
+up to COM_SYNC_WAKES samples, each a blank's time and its count, oldest
+first. Unlike a thread's wakes, the times are the blanks', so the period is
+the time over the count between the oldest and the newest sample, and the
+newest is the blank.
+
+No clock (qfalse) with fewer than half of COM_SYNC_WAKES samples; with a
+sample off the grid by over a twentieth of the period, as when the blanks
+follow the frames (a variable refresh rate), the times aren't the
+display's, or the counts don't rise; with a period under 1 ms,
+over 100 ms, or over a tenth from refresh, the display mode's, where it's
+known (0 where not); or with the newest blank over two periods before now,
+or after it by over a tenth of one, a clock other than Sys_Nanoseconds'
+=================
+*/
+qboolean Com_VBlankCounted( const int64_t *times, const int64_t *counts, int count, int64_t now, int64_t refresh,
+		int64_t *vblank, int64_t *period ) {
+	int64_t	p, last;
+	int		i;
+
+	if ( count < COM_SYNC_WAKES / 2 || counts[count - 1] <= counts[0] ) {
+		return qfalse;
+	}
+
+	p = ( times[count - 1] - times[0] ) / ( counts[count - 1] - counts[0] );
+	if ( p < 1000000 || p > 100000000 || ( refresh > 0 && llabs( p - refresh ) > refresh / 10 ) ) {
+		return qfalse;
+	}
+	for ( i = 0; i < count; i++ ) {
+		if ( llabs( times[i] - times[0] - ( counts[i] - counts[0] ) * p ) > p / 20 ) {
+			return qfalse;
+		}
+	}
+
+	last = times[count - 1];
+	if ( now - last > 2 * p || last - now > p / 10 ) {
+		return qfalse;
+	}
+
+	*vblank = last;
+	*period = p;
+	return qtrue;
+}

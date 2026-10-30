@@ -463,6 +463,11 @@ cpuFeatures_t Sys_GetProcessorFeatures( void )
 	return features;
 }
 
+#ifdef SYS_GLX_VBLANK_CLOCK
+// whether low latency uses the driver's record of the blanks (glx_vblank.c)
+static cvar_t *com_vblankClock;
+#endif
+
 /*
 =================
 Sys_Init
@@ -473,6 +478,13 @@ void Sys_Init(void)
 	Cmd_AddCommand( "in_restart", Sys_In_Restart_f );
 	Cvar_Get( "arch", OS_STRING " " ARCH_STRING, CVAR_ROM );
 	Cvar_Get( "username", Sys_GetCurrentUser( ), CVAR_ROM | CVAR_PRIVATE );
+#ifdef SYS_GLX_VBLANK_CLOCK
+	com_vblankClock = Cvar_Get( "com_vblankClock", "0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( com_vblankClock, 0, 1, qtrue );
+	Cvar_SetDescription( com_vblankClock, "Under X11, time low-latency V-Sync (com_lowLatencyVsync) by the display's blanks "
+		"as the driver records them (GLX_OML_sync_control). Off until it's been measured on a Linux display; "
+		"without it, or without the extension, low latency is plain V-Sync." );
+#endif
 }
 
 /*
@@ -1399,8 +1411,9 @@ static SDL_Window *Sys_GameWindow( void )
 Sys_VBlankClock
 
 On Windows, from a thread that waits for each blank of the display the
-window is on (win_vblank.c), fitted to a grid (Com_VBlankFit). None yet
-elsewhere
+window is on (win_vblank.c), fitted to a grid (Com_VBlankFit). Under X11,
+where com_vblankClock asks, from the driver's record of the blanks
+(glx_vblank.c, Com_VBlankCounted). None elsewhere
 =================
 */
 qboolean Sys_VBlankClock( int64_t *vblank, int64_t *period )
@@ -1417,6 +1430,17 @@ qboolean Sys_VBlankClock( int64_t *vblank, int64_t *period )
 	count = Sys_VBlankWakes( SDL_GetPointerProperty( SDL_GetWindowProperties( window ), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL ), wakes );
 
 	return Com_VBlankFit( wakes, count, Sys_Nanoseconds( ), vblank, period );
+#elif defined( SYS_GLX_VBLANK_CLOCK )
+	int64_t times[ COM_SYNC_WAKES ], counts[ COM_SYNC_WAKES ];
+	int count;
+
+	if( !com_vblankClock->integer )
+	{
+		return qfalse;
+	}
+	count = Sys_GLXBlanks( times, counts );
+
+	return Com_VBlankCounted( times, counts, count, Sys_Nanoseconds( ), Sys_RefreshInterval( ), vblank, period );
 #else
 	return qfalse;
 #endif

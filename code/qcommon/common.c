@@ -4194,8 +4194,8 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	com_fakeVBlank = Cvar_Get( "com_fakeVBlank", "0", 0 );
 	Cvar_CheckRange( com_fakeVBlank, -1000, 1000, qtrue );
 	Cvar_SetDescription( com_fakeVBlank, "For testing frame pacing where the display has no vsync or clock (Xvfb): "
-		"a display of this many refreshes a second, which frames are synced to; negative, the same without a clock "
-		"for its refreshes. 0 for the real display." );
+		"a display of this many refreshes a second, which frames are synced to; negative, the same with the platform's "
+		"own clock for its refreshes, where it has one, rather than the fake one. 0 for the real display." );
 #endif
 	Cvar_Get("com_errorMessage", "", CVAR_ROM | CVAR_NORESTART);
 	Cvar_Get("com_errorCode", "", CVAR_ROM | CVAR_NORESTART);
@@ -4779,16 +4779,17 @@ static int Com_SwapInterval( void ) {
 =================
 Com_VBlankClock
 
-The display's blanks (Sys_VBlankClock), or com_fakeVBlank's, from 0; none
-for a negative com_fakeVBlank
+The display's blanks (Sys_VBlankClock), or a positive com_fakeVBlank's,
+from 0. A negative one's display asks the platform's clock, which Xvfb has
+none of, so its synced frames test that there's none
 =================
 */
 static qboolean Com_VBlankClock( int64_t *vblank, int64_t *period ) {
-	if(com_fakeVBlank->integer)
+	if(com_fakeVBlank->integer > 0)
 	{
 		*vblank = 0;
 		*period = Com_DisplayRefresh();
-		return com_fakeVBlank->integer > 0;
+		return qtrue;
 	}
 
 	return Sys_VBlankClock(vblank, period);
