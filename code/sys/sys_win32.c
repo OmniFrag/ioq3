@@ -1254,6 +1254,50 @@ static void Sys_KeepTimerResolution( void )
 
 /*
 ==============
+Sys_StopTimer
+==============
+*/
+static void Sys_StopTimer( void *seconds )
+{
+	Sleep( (DWORD)(intptr_t)seconds * 1000 );
+	Sys_StopTimedOut( );
+}
+
+/*
+==============
+Sys_PlatformStopTimer
+
+The stop's watchdog (Sys_StopWatchdog), on a thread of its own. A stop
+comes from a console's handler (CON_CtrlHandler) or the C runtime's for
+SIGINT and SIGTERM, both on threads of their own, where making one is safe
+==============
+*/
+void Sys_PlatformStopTimer( int seconds )
+{
+	Sys_StartThread( Sys_StopTimer, (void *)(intptr_t)seconds );
+}
+
+/*
+==============
+Sys_PlatformForceStop
+
+Says why, removes the PID file if it's given one, and ends the process as
+Unix's default action for the signal would, with exit status 128 + signal
+==============
+*/
+void Sys_PlatformForceStop( int signal, const char *message, const char *pidFile )
+{
+	DWORD	written;
+
+	if( pidFile )
+		DeleteFileA( pidFile );
+
+	WriteFile( GetStdHandle( STD_ERROR_HANDLE ), message, (DWORD)strlen( message ), &written, NULL );
+	TerminateProcess( GetCurrentProcess( ), 128 + signal );
+}
+
+/*
+==============
 Sys_PlatformInit
 
 Windows specific initialisation

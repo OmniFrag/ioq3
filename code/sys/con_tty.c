@@ -183,6 +183,23 @@ void CON_Shutdown( void )
 
 /*
 ==================
+CON_ForceStop
+
+The terminal as CON_Init found it, for an end without the shutdown
+(Sys_PlatformForceStop), where CON_Shutdown's printing isn't safe. Safe
+in a signal's handler
+==================
+*/
+void CON_ForceStop( void )
+{
+	if( ttycon_on )
+		tcsetattr( STDIN_FILENO, TCSANOW, &TTY_tc );
+
+	fcntl( STDIN_FILENO, F_SETFL, fcntl( STDIN_FILENO, F_GETFL, 0 ) & ~O_NONBLOCK );
+}
+
+/*
+==================
 Hist_Add
 ==================
 */

@@ -1029,9 +1029,107 @@ char *Sys_ParseProtocolUri( const char *uri )
 
 /*
 =================
+Sys_StopAppend
+
+Text, and a number if it's not negative, added to a message in a signal's
+handler, where snprintf isn't safe
+=================
+*/
+static char *Sys_StopAppend( char *p, const char *end, const char *text, int number )
+{
+	char  digits[ 12 ];
+	int   count = 0;
+
+	while( *text && p < end )
+		*p++ = *text++;
+
+	if( number >= 0 )
+	{
+		do
+		{
+			digits[ count++ ] = '0' + number % 10;
+			number /= 10;
+		} while( number > 0 );
+
+		while( count > 0 && p < end )
+			*p++ = digits[ --count ];
+	}
+
+	return p;
+}
+
+/*
+=================
+Sys_ForceStop
+
+Ends the process without the shutdown when a stop signal isn't answered
+(Com_QueueQuit): asked again (seconds 0), or still running seconds after
+it. Like a crash, it leaves a client's PID file, for safe settings at the
+next start, and removes a dedicated server's (Sys_Exit). Safe in a
+signal's handler
+=================
+*/
+void Sys_ForceStop( int signal, int seconds )
+{
+	char  message[ 160 ];
+	char  *p = message, *end = message + sizeof( message ) - 1;
+
+	if( seconds > 0 )
+	{
+		p = Sys_StopAppend( p, end, "Still running ", seconds );
+		p = Sys_StopAppend( p, end, " seconds after signal ", signal );
+		p = Sys_StopAppend( p, end, " asked it to stop: ending it without the shutdown (com_stopTimeout)\n", -1 );
+	}
+	else
+	{
+		p = Sys_StopAppend( p, end, "Signal ", signal );
+		p = Sys_StopAppend( p, end, " again, before the game could quit: ending it without the shutdown\n", -1 );
+	}
+	*p = '\0';
+
+	Sys_PlatformForceStop( signal, message,
+		!Com_IsClient( ) && pidFileWritten[ 0 ] ? pidFileWritten : NULL );
+}
+
+// the stop the watchdog waits on
+static volatile sig_atomic_t	stopSignal, stopSeconds;
+
+/*
+=================
+Sys_StopWatchdog
+
+Ends the process if it's still running seconds on (Com_QueueQuit). Safe in
+a signal's handler
+=================
+*/
+void Sys_StopWatchdog( int signal, int seconds )
+{
+	if( seconds <= 0 )
+		return;
+
+	stopSignal = signal;
+	stopSeconds = seconds;
+	Sys_PlatformStopTimer( seconds );
+}
+
+/*
+=================
+Sys_StopTimedOut
+
+The watchdog's time is up (Sys_PlatformStopTimer)
+=================
+*/
+void Sys_StopTimedOut( void )
+{
+	Sys_ForceStop( stopSignal, stopSeconds );
+}
+
+/*
+=================
 Sys_SigHandler
 
-A stop that was asked for is left to the main loop (Com_QueueQuit).
+A stop that was asked for is left to the main loop (Com_QueueQuit), or
+if the loop doesn't come back, to its watchdog.
 Fatal signals shut down here, as the main loop can't go on.
 =================
 */

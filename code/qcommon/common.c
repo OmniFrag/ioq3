@@ -119,6 +119,7 @@ cvar_t	*com_legacyprotocol;
 cvar_t	*com_basegame;
 cvar_t  *com_homepath;
 cvar_t	*com_busyWait;
+static cvar_t	*com_stopTimeout;
 static cvar_t	*com_writeConfig;
 #ifndef DEDICATED
 cvar_t  *con_autochat;
@@ -3614,6 +3615,10 @@ void Com_ExecuteCfg(void)
 static volatile sig_atomic_t	com_reloadQueued;
 // a stop asked for by a signal, the next frame's quit
 static volatile sig_atomic_t	com_quitSignal;
+// when it came (Sys_Nanoseconds), and com_stopTimeout as Com_Init or the
+// last frame read it (its default before), for the signal's handler
+static int64_t	com_quitSignalTime;
+static volatile sig_atomic_t	com_stopSeconds = 60;
 
 /*
 ==================
@@ -3679,11 +3684,27 @@ A stop asked for by a signal (SIGTERM, SIGINT, SIGHUP): the main loop
 quits, as the quit command does. Shutting down in the signal's handler
 would run the renderer's GL calls in the middle of whatever the signal
 interrupted, which may hold the driver's locks: some drivers then wait
-on themselves for good, or abort
+on themselves for good, or abort.
+
+A main loop that never comes back would then keep the process running, so
+it's ended without the shutdown, as a crash would be, if it's still
+running com_stopTimeout seconds on (Sys_StopWatchdog), or when a stop is
+asked for again a second or more after the first: GNU timeout sends its
+signal to its command and then to the command's process group, which
+holds the command too. Runs in the signal's handler: only what's safe
+there
 ==================
 */
 void Com_QueueQuit( int signal ) {
-	com_quitSignal = signal;
+	int64_t	now = Sys_Nanoseconds( );
+
+	if ( !com_quitSignal ) {
+		com_quitSignalTime = now;
+		com_quitSignal = signal;
+		Sys_StopWatchdog( signal, com_stopSeconds );
+	} else if ( now - com_quitSignalTime >= 1000000000 ) {
+		Sys_ForceStop( signal, 0 );
+	}
 }
 
 /*
@@ -4165,6 +4186,13 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 #endif
 	com_abnormalExit = Cvar_Get( "com_abnormalExit", "0", CVAR_ROM );
 	com_busyWait = Cvar_Get("com_busyWait", "0", CVAR_ARCHIVE);
+	com_stopTimeout = Cvar_Get( "com_stopTimeout", "60", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( com_stopTimeout, 0, 3600, qtrue );
+	Cvar_SetDescription( com_stopTimeout,
+		"Seconds a stop signal (SIGTERM, SIGINT, Ctrl-C) waits for the game to quit before it's ended without "
+		"the shutdown, as when it's stuck and never gets back to quitting. 0 waits for good. A second stop signal, "
+		"a second or more after the first, ends it at once." );
+	com_stopSeconds = com_stopTimeout->integer;
 	com_writeConfig = Cvar_Get( "com_writeConfig", "1", 0 );
 	Cvar_SetDescription( com_writeConfig,
 		"Whether changed settings are written back to the saved settings\n"
@@ -5264,6 +5292,7 @@ void Com_Frame( void ) {
 		return;			// an ERR_DROP was thrown
 	}
 
+	com_stopSeconds = com_stopTimeout->integer;
 	if ( com_quitSignal ) {
 		Com_Quit( va( "Received signal %d", (int)com_quitSignal ) );
 	}
