@@ -63,6 +63,22 @@ static cvar_t *com_frameSync;
 // the engine's: 1 while vsync is off for its 125 hold; modified until the
 // swap interval follows it
 static cvar_t *com_vsyncHold;
+
+// macOS's window server composites every window, in fullscreen too
+// (Instruments: none was shown direct to the display, on an M4 Mac mini),
+// and takes a frame as it's presented, its drawing done or not: one
+// presented before about half a millisecond past a blank shows on the
+// next, and the window server waits for the GPU's work itself. So a frame
+// started just before the blank (com_frameSync 2) is timed as the CPU is
+// done with it, with no fence, where waiting for its drawing held it 4 ms
+// behind its GPU work, and a fence after its swap stalled the window
+// server's frames for up to 200 ms; and it swaps with no interval, where
+// one waited 2.5 ms for a free buffer. Measured (2026-10-29), it then
+// showed a median 11.1 ms after it started, within half a millisecond,
+// against 15.1 with plain vsync (OmniFrag's docs/benchmarks.md)
+#ifdef __APPLE__
+#define GLIMP_SYNC_AT_PRESENT
+#endif
 static void GLimp_SetSwapInterval( void );
 
 // a new r_mode for the window, which waits while it's fullscreen
@@ -1752,6 +1768,10 @@ at once, without a vid_restart, as the hold starts and ends.
 r_swapIntervalActive is the interval that took, which isn't the one asked
 for when the driver refused it (a driver's settings can also override it
 unseen, which the frame cap allows for).
+
+On macOS, frames started just before the display's blank (com_frameSync 2)
+swap with none either (GLIMP_SYNC_AT_PRESENT), and r_swapIntervalActive
+keeps the 1 that put the frames there.
 ===============
 */
 static void GLimp_SetSwapInterval( void )
@@ -1766,6 +1786,21 @@ static void GLimp_SetSwapInterval( void )
 	swapInterval = com_vsyncHold->integer ? 0 : r_swapInterval->integer;
 #endif
 	com_vsyncHold->modified = qfalse;
+
+#ifdef GLIMP_SYNC_AT_PRESENT
+	com_frameSync->modified = qfalse;
+	if( swapInterval == 1 && com_frameSync->integer == 2 )
+	{
+		if( SDL_GL_SetSwapInterval( 0 ) )
+		{
+			// a new window's, after a vid_restart, as GLimp_Shutdown
+			// zeroed it
+			ri.Cvar_Set( "r_swapIntervalActive", "1" );
+			return;
+		}
+		ri.Printf( PRINT_DEVELOPER, "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
+	}
+#endif
 
 	if( !SDL_GL_SetSwapInterval( swapInterval ) )
 	{
@@ -1817,13 +1852,22 @@ void GLimp_EndFrame( void )
 	// where the driver waits on the GPU, as NVIDIA's OpenGL on Windows does
 	// before a fence after the swap: measured on Joe's PC (2026-10-29), the
 	// frames then started a refresh early to make room for it. Without
-	// fences (r_gpuSync 0, or none), it's timed as the CPU is done with it.
+	// fences (r_gpuSync 0, or none), it's timed as the CPU is done with it,
+	// and so it is on macOS (GLIMP_SYNC_AT_PRESENT).
 	qboolean waited = qfalse;
+	qboolean fences = r_gpuSync->integer && qglFenceSync;
+
+#ifdef GLIMP_SYNC_AT_PRESENT
+	if( com_frameSync->integer == 2 )
+	{
+		fences = qfalse;
+	}
+#endif
 
 #ifndef __EMSCRIPTEN__
 	if( com_frameSync->integer == 2 )
 	{
-		if( r_gpuSync->integer && qglFenceSync )
+		if( fences )
 		{
 			GLsync drawnFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
 
@@ -1868,14 +1912,19 @@ void GLimp_EndFrame( void )
 	}
 #endif
 
-	// the 125 hold started or ended since the last swap
+	// the 125 hold started or ended since the last swap, or on macOS,
+	// frames started or stopped being synced just before the blank
+#ifdef GLIMP_SYNC_AT_PRESENT
+	if( com_vsyncHold->modified || com_frameSync->modified )
+#else
 	if( com_vsyncHold->modified )
+#endif
 	{
 		GLimp_SetSwapInterval( );
 	}
 
 	// a frame waited for already needs no fence for the next
-	if( r_gpuSync->integer && qglFenceSync && !waited )
+	if( fences && !waited )
 	{
 		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
 	}

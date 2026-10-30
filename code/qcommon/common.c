@@ -4203,7 +4203,7 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 #ifndef DEDICATED
 	// the renderer's, set when it makes the window
 	com_swapIntervalActive = Cvar_Get( "r_swapIntervalActive", "0", CVAR_ROM );
-#ifdef SYS_VBLANK_CLOCK
+#ifdef SYS_VBLANK_DEFAULT
 	com_lowLatencyVsync = Cvar_Get( "com_lowLatencyVsync", "1", CVAR_ARCHIVE_ND );
 #else
 	com_lowLatencyVsync = Cvar_Get( "com_lowLatencyVsync", "0", CVAR_ARCHIVE_ND );
@@ -4211,7 +4211,7 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	Cvar_CheckRange( com_lowLatencyVsync, 0, 1, qtrue );
 	Cvar_SetDescription( com_lowLatencyVsync, "With vsync (r_swapInterval 1), start each frame just before the display's next refresh, "
 		"as late as the last frames allow, so it shows the newest input. Needs a frame cap at or above the refresh rate, and a clock "
-		"for the display's refreshes (Windows); plain vsync otherwise. com_frameSync says which is in effect." );
+		"for the display's refreshes (Windows, macOS, and X11 with com_vblankClock 1); plain vsync otherwise. com_frameSync says which is in effect." );
 	com_frameSync = Cvar_Get( "com_frameSync", "0", CVAR_ROM );
 	Cvar_SetDescription( com_frameSync, "How frames meet the display now: 0 not synced (vsync off), 1 synced (vsync), "
 		"2 synced with each frame started just before the refresh (com_lowLatencyVsync)." );

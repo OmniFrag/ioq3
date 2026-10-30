@@ -1158,7 +1158,7 @@ void R_Register( void )
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
 	r_finish = ri.Cvar_Get ("r_finish", "0", CVAR_ARCHIVE);
 	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR", CVAR_ARCHIVE );
-#ifdef SYS_VBLANK_CLOCK
+#ifdef SYS_VBLANK_DEFAULT
 	// frames start just before the display's refresh by default
 	// (com_lowLatencyVsync), which needs vsync
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "1",

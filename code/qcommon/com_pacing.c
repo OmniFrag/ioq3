@@ -363,6 +363,8 @@ Com_VBlankFit
 
 A display's blanks from the times a thread woke for them, oldest first: a
 wake comes after its blank, by a little or by much, never before. The
+blanks themselves, as macOS's display link gives them, fit too, ahead of
+now as they are. The
 period starts as the median interval, and is corrected twice by the drift
 between the earliest wakes of the first and last quarters; the blank is a
 recent one, from the earliest of the last 16 wakes, so the wakes' jitter
