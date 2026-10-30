@@ -9,9 +9,12 @@ option(BUILD_MACOS_APP "Deploy as a macOS .app" ON)
 enable_language(OBJC)
 
 list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx.m)
+list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/mac_vblank.m)
 
 list(APPEND COMMON_LIBRARIES "-framework Cocoa")
 list(APPEND CLIENT_LIBRARIES "-framework IOKit")
+# the display's blanks (mac_vblank.m)
+list(APPEND CLIENT_LIBRARIES "-framework CoreVideo")
 # the dedicated server's power assertion, which keeps the Mac awake for
 # its players (Sys_KeepAwake)
 list(APPEND SERVER_LIBRARIES "-framework IOKit")

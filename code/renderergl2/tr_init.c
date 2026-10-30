@@ -1471,11 +1471,10 @@ void R_Register( void )
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
 	r_finish = ri.Cvar_Get ("r_finish", "0", CVAR_ARCHIVE);
 	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR", CVAR_ARCHIVE );
-#if defined( __EMSCRIPTEN__ ) || defined( SYS_VBLANK_CLOCK )
+#if defined( __EMSCRIPTEN__ ) || defined( SYS_VBLANK_DEFAULT )
 	// Under Emscripten we don't throttle framerate with com_maxfps by default, so enable
-	// vsync by default instead. Where there's a clock for the display's
-	// refreshes, frames start just before them by default
-	// (com_lowLatencyVsync), which needs vsync.
+	// vsync by default instead. Where frames start just before the
+	// display's refreshes by default (com_lowLatencyVsync), it needs vsync.
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "1",
 					CVAR_ARCHIVE | CVAR_LATCH );
 #else
