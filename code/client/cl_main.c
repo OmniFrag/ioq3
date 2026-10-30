@@ -4393,6 +4393,19 @@ int CL_ScaledMilliseconds(void) {
 
 /*
 ============
+CL_FrameDrawn
+
+The renderer says the frame's drawing has ended, before its swap
+(ri.FrameDrawn): frames started just before the display's blank are timed
+to it (Com_ClientFrameEnded), as the swap can wait for the blank
+============
+*/
+static void CL_FrameDrawn( void ) {
+	com_frameDrawnTime = Sys_Nanoseconds();
+}
+
+/*
+============
 CL_InitRef
 ============
 */
@@ -4530,6 +4543,7 @@ void CL_InitRef( void ) {
 	ri.Sys_GLimpInit = Sys_GLimpInit;
 	ri.Sys_LowPhysicalMemory = Sys_LowPhysicalMemory;
 	ri.Nanoseconds = Sys_Nanoseconds;
+	ri.FrameDrawn = CL_FrameDrawn;
 
 	ret = GetRefAPI( REF_API_VERSION, &ri );
 

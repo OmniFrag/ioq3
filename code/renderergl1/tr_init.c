@@ -1158,8 +1158,15 @@ void R_Register( void )
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
 	r_finish = ri.Cvar_Get ("r_finish", "0", CVAR_ARCHIVE);
 	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR", CVAR_ARCHIVE );
+#ifdef SYS_VBLANK_CLOCK
+	// frames start just before the display's refresh by default
+	// (com_lowLatencyVsync), which needs vsync
+	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "1",
+					CVAR_ARCHIVE | CVAR_LATCH );
+#else
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0",
 					CVAR_ARCHIVE | CVAR_LATCH );
+#endif
 	r_gamma = ri.Cvar_Get( "r_gamma", "1", CVAR_ARCHIVE );
 	r_viewScale = ri.Cvar_Get( "r_viewScale", "1", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_viewScale, 0.25f, 2, qfalse );

@@ -1513,6 +1513,12 @@ extern	int		time_backend;		// renderer backend time
 extern	int		time_late;			// the frame's start after it was due
 extern	int		time_inputAge;		// the newest input's age as the usercmd is built
 extern	int		time_swap;			// since the last frame's swap
+// when the last swap ended, after the renderer's wait for the GPU, and
+// when the last frame's drawing ended, before its swap, where the renderer
+// says (ri.FrameDrawn), in Sys_Nanoseconds: frames synced to the display's
+// blanks are timed to the second, or failing it the first
+extern	int64_t	com_frameSwapTime;
+extern	int64_t	com_frameDrawnTime;
 
 extern	int		com_frameTime;
 
@@ -1775,11 +1781,25 @@ void	Sys_SleepPrecise( int64_t ns );
 // the refresh interval of the display the game is on, in nanoseconds; 0
 // when it isn't known
 int64_t	Sys_RefreshInterval( void );
+// the vertical blanks of the display the game is on: a recent one, on
+// Sys_Nanoseconds' clock, and the period, both in nanoseconds; qfalse where
+// the platform has no clock for them
+qboolean	Sys_VBlankClock( int64_t *vblank, int64_t *period );
+#endif
+
+// where the platform has a clock for the display's vertical blanks
+// (Sys_VBlankClock), frames start just before them by default
+// (com_lowLatencyVsync 1, and r_swapInterval 1 for the vsync it needs);
+// elsewhere native builds keep vsync off by default, as low latency would be
+// plain vsync (a browser always syncs)
+#if defined( _WIN32 ) && !defined( DEDICATED )
+#define	SYS_VBLANK_CLOCK
 #endif
 
 // com_maxfps's values besides a number of frames a second and 0 (no cap):
-// the display's refresh rate, and 3% under it, for a display of variable
-// refresh rate with vsync (com_pacing.c)
+// the display's refresh rate (3% over, for a tear that moves without
+// vsync), and 3% under it, for a display of variable refresh rate with vsync
+// (com_pacing.c)
 #define	COM_MAXFPS_DISPLAY			-1
 #define	COM_MAXFPS_BELOW_DISPLAY	-2
 
@@ -1787,6 +1807,52 @@ int64_t	Com_RefreshNanoseconds( int numerator, int denominator );
 int64_t	Com_CapInterval( int fps );
 int64_t	Com_MaxFpsInterval( int maxfps, int64_t refresh, qboolean movesByFrame );
 qboolean	Com_MovesByFrame( const char *pmoveFixed, const char *gamename );
+qboolean	Com_HoldDropsVsync( int maxfps, qboolean movesByFrame );
+
+// Frames that start just before the display's next vertical blank, as late
+// as recent frames allow (com_lowLatencyVsync; com_pacing.c). All times are
+// in nanoseconds, on Sys_Nanoseconds' clock; a blank is any on the grid of
+// vblank + k * period.
+#define	COM_SYNC_COSTS			64			// frames whose cost is kept
+#define	COM_SYNC_MARGIN_START	1000000		// before any frame missed
+#define	COM_SYNC_MARGIN_MIN		500000
+#define	COM_SYNC_MARGIN_STEP	500000		// added by a missed blank
+#define	COM_SYNC_MARGIN_DECAY	10000000000LL	// the time constant back down
+#define	COM_SYNC_WAKES			64			// vblank wakes Com_VBlankFit takes
+#define	COM_SYNC_MISS_WINDOW	128			// synced frames whose misses count
+#define	COM_SYNC_MISS_LIMIT		16			// misses among them that give up
+#define	COM_SYNC_RETRY			30000000000LL	// before trying again, doubled each time
+#define	COM_SYNC_RETRY_MAX		600000000000LL	// and the most, which forgives too
+
+typedef struct {
+	int64_t	costs[COM_SYNC_COSTS];	// from a frame's start to its drawing's end
+	int		numCosts, nextCost;
+	int64_t	margin;
+	int64_t	target;		// the blank the frame under way shows on, 0 for none
+} comFrameSync_t;
+
+// a synced frame's result (Com_SyncFrameDone)
+enum { COM_SYNC_IN_TIME, COM_SYNC_MISSED, COM_SYNC_HITCH };
+
+// whether low latency has given up, for frames whose work doesn't fit in a
+// refresh (Com_SyncFallBack)
+typedef struct {
+	byte	missed[COM_SYNC_MISS_WINDOW];	// of the last synced frames
+	int		nextFrame, misses;
+	int64_t	retryAt;	// when it's tried again, or was last
+	int64_t	wait;		// how long the last time it gave up waited, 0 for none
+} comSyncFallback_t;
+
+void	Com_SyncReset( comFrameSync_t *sync );
+int64_t	Com_SyncCost( const comFrameSync_t *sync, int64_t period );
+int64_t	Com_SyncNextStart( comFrameSync_t *sync, int64_t now, int64_t vblank, int64_t period );
+int		Com_SyncFrameDone( comFrameSync_t *sync, int64_t start, int64_t done, int64_t vblank, int64_t period );
+qboolean	Com_SyncFallBack( comSyncFallback_t *fallback, int result, int64_t now );
+qboolean	Com_SyncFallenBack( const comSyncFallback_t *fallback, int64_t now );
+void	Com_SyncRetry( comSyncFallback_t *fallback, int64_t now );
+// at a map load, low latency is tried again if it gave up (Com_SyncRetry)
+void	Com_FrameSyncRetry( void );
+qboolean	Com_VBlankFit( const int64_t *wakes, int count, int64_t now, int64_t *vblank, int64_t *period );
 
 qboolean Sys_RandomBytes( byte *string, int len );
 
