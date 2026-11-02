@@ -2526,6 +2526,10 @@ void S_AL_Shutdown( void )
 	S_AL_SrcShutdown( );
 	S_AL_BufferShutdown( );
 
+	// macOS's OpenAL ignores a destroy of the current context; closing the
+	// device then frees the context while the render thread still reads
+	// its sources
+	qalcMakeContextCurrent(NULL);
 	qalcDestroyContext(alContext);
 	qalcCloseDevice(alDevice);
 
