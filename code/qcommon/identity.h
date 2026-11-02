@@ -61,6 +61,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define IDENT_SERVER_DOMAIN	"OmniFrag server v1"
 #define IDENT_CLIENT_DOMAIN	"OmniFrag client v1"
+#define IDENT_PURPOSE_DOMAIN	"OmniFrag purpose v1"	// Ident_SignPurpose's; no proof may use it
 
 // a key pair: the secret never leaves its file but as this
 typedef struct identKey_s {
@@ -83,6 +84,19 @@ void		Ident_SignClient( const identKey_t *client, const byte serverKey[IDENT_KEY
 				byte sig[IDENT_SIG_SIZE] );
 qboolean	Ident_CheckClient( const byte clientKey[IDENT_KEY_SIZE], const byte serverKey[IDENT_KEY_SIZE],
 				const byte serverNonce[IDENT_KEY_SIZE], const byte clientNonce[IDENT_KEY_SIZE], int challenge,
+				const byte sig[IDENT_SIG_SIZE] );
+
+// A signature for another purpose than the handshake's, a service's message
+// say: over IDENT_PURPOSE_DOMAIN and the purpose, each with its terminator,
+// then the message, so it holds only for that purpose and never as a proof
+// above. qfalse, and no signature, for an empty purpose or one past
+// IDENT_PURPOSE_NAME_MAX characters, a NULL message, or one past
+// IDENT_PURPOSE_MAX bytes; an empty message is signed
+#define IDENT_PURPOSE_NAME_MAX	63
+#define IDENT_PURPOSE_MAX		2048
+qboolean	Ident_SignPurpose( const identKey_t *key, const char *purpose, const void *message, int length,
+				byte sig[IDENT_SIG_SIZE] );
+qboolean	Ident_CheckPurpose( const byte key[IDENT_KEY_SIZE], const char *purpose, const void *message, int length,
 				const byte sig[IDENT_SIG_SIZE] );
 
 // The tokens: each read is qtrue only when every one it names is there,

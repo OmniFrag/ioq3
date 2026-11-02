@@ -112,6 +112,54 @@ qboolean Ident_CheckClient( const byte clientKey[IDENT_KEY_SIZE], const byte ser
 	return crypto_ed25519_check( sig, clientKey, message, length ) == 0;
 }
 
+/*
+=================
+Ident_PurposeMessage
+
+What a purpose's signature signs, in buf: IDENT_PURPOSE_DOMAIN and the
+purpose, each with its terminator, then the message. No proof's domain is
+IDENT_PURPOSE_DOMAIN, so none signs the same bytes. 0 when
+Ident_SignPurpose refuses it
+=================
+*/
+#define IDENT_PURPOSE_SIZE	( sizeof( IDENT_PURPOSE_DOMAIN ) + IDENT_PURPOSE_NAME_MAX + 1 + IDENT_PURPOSE_MAX )
+
+static int Ident_PurposeMessage( byte buf[IDENT_PURPOSE_SIZE], const char *purpose, const void *message, int length ) {
+	int		name;
+
+	if ( !purpose || !message || length < 0 || length > IDENT_PURPOSE_MAX ) {
+		return 0;
+	}
+	name = (int)strlen( purpose );
+	if ( !name || name > IDENT_PURPOSE_NAME_MAX ) {
+		return 0;
+	}
+	Com_Memcpy( buf, IDENT_PURPOSE_DOMAIN, sizeof( IDENT_PURPOSE_DOMAIN ) );
+	Com_Memcpy( buf + sizeof( IDENT_PURPOSE_DOMAIN ), purpose, name + 1 );
+	Com_Memcpy( buf + sizeof( IDENT_PURPOSE_DOMAIN ) + name + 1, message, length );
+	return (int)sizeof( IDENT_PURPOSE_DOMAIN ) + name + 1 + length;
+}
+
+qboolean Ident_SignPurpose( const identKey_t *key, const char *purpose, const void *message, int length,
+	byte sig[IDENT_SIG_SIZE] ) {
+	byte	buf[IDENT_PURPOSE_SIZE];
+	int		total = Ident_PurposeMessage( buf, purpose, message, length );
+
+	if ( !total ) {
+		return qfalse;
+	}
+	crypto_ed25519_sign( sig, key->secret, buf, total );
+	return qtrue;
+}
+
+qboolean Ident_CheckPurpose( const byte key[IDENT_KEY_SIZE], const char *purpose, const void *message, int length,
+	const byte sig[IDENT_SIG_SIZE] ) {
+	byte	buf[IDENT_PURPOSE_SIZE];
+	int		total = Ident_PurposeMessage( buf, purpose, message, length );
+
+	return total && crypto_ed25519_check( sig, key, buf, total ) == 0;
+}
+
 qboolean Ident_ReadNonce( const extTokens_t *tokens, const char *key, byte nonce[IDENT_KEY_SIZE] ) {
 	const char	*value = Com_ExtensionValue( tokens, key );
 
