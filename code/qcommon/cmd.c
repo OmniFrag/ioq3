@@ -38,12 +38,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // "-" closes the latest.
 #define	CBUF_MARKER			'\x01'
 #define	MAX_ORIGIN_DEPTH	16
+// the longest origin kept: a config's path, a vote's caller or a tool's name
+#define	CMD_ORIGIN_NAME		128
 
 typedef struct {
-	char		name[MAX_QPATH];	// "" for text from no config
+	char		name[CMD_ORIGIN_NAME];	// "" for text from no config
 	int			line;				// the line's number, 0 for none
 	qboolean	counted;			// a frame's: line is the next line's, and counts on
 	qboolean	pak;				// a pak's config's, on a dedicated server
+	char		by;					// a passed vote's text ('v') or a tool's ('t'), or 0 (Cbuf_AddVoteText, Cbuf_AddToolText)
 } cmdOrigin_t;
 
 typedef struct {
@@ -240,18 +243,25 @@ static void Cbuf_InsertFrame( cmd_t *buf, const char *marker, const char *text )
 ============
 Cbuf_OriginMarker
 
-The marker of a frame whose lines all have an origin, line 0 for none
+The marker of a frame whose lines all have an origin, line 0 for none: a
+pak config's, a vote's or a tool's (by), or another. In a buffer of its
+own, not va()'s, whose two the caller's name and text may both be in (a
+frame keeps a name of CMD_ORIGIN_NAME, Cbuf_ExecuteMarker)
 ============
 */
-static const char *Cbuf_OriginMarker( const char *name, int line, qboolean pak ) {
-	return va( "%c%c%i %s", CBUF_MARKER, pak ? '#' : '=', line, name );
+static const char *Cbuf_OriginMarker( const char *name, int line, qboolean pak, char by ) {
+	static char	marker[CMD_ORIGIN_NAME + 32];
+
+	Com_sprintf( marker, sizeof( marker ), "%c%c%i %.*s", CBUF_MARKER, pak ? '#' : by ? by : '=', line,
+		CMD_ORIGIN_NAME - 1, name );
+	return marker;
 }
 
 // inserts text a command queues, in a frame keeping the command's origin;
 // with none, and no frame to keep it out of, as it is
 static void Cbuf_Insert( cmd_t *buf, const char *text ) {
-	Cbuf_InsertFrame( buf, cmd_origin.name[0] || cmd_origin.pak || buf->depth ?
-		Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, cmd_origin.pak ) : NULL, text );
+	Cbuf_InsertFrame( buf, cmd_origin.name[0] || cmd_origin.pak || cmd_origin.by || buf->depth ?
+		Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, cmd_origin.pak, cmd_origin.by ) : NULL, text );
 }
 
 /*
@@ -278,6 +288,7 @@ static void Cbuf_ExecuteMarker( cmd_t *buf, int at ) {
 		origin = &buf->origins[ buf->depth - 1 ];
 		origin->counted = text[1] == '+' || text[1] == '*';
 		origin->pak = text[1] == '*' || text[1] == '#';
+		origin->by = text[1] == 'v' || text[1] == 't' ? text[1] : 0;
 		origin->line = 1;
 		if ( !origin->counted ) {
 			origin->line = atoi( name );
@@ -452,6 +463,7 @@ void Cmd_EndRestricted( void ) {
 	cmd_origin.name[0] = '\0';
 	cmd_origin.line = 0;
 	cmd_origin.pak = qfalse;
+	cmd_origin.by = 0;
 	cmd_numPushedOrigins = 0;
 }
 
@@ -466,13 +478,16 @@ Cbuf_ExecuteText, restricted or not, whatever the running command is
 static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolean restricted )
 {
 	qboolean	running = cmd_restricted, script = cmd_script, pak = cmd_origin.pak;
+	char		by = cmd_origin.by;
 
 	// the engine's text, or game code's, isn't a script's; nor is game
-	// code's a pak config's when a pak's map command started the game
+	// code's a pak config's when a pak's map command started the game, or
+	// a vote's or a tool's when their command ran game code
 	cmd_restricted = restricted;
 	cmd_script = qfalse;
 	if ( restricted ) {
 		cmd_origin.pak = qfalse;
+		cmd_origin.by = 0;
 	}
 	switch (exec_when)
 	{
@@ -497,6 +512,7 @@ static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolea
 	cmd_restricted = running;
 	cmd_script = script;
 	cmd_origin.pak = pak;
+	cmd_origin.by = by;
 }
 
 /*
@@ -663,7 +679,7 @@ Cmd_Origin
 ============
 */
 const char *Cmd_Origin( void ) {
-	static char	text[MAX_QPATH + 16];
+	static char	text[CMD_ORIGIN_NAME + 16];
 
 	if ( !cmd_origin.name[0] ) {
 		return NULL;
@@ -698,6 +714,24 @@ qboolean Cmd_IsPakConfig( void ) {
 
 /*
 ============
+Cmd_IsVote
+============
+*/
+qboolean Cmd_IsVote( void ) {
+	return cmd_origin.by == 'v';
+}
+
+/*
+============
+Cmd_IsTool
+============
+*/
+qboolean Cmd_IsTool( void ) {
+	return cmd_origin.by == 't';
+}
+
+/*
+============
 Cmd_PushOrigin
 
 The origin of text run at once rather than queued, a settings file's
@@ -713,6 +747,7 @@ void Cmd_PushOrigin( const char *name, int line ) {
 	cmd_origin.line = line;
 	cmd_origin.counted = qfalse;
 	cmd_origin.pak = qfalse;
+	cmd_origin.by = 0;
 }
 
 /*
@@ -733,10 +768,8 @@ Cbuf_AddTextFrom
 Text added to the player's buffer whose lines all have one origin
 ============
 */
-void Cbuf_AddTextFrom( const char *origin, const char *text ) {
-	cmd_t		*buf = Cbuf_Current();
-	const char	*marker = Cbuf_OriginMarker( origin, 0, qfalse );
-	int			len = Cbuf_WriteFrame( NULL, marker, text );
+static void Cbuf_AddFrame( cmd_t *buf, const char *marker, const char *text ) {
+	int	len = Cbuf_WriteFrame( NULL, marker, text );
 
 	if ( buf->cursize + len >= buf->maxsize ) {
 		Com_Printf( "Cbuf_AddText: overflow\n" );
@@ -744,6 +777,34 @@ void Cbuf_AddTextFrom( const char *origin, const char *text ) {
 	}
 	Cbuf_WriteFrame( buf->data + buf->cursize, marker, text );
 	buf->cursize += len;
+}
+
+void Cbuf_AddTextFrom( const char *origin, const char *text ) {
+	Cbuf_AddFrame( Cbuf_Current(), Cbuf_OriginMarker( origin, 0, qfalse, 0 ), text );
+}
+
+/*
+============
+Cbuf_AddVoteText, Cbuf_AddToolText
+
+A passed vote's text, added to game code's buffer, as it runs restricted,
+in a frame whose origin is the vote's (Cmd_IsVote); a tool's, added to
+the player's, in one whose origin is the tool's (Cmd_IsTool)
+============
+*/
+void Cbuf_AddVoteText( const char *voter, const char *text ) {
+	char	origin[CMD_ORIGIN_NAME];
+
+	if ( voter && voter[0] ) {
+		Com_sprintf( origin, sizeof( origin ), CMD_ORIGIN_VOTE_BY "%s", voter );
+	} else {
+		Q_strncpyz( origin, CMD_ORIGIN_VOTE, sizeof( origin ) );
+	}
+	Cbuf_AddFrame( Cbuf_For( qtrue, qfalse ), Cbuf_OriginMarker( origin, 0, qfalse, 'v' ), text );
+}
+
+void Cbuf_AddToolText( const char *tool, const char *text ) {
+	Cbuf_AddFrame( Cbuf_For( qfalse, qfalse ), Cbuf_OriginMarker( tool, 0, qfalse, 't' ), text );
 }
 
 // the order the buffers run in: the startup scripts' first, as one buffer
@@ -1011,7 +1072,7 @@ void Cmd_Vstr_f( void ) {
 	v = Cvar_VariableString( Cmd_Argv( 1 ) );
 	if ( Cvar_SetByPak( Cmd_Argv( 1 ) ) ) {
 		Cbuf_InsertFrame( Cbuf_For( Cvar_RunsRestricted( Cmd_Argv( 1 ) ), cmd_script ),
-			Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, qtrue ), v );
+			Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, qtrue, 0 ), v );
 	} else {
 		Cbuf_InsertTextRestricted( va("%s\n", v ), Cvar_RunsRestricted( Cmd_Argv( 1 ) ) );
 	}

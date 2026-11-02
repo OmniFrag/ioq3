@@ -558,7 +558,7 @@ default. One no code has registered has no default yet, and its value is
 kept as it is
 ============
 */
-static const char *Cvar_SavedValue( const cvar_t *var ) {
+const char *Cvar_SavedValue( const cvar_t *var ) {
 	if ( !var->savedString ) {
 		return NULL;
 	}
@@ -1092,6 +1092,21 @@ static const char *cvar_setOrigin;
 
 /*
 ============
+Cvar_NextValue
+============
+*/
+const char *Cvar_NextValue( const cvar_t *var ) {
+	return var->latchedString ? var->latchedString : var->string;
+}
+
+// what the change hook hears was the value before a set: the latched value
+// waiting, if one was, as that's the one a latched set replaces
+static char *Cvar_HookOld( const cvar_t *var ) {
+	return CopyString( Cvar_NextValue( var ) );
+}
+
+/*
+============
 Cvar_SetVar
 
 Sets a cvar in its source's layer (NULL clears it) and gives it the value
@@ -1153,7 +1168,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 		}
 	}
 
-	old = cvar_changeHook && source != CVAR_SOURCE_SERVER && source != CVAR_SOURCE_SYSTEM ? CopyString( var->string ) : NULL;
+	old = cvar_changeHook && source != CVAR_SOURCE_SERVER && source != CVAR_SOURCE_SYSTEM ? Cvar_HookOld( var ) : NULL;
 	Cvar_SetLayer( layer, value );
 	if ( serverLayer >= 0 ) {
 		Cvar_SetLayer( &var->layerOrigins[serverLayer], value ? cvar_setOrigin : NULL );
@@ -1772,7 +1787,7 @@ Cvar_DropUser
 ============
 */
 void Cvar_DropUser( cvar_t *var ) {
-	char	*old = cvar_changeHook ? CopyString( var->string ) : NULL;
+	char	*old = cvar_changeHook ? Cvar_HookOld( var ) : NULL;
 	cvarSource_t	source = var->userSource;
 
 	Cvar_ClearUser( var );
@@ -1865,6 +1880,27 @@ void Cvar_SetChangeHook( void ( *hook )( cvar_t *var, const char *old, cvarSourc
 
 /*
 ============
+Cvar_CommandSource
+
+Whose a set by the running command is: a startup script's sets aren't
+saved, its game content's too (default.cfg from a pak), which runs
+restricted, nor a pak's config's on a dedicated server, a script of the
+pak's; a tool's are the tool's; game code's restricted text is game
+code's, but a passed vote's, which runs restricted, is the players'
+============
+*/
+cvarSource_t Cvar_CommandSource( void ) {
+	if ( Cmd_IsScript() || Cmd_IsPakConfig() ) {
+		return CVAR_SOURCE_SCRIPT;
+	}
+	if ( Cmd_IsTool() ) {
+		return CVAR_SOURCE_TOOL;
+	}
+	return Cmd_IsRestricted() && !Cmd_IsVote() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER;
+}
+
+/*
+============
 Cvar_SetFromText
 
 A set by a command, the player's, or game code's if the command is
@@ -1875,9 +1911,6 @@ latched set leaves the old value, and its mark, in place
 */
 static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 {
-	// a startup script's sets aren't saved, its game content's too
-	// (default.cfg from a pak), which runs restricted, nor a pak's config's
-	// on a dedicated server, a script of the pak's
 	qboolean	pak = Cmd_IsPakConfig();
 	cvar_t	*var;
 
@@ -1891,8 +1924,7 @@ static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 	}
 
 	// a set that takes notes its origin; a refused one leaves the earlier
-	var = Cvar_SetFromOrigin( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
-		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, Cmd_Origin() );
+	var = Cvar_SetFromOrigin( var_name, value, Cvar_CommandSource(), Cmd_Origin() );
 
 	if ( var ) {
 		if ( value && var->userString && !strcmp( var->userString, value ) ) {
@@ -2083,7 +2115,7 @@ void Cvar_Why_f( void ) {
 	}
 	if ( var->savedString ) {
 		Cvar_PlainPrintf( "  the choice saved is \"%s" S_COLOR_WHITE "\"%s\n", var->savedString,
-			!( var->flags & CVAR_ARCHIVE ) ? ", which isn't archived, so it's kept for this run" :
+			!( var->flags & CVAR_ARCHIVE ) ? ", which isn't archived, so no config saves it" :
 			Cvar_SavedValue( var ) ? "" : ", the default, so the config leaves it out" );
 	}
 	if ( var->flags & CVAR_USER_CREATED ) {
@@ -2404,7 +2436,7 @@ void Cvar_ListModified_f( void ) {
 		if ( !var->name || !var->modificationCount )
 			continue;
 
-		value = var->latchedString ? var->latchedString : var->string;
+		value = Cvar_NextValue( var );
 		if ( !strcmp( value, var->resetString ) )
 			continue;
 

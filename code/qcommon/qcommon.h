@@ -484,6 +484,14 @@ typedef struct {
 // extension
 #define	COM_TRAP_CLIENTROLE	812
 
+// trap_VoteCommand( int clientNum, const char *text ) in game: a passed
+// vote's command text, appended to run restricted as game code's does,
+// with "vote by <name>" as its origin, the name the engine's own copy of
+// clientNum's (Cmd_IsVote): what it sets is a player's change, so the
+// server's keeper of settings records it. A slot out of range, or nobody's,
+// gives "a vote". On engines without it, game code sends the text as before
+#define	COM_TRAP_VOTECOMMAND	813
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL
@@ -664,6 +672,16 @@ void Cbuf_AddTextFrom( const char *origin, const char *text );
 // Cbuf_AddText for text whose lines all have the origin given, the
 // command line's, say (Cmd_Origin)
 
+#define	CMD_ORIGIN_VOTE_BY	"vote by "
+#define	CMD_ORIGIN_VOTE		"a vote"
+void Cbuf_AddVoteText( const char *voter, const char *text );
+// a passed vote's text, which runs restricted, with "vote by <voter>" as
+// its origin, or "a vote" for no voter, NULL or "" (Cmd_IsVote)
+
+void Cbuf_AddToolText( const char *tool, const char *text );
+// a tool's text, with the tool's origin, "the Omniwire tool \"panel\""
+// (Cmd_IsTool)
+
 //===========================================================================
 
 /*
@@ -732,6 +750,12 @@ const char *Cmd_Origin( void );
 qboolean Cmd_OriginIsCommandLine( void );
 qboolean Cmd_IsPakConfig( void );
 // the running command is a pak's config's, on a dedicated server
+qboolean Cmd_IsVote( void );
+// the running command is a passed vote's, or came from text one queued
+// (Cbuf_AddVoteText): restricted, but its sets are the players' changes
+qboolean Cmd_IsTool( void );
+// the running command is a tool's (Cbuf_AddToolText): its sets are the
+// tool's (CVAR_SOURCE_TOOL)
 void Cmd_PushOrigin( const char *name, int line );
 void Cmd_PopOrigin( void );
 // the origin of text run at once (EXEC_NOW), a settings file's line, say
@@ -797,7 +821,7 @@ typedef enum {
 	CVAR_SOURCE_DEFAULT,	// no one's: the default (Cvar_Source)
 	CVAR_SOURCE_ENGINE,	// engine code (Cvar_Set): saved if archived
 	CVAR_SOURCE_GAME,	// game code, and a server running here (Cvar_SetFromVM, Cvar_SetSafe, restricted text): saved if archived
-	CVAR_SOURCE_PLAYER,	// the console and configs: saved if archived
+	CVAR_SOURCE_PLAYER,	// the console, configs and a passed vote's text (Cmd_IsVote): saved if archived
 	CVAR_SOURCE_MENU,	// the menus, the ui module's sets: the player's choice, saved if archived
 	CVAR_SOURCE_SCRIPT,	// what runs at every start (default.cfg, autoexec.cfg): not saved
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
@@ -900,10 +924,21 @@ void	Cvar_ForEach( void ( *fn )( cvar_t *var, void *context ), void *context );
 // calls fn for every cvar, which it mustn't unset
 void	Cvar_SetChangeHook( void ( *hook )( cvar_t *var, const char *old, cvarSource_t source ) );
 // hook is called after a set changes a cvar's player, file, pool entry or
-// mode value, with its value before, and the set's source: one at a time, a
-// dedicated server's keeper of its settings (hosting/)
+// mode value, with its value before (the latched value waiting, if one
+// was), and the set's source: one at a time, a dedicated server's keeper of
+// its settings (hosting/)
 const char	*Cvar_SavedChoice( const cvar_t *var, int scopes );
 // what a config of these scopes (cvarScope_t bits) saves of it, or NULL
+const char	*Cvar_SavedValue( const cvar_t *var );
+// its saved choice as Cvar_SavedChoice judges it, archived or not, or NULL:
+// a dedicated server's keeper of settings keeps a live change of a setting
+// stock doesn't archive
+const char	*Cvar_NextValue( const cvar_t *var );
+// the value it will have: the latched one waiting, or its own
+cvarSource_t	Cvar_CommandSource( void );
+// whose a set by the running command is: a startup script's or a pak
+// config's, a tool's, game code's or else the player's, a passed vote's
+// too
 const char	*Cvar_SourceName( cvarSource_t source );
 // a source's name, as cvar_dump gives it: "file", "player", "tool"
 const cvarDeclaration_t	*Cvar_Declaration( const char *var_name );

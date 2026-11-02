@@ -343,6 +343,7 @@ static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ "trap_GameFact_OF", COM_TRAP_GAMEFACT },
 	{ "trap_ClientRole_OF", COM_TRAP_CLIENTROLE },
+	{ "trap_VoteCommand_OF", COM_TRAP_VOTECOMMAND },
 	{ NULL, 0 }
 };
 
@@ -548,6 +549,7 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 	SYSCALL( COM_TRAP_GAMEFACT ),
 	SYSCALL( COM_TRAP_CLIENTROLE ),
+	SYSCALL( COM_TRAP_VOTECOMMAND ),
 };
 
 // the game's facts (COM_TRAP_GAMEFACT): how many came in the game frame at
@@ -1295,6 +1297,17 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 			return ROLE_NONE;
 		}
 		return Hooks_ClientRole( clientNum, cl->identityProven ? cl->identity : NULL );
+	}
+
+	case COM_TRAP_VOTECOMMAND: {
+		// the voter's name is the engine's, as the client gave it, printable;
+		// none for a slot that's nobody's
+		char	name[MAX_NAME_LENGTH];
+
+		Q_strncpyz( name, SV_ExtClientName( args[1] ), sizeof( name ) );
+		Q_CleanStr( name );
+		Cbuf_AddVoteText( name, VMA_STR( 2 ) );
+		return 0;
 	}
 
 	default:
