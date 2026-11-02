@@ -443,6 +443,13 @@ qboolean Hooks_WantDraw( void ) {
 		} \
 	} while ( 0 )
 
+qboolean Hooks_Connectionless( const netadr_t *from ) {
+	int	taker;
+
+	HOOKS_OFFER( taker, connectionless, ( from ) );
+	return taker != 0;
+}
+
 int Hooks_KeyDown( int key, unsigned time ) {
 	int	taker;
 

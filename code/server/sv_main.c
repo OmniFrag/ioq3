@@ -353,6 +353,31 @@ but not on every player enter or exit.
 */
 #define	HEARTBEAT_MSEC	300*1000
 #define	MASTERDNS_MSEC	24*60*60*1000
+/*
+================
+SV_ExtListed
+
+Whether the server lists itself on the masters: "dedicated 1" is for LAN
+play, "dedicated 2" for public play, with a network on and a master set. A
+draining server leaves their lists: it doesn't answer their polls
+(SV_IsMasterAddress), nor send them heartbeats
+================
+*/
+qboolean SV_ExtListed( void ) {
+	int	i;
+
+	if ( !com_dedicated || com_dedicated->integer != 2 ||
+		!( Cvar_VariableIntegerValue( "net_enabled" ) & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) || sv_drainReason[0] ) {
+		return qfalse;
+	}
+	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
+		if ( sv_master[i] && sv_master[i]->string[0] ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 void SV_MasterHeartbeat(const char *message)
 {
 	netadr_t	(*adr)[2] = sv_masterAdr;
@@ -360,16 +385,9 @@ void SV_MasterHeartbeat(const char *message)
 	int			res;
 	int			netenabled;
 
-	netenabled = Cvar_VariableIntegerValue("net_enabled");
-
-	// "dedicated 1" is for lan play, "dedicated 2" is for inet public play
-	if (!com_dedicated || com_dedicated->integer != 2 || !(netenabled & (NET_ENABLEV4 | NET_ENABLEV6)))
-		return;		// only dedicated servers send heartbeats
-
-	// a draining server leaves the masters' lists: it doesn't answer their
-	// polls (SV_IsMasterAddress), nor send them heartbeats
-	if ( sv_drainReason[0] )
+	if ( !SV_ExtListed() )
 		return;
+	netenabled = Cvar_VariableIntegerValue( "net_enabled" );
 
 	// if not time yet, don't send anything
 	if ( svs.time < svs.nextHeartbeatTime )
@@ -1209,7 +1227,7 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		// if a client starts up a local server, we may see some spurious
 		// server disconnect messages when their new server sees our final
 		// sequenced messages to the old client
-	} else {
+	} else if ( !Hooks_Connectionless( &from ) ) {
 		Com_DPrintf ("bad connectionless packet from %s:\n%s\n",
 			NET_AdrToString (from), s);
 	}

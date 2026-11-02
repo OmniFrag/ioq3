@@ -224,6 +224,11 @@ typedef struct {
 	// The game sent a command to a client, or to every client when
 	// clientNum is -1: a line to print, a chat line, the scores
 	void		(*serverCommand)( int clientNum, const char *text );
+	// A connectionless packet the server doesn't answer itself, from an
+	// address: qtrue if the extension took it. Its line, up to
+	// BIG_INFO_STRING, is in Cmd_Argv. Anyone can send one, from any
+	// address, so every word is hostile
+	qboolean	(*connectionless)( const netadr_t *from );
 	// The program printed text: part of a line, a line or several, color
 	// codes and all, but not what a redirect captures (rcon's replies).
 	// What a print hook prints reaches no print hook. Called on the
@@ -348,6 +353,8 @@ int		Hooks_FindClientCommand( const char *name, int *flags );
 void	Hooks_RunClientCommand( int extension, int clientNum );
 void	Hooks_ClientCommandDone( int clientNum );
 void	Hooks_ServerCommand( int clientNum, const char *text );
+// whether an extension took a connectionless packet, its line in Cmd_Argv
+qboolean	Hooks_Connectionless( const netadr_t *from );
 void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );
@@ -546,6 +553,9 @@ qboolean	SV_ExtClientIsBot( int clientNum );
 qboolean	SV_ExtClientIdentity( int clientNum, byte key[32] );
 // prints text on a client's console only, as print does; nothing for none
 void	SV_ExtClientPrint( int clientNum, const char *text );
+// whether the server lists itself now: dedicated 2, a network on, a master
+// set, and no drain, as its heartbeats go
+qboolean	SV_ExtListed( void );
 // its ping in milliseconds, as status and getstatus give it; 999 while it
 // loads the map, 0 for a bot or none
 int		SV_ExtClientPing( int clientNum );
