@@ -744,6 +744,18 @@ char *Sys_GetCurrentUser( void )
 	return p->pw_name;
 }
 
+extern char **environ;
+
+/*
+==================
+Sys_Environment
+==================
+*/
+char **Sys_Environment( void )
+{
+	return environ;
+}
+
 #define MEM_THRESHOLD 96*1024*1024
 
 /*

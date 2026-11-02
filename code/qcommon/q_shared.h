@@ -988,6 +988,14 @@ struct cvar_s {
 	char		*userOrigin;	// the config line that set userString ("server.cfg:12", Cmd_Origin), or NULL
 	int		originOrder;	// when it was set, among the cvars a config's line set
 	char		*savedString;
+	// below the player's value, a dedicated server's own file's
+	// (server.toml, Cvar_SetFile), with the line that set it; and what
+	// locked it, the command line or an environment variable, which tools
+	// can't change (Cvar_LockedBy)
+	char		*fileString;
+	char		*fileOrigin;
+	char		*lockOrigin;
+	char		*lockString;	// the value it locked, which settings_revert goes back to
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1
 

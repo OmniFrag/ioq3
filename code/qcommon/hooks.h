@@ -109,6 +109,16 @@ typedef struct {
 	// be half changed, nor after a crash.
 	void		(*shutdown)( const char *reason );
 
+	// A dedicated server's own settings, kept the extension's way in place
+	// of the engine's q3config_server.cfg. read is called where the configs
+	// run, before init and under --check too, and again on a reload (reload
+	// qtrue), a game restart (qfalse again); write when a saved setting
+	// changed. Each returns whether it handled them; with none that does,
+	// the engine keeps its config as before. An error raised in a first
+	// read stops the program, as one in Com_Init does.
+	qboolean	(*readServerSettings)( qboolean reload );
+	qboolean	(*writeServerSettings)( void );
+
 	// What the server does, dedicated or a listen server's, each called
 	// once it has happened. clientNum runs from 0 to sv_maxclients - 1,
 	// and the SV_Ext* accessors below read the client's details.
@@ -269,6 +279,8 @@ void	Hooks_Frame( void );
 // an ERR_DROP ended the frame, in a hook perhaps
 void	Hooks_FrameAborted( void );
 void	Hooks_Shutdown( const char *reason );
+qboolean	Hooks_ReadServerSettings( qboolean reload );
+qboolean	Hooks_WriteServerSettings( void );
 // a crash stops the program: before the server shuts down
 void	Hooks_Signal( void );
 // the longest a dedicated server with no map may wait, as the extensions

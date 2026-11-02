@@ -971,10 +971,76 @@ before the filesystem is started, but all other sets should
 be after execing the config and default.
 ===============
 */
+#define ENV_PREFIX	"OMNIFRAG_"
+
+static int QDECL Com_CompareStrings( const void *a, const void *b ) {
+	return strcmp( *(const char * const *)a, *(const char * const *)b );
+}
+
+/*
+===============
+Com_EnvironmentVariables
+
+A dedicated server's sets from its environment, before the command line's,
+which win: OMNIFRAG_SV_HOSTNAME="My server" sets sv_hostname, the name
+after OMNIFRAG_ in lower case, in the variables' sorted order, as the
+container image's start did (deploy/entrypoint.sh). Each value is as it
+is, its ; and + its own; one holding a double quote, a newline or a
+carriage return, which a cvar's value can't, is left out. Each set locks
+its cvar with the variable's name (Cvar_Lock). What's left out is said
+once, on the first pass
+===============
+*/
+static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
+	static qboolean	warned;
+	char	**env = Sys_Environment();
+	const char	*found[512];
+	char	name[MAX_STRING_CHARS];
+	int		count = 0, i;
+
+	for ( i = 0; env && env[i] && count < ARRAY_LEN( found ); i++ ) {
+		if ( !strncmp( env[i], ENV_PREFIX, strlen( ENV_PREFIX ) ) && strchr( env[i], '=' ) ) {
+			found[count++] = env[i];
+		}
+	}
+	qsort( found, count, sizeof( found[0] ), Com_CompareStrings );
+
+	for ( i = 0; i < count; i++ ) {
+		const char	*equals = strchr( found[i], '=' ), *value = equals + 1;
+		int		length = equals - found[i];
+		char	variable[MAX_STRING_CHARS];
+		cvar_t	*var;
+
+		Q_strncpyz( variable, found[i], MIN( length + 1, (int)sizeof( variable ) ) );
+		Q_strncpyz( name, variable + strlen( ENV_PREFIX ), sizeof( name ) );
+		Q_strlwr( name );
+		if ( !name[0] || strpbrk( value, "\"\r\n" ) ) {
+			if ( !warned && !match ) {
+				Com_Printf( "%s %s: left out\n", variable, !name[0] ? "names no cvar" :
+					"holds a double quote, a newline or a carriage return, which a cvar's value can't" );
+			}
+			continue;
+		}
+		if ( ( match && Q_stricmp( name, match ) ) || ( Cvar_Flags( name ) & skipFlags ) ) {
+			continue;
+		}
+		var = Cvar_SetFromOrigin( name, value, CVAR_SOURCE_SESSION, variable );
+		if ( var ) {
+			Cvar_Lock( var, variable );
+		}
+	}
+	if ( !match ) {
+		warned = qtrue;
+	}
+}
+
 static void Com_StartupVariables( const char *match, int skipFlags ) {
 	int		i;
 	char	*s;
 
+	if ( !Com_IsClient() ) {
+		Com_EnvironmentVariables( match, skipFlags );
+	}
 	for (i=0 ; i < com_numConsoleLines ; i++) {
 		Cmd_TokenizeString( com_consoleLines[i] );
 		if ( strcmp( Cmd_Argv(0), "set" ) ) {
@@ -985,10 +1051,13 @@ static void Com_StartupVariables( const char *match, int skipFlags ) {
 		
 		if( ( !match || !strcmp(s, match) ) && !( Cvar_Flags( s ) & skipFlags ) )
 		{
-			cvar_t	*var = Cvar_SetFrom(s, Cmd_ArgsFrom(2), CVAR_SOURCE_SESSION, qfalse);
+			cvar_t	*var = Cvar_SetFromOrigin( s, Cmd_ArgsFrom( 2 ), CVAR_SOURCE_SESSION, CMD_ORIGIN_COMMAND_LINE );
 
 			if ( var ) {
-				Cvar_NoteOrigin( var, CMD_ORIGIN_COMMAND_LINE );
+				// a dedicated server's tools can't change it
+				if ( !Com_IsClient() ) {
+					Cvar_Lock( var, CMD_ORIGIN_COMMAND_LINE );
+				}
 			}
 		}
 	}
@@ -3060,6 +3129,41 @@ static settingsFile_t *Com_SettingsFiles( int *count ) {
 	return &com_serverConfig;
 }
 
+static qboolean Com_ReadSettingsFile( settingsFile_t *file );
+
+// Com_ReadServerConfig's read, an extension's import of the old config
+static qboolean	com_serverImport;
+
+/*
+=================
+Com_ReadServerConfig
+
+For an extension that keeps a dedicated server's settings its own way
+(Hooks_ReadServerSettings): the config the engine kept them in before, if
+there is one, applied as it would be. Returns whether there was one
+=================
+*/
+qboolean Com_ReadServerConfig( void ) {
+	qboolean	read;
+
+	com_serverImport = qtrue;
+	read = Com_ReadSettingsFile( &com_serverConfig );
+	com_serverImport = qfalse;
+	return read;
+}
+
+/*
+=================
+Com_ServerSavedValue
+
+What a dedicated server would save of a cvar, its choice where it isn't
+the default, or NULL: as q3config_server.cfg holds it
+=================
+*/
+const char *Com_ServerSavedValue( const cvar_t *var ) {
+	return Cvar_SavedChoice( var, com_serverConfig.scopes );
+}
+
 /*
 =================
 Com_SettingsPath
@@ -3494,7 +3598,12 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 		}
 		Com_SettingsPath( file->oldPath, oldPath, sizeof( oldPath ) );
 		if ( FS_BaseDir_ReadFile_HomeConfig( oldPath, (void **)&text ) >= 0 ) {
-			Com_Printf( "Reading %s, to be saved as %s\n", oldPath, path );
+			// an extension's import says where they go itself
+			if ( com_serverImport ) {
+				Com_Printf( "Reading %s\n", oldPath );
+			} else {
+				Com_Printf( "Reading %s, to be saved as %s\n", oldPath, path );
+			}
 			Com_ImportConfig( text, oldPath, NULL, qfalse );
 		} else if ( FS_ReadUncopiedConfig( path, (void **)&text, from, sizeof( from ) ) >= 0 ) {
 			// --check copies no config from the predecessor's home: the
@@ -3533,7 +3642,10 @@ static void Com_ReadSettings( void ) {
 	int		i;
 
 	if ( !Com_IsClient() ) {
-		Com_ReadSettingsFile( &com_serverConfig );
+		// an extension may keep them its own way (hosting/'s state.toml)
+		if ( !Hooks_ReadServerSettings( qfalse ) ) {
+			Com_ReadSettingsFile( &com_serverConfig );
+		}
 		return;
 	}
 	for ( i = 0; i < ARRAY_LEN( com_settingsFiles ); i++ ) {
@@ -3652,6 +3764,8 @@ Com_Reload_f
 ==================
 */
 static void Com_Reload_f( void ) {
+	qboolean	file;
+
 	if ( Com_IsClient() ) {
 		Com_Printf( "Only a dedicated server runs its command line's configs again.\n" );
 		return;
@@ -3662,7 +3776,10 @@ static void Com_Reload_f( void ) {
 		Com_Printf( "The startup scripts haven't finished running; reload once they have.\n" );
 		return;
 	}
-	if ( !Com_ReloadConfigs() ) {
+	// the server's own file again (hosting/'s server.toml), then the
+	// scripts, which win, as at the start
+	file = Hooks_ReadServerSettings( qtrue );
+	if ( !Com_ReloadConfigs() && !file ) {
 		Com_Printf( "The command line execs no config to run again.\n" );
 	}
 }
@@ -4499,6 +4616,10 @@ static void Com_WriteSettings( void ) {
 	qboolean	written = qfalse;
 	int		count, i;
 	settingsFile_t	*files = Com_SettingsFiles( &count );
+
+	if ( !Com_IsClient() && Hooks_WriteServerSettings() ) {
+		return;
+	}
 
 	for ( i = 0; i < count; i++ ) {
 		settingsFile_t	*file = &files[i];
