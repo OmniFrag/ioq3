@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
+#include "../qcommon/net_proxy.h"
 
 #ifdef _WIN32
 #	include <winsock2.h>
@@ -743,19 +744,298 @@ const char *NET_TakeBroadcastFailure( void ) {
 }
 
 /*
+===============================================================================
+
+Trusted proxies (P8, docs/contracts.md section 6)
+
+A relay in front of the server sends each player's datagram with a PROXY
+protocol version 2 header (net_proxy.h) naming the player. From an address
+the server trusts (sv_trustedProxies, given here by NET_SetTrustedProxies),
+the player's address is that one, and the header is taken off before
+anything else reads the packet. Replies to the player go back the way its
+last datagram came, with a header naming it; nothing else is sent one. A
+datagram from a trusted address without a valid header is dropped; from
+anyone else a header isn't read, so it fails as the garbage it is.
+
+===============================================================================
+*/
+
+#define NET_MAX_TRUSTED		32
+#define NET_PROXY_ROUTES	1024	// a power of 2
+#define NET_PROXY_PROBES	16
+#define NET_PROXY_STALE		120000	// msec unused before a route's slot may go to another player
+
+// the way a player's datagrams come: by the real address, as the server
+// knows the player
+typedef struct {
+	netadr_t		player;
+	netadr_t		via;		// the proxy its last datagram came through
+	proxyHeader_t	header;		// that datagram's, whose dst its replies name
+	int				lastUsed;	// Sys_Milliseconds, odd; 0 for an empty slot
+	int				hits;		// its datagrams, up to NET_PROXY_HITS: a player's outweighs a query's
+} netProxyRoute_t;
+
+#define NET_PROXY_HITS		1000000
+
+static unsigned			netProxySeed;		// the hash's, random, so no flood aims at one player's slots
+
+static netadr_t			netTrusted[NET_MAX_TRUSTED];
+static int				netTrustedMask[NET_MAX_TRUSTED];
+static int				netTrustedCount;
+static netProxyRoute_t	netProxyRoutes[NET_PROXY_ROUTES];
+static qboolean			netProxyRouted;		// a route may be held
+static qboolean			netPacketProxied;	// the packet being handled came through one
+
+static qboolean NET_IsTrustedProxy( const netadr_t *adr ) {
+	int		i;
+
+	for( i = 0; i < netTrustedCount; i++ ) {
+		if( NET_CompareBaseAdrMask( netTrusted[i], *adr, netTrustedMask[i] ) )
+			return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+==================
+NET_SetTrustedProxies
+
+The proxies the server takes players' addresses from, as addresses and
+masks, which forgets the routes through any proxy no longer among them
+==================
+*/
+void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
+	int		i;
+
+	netTrustedCount = MAX( 0, MIN( count, NET_MAX_TRUSTED ) );
+	if( netTrustedCount ) {
+		Com_Memcpy( netTrusted, adr, netTrustedCount * sizeof( netTrusted[0] ) );
+		Com_Memcpy( netTrustedMask, mask, netTrustedCount * sizeof( netTrustedMask[0] ) );
+	}
+	// a proxy no longer trusted gets no more replies; a route through one
+	// still trusted stays, as the frame's replies are sent before any
+	// player's next datagram could bring it back
+	netProxyRouted = qfalse;
+	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
+		if( !netProxyRoutes[i].lastUsed )
+			continue;
+		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) )
+			netProxyRouted = qtrue;
+		else
+			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
+	}
+}
+
+static unsigned NET_ProxyHash( const netadr_t *a ) {
+	const byte	*b = a->type == NA_IP6 ? a->ip6 : a->ip;
+	int			i, n = a->type == NA_IP6 ? 16 : 4;
+	unsigned	h;
+
+	if( !netProxySeed ) {
+		Com_RandomBytes( (byte *)&netProxySeed, sizeof( netProxySeed ) );
+		netProxySeed |= 1;
+	}
+	h = 2166136261u ^ netProxySeed;
+
+	for( i = 0; i < n; i++ )
+		h = ( h ^ b[i] ) * 16777619u;
+	h = ( h ^ ( a->port & 0xff ) ) * 16777619u;
+	return ( h ^ ( a->port >> 8 ) ) * 16777619u;
+}
+
+static netProxyRoute_t *NET_ProxySlot( unsigned hash, int probe ) {
+	return &netProxyRoutes[( hash + probe ) & ( NET_PROXY_ROUTES - 1 )];
+}
+
+/*
+==================
+NET_ProxyRoute
+
+The route to a player behind a proxy; NULL for an address reached
+directly. A stale route still holds until its slot goes to another
+player, as a player may be silent longer than NET_PROXY_STALE and still
+connected (sv_timeout)
+==================
+*/
+static netProxyRoute_t *NET_ProxyRoute( const netadr_t *player ) {
+	netProxyRoute_t	*r;
+	unsigned		hash;
+	int				i;
+
+	if( !netProxyRouted || ( player->type != NA_IP && player->type != NA_IP6 ) )
+		return NULL;
+	hash = NET_ProxyHash( player );
+	for( i = 0; i < NET_PROXY_PROBES; i++ ) {
+		r = NET_ProxySlot( hash, i );
+		if( r->lastUsed && NET_CompareAdr( r->player, *player ) )
+			return r;
+	}
+	return NULL;
+}
+
+// whether r may be given to another player before s: empty or stale
+// first, then the one with fewer datagrams, so a flood of one-off queries
+// gives way before a player in the game, then the one used longer ago
+static qboolean NET_ProxyBefore( const netProxyRoute_t *r, const netProxyRoute_t *s, int now ) {
+	qboolean	rFree = !r->lastUsed || now - r->lastUsed >= NET_PROXY_STALE;
+	qboolean	sFree = !s->lastUsed || now - s->lastUsed >= NET_PROXY_STALE;
+
+	if( rFree != sFree )
+		return rFree;
+	if( rFree )
+		return qfalse;
+	if( r->hits != s->hits )
+		return r->hits < s->hits;
+	return r->lastUsed - s->lastUsed < 0;
+}
+
+/*
+==================
+NET_ProxyKeep
+
+The route a player's datagram just came by, for its replies: its own slot,
+else the first of its probes NET_ProxyBefore gives up. A live route moves
+to another port of the same proxy host (one that started again, or sends
+each player from a port of its own), but not to another host until it's
+stale: a datagram isn't checked here, so one spoofed to another trusted
+relay mustn't take a player's replies away
+==================
+*/
+static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const proxyHeader_t *header ) {
+	static qboolean	said;
+	netProxyRoute_t	*r, *slot = NULL;
+	unsigned		hash = NET_ProxyHash( player );
+	int				i, now = Sys_Milliseconds() | 1;
+
+	for( i = 0; i < NET_PROXY_PROBES; i++ ) {
+		r = NET_ProxySlot( hash, i );
+		if( r->lastUsed && NET_CompareAdr( r->player, *player ) ) {
+			if( now - r->lastUsed < NET_PROXY_STALE && !NET_CompareBaseAdr( r->via, *via ) ) {
+				char	who[NET_ADDRSTRMAXLEN], came[NET_ADDRSTRMAXLEN];
+
+				// each its own copy, as the strings share a buffer
+				Q_strncpyz( who, NET_AdrToStringwPort( *player ), sizeof( who ) );
+				Q_strncpyz( came, NET_AdrToString( *via ), sizeof( came ) );
+				Com_DPrintf( "%s: came through %s, but its route is through %s, kept\n", who, came,
+					NET_AdrToString( r->via ) );
+				return;
+			}
+			slot = r;
+			break;
+		}
+		if( !slot || NET_ProxyBefore( r, slot, now ) )
+			slot = r;
+	}
+	if( !NET_CompareAdr( slot->player, *player ) || !slot->lastUsed ) {
+		if( slot->lastUsed && now - slot->lastUsed < NET_PROXY_STALE && !said ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: more players behind proxies than the server keeps routes for; "
+				"some replies go straight to the player\n" );
+			said = qtrue;
+		}
+		slot->hits = 0;
+	}
+	slot->player = *player;
+	slot->via = *via;
+	slot->header = *header;
+	slot->lastUsed = now;
+	if( slot->hits < NET_PROXY_HITS )
+		slot->hits++;
+	netProxyRouted = qtrue;
+}
+
+/*
+==================
+NET_ProxyInbound
+
+A datagram just read: from a trusted proxy, its header taken off and from
+made the player's real address, its route kept; qfalse to drop it
+==================
+*/
+static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
+	proxyHeader_t	h;
+	netadr_t		player;
+	int				length;
+
+	// SOCKS's datagrams come with readcount past a header of its own
+	if( !netTrustedCount || msg->readcount || !NET_IsTrustedProxy( from ) )
+		return qtrue;
+	length = NET_ProxyRead( msg->data, msg->cursize, &h );
+	if( length <= 0 ) {
+		Com_DPrintf( "%s: a trusted proxy's datagram without a PROXY header, dropped\n", NET_AdrToStringwPort( *from ) );
+		return qfalse;
+	}
+	// its own health check
+	if( h.command == PROXY_LOCAL )
+		return qfalse;
+	Com_Memset( &player, 0, sizeof( player ) );
+	if( h.family == 6 ) {
+		player.type = NA_IP6;
+		Com_Memcpy( player.ip6, h.src, 16 );
+	} else {
+		player.type = NA_IP;
+		Com_Memcpy( player.ip, h.src, 4 );
+	}
+	player.port = BigShort( (short)h.srcPort );
+	NET_ProxyKeep( &player, from, &h );
+	*from = player;
+	netPacketProxied = qtrue;
+	// taken off, not skipped: the server reads packets again from the start
+	msg->cursize -= length;
+	memmove( msg->data, msg->data + length, msg->cursize );
+	return qtrue;
+}
+
+/*
+==================
+NET_PacketProxied
+
+Whether the packet being handled came through a trusted proxy, its
+address the one the proxy named rather than the one it came from
+==================
+*/
+qboolean NET_PacketProxied( void ) {
+	return netPacketProxied;
+}
+
+static qboolean Sys_SendDatagram( int length, const void *data, netadr_t to );
+
+/*
 ==================
 Sys_SendPacket
 
-qfalse when the socket can't take the datagram now
+qfalse when the socket can't take the datagram now. A player behind a
+proxy is sent it through the proxy, with a header naming them
 ==================
 */
 qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
+	static byte		buf[PROXY_MAX_WRITTEN + MAX_MSGLEN];
+	netProxyRoute_t	*route = NET_ProxyRoute( &to );
+	int				header;
+
+	if( !route )
+		return Sys_SendDatagram( length, data, to );
+	// the route's header names this player already: its src is to
+	header = NET_ProxyWrite( buf, sizeof( buf ), &route->header );
+	if( length > (int)sizeof( buf ) - header )
+		return qtrue;
+	Com_Memcpy( buf + header, data, length );
+	return Sys_SendDatagram( header + length, buf, route->via );
+}
+
+/*
+==================
+Sys_SendDatagram
+
+Sys_SendPacket's datagram as it is, to the address as it is
+==================
+*/
+static qboolean Sys_SendDatagram( int length, const void *data, netadr_t to ) {
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
 
 	if( to.type != NA_BROADCAST && to.type != NA_IP && to.type != NA_IP6 && to.type != NA_MULTICAST6)
 	{
-		Com_Error( ERR_FATAL, "Sys_SendPacket: bad address type" );
+		Com_Error( ERR_FATAL, "Sys_SendDatagram: bad address type" );
 		return qtrue;
 	}
 
@@ -855,7 +1135,7 @@ int Sys_SendPackets( int count, int size, int length, const void *data, netadr_t
 		struct cmsghdr	align;
 	} control;
 
-	if( count < 2 || unsegmented || usingSocks || sock == INVALID_SOCKET )
+	if( count < 2 || unsegmented || usingSocks || sock == INVALID_SOCKET || NET_ProxyRoute( &to ) )
 		return -1;
 
 	// a kernel before 4.18 ignores the option rather than refuse it, and
@@ -930,6 +1210,11 @@ qboolean Sys_IsLANAddress( netadr_t adr ) {
 
 	if( adr.type == NA_LOOPBACK ) {
 		return qtrue;
+	}
+
+	// a player behind a proxy is never on the LAN, whatever its address
+	if( NET_ProxyRoute( &adr ) ) {
+		return qfalse;
 	}
 
 	if( adr.type == NA_IP )
@@ -2255,9 +2540,14 @@ static void NET_Event(netsocks_t *readsocks)
 	while(1)
 	{
 		MSG_Init(&netmsg, bufData, sizeof(bufData));
+		// cleared before each read, so a packet dropped below, or the last
+		// one handled, leaves it set for nothing after
+		netPacketProxied = qfalse;
 
 		if(NET_GetPacket(&from, &netmsg, readsocks))
 		{
+			if(!NET_ProxyInbound(&from, &netmsg))
+				continue;
 			if(net_dropsim->value > 0.0f && net_dropsim->value <= 100.0f)
 			{
 				// com_dropsim->value percent of incoming packets get dropped.

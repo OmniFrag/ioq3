@@ -71,6 +71,7 @@ cvar_t	*sv_strictAuth;
 #endif
 cvar_t	*sv_banFile;
 cvar_t	*sv_rconAllow;		// the addresses rcon is taken from, empty for any
+cvar_t	*sv_trustedProxies;	// relays players' real addresses are taken from (P8)
 
 // drain's reason (SV_Drain_f), while the server drains
 char		sv_drainReason[MAX_DRAIN_REASON];
@@ -979,66 +980,81 @@ static void SVC_RconRefused( leakyBucket_t *bucket, netadr_t from, const char *w
 }
 
 #define	MAX_RCON_ALLOW	32
+#define	MAX_TRUSTED_PROXIES	32
 
-// sv_rconAllow's addresses, as it was last parsed
-static struct {
+// an address list's entry: an address and its mask, NET_CompareBaseAdrMask's
+typedef struct {
 	netadr_t	adr;
 	int			mask;
-} rconAllow[MAX_RCON_ALLOW];
-static int		rconAllowCount;
+} svAddressMask_t;
+
+// sv_rconAllow's addresses, as it was last parsed
+static svAddressMask_t	rconAllow[MAX_RCON_ALLOW];
+static int				rconAllowCount;
 
 /*
 ===============
-SV_ParseRconAllow
+SV_ParseAddressList
 
-Parses sv_rconAllow when it has changed, each frame, saying what it can't
-use, so a name is looked up once, as the admin sets it, rather than for a
-packet. When it has text but no address, rcon is refused to all rather
-than allowed to any
+A cvar's list of addresses, ranges and host names, separated by spaces,
+commas or semicolons, into list: how many, saying what it can't use. A
+name is looked up here, as the admin sets it, rather than for a packet;
+localhost, the client's own loopback that no packet comes from, is
+127.0.0.0/8
 ===============
 */
-static void SV_ParseRconAllow( void ) {
-	char	list[MAX_STRING_CHARS];
+static int SV_ParseAddressList( const char *name, const char *string, svAddressMask_t *list, int max ) {
+	char	text[MAX_STRING_CHARS];
 	char	*entry;
+	int		count = 0;
 
-	if ( !sv_rconAllow->modified ) {
-		return;
-	}
-	sv_rconAllow->modified = qfalse;
-	rconAllowCount = 0;
-
-	Q_strncpyz( list, sv_rconAllow->string, sizeof( list ) );
-	if ( strlen( sv_rconAllow->string ) >= sizeof( list ) ) {
+	Q_strncpyz( text, string, sizeof( text ) );
+	if ( strlen( string ) >= sizeof( text ) ) {
 		// a cut entry could name another address: leave it out whole
-		char	*p, *last = list;
+		char	*p, *last = text;
 
-		for ( p = list; *p; p++ ) {
+		for ( p = text; *p; p++ ) {
 			if ( strchr( " ,;", *p ) ) {
 				last = p;
 			}
 		}
 		*last = '\0';
-		Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow is longer than %i characters; "
-			"the addresses after that are left out.\n", (int)sizeof( list ) - 1 );
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s is longer than %i characters; "
+			"the addresses after that are left out.\n", name, (int)sizeof( text ) - 1 );
 	}
-	for ( entry = strtok( list, " ,;" ); entry; entry = strtok( NULL, " ,;" ) ) {
-		if ( rconAllowCount == MAX_RCON_ALLOW ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow lists more than %i addresses; "
-				"%s and those after it are left out.\n", MAX_RCON_ALLOW, entry );
+	for ( entry = strtok( text, " ,;" ); entry; entry = strtok( NULL, " ,;" ) ) {
+		if ( count == max ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s lists more than %i addresses; "
+				"%s and those after it are left out.\n", name, max, entry );
 			break;
 		}
-		if ( SV_ParseCIDRNotation( &rconAllow[rconAllowCount].adr, &rconAllow[rconAllowCount].mask, entry ) ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow: %s isn't an address; left out.\n", entry );
+		if ( SV_ParseCIDRNotation( &list[count].adr, &list[count].mask, entry ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s isn't an address; left out.\n", name, entry );
 			continue;
 		}
-		// "localhost" parses as the client's own loopback, which no packet
-		// comes from: rcon from this machine comes from 127.0.0.0/8
-		if ( rconAllow[rconAllowCount].adr.type == NA_LOOPBACK ) {
-			NET_StringToAdr( "127.0.0.1", &rconAllow[rconAllowCount].adr, NA_IP );
-			rconAllow[rconAllowCount].mask = 8;
+		if ( list[count].adr.type == NA_LOOPBACK ) {
+			NET_StringToAdr( "127.0.0.1", &list[count].adr, NA_IP );
+			list[count].mask = 8;
 		}
-		rconAllowCount++;
+		count++;
 	}
+	return count;
+}
+
+/*
+===============
+SV_ParseRconAllow
+
+Parses sv_rconAllow when it has changed, each frame. When it has text but
+no address, rcon is refused to all rather than allowed to any
+===============
+*/
+static void SV_ParseRconAllow( void ) {
+	if ( !sv_rconAllow->modified ) {
+		return;
+	}
+	sv_rconAllow->modified = qfalse;
+	rconAllowCount = SV_ParseAddressList( "sv_rconAllow", sv_rconAllow->string, rconAllow, MAX_RCON_ALLOW );
 	if ( sv_rconAllow->string[0] && !rconAllowCount ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: sv_rconAllow lists no address it can use, "
 			"so rcon is refused from everywhere.\n" );
@@ -1047,9 +1063,56 @@ static void SV_ParseRconAllow( void ) {
 
 /*
 ===============
+SV_ParseTrustedProxies
+
+Parses sv_trustedProxies when it has changed, each frame and as the server
+starts, for the network code to take players' addresses from (P8)
+===============
+*/
+void SV_ParseTrustedProxies( void ) {
+	svAddressMask_t	list[MAX_TRUSTED_PROXIES];
+	netadr_t		adr[MAX_TRUSTED_PROXIES];
+	int				mask[MAX_TRUSTED_PROXIES];
+	int				i, count;
+
+	if ( !sv_trustedProxies->modified ) {
+		return;
+	}
+	sv_trustedProxies->modified = qfalse;
+	count = SV_ParseAddressList( "sv_trustedProxies", sv_trustedProxies->string, list, MAX_TRUSTED_PROXIES );
+	for ( i = 0; i < count; i++ ) {
+		adr[i] = list[i].adr;
+		mask[i] = list[i].mask;
+	}
+	NET_SetTrustedProxies( adr, mask, count );
+	if ( sv_trustedProxies->string[0] && !count ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_trustedProxies lists no address it can use, "
+			"so no proxy is trusted.\n" );
+	}
+}
+
+/*
+===============
+SV_ForgetTrustedProxies
+
+As the server stops: no proxy is trusted until the next one starts, and
+the routes through them are gone
+===============
+*/
+void SV_ForgetTrustedProxies( void ) {
+	NET_SetTrustedProxies( NULL, NULL, 0 );
+	if ( sv_trustedProxies ) {
+		sv_trustedProxies->modified = qtrue;
+	}
+}
+
+/*
+===============
 SVC_RconAllowed
 
-Whether rcon may come from this address: any when sv_rconAllow is empty
+Whether rcon may come from this address: any when sv_rconAllow is empty.
+A trusted proxy can name any address, so the list holds only for packets
+that came directly
 ===============
 */
 static qboolean SVC_RconAllowed( netadr_t from ) {
@@ -1057,6 +1120,9 @@ static qboolean SVC_RconAllowed( netadr_t from ) {
 
 	if ( !sv_rconAllow->string[0] ) {
 		return qtrue;
+	}
+	if ( NET_PacketProxied() ) {
+		return qfalse;
 	}
 	for ( i = 0; i < rconAllowCount; i++ ) {
 		if ( NET_CompareBaseAdrMask( rconAllow[i].adr, from, rconAllow[i].mask ) ) {
@@ -1227,7 +1293,7 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		// if a client starts up a local server, we may see some spurious
 		// server disconnect messages when their new server sees our final
 		// sequenced messages to the old client
-	} else if ( !Hooks_Connectionless( &from ) ) {
+	} else if ( !Hooks_Connectionless( &from, NET_PacketProxied() ) ) {
 		Com_DPrintf ("bad connectionless packet from %s:\n%s\n",
 			NET_AdrToString (from), s);
 	}
@@ -1817,6 +1883,7 @@ void SV_Frame( int msec ) {
 	SV_KeepAwake();
 	// before the pause, as rcon is taken while paused
 	SV_ParseRconAllow();
+	SV_ParseTrustedProxies();
 
 	// a draining server stops once its players have left, bots aside
 	if ( sv_drainReason[0] && !SV_HumanCount() ) {

@@ -1967,6 +1967,12 @@ cpuFeatures_t Sys_GetProcessorFeatures( void );
 void	Sys_SetErrorText( const char *text );
 
 qboolean	Sys_SendPacket( int length, const void *data, netadr_t to );
+// the proxies the server takes players' real addresses from (P8,
+// sv_trustedProxies): addresses and their masks, NET_CompareBaseAdrMask's;
+// none forgets every player's route through one
+void		NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count );
+// whether a trusted proxy named the address of the packet being handled
+qboolean	NET_PacketProxied( void );
 int		Sys_SendPackets( int count, int size, int length, const void *data, netadr_t to );
 
 qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );

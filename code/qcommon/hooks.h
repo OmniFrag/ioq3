@@ -227,8 +227,11 @@ typedef struct {
 	// A connectionless packet the server doesn't answer itself, from an
 	// address: qtrue if the extension took it. Its line, up to
 	// BIG_INFO_STRING, is in Cmd_Argv. Anyone can send one, from any
-	// address, so every word is hostile
-	qboolean	(*connectionless)( const netadr_t *from );
+	// address, so every word is hostile. proxied when a trusted proxy
+	// (sv_trustedProxies) named from rather than the packet coming from
+	// it: a proxy can name any address, so a service's own messages
+	// should be taken only from packets that came directly
+	qboolean	(*connectionless)( const netadr_t *from, qboolean proxied );
 	// The program printed text: part of a line, a line or several, color
 	// codes and all, but not what a redirect captures (rcon's replies).
 	// What a print hook prints reaches no print hook. Called on the
@@ -354,7 +357,7 @@ void	Hooks_RunClientCommand( int extension, int clientNum );
 void	Hooks_ClientCommandDone( int clientNum );
 void	Hooks_ServerCommand( int clientNum, const char *text );
 // whether an extension took a connectionless packet, its line in Cmd_Argv
-qboolean	Hooks_Connectionless( const netadr_t *from );
+qboolean	Hooks_Connectionless( const netadr_t *from, qboolean proxied );
 void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );

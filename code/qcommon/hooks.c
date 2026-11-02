@@ -443,10 +443,10 @@ qboolean Hooks_WantDraw( void ) {
 		} \
 	} while ( 0 )
 
-qboolean Hooks_Connectionless( const netadr_t *from ) {
+qboolean Hooks_Connectionless( const netadr_t *from, qboolean proxied ) {
 	int	taker;
 
-	HOOKS_OFFER( taker, connectionless, ( from ) );
+	HOOKS_OFFER( taker, connectionless, ( from, proxied ) );
 	return taker != 0;
 }
 

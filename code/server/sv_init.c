@@ -1041,6 +1041,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	SV_CheckRconPassword();
 
+	// the proxies players come through, before the first frame's packets
+	SV_ParseTrustedProxies();
 	Hooks_MapSpawned();
 
 	Com_Printf ("-----------------------------------\n");
@@ -1439,6 +1441,13 @@ void SV_Init (void)
 		"commas; localhost is this machine. Rcon from anywhere else gets no answer, before the password "
 		"is checked. An IPv4 entry never matches an admin on IPv6, which the server also listens on, so "
 		"add an IPv6 address too if you have one." );
+	sv_trustedProxies = Cvar_Get( "sv_trustedProxies", "", CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( sv_trustedProxies,
+		"Relays the server takes players' real addresses from\n"
+		"List up to 32 addresses, ranges such as 10.0.0.0/8, or host names, separated by spaces or commas, "
+		"as sv_rconAllow takes them; empty for none. Each datagram from one must start with a PROXY "
+		"protocol version 2 header naming the player, or it's dropped, and replies to that player go back "
+		"through it with one." );
 
 	// initialize bot cvars so they are listed and can be set before loading the botlib
 	SV_BotInitCvars();
@@ -1532,6 +1541,8 @@ void SV_Shutdown( char *finalmsg ) {
 	Com_Memset( &svs, 0, sizeof( svs ) );
 	// a drain is the running server's
 	sv_drainReason[0] = '\0';
+	// and the proxies it trusted
+	SV_ForgetTrustedProxies();
 
 	Cvar_Set( "sv_running", "0" );
 	Cvar_Set("ui_singlePlayerActive", "0");

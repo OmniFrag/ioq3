@@ -386,6 +386,7 @@ extern	cvar_t	*sv_strictAuth;
 #endif
 extern	cvar_t	*sv_banFile;
 extern	cvar_t	*sv_rconAllow;
+extern	cvar_t	*sv_trustedProxies;
 
 extern	serverBan_t serverBans[SERVER_MAXBANS];
 extern	int serverBansCount;
@@ -436,6 +437,10 @@ void SV_RemoveOperatorCommands (void);
 
 
 void SV_MasterShutdown (void);
+// sv_trustedProxies (P8): parsed when it changes, and forgotten, with
+// every route through a proxy, as the server stops
+void SV_ParseTrustedProxies( void );
+void SV_ForgetTrustedProxies( void );
 
 // drain's reason, while the server drains (SV_Drain_f): new players are
 // refused with it, the masters drop the server, and it stops once its
