@@ -182,6 +182,9 @@ void		NET_SendPacket (netsrc_t sock, int length, const void *data, netadr_t to);
 qboolean	NET_SendPacketChecked( netsrc_t sock, int length, const void *data, netadr_t to );
 int			NET_SendPacketsChecked( netsrc_t sock, int count, int size, int length, const void *data, netadr_t to );
 void		QDECL NET_OutOfBandPrint( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
+// to the address itself, never through a trusted proxy's route
+// (sv_trustedProxies): for a service the server contacts itself
+void		QDECL NET_OutOfBandPrintDirect( netsrc_t net_socket, netadr_t adr, const char *format, ...) Q_PRINTF_FUNC(3, 4);
 void		QDECL NET_OutOfBandData( netsrc_t sock, netadr_t adr, byte *format, int len );
 
 qboolean	NET_CompareAdr (netadr_t a, netadr_t b);
@@ -1967,6 +1970,8 @@ cpuFeatures_t Sys_GetProcessorFeatures( void );
 void	Sys_SetErrorText( const char *text );
 
 qboolean	Sys_SendPacket( int length, const void *data, netadr_t to );
+// Sys_SendPacket to the address itself, never through a proxy's route
+qboolean	Sys_SendPacketDirect( int length, const void *data, netadr_t to );
 // the proxies the server takes players' real addresses from (P8,
 // sv_trustedProxies): addresses and their masks, NET_CompareBaseAdrMask's;
 // none forgets every player's route through one

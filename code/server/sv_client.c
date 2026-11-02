@@ -253,7 +253,7 @@ void SV_GetChallenge(netadr_t from)
 			
 			// the 0 is for backwards compatibility with obsolete sv_allowanonymous flags
 			// getIpAuthorize <challenge> <IP> <game> 0 <auth-flag>
-			NET_OutOfBandPrint( NS_SERVER, svs.authorizeAddress,
+			NET_OutOfBandPrintDirect( NS_SERVER, svs.authorizeAddress,
 				"getIpAuthorize %i %i.%i.%i.%i %s 0 %s",  challenge->challenge,
 				from.ip[0], from.ip[1], from.ip[2], from.ip[3], game, sv_strictAuth->string );
 			
@@ -282,7 +282,9 @@ void SV_AuthorizeIpPacket( netadr_t from ) {
 	char	*r;
 	challenge_t *challengeptr;
 
-	if ( !NET_CompareBaseAdr( from, svs.authorizeAddress ) ) {
+	// a trusted proxy (sv_trustedProxies) can name the authorize server's
+	// address too, so only a packet that came directly counts
+	if ( !NET_CompareBaseAdr( from, svs.authorizeAddress ) || NET_PacketProxied() ) {
 		Com_Printf( "SV_AuthorizeIpPacket: not from authorize server\n" );
 		return;
 	}

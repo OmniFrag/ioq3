@@ -465,9 +465,9 @@ void SV_MasterHeartbeat(const char *message)
 		// ever incompatably changes
 
 		if(adr[i][0].type != NA_BAD)
-			NET_OutOfBandPrint( NS_SERVER, adr[i][0], "heartbeat %s\n", message);
+			NET_OutOfBandPrintDirect( NS_SERVER, adr[i][0], "heartbeat %s\n", message);
 		if(adr[i][1].type != NA_BAD)
-			NET_OutOfBandPrint( NS_SERVER, adr[i][1], "heartbeat %s\n", message);
+			NET_OutOfBandPrintDirect( NS_SERVER, adr[i][1], "heartbeat %s\n", message);
 	}
 }
 
@@ -729,6 +729,31 @@ void SVC_RateRestoreBurstAddress( netadr_t from, int burst, int period ) {
 
 /*
 ================
+SV_OutOfBandReply
+
+NET_OutOfBandPrint's reply to the connectionless packet being handled,
+back the way it came: one that came directly goes to the address itself,
+even when a trusted proxy that named that address holds a route to it, so
+a master's poll is answered to the master
+================
+*/
+static void QDECL SV_OutOfBandReply( netadr_t to, const char *format, ... ) Q_PRINTF_FUNC(2, 3);
+static void QDECL SV_OutOfBandReply( netadr_t to, const char *format, ... ) {
+	static char	text[MAX_MSGLEN - 4];
+	va_list		argptr;
+
+	va_start( argptr, format );
+	Q_vsnprintf( text, sizeof( text ), format, argptr );
+	va_end( argptr );
+	if ( NET_PacketProxied() ) {
+		NET_OutOfBandPrint( NS_SERVER, to, "%s", text );
+	} else {
+		NET_OutOfBandPrintDirect( NS_SERVER, to, "%s", text );
+	}
+}
+
+/*
+================
 SVC_Status
 
 Responds with all the info that qplug or qspy can see about the server
@@ -796,7 +821,7 @@ static void SVC_Status( netadr_t from ) {
 		}
 	}
 
-	NET_OutOfBandPrint( NS_SERVER, from, "statusResponse\n%s\n%s", infostring, status );
+	SV_OutOfBandReply( from, "statusResponse\n%s\n%s", infostring, status );
 }
 
 /*
@@ -906,7 +931,7 @@ void SVC_Info( netadr_t from ) {
 	if ( asked & OFX_CONTENT ) {
 		SV_ContentInfo( infostring );
 	}
-	NET_OutOfBandPrint( NS_SERVER, from, "infoResponse\n%s", infostring );
+	SV_OutOfBandReply( from, "infoResponse\n%s", infostring );
 }
 
 /*
@@ -916,7 +941,7 @@ SVC_FlushRedirect
 ================
 */
 static void SV_FlushRedirect( char *outputbuf ) {
-	NET_OutOfBandPrint( NS_SERVER, svs.redirectAddress, "print\n%s", outputbuf );
+	SV_OutOfBandReply( svs.redirectAddress, "print\n%s", outputbuf );
 }
 
 /*

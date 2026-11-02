@@ -484,12 +484,13 @@ typedef struct packetQueue_s {
         byte *data;
         netadr_t to;
         int release;
+        qboolean direct;
 } packetQueue_t;
 
 packetQueue_t *packetQueue = NULL;
 
 static void NET_QueuePacket( int length, const void *data, netadr_t to,
-	int offset )
+	int offset, qboolean direct )
 {
 	packetQueue_t *new, *next = packetQueue;
 
@@ -501,6 +502,7 @@ static void NET_QueuePacket( int length, const void *data, netadr_t to,
 	Com_Memcpy(new->data, data, length);
 	new->length = length;
 	new->to = to;
+	new->direct = direct;
 	new->release = Sys_Milliseconds() + (int)((float)offset / com_timescale->value);	
 	new->next = NULL;
 
@@ -526,8 +528,12 @@ void NET_FlushPacketQueue(void)
 		now = Sys_Milliseconds();
 		if(packetQueue->release >= now)
 			break;
-		Sys_SendPacket(packetQueue->length, packetQueue->data,
-			packetQueue->to);
+		if(packetQueue->direct)
+			Sys_SendPacketDirect(packetQueue->length, packetQueue->data,
+				packetQueue->to);
+		else
+			Sys_SendPacket(packetQueue->length, packetQueue->data,
+				packetQueue->to);
 		last = packetQueue;
 		packetQueue = packetQueue->next;
 		Z_Free(last->data);
@@ -537,12 +543,19 @@ void NET_FlushPacketQueue(void)
 
 /*
 ===============
-NET_SendPacketChecked
+NET_SendPacketVia
 
-NET_SendPacket, but qfalse when the socket can't take the datagram now
+NET_SendPacketChecked's work. direct sends to the address itself, never
+through a trusted proxy's route to it, as the client's sends always go: a
+route is a reply's way back to a player of the server, and a listen
+server's own client is none
 ===============
 */
-qboolean NET_SendPacketChecked( netsrc_t sock, int length, const void *data, netadr_t to ) {
+static qboolean NET_SendPacketVia( netsrc_t sock, int length, const void *data, netadr_t to, qboolean direct ) {
+
+	if ( sock == NS_CLIENT ) {
+		direct = qtrue;
+	}
 
 	// sequenced packets are shown in netchan, so just show oob
 	if ( showpackets->integer && *(int *)data == -1 )	{
@@ -561,15 +574,29 @@ qboolean NET_SendPacketChecked( netsrc_t sock, int length, const void *data, net
 	}
 
 	if ( sock == NS_CLIENT && cl_packetdelay->integer > 0 ) {
-		NET_QueuePacket( length, data, to, cl_packetdelay->integer );
+		NET_QueuePacket( length, data, to, cl_packetdelay->integer, direct );
 	}
 	else if ( sock == NS_SERVER && sv_packetdelay->integer > 0 ) {
-		NET_QueuePacket( length, data, to, sv_packetdelay->integer );
+		NET_QueuePacket( length, data, to, sv_packetdelay->integer, direct );
+	}
+	else if ( direct ) {
+		return Sys_SendPacketDirect( length, data, to );
 	}
 	else {
 		return Sys_SendPacket( length, data, to );
 	}
 	return qtrue;
+}
+
+/*
+===============
+NET_SendPacketChecked
+
+NET_SendPacket, but qfalse when the socket can't take the datagram now
+===============
+*/
+qboolean NET_SendPacketChecked( netsrc_t sock, int length, const void *data, netadr_t to ) {
+	return NET_SendPacketVia( sock, length, data, to, qfalse );
 }
 
 void NET_SendPacket( netsrc_t sock, int length, const void *data, netadr_t to ) {
@@ -610,10 +637,9 @@ NET_OutOfBandPrint
 Sends a text message in an out-of-band datagram
 ================
 */
-void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, ... ) {
-	va_list		argptr;
+static void NET_OutOfBandVPrint( netsrc_t sock, netadr_t adr, qboolean direct, const char *format, va_list argptr ) Q_PRINTF_FUNC(4, 0);
+static void NET_OutOfBandVPrint( netsrc_t sock, netadr_t adr, qboolean direct, const char *format, va_list argptr ) {
 	char		string[MAX_MSGLEN];
-
 
 	// set the header
 	string[0] = -1;
@@ -621,12 +647,35 @@ void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, 
 	string[2] = -1;
 	string[3] = -1;
 
-	va_start( argptr, format );
 	Q_vsnprintf( string+4, sizeof(string)-4, format, argptr );
-	va_end( argptr );
 
 	// send the datagram
-	NET_SendPacket( sock, strlen( string ), string, adr );
+	NET_SendPacketVia( sock, strlen( string ), string, adr, direct );
+}
+
+void QDECL NET_OutOfBandPrint( netsrc_t sock, netadr_t adr, const char *format, ... ) {
+	va_list		argptr;
+
+	va_start( argptr, format );
+	NET_OutOfBandVPrint( sock, adr, qfalse, format, argptr );
+	va_end( argptr );
+}
+
+/*
+===============
+NET_OutOfBandPrintDirect
+
+NET_OutOfBandPrint to the address itself, even when a trusted proxy
+(sv_trustedProxies) named it and holds a route to it: for messages to a
+service the server contacts itself, which a proxy mustn't be able to take
+================
+*/
+void QDECL NET_OutOfBandPrintDirect( netsrc_t sock, netadr_t adr, const char *format, ... ) {
+	va_list		argptr;
+
+	va_start( argptr, format );
+	NET_OutOfBandVPrint( sock, adr, qtrue, format, argptr );
+	va_end( argptr );
 }
 
 /*

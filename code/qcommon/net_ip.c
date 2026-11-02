@@ -997,8 +997,6 @@ qboolean NET_PacketProxied( void ) {
 	return netPacketProxied;
 }
 
-static qboolean Sys_SendDatagram( int length, const void *data, netadr_t to );
-
 /*
 ==================
 Sys_SendPacket
@@ -1013,29 +1011,29 @@ qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 	int				header;
 
 	if( !route )
-		return Sys_SendDatagram( length, data, to );
+		return Sys_SendPacketDirect( length, data, to );
 	// the route's header names this player already: its src is to
 	header = NET_ProxyWrite( buf, sizeof( buf ), &route->header );
 	if( length > (int)sizeof( buf ) - header )
 		return qtrue;
 	Com_Memcpy( buf + header, data, length );
-	return Sys_SendDatagram( header + length, buf, route->via );
+	return Sys_SendPacketDirect( header + length, buf, route->via );
 }
 
 /*
 ==================
-Sys_SendDatagram
+Sys_SendPacketDirect
 
 Sys_SendPacket's datagram as it is, to the address as it is
 ==================
 */
-static qboolean Sys_SendDatagram( int length, const void *data, netadr_t to ) {
+qboolean Sys_SendPacketDirect( int length, const void *data, netadr_t to ) {
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
 
 	if( to.type != NA_BROADCAST && to.type != NA_IP && to.type != NA_IP6 && to.type != NA_MULTICAST6)
 	{
-		Com_Error( ERR_FATAL, "Sys_SendDatagram: bad address type" );
+		Com_Error( ERR_FATAL, "Sys_SendPacketDirect: bad address type" );
 		return qtrue;
 	}
 
