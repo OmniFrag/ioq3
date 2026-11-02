@@ -1169,7 +1169,9 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		Huff_Decompress(msg, 12);
 	}
 
-	s = MSG_ReadStringLine( msg );
+	// up to BIG_INFO_STRING: a connect's line runs past MAX_STRING_CHARS
+	// with its extension tokens after a full userinfo, compressed or not
+	s = MSG_ReadBigStringLine( msg );
 	Cmd_TokenizeString( s );
 
 	c = Cmd_Argv(0);
@@ -1546,6 +1548,37 @@ qboolean SV_ExtClientIsBot( int clientNum ) {
 	client_t	*cl = SV_ExtClient( clientNum );
 
 	return cl && cl->netchan.remoteAddress.type == NA_BOT;
+}
+
+qboolean SV_ExtClientIdentity( int clientNum, byte key[32] ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	if ( !cl || !cl->identityProven ) {
+		return qfalse;
+	}
+	Com_Memcpy( key, cl->identity, sizeof( cl->identity ) );
+	return qtrue;
+}
+
+void SV_ExtClientPrint( int clientNum, const char *text ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+	char		part[1000];
+	int			n;
+
+	if ( !cl || cl->netchan.remoteAddress.type == NA_BOT ) {
+		return;
+	}
+	// in parts SV_SendServerCommand sends (it drops a command past 1022
+	// characters), a quote made a ' so it doesn't end print's argument,
+	// as a cvar's printed value would
+	while ( *text ) {
+		for ( n = 0; text[n] && n < (int)sizeof( part ) - 1; n++ ) {
+			part[n] = text[n] == '"' ? '\'' : text[n];
+		}
+		part[n] = '\0';
+		text += n;
+		SV_SendServerCommand( cl, "print \"%s\"", part );
+	}
 }
 
 int SV_ExtClientPing( int clientNum ) {

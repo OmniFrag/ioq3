@@ -807,6 +807,14 @@ char *Com_SkipCharset( char *s, char *sep );
 
 void Com_RandomBytes( byte *string, int len );
 
+// a person's role on a dedicated server, as its keeper of roles gives it
+// (hosting/; docs/design/server-hosting.md, section 6), for the engine and
+// the game alike (trap_ClientRole)
+#define	ROLE_NONE		0
+#define	ROLE_MODERATOR	1
+#define	ROLE_ADMIN		2
+#define	ROLE_OWNER		3
+
 // mode parm for FS_FOpenFile
 typedef enum {
 	FS_READ,

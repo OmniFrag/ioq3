@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // sv_client.c -- server code for dealing with clients
 
 #include "server.h"
+#include "../qcommon/identity.h"
 
 static void SV_CloseDownload( client_t *cl );
 
@@ -61,6 +62,16 @@ static void SV_SendChallengeResponse( challenge_t *challenge, int clientChalleng
 	tokens[0] = '\0';
 	if ( challenge->ofx ) {
 		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", challenge->ofx ) );
+	}
+	// this server's key, proved over both nonces (identity.h)
+	if ( challenge->ofx & OFX_IDENTITY ) {
+		const identKey_t	*key = Com_ServerKey();
+		byte				sig[IDENT_SIG_SIZE];
+
+		Ident_SignServer( key, challenge->clientNonce, challenge->serverNonce, sig );
+		Ident_AppendHex( tokens, sizeof( tokens ), "ofn", challenge->serverNonce );
+		Ident_AppendHex( tokens, sizeof( tokens ), "ofp", key->pub );
+		Ident_AppendSig( tokens, sizeof( tokens ), sig );
 	}
 	challenge->pingTime = svs.time;
 	NET_OutOfBandPrint( NS_SERVER, challenge->adr, "challengeResponse %d %d %d%s",
@@ -184,6 +195,20 @@ void SV_GetChallenge(netadr_t from)
 	// made at its first connect
 	challenge->ofx = SV_AskedExtensions( 3 );
 	challenge->contentKey = 0;
+	// a key's proof needs the client's nonce, this server's key and a
+	// nonce of its own: without one of them, the connection proves nothing.
+	// Each is a signature, so all addresses together get 50 a second,
+	// which forged ones can't spend past: the rest are answered unproven
+	if ( challenge->ofx & OFX_IDENTITY ) {
+		static rateLimit_t	signedReplies;
+		extTokens_t			tokens;
+
+		if ( SVC_RateLimit( &signedReplies, 50, 1000 ) || Com_ParseExtensionTokens( Cmd_ArgsFrom( 3 ), &tokens ) ||
+			!Ident_ReadNonce( &tokens, "ofc", challenge->clientNonce ) || !Com_ServerKey() ||
+			!Com_RandomSecret( challenge->serverNonce, sizeof( challenge->serverNonce ) ) ) {
+			challenge->ofx &= ~OFX_IDENTITY;
+		}
+	}
 
 #ifndef STANDALONE
 	// Drop the authorize stuff if this client is coming in via v6 as the auth server does not support ipv6.
@@ -439,6 +464,33 @@ A "connect" OOB command has been received
 ==================
 */
 
+/*
+==================
+SV_ClientProof
+
+The device key a connect's tokens prove, on the challenge it answers
+(identity.h): qfalse for none, or a proof that doesn't hold, which leaves
+the client unproven but connecting
+==================
+*/
+static qboolean SV_ClientProof( const challenge_t *challenge, byte identity[IDENT_KEY_SIZE] ) {
+	extTokens_t			tokens;
+	byte				sig[IDENT_SIG_SIZE];
+	const identKey_t	*key = Com_ServerKey();
+
+	if ( !key || Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) ||
+		!Ident_ReadClientProof( &tokens, identity, sig ) ) {
+		return qfalse;
+	}
+	if ( !Ident_CheckClient( identity, key->pub, challenge->serverNonce, challenge->clientNonce,
+		challenge->challenge, sig ) ) {
+		Com_Printf( "%s: a device key's proof that doesn't hold; connecting without it\n",
+			NET_AdrToString( challenge->adr ) );
+		return qfalse;
+	}
+	return qtrue;
+}
+
 void SV_DirectConnect( netadr_t from ) {
 	char		userinfo[MAX_INFO_STRING];
 	int			i;
@@ -456,6 +508,8 @@ void SV_DirectConnect( netadr_t from ) {
 	char		*ip;
 	uint32_t	ofx = 0;
 	uint64_t	contentKey = 0;
+	qboolean	identityProven = qfalse;
+	byte		identity[IDENT_KEY_SIZE];
 	char		tokens[EXT_MAX_STRING];
 	char		key[OFK_DIGITS + 1];
 	char		hex[SHA256_HEX_SIZE];
@@ -585,6 +639,7 @@ void SV_DirectConnect( netadr_t from ) {
 				Com_RandomBytes( (byte *)&challengeptr->contentKey, sizeof( challengeptr->contentKey ) );
 			}
 			contentKey = challengeptr->contentKey;
+			identityProven = ( ofx & OFX_IDENTITY ) && SV_ClientProof( challengeptr, identity );
 		}
 
 		// the challenge shows the address is real, so this connect
@@ -658,7 +713,9 @@ void SV_DirectConnect( netadr_t from ) {
 
 	// check for privateClient password
 	password = Info_ValueForKey( userinfo, "password" );
-	if ( *password && !strcmp( password, sv_privatePassword->string ) ) {
+	if ( ( *password && !strcmp( password, sv_privatePassword->string ) ) ||
+		// an admin's device, as the keeper of roles says (hooks.h)
+		( identityProven && Hooks_ClientRole( -1, identity ) >= ROLE_ADMIN ) ) {
 		startIndex = 0;
 	} else {
 		// skip past the reserved slots
@@ -723,6 +780,16 @@ gotnewcl:
 	// save the userinfo
 	Q_strncpyz( newcl->userinfo, userinfo, sizeof(newcl->userinfo) );
 
+	// the device it proved, before the game asks its role (trap_ClientRole)
+	newcl->identityProven = identityProven;
+	if ( identityProven ) {
+		char	fingerprint[IDENT_FINGERPRINT_SIZE];
+
+		Com_Memcpy( newcl->identity, identity, sizeof( newcl->identity ) );
+		Ident_Fingerprint( identity, fingerprint );
+		Com_Printf( "Client %i proved device %s\n", clientNum, fingerprint );
+	}
+
 	// get the game a chance to reject this connection or modify the userinfo
 	denied = VM_Call( gvm, GAME_CLIENT_CONNECT, clientNum, qtrue, qfalse ); // firstTime = qtrue
 	if ( denied ) {
@@ -730,6 +797,8 @@ gotnewcl:
 
 		SV_RefuseConnect( from, "%s\n", str );
 		Com_DPrintf ("Game rejected a connection: %s.\n", str);
+		// the free slot keeps no device for trap_ClientRole to find
+		newcl->identityProven = qfalse;
 		return;
 	}
 
@@ -884,8 +953,9 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 		drop->state = CS_ZOMBIE;		// become free in a few seconds
 	}
 
-	// nuke user info
+	// nuke user info, and the device it proved
 	SV_SetUserinfo( drop - svs.clients, "" );
+	drop->identityProven = qfalse;
 
 	// if this was the last client on the server, send a heartbeat
 	// to the master so it is known the server is empty
@@ -2046,6 +2116,50 @@ static qboolean SV_IsChatCommand( const char *cmd ) {
 	return qfalse;
 }
 
+// whether a chat line starts with a command whose words are secrets
+// (hooks.h's EXT_COMMAND_SECRET), typed into the chat by mistake:
+// "/login alice hunter2", "claim KQ7M-3XRP"; a tell's, or an order's
+// (gc), after the player it goes to
+static qboolean SV_ChatHoldsSecret( const char *chat, const char *text ) {
+	char	word[32];
+	int		n, flags;
+
+	text += strspn( text, " \"" );
+	if ( Q_stristr( chat, "tell" ) || !Q_stricmp( chat, "gc" ) ) {
+		text += strcspn( text, " " );
+		text += strspn( text, " \"" );
+	}
+	if ( *text == '/' || *text == '\\' ) {
+		text++;
+	}
+	for ( n = 0; text[n] && text[n] != ' ' && n < (int)sizeof( word ) - 1; n++ ) {
+		word[n] = text[n];
+	}
+	word[n] = '\0';
+	return Hooks_FindClientCommand( word, &flags ) >= 0 && ( flags & EXT_COMMAND_SECRET );
+}
+
+/*
+==================
+SV_ExtensionCommand
+
+A client's command that an extension runs (hooks.h's clientCommands): a
+limited one at 5 a minute for each client and 30 for every client, as
+rcon is, which puts a claim code's or a password's guessing out of reach
+==================
+*/
+static rateLimit_t	sv_extensionCommandRate;
+
+static void SV_ExtensionCommand( client_t *cl, int extension, int flags ) {
+	if ( ( flags & EXT_COMMAND_LIMITED ) && cl->netchan.remoteAddress.type != NA_LOOPBACK &&
+		// a bucket gives one back each period: 5 a minute, and 30
+		( SVC_RateLimit( &cl->roleRate, 5, 60000 / 5 ) || SVC_RateLimit( &sv_extensionCommandRate, 30, 60000 / 30 ) ) ) {
+		SV_SendServerCommand( cl, "print \"Too many tries; wait a minute.\n\"" );
+		return;
+	}
+	Hooks_RunClientCommand( extension, cl - svs.clients );
+}
+
 /*
 ==================
 SV_ExecuteClientCommand
@@ -2056,8 +2170,16 @@ Also called by bot code
 void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK ) {
 	ucmd_t	*u;
 	qboolean bProcessed = qfalse;
+	int		extension, flags;
 	
 	Cmd_TokenizeString( s );
+
+	// an extension's command, which the game never sees (a bot's goes on)
+	if ( clientOK && cl->netchan.remoteAddress.type != NA_BOT &&
+		( extension = Hooks_FindClientCommand( Cmd_Argv( 0 ), &flags ) ) >= 0 ) {
+		SV_ExtensionCommand( cl, extension, flags );
+		return;
+	}
 
 	// see if it is a server level command
 	u = SV_FindUcmd( Cmd_Argv(0) );
@@ -2074,6 +2196,12 @@ void SV_ExecuteClientCommand( client_t *cl, const char *s, qboolean clientOK ) {
 			// a muted client's chat reaches neither the game nor anyone
 			if ( SV_ClientMuted( cl ) && SV_IsChatCommand( Cmd_Argv(0) ) ) {
 				SV_SendServerCommand( cl, "print \"You are muted.\n\"" );
+				return;
+			}
+			// a password or a claim code typed into the chat stays with its
+			// player
+			if ( SV_IsChatCommand( Cmd_Argv( 0 ) ) && SV_ChatHoldsSecret( Cmd_Argv( 0 ), Cmd_ArgsFrom( 1 ) ) ) {
+				SV_SendServerCommand( cl, "print \"That goes in the console, not the chat: nothing was sent.\n\"" );
 				return;
 			}
 
@@ -2096,6 +2224,7 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 	int		seq;
 	const char	*s;
 	qboolean clientOk = qtrue;
+	int		flags;
 
 	seq = MSG_ReadLong( msg );
 	s = MSG_ReadString( msg );
@@ -2105,7 +2234,13 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 		return qtrue;
 	}
 
-	Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );
+	// a secret command's words aren't printed, even for developers
+	Cmd_TokenizeString( s );
+	if ( Hooks_FindClientCommand( Cmd_Argv( 0 ), &flags ) >= 0 && ( flags & EXT_COMMAND_SECRET ) ) {
+		Com_DPrintf( "clientCommand: %s : %i : %s (hidden)\n", cl->name, seq, Cmd_Argv( 0 ) );
+	} else {
+		Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );
+	}
 
 	// drop the connection if we have somehow lost commands
 	if ( seq > cl->lastClientCommand + 1 ) {
@@ -2115,7 +2250,7 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 		return qfalse;
 	}
 
-	Cmd_TokenizeString( s );
+	// tokenized above, for the log
 
 	// each userinfo change makes the game send commands to every
 	// other client, so a client changing it often could overflow

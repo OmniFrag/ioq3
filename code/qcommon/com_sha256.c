@@ -90,14 +90,25 @@ A digest as 64 lowercase hexadecimal digits
 =================
 */
 void Com_SHA256Hex( const byte digest[SHA256_DIGEST_SIZE], char hex[SHA256_HEX_SIZE] ) {
+	Com_BytesToHex( digest, SHA256_DIGEST_SIZE, hex );
+}
+
+/*
+=================
+Com_BytesToHex
+
+Bytes as lowercase hexadecimal digits, the most significant nibble first
+=================
+*/
+void Com_BytesToHex( const byte *bytes, int length, char *hex ) {
 	static const char	digits[] = "0123456789abcdef";
 	int					i;
 
-	for ( i = 0; i < SHA256_DIGEST_SIZE; i++ ) {
-		hex[i * 2] = digits[digest[i] >> 4];
-		hex[i * 2 + 1] = digits[digest[i] & 15];
+	for ( i = 0; i < length; i++ ) {
+		hex[i * 2] = digits[bytes[i] >> 4];
+		hex[i * 2 + 1] = digits[bytes[i] & 15];
 	}
-	hex[SHA256_DIGEST_SIZE * 2] = '\0';
+	hex[length * 2] = '\0';
 }
 
 /*
@@ -109,11 +120,27 @@ writes them; qfalse for anything else, leaving digest as it was
 =================
 */
 qboolean Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] ) {
-	byte	read[SHA256_DIGEST_SIZE];
+	return Com_HexToBytes( hex, digest, SHA256_DIGEST_SIZE );
+}
+
+/*
+=================
+Com_HexToBytes
+
+Bytes from exactly length * 2 lowercase hexadecimal digits, as
+Com_BytesToHex writes them; qfalse for anything else, leaving bytes as
+they were
+=================
+*/
+qboolean Com_HexToBytes( const char *hex, byte *bytes, int length ) {
+	byte	read[64];
 	int		i, nibble;
 	char	c;
 
-	for ( i = 0; i < SHA256_DIGEST_SIZE * 2; i++ ) {
+	if ( length > (int)sizeof( read ) ) {
+		return qfalse;
+	}
+	for ( i = 0; i < length * 2; i++ ) {
 		c = hex[i];
 		if ( c >= '0' && c <= '9' ) {
 			nibble = c - '0';
@@ -131,6 +158,6 @@ qboolean Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] ) {
 	if ( hex[i] != '\0' ) {
 		return qfalse;
 	}
-	Com_Memcpy( digest, read, sizeof( read ) );
+	Com_Memcpy( bytes, read, length );
 	return qtrue;
 }

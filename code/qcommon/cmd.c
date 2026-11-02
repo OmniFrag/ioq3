@@ -1336,6 +1336,18 @@ cmd_function_t *Cmd_FindCommand( const char *cmd_name )
 
 /*
 ============
+Cmd_Exists
+
+Whether a command of this name exists, rather than a cvar, which a line
+naming no command sets (Cvar_Command)
+============
+*/
+qboolean Cmd_Exists( const char *cmd_name ) {
+	return Cmd_FindCommand( cmd_name ) != NULL;
+}
+
+/*
+============
 Cmd_AddCommand
 ============
 */

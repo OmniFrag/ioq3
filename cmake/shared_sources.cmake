@@ -17,6 +17,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/cm_trace.c
     ${SOURCE_DIR}/qcommon/cmd.c
     ${SOURCE_DIR}/qcommon/common.c
+    ${SOURCE_DIR}/qcommon/com_identity.c
     ${SOURCE_DIR}/qcommon/com_pacing.c
     ${SOURCE_DIR}/qcommon/com_sha256.c
     ${SOURCE_DIR}/qcommon/content.c
@@ -26,6 +27,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/files.c
     ${SOURCE_DIR}/qcommon/fs_name.c
     ${SOURCE_DIR}/qcommon/hooks.c
+    ${SOURCE_DIR}/qcommon/identity.c
     ${SOURCE_DIR}/qcommon/logs.c
     ${SOURCE_DIR}/qcommon/md4.c
     ${SOURCE_DIR}/qcommon/md5.c
@@ -47,11 +49,16 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/vm_powerpc.c
     ${SOURCE_DIR}/qcommon/vm_sparc.c
     ${SOURCE_DIR}/qcommon/vm_x86.c
+    # Ed25519 and Argon2id for identity.c (thirdparty/monocypher-4.0.2)
+    ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher.c
+    ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher-ed25519.c
 )
 
 disable_warnings(
     ${SOURCE_DIR}/qcommon/unzip.c
     ${SOURCE_DIR}/qcommon/ioapi.c
+    ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher.c
+    ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher-ed25519.c
 )
 
 add_git_dependency(${SOURCE_DIR}/qcommon/common.c)

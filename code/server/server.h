@@ -170,6 +170,12 @@ typedef struct client_s {
 	// one, and with them the connection's content key, sent on connectResponse
 	uint32_t		ofx;
 	uint64_t		contentKey;
+	// the device key the client proved on connect (identity.h), with
+	// identityProven; an unproven client has none
+	qboolean		identityProven;
+	byte			identity[32];
+	// /login, /login_set and /claim (SV_RoleCommand), each client's own
+	rateLimit_t		roleRate;
 	// a map changed while it loaded by the fast path, which sends no
 	// netchan packets: the gamestate goes on its next packet
 	qboolean		contentGamestateDue;
@@ -277,6 +283,10 @@ typedef struct {
 	qboolean	connected;
 	uint32_t	ofx;				// the extensions agreed on challengeResponse (exttokens.h), 0 for none
 	uint64_t	contentKey;			// with them, the key every connect on this challenge is sent, 0 until the first
+	// with OFX_IDENTITY, the nonces the proofs sign (identity.h): the
+	// client's ofc, and this server's ofn, made with each challenge
+	byte		clientNonce[32];
+	byte		serverNonce[32];
 } challenge_t;
 
 // what each map change sets svs.time to (SV_RebaseTime): an hour, so that

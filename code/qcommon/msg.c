@@ -506,8 +506,7 @@ char *MSG_ReadBigString( msg_t *msg ) {
 	return string;
 }
 
-char *MSG_ReadStringLine( msg_t *msg ) {
-	static char	string[MAX_STRING_CHARS];
+static char *MSG_ReadLineInto( msg_t *msg, char *string, int size ) {
 	int		l,c;
 
 	l = 0;
@@ -525,7 +524,7 @@ char *MSG_ReadStringLine( msg_t *msg ) {
 			c = '.';
 		}
 		// break only after reading all expected data from bitstream
-		if ( l >= sizeof(string)-1 ) {
+		if ( l >= size-1 ) {
 			break;
 		}
 		string[l++] = c;
@@ -534,6 +533,26 @@ char *MSG_ReadStringLine( msg_t *msg ) {
 	string[l] = '\0';
 	
 	return string;
+}
+
+char *MSG_ReadStringLine( msg_t *msg ) {
+	static char	string[MAX_STRING_CHARS];
+
+	return MSG_ReadLineInto( msg, string, sizeof( string ) );
+}
+
+/*
+=================
+MSG_ReadBigStringLine
+
+MSG_ReadStringLine's line, up to BIG_INFO_STRING: a connect's, whose
+userinfo may fill MAX_INFO_STRING before its extension tokens
+=================
+*/
+char *MSG_ReadBigStringLine( msg_t *msg ) {
+	static char	string[BIG_INFO_STRING];
+
+	return MSG_ReadLineInto( msg, string, sizeof( string ) );
 }
 
 float MSG_ReadAngle16( msg_t *msg ) {

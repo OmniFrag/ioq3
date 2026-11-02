@@ -584,6 +584,20 @@ void Sys_Print( const char *msg )
 
 /*
 =================
+Sys_PrintSecret
+
+The console's output alone: not the console log's buffer, which
+crashlog.txt dumps, nor the log or a print hook, as Sys_Print isn't
+either
+=================
+*/
+void Sys_PrintSecret( const char *msg )
+{
+	CON_Print( msg );
+}
+
+/*
+=================
 Sys_Error
 =================
 */

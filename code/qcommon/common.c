@@ -5751,7 +5751,7 @@ static qboolean Field_Complete( void )
 		return qtrue;
 	}
 
-	Com_Printf( "]%s\n", completionField->buffer );
+	Com_EchoField( completionField->buffer );
 
 	return qfalse;
 }
@@ -5896,6 +5896,68 @@ void Field_AutoComplete( field_t *field )
 	completionField = field;
 
 	Field_CompleteCommand( completionField->buffer, qtrue, qtrue );
+}
+
+/*
+==================
+Com_EchoField
+
+A console line as the console echoes it: "]<line>", or its command alone
+for a secret one (Com_IsSecretCommand)
+==================
+*/
+void Com_EchoField( const char *line ) {
+	char	shown[32];
+
+	if ( Com_IsSecretCommand( line, shown, sizeof( shown ) ) ) {
+		Com_Printf( "]%s\n", shown );
+	} else {
+		Com_Printf( "]%s\n", line );
+	}
+}
+
+/*
+==================
+Com_IsSecretCommand
+
+Whether a command line, with or without its leading slash, is one whose
+words are a secret (a password, a claim code), which no console echo,
+history or log may keep: login, login_set and claim, hosting/'s, which a
+client must know before it knows its server. With shown, what may be
+shown instead: "login (hidden)"
+==================
+*/
+qboolean Com_IsSecretCommand( const char *line, char *shown, int size ) {
+	static const char *const secret[] = { "login", "login_set", "claim" };
+	char	word[16];
+	int		i;
+
+	// each command of the line, as the buffer splits it at ; and line
+	// breaks: "say hi; login alice hunter2" runs a login too
+	for ( ; *line; line += strcspn( line, ";\n" ), line += *line ? 1 : 0 ) {
+		const char	*p = line + strspn( line, " \t" );
+
+		if ( *p == '/' || *p == '\\' ) {
+			p++;
+		}
+		// the console's own forwarding, cmd <command>
+		if ( !Q_stricmpn( p, "cmd ", 4 ) ) {
+			p += 4;
+		}
+		// a quoted command is the same command: "login" alice hunter2
+		p += strspn( p, " \t\"" );
+		Com_Word( p, word, sizeof( word ) );
+		word[strcspn( word, "\"\t" )] = '\0';
+		for ( i = 0; i < ARRAY_LEN( secret ); i++ ) {
+			if ( !Q_stricmp( word, secret[i] ) ) {
+				if ( shown ) {
+					Com_sprintf( shown, size, "%s (hidden)", word );
+				}
+				return qtrue;
+			}
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -6103,7 +6165,7 @@ void Field_CompletePlayerName( const char **names, int nameCount )
 
 	if( matchCount > 1 )
 	{
-		Com_Printf( "]%s\n", completionField->buffer );
+		Com_EchoField( completionField->buffer );
 		
 		Name_PlayerNameCompletion( names, nameCount, PrintMatches );
 	}

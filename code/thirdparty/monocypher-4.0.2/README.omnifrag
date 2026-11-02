@@ -1,0 +1,5 @@
+Monocypher 4.0.2 (https://monocypher.org), BSD-2-Clause or CC0 (LICENCE.md).
+From monocypher-4.0.2.tar.gz, SHA-512
+bf275d4c53ff94af6cdc723a4e002e9f080f4d1436c86c76bb37870b34807f1d7b32331d8ff8a1aeb369e946f3769021e03e63efac25b82efc5abf54dc084714
+(monocypher.org's published hash; the GitHub release's archive is the same).
+src/monocypher.{c,h} and src/optional/monocypher-ed25519.{c,h}, unchanged.

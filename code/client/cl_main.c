@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "client.h"
 #include "../qcommon/content.h"
+#include "../qcommon/identity.h"
 #include <limits.h>
 
 #include "../sys/sys_local.h"
@@ -1928,6 +1929,9 @@ void CL_Connect_f( void ) {
 		// Set a client challenge number that ideally is mirrored back by the server.
 		clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
 	}
+	// a new connect, with a nonce of its own for its key's proof
+	clc.clientNonceSet = qfalse;
+	clc.identityProved = qfalse;
 
 	Key_SetCatcher( 0 );
 	clc.connectTime = -99999;	// CL_CheckForResend() will fire immediately
@@ -3182,7 +3186,7 @@ Resend a connect message if the last one has timed out
 void CL_CheckForResend( void ) {
 	int		port;
 	char	info[MAX_INFO_STRING];
-	char	data[MAX_INFO_STRING + 10];
+	char	data[MAX_INFO_STRING + 10 + EXT_MAX_STRING];
 	char	tokens[EXT_MAX_STRING];
 
 	// don't send anything if playing back a demo
@@ -3218,6 +3222,15 @@ void CL_CheckForResend( void ) {
 		tokens[0] = '\0';
 		if ( *com_gamename->string ) {
 			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", OFX_BUILD ) );
+			// this device's key is proved with a nonce of the connect's own,
+			// the same in every resend; without a key or the randomness for
+			// one, the server's ignores OFX_IDENTITY (identity.h)
+			if ( !clc.clientNonceSet && Com_DeviceKey() ) {
+				clc.clientNonceSet = Com_RandomSecret( clc.clientNonce, sizeof( clc.clientNonce ) );
+			}
+			if ( clc.clientNonceSet ) {
+				Ident_AppendHex( tokens, sizeof( tokens ), "ofc", clc.clientNonce );
+			}
 		}
 		Com_sprintf(data, sizeof(data), "getchallenge %d %s%s", clc.challenge, com_gamename->string, tokens);
 
@@ -3242,7 +3255,16 @@ void CL_CheckForResend( void ) {
 		Info_SetValueForKey( info, "qport", va("%i", port ) );
 		Info_SetValueForKey( info, "challenge", va("%i", clc.challenge ) );
 		
-		Com_sprintf( data, sizeof(data), "connect \"%s\"", info );
+		// and the device's proof, once the server proved its own key
+		tokens[0] = '\0';
+		if ( clc.identityProved && Com_DeviceKey() ) {
+			byte	sig[IDENT_SIG_SIZE];
+
+			Ident_SignClient( Com_DeviceKey(), clc.serverKey, clc.serverNonce, clc.clientNonce, clc.challenge, sig );
+			Ident_AppendHex( tokens, sizeof( tokens ), "ofi", Com_DeviceKey()->pub );
+			Ident_AppendSig( tokens, sizeof( tokens ), sig );
+		}
+		Com_sprintf( data, sizeof(data), "connect \"%s\"%s", info, tokens );
 		NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) data, strlen ( data ) );
 		// the most current userinfo has been sent, so watch for any
 		// newer changes to userinfo variables
@@ -3551,6 +3573,46 @@ static uint32_t CL_ServerExtensions( int firstArg, uint64_t *key ) {
 
 /*
 =================
+CL_ServerProof
+
+Whether challengeResponse's tokens prove the server's key over this
+connect's nonce (identity.h), keeping the key and the server's nonce for
+the connect's own proof. One that doesn't hold leaves the connection
+unproven
+=================
+*/
+static qboolean CL_ServerProof( void ) {
+	extTokens_t	tokens;
+	byte		sig[IDENT_SIG_SIZE], known[IDENT_KEY_SIZE];
+
+	if ( Com_ParseExtensionTokens( Cmd_ArgsFrom( 4 ), &tokens ) ||
+		!Ident_ReadServerProof( &tokens, clc.serverNonce, clc.serverKey, sig ) ) {
+		Com_DPrintf( "challengeResponse: no proof of the server's key\n" );
+		return qfalse;
+	}
+	if ( !Ident_CheckServer( clc.serverKey, clc.clientNonce, clc.serverNonce, sig ) ) {
+		Com_Printf( "The server's proof of its key doesn't hold: connecting without this device's.\n" );
+		return qfalse;
+	}
+	// a different key than this address proved before is said, and the
+	// connection goes on: refusing it waits for the list of servers a
+	// player runs (server-hosting.md, step 5). The address is the one the
+	// player connected to, as a reply from elsewhere is taken too (a
+	// proxy's hand-off), which mustn't escape the check
+	if ( Com_KnownServerKey( NET_AdrToStringwPort( clc.serverAddress ), clc.serverKey, known ) == KNOWN_CHANGED ) {
+		char	before[IDENT_FINGERPRINT_SIZE], now[IDENT_FINGERPRINT_SIZE];
+
+		Ident_Fingerprint( known, before );
+		Ident_Fingerprint( clc.serverKey, now );
+		Com_Printf( S_COLOR_YELLOW "WARNING: the server at %s has a different key than before: %s, not %s. If its "
+			"owner didn't make it a new one, it may not be the server you think it is.\n",
+			NET_AdrToStringwPort( clc.serverAddress ), now, before );
+	}
+	return qtrue;
+}
+
+/*
+=================
 CL_ConnectionlessPacket
 
 Responses to broadcasts, etc
@@ -3652,6 +3714,8 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
+		// the server's key, if it proved it: then this device proves its own
+		clc.identityProved = ( clc.ofx & OFX_IDENTITY ) && clc.clientNonceSet && CL_ServerProof();
 		clc.state = CA_CHALLENGING;
 		clc.connectPacketCount = 0;
 		clc.connectTime = -99999;

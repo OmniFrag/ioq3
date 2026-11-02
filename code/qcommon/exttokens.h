@@ -20,8 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 // exttokens.h -- extension tokens: key=value words after the classic
-// arguments of getchallenge, challengeResponse, connectResponse and
-// getinfo, by which two peers of this engine agree on what both can do.
+// arguments of getchallenge, challengeResponse, connect, connectResponse
+// and getinfo, by which two peers of this engine agree on what both can do.
 // Classic clients and servers read no further than their own arguments,
 // so they see nothing new, and are sent nothing new.
 //
@@ -48,7 +48,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // the capability bits, sent as ofx in lowercase hex. Each is assigned in
 // the commit that first uses it and never reused
 #define OFX_CONTENT		0x00000001u	// content protocol version 1
-#define OFX_BUILD		OFX_CONTENT	// the bits this build has
+#define OFX_IDENTITY	0x00000002u	// keys proved in the handshake (identity.h)
+#define OFX_BUILD		( OFX_CONTENT | OFX_IDENTITY )	// the bits this build has
 
 // the digits of ofk: a connection's 64-bit content key in lowercase hex,
 // the most significant first, as the content datagrams' key field holds

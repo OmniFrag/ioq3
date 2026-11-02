@@ -67,6 +67,14 @@ typedef struct {
 	int		modules;	// EXT_MODULE_BIT()s
 } extModuleCall_t;
 
+// a client command an extension runs rather than the game (clientCommands)
+#define EXT_COMMAND_SECRET	1	// its words after its own are a secret: no log, echo or chat line holds them
+#define EXT_COMMAND_LIMITED	2	// 5 a minute for each client and 30 for every client, as guessing a secret needs
+typedef struct {
+	const char	*name;
+	int		flags;		// EXT_COMMAND_ bits
+} extClientCommand_t;
+
 // what a module registered (moduleAsset)
 typedef enum {
 	EXT_ASSET_SHADER,
@@ -182,6 +190,19 @@ typedef struct {
 	// say's chat lines, answered it. An error that ends the frame inside
 	// the game skips this call
 	void		(*clientCommandDone)( int clientNum );
+	// A client's role, a ROLE_ rank (q_shared.h), by its slot and the device
+	// key it proved (NULL for none), or of a key alone before it has a slot
+	// (clientNum -1): the highest any extension gives
+	int			(*clientRole)( int clientNum, const byte *key );
+	// clientCommands, ending with a NULL name: commands a client sends that
+	// this extension runs (runCommand, their words in Cmd_Argv) in place of
+	// the game, which never sees them, nor clientCommand above. With
+	// EXT_COMMAND_SECRET the engine logs and echoes none of their words but
+	// the command's own, and sends no chat line that starts with one; with
+	// EXT_COMMAND_LIMITED it limits how often they come. A bot's go to the
+	// game, as a bot has no secrets
+	const extClientCommand_t	*clientCommands;
+	void		(*runCommand)( int clientNum );
 	// The game sent a command to a client, or to every client when
 	// clientNum is -1: a line to print, a chat line, the scores
 	void		(*serverCommand)( int clientNum, const char *text );
@@ -298,6 +319,11 @@ void	Hooks_GameFrameDone( int levelTime );
 void	Hooks_Hibernation( qboolean asleep );
 void	Hooks_GameFact( const char *fact, const char *info );
 void	Hooks_ClientCommand( int clientNum, const char *text );
+int		Hooks_ClientRole( int clientNum, const byte *key );
+// the extension that runs a client command (clientCommands), with its
+// flags, or -1; and running it there
+int		Hooks_FindClientCommand( const char *name, int *flags );
+void	Hooks_RunClientCommand( int extension, int clientNum );
 void	Hooks_ClientCommandDone( int clientNum );
 void	Hooks_ServerCommand( int clientNum, const char *text );
 void	Hooks_Print( const char *text );
@@ -493,6 +519,11 @@ const char	*SV_ExtClientName( int clientNum );
 // its next call, this one's too, overwrites
 const char	*SV_ExtClientAddress( int clientNum );
 qboolean	SV_ExtClientIsBot( int clientNum );
+// the device key the client proved on connect (identity.h), into key;
+// qfalse for an unproven one, a stock client's, or none
+qboolean	SV_ExtClientIdentity( int clientNum, byte key[32] );
+// prints text on a client's console only, as print does; nothing for none
+void	SV_ExtClientPrint( int clientNum, const char *text );
 // its ping in milliseconds, as status and getstatus give it; 999 while it
 // loads the map, 0 for a bot or none
 int		SV_ExtClientPing( int clientNum );

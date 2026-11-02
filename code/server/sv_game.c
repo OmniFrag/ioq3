@@ -342,6 +342,7 @@ static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ "trap_GameFact_OF", COM_TRAP_GAMEFACT },
+	{ "trap_ClientRole_OF", COM_TRAP_CLIENTROLE },
 	{ NULL, 0 }
 };
 
@@ -546,6 +547,7 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( COM_TRAP_CVAR_SETDESCRIPTION ),
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 	SYSCALL( COM_TRAP_GAMEFACT ),
+	SYSCALL( COM_TRAP_CLIENTROLE ),
 };
 
 // the game's facts (COM_TRAP_GAMEFACT): how many came in the game frame at
@@ -1278,6 +1280,22 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		// fails the same way in every build
 		SV_GameFact( VMA_STR( 1 ), VMA_STR( 2 ) );
 		return 0;
+
+	case COM_TRAP_CLIENTROLE: {
+		// a slot out of range, or nobody's, has none
+		int			clientNum = args[1];
+		client_t	*cl;
+
+		if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+			return ROLE_NONE;
+		}
+		cl = &svs.clients[clientNum];
+		// a client the game is connecting has no state yet, but its key
+		if ( ( cl->state < CS_CONNECTED && !cl->identityProven ) || cl->netchan.remoteAddress.type == NA_BOT ) {
+			return ROLE_NONE;
+		}
+		return Hooks_ClientRole( clientNum, cl->identityProven ? cl->identity : NULL );
+	}
 
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );

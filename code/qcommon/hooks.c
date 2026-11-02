@@ -302,6 +302,46 @@ void Hooks_ClientCommandDone( int clientNum ) {
 	HOOKS_CALL( clientCommandDone, ( clientNum ) );
 }
 
+int Hooks_ClientRole( int clientNum, const byte *key ) {
+	int		i, role, best = ROLE_NONE;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( hooks_active[i] && engineExtensions[i]->clientRole ) {
+			hooks_depth[i]++;
+			role = engineExtensions[i]->clientRole( clientNum, key );
+			hooks_depth[i]--;
+			best = MAX( best, role );
+		}
+	}
+	return best;
+}
+
+int Hooks_FindClientCommand( const char *name, int *flags ) {
+	const extClientCommand_t	*command;
+	int							i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( !hooks_active[i] || !engineExtensions[i]->clientCommands || !engineExtensions[i]->runCommand ) {
+			continue;
+		}
+		for ( command = engineExtensions[i]->clientCommands; command->name; command++ ) {
+			if ( !Q_stricmp( name, command->name ) ) {
+				*flags = command->flags;
+				return i;
+			}
+		}
+	}
+	return -1;
+}
+
+void Hooks_RunClientCommand( int extension, int clientNum ) {
+	if ( extension >= 0 && hooks_active[extension] ) {
+		hooks_depth[extension]++;
+		engineExtensions[extension]->runCommand( clientNum );
+		hooks_depth[extension]--;
+	}
+}
+
 void Hooks_ServerCommand( int clientNum, const char *text ) {
 	HOOKS_CALL( serverCommand, ( clientNum, text ) );
 }

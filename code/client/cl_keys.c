@@ -636,7 +636,7 @@ void Console_Key (int key) {
 			g_consoleField.cursor++;
 		}
 
-		Com_Printf ( "]%s\n", g_consoleField.buffer );
+		Com_EchoField( g_consoleField.buffer );
 
 		// leading slash is an explicit command
 		if ( g_consoleField.buffer[0] == '\\' || g_consoleField.buffer[0] == '/' ) {
@@ -656,9 +656,11 @@ void Console_Key (int key) {
 			}
 		}
 
-		// copy line to history buffer
-		historyEditLines[nextHistoryLine % COMMAND_HISTORY] = g_consoleField;
-		nextHistoryLine++;
+		// copy line to history buffer, but a password or a claim code
+		if ( !Com_IsSecretCommand( g_consoleField.buffer, NULL, 0 ) ) {
+			historyEditLines[nextHistoryLine % COMMAND_HISTORY] = g_consoleField;
+			nextHistoryLine++;
+		}
 		historyLine = nextHistoryLine;
 
 		Field_Clear( &g_consoleField );

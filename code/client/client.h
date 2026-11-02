@@ -183,6 +183,14 @@ typedef struct {
 	// them, the bits challengeResponse agreed
 	uint32_t	ofx;
 	uint64_t	contentKey;
+	// with OFX_IDENTITY, this connect's nonce (ofc), and once the server
+	// proved its key on challengeResponse, the key and its nonce, which
+	// the connect's proof of this device signs (identity.h)
+	byte		clientNonce[32];
+	qboolean	clientNonceSet;
+	qboolean	identityProved;
+	byte		serverKey[32];
+	byte		serverNonce[32];
 	// the server's content manifest, as connectResponse names it (ofm) or
 	// the last received, which the paks are checked against
 	// (download-protocol.md section 9.1, step 3)

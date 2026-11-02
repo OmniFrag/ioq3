@@ -84,6 +84,7 @@ float	MSG_ReadFloat (msg_t *sb);
 char	*MSG_ReadString (msg_t *sb);
 char	*MSG_ReadBigString (msg_t *sb);
 char	*MSG_ReadStringLine (msg_t *sb);
+char	*MSG_ReadBigStringLine( msg_t *sb );
 float	MSG_ReadAngle16 (msg_t *sb);
 void	MSG_ReadData (msg_t *sb, void *buffer, int size);
 int		MSG_LookaheadByte (msg_t *msg);
@@ -474,6 +475,12 @@ typedef struct {
 // and info string, and at most 256 a game frame; it counts the rest
 #define	COM_TRAP_GAMEFACT	807
 
+// int trap_ClientRole( int clientNum ) in game: the role the server's
+// keeper of roles (hooks.h's clientRole) gives a client, a ROLE_ rank
+// (q_shared.h): ROLE_NONE for none, as on every engine without the
+// extension
+#define	COM_TRAP_CLIENTROLE	812
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL
@@ -706,6 +713,7 @@ void	Cmd_TokenizeStringIgnoreQuotes( const char *text_in );
 // breaks the string up into arg tokens.
 
 void	Cmd_ExecuteString( const char *text );
+qboolean	Cmd_Exists( const char *cmd_name );
 // Parses a single line of text into arguments and tries to execute it
 // as if it was typed at the console
 
@@ -844,6 +852,7 @@ typedef struct {
 	const char	*unit;		// what a number counts, as said after it: "frames a second", "ms"
 	const char	*applies;	// "at once", "next map", "vid_restart", "snd_restart", "restart"; NULL: as its flags say
 	const char	*key;		// a server's file's friendly name for it, "public_name", or NULL for its own
+	const char	*may;		// the role a player's change to it needs, "admin", or NULL for the default policy
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
@@ -1111,6 +1120,19 @@ void	FS_FreeFileList( char **list );
 qboolean FS_FileExists_HomeData( const char *file );
 
 qboolean FS_CreatePath (const char *OSPath);
+
+// the system's randomness alone, or qfalse (com_identity.c); this device's
+// key, the one this program serves with, and a key's fingerprint, "none"
+// for NULL (identity.h)
+struct identKey_s;
+qboolean	Com_RandomSecret( byte *bytes, int length );
+// a command line whose words are secrets (login, login_set, claim), and
+// the console's echo of a line, which shows only such a line's command
+qboolean	Com_IsSecretCommand( const char *line, char *shown, int size );
+void		Com_EchoField( const char *line );
+const struct identKey_s	*Com_DeviceKey( void );
+const struct identKey_s	*Com_ServerKey( void );
+const char	*Com_KeyFingerprint( const struct identKey_s *key );
 long FS_ReadOSFile( const char *ospath, void **buffer );
 // a file outside the search path, into memory (Z_Free it), or -1
 qboolean FS_ReplaceOSFile( const char *ospath, const void *data, int length, qboolean private );
@@ -1495,6 +1517,10 @@ void		Com_SHA256Update( sha256_t *ctx, const void *data, size_t len );
 void		Com_SHA256Final( sha256_t *ctx, byte digest[SHA256_DIGEST_SIZE] );
 void		Com_SHA256Buffer( const void *data, size_t len, byte digest[SHA256_DIGEST_SIZE] );
 void		Com_SHA256Hex( const byte digest[SHA256_DIGEST_SIZE], char hex[SHA256_HEX_SIZE] );
+// any length's bytes as lowercase hex digits, length * 2 and a terminator;
+// and back, from exactly length * 2 of them (qfalse for anything else)
+void		Com_BytesToHex( const byte *bytes, int length, char *hex );
+qboolean	Com_HexToBytes( const char *hex, byte *bytes, int length );
 // lowercase
 qboolean	Com_SHA256FromHex( const char *hex, byte digest[SHA256_DIGEST_SIZE] );
 // exactly 64 lowercase hexadecimal digits
@@ -1819,6 +1845,9 @@ char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 void	Sys_SetClipboardData( const char *text );
 
 void	Sys_Print( const char *msg );
+// the console's output alone, for a secret (a token, a claim code): not
+// the log, crashlog.txt's buffer, nor an extension's print hook
+void	Sys_PrintSecret( const char *msg );
 void	Sys_Notify( const char *state );	// to the service manager, as sd_notify
 void	Sys_PrintFirewall( int port );	// whether Windows Firewall lets players in
 
