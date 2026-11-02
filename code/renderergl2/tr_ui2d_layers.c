@@ -51,6 +51,9 @@ static struct {
 	int			depth;						// the layers pushed, in the back end
 	int			idleFrames;
 	target2D_t	layers[MAX_LAYERS2D];
+	// what of each pushed layer has been cleared since its push, in the 2D
+	// target's pixels, y down: nothing, a box, or all of it (RB_ClearLayer2D)
+	ivec4_t		cleared[MAX_LAYERS2D];
 	// single-sampled, each level half the size of the one before; three
 	// at each, for a drop shadow's
 	target2D_t	scratch[BLUR_LEVELS][3];
@@ -219,13 +222,119 @@ BACK END
 
 /*
 ===============
-RB_Target2D
+RB_ForgetScissor2D
 
-What the 2D draws go into: the top layer, or the 2D target
+The 2D's scissor state is no longer what GL has, after passes that set
+their own; the next 2D draw sets it again as it binds its target
 ===============
 */
-FBO_t *RB_Target2D( void ) {
-	return ui2dLayers.depth ? &ui2dLayers.layers[ui2dLayers.depth - 1].fbo : tr.renderFbo;
+static void RB_ForgetScissor2D( void ) {
+	backEnd.scissor2D = qtrue;
+	VectorSet4( backEnd.scissorRect2D, -1, -1, -1, -1 );
+}
+
+/*
+===============
+RB_ClearBoxes2D
+
+Clears boxes (x, y, width and height, y down) of the bound framebuffer to
+transparent, through the 2D's scissor, which a layer command's own passes
+and blits may have left other than its state says
+===============
+*/
+static void RB_ClearBoxes2D( ivec4_t *boxes, int numBoxes ) {
+	int		i;
+
+	RB_ForgetScissor2D();
+	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	qglClearColor( 0, 0, 0, 0 );
+	for ( i = 0; i < numBoxes; i++ ) {
+		if ( boxes[i][2] > 0 && boxes[i][3] > 0 ) {
+			RB_Scissor2D( boxes[i] );
+			qglClear( GL_COLOR_BUFFER_BIT );
+		}
+	}
+	qglColorMask( !backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3] );
+}
+
+static qboolean RB_BoxWithin2D( const int in[4], const int out[4] ) {
+	return in[0] >= out[0] && in[1] >= out[1] && in[0] + in[2] <= out[0] + out[2] && in[1] + in[3] <= out[1] + out[3];
+}
+
+/*
+===============
+RB_ClearLayer2D
+
+Clears what of a pushed layer box covers, or all of it without one, that
+hasn't been cleared since its push: a layer isn't cleared as it's pushed,
+as a backdrop's is only composited into within a box. The first box is
+cleared alone; past it, the rest is cleared in bands around it. (Dropping
+the old contents first with glInvalidateFramebuffer was slower, on an RTX
+5070 Ti without MSAA and in Chrome on an M4)
+===============
+*/
+static void RB_ClearLayer2D( int layer, const int box[4] ) {
+	int		w = ui2dLayers.width, h = ui2dLayers.height;
+	int		*c;
+	ivec4_t	b;
+
+	if ( !layer ) {
+		return;
+	}
+	c = ui2dLayers.cleared[layer - 1];
+	if ( c[2] == w && c[3] == h ) {
+		return;
+	}
+	if ( box ) {
+		b[0] = MAX( 0, box[0] );
+		b[1] = MAX( 0, box[1] );
+		b[2] = MIN( w, (int64_t)box[0] + box[2] ) - b[0];
+		b[3] = MIN( h, (int64_t)box[1] + box[3] ) - b[1];
+	} else {
+		VectorSet4( b, 0, 0, w, h );
+	}
+	if ( b[2] <= 0 || b[3] <= 0 || RB_BoxWithin2D( b, c ) ) {
+		return;
+	}
+
+	if ( tess.numIndexes ) {
+		RB_EndSurface();
+	}
+	FBO_Bind( &ui2dLayers.layers[layer - 1].fbo );
+	if ( !c[2] && ( b[2] < w || b[3] < h ) ) {
+		RB_ClearBoxes2D( &b, 1 );
+		VectorCopy4( b, c );
+	} else if ( !c[2] ) {
+		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+		VectorSet4( c, 0, 0, w, h );
+	} else {
+		// the bands above and below the cleared box, then beside it
+		ivec4_t	bands[4] = {
+			{ 0, 0, w, c[1] },
+			{ 0, c[1] + c[3], w, h - c[1] - c[3] },
+			{ 0, c[1], c[0], c[3] },
+			{ c[0] + c[2], c[1], w - c[0] - c[2], c[3] }
+		};
+
+		RB_ClearBoxes2D( bands, 4 );
+		VectorSet4( c, 0, 0, w, h );
+	}
+}
+
+/*
+===============
+RB_BindTarget2D
+
+Binds what the 2D draws and clip masks go into: the top layer, or the 2D
+target. A draw in color clears the rest of the top layer first; a clip
+mask writes only the stencil, so it clears nothing
+===============
+*/
+void RB_BindTarget2D( qboolean color ) {
+	if ( color ) {
+		RB_ClearLayer2D( ui2dLayers.depth, NULL );
+	}
+	FBO_Bind( ui2dLayers.depth ? &ui2dLayers.layers[ui2dLayers.depth - 1].fbo : tr.renderFbo );
 }
 
 /*
@@ -516,15 +625,20 @@ resolved, as a layer without samples has it
 static FBO_t *RB_LayerFbo2D( int layer, const int box[4], int reach ) {
 	FBO_t	*fbo = layer ? &ui2dLayers.layers[layer - 1].fbo : tr.renderFbo;
 	FBO_t	*resolve = layer ? &ui2dLayers.layers[layer - 1].resolveFbo : tr.msaaResolveFbo;
+	// a blur's levels round to their texels, and filter linearly a texel
+	// further
+	int		margin = reach ? reach + ( 1 << ( BLUR_LEVELS - 1 ) ) + 1 : 0;
+	// what the filters read: the box and its margin, and the pixel more to
+	// the right and below that RB_Pass2D writes, so a read of the box a
+	// composite wrote is within what it cleared
+	int		x0 = MAX( 0, box[0] - margin ), y0 = MAX( 0, box[1] - margin );
+	int		x1 = MIN( ui2dLayers.width, box[0] + box[2] + margin + 1 );
+	int		y1 = MIN( ui2dLayers.height, box[1] + box[3] + margin + 1 );
+	int		read[4] = { x0, y0, x1 - x0, y1 - y0 };
 	ivec4_t	glBox;
 
+	RB_ClearLayer2D( layer, read );
 	if ( ui2dLayers.samples && resolve ) {
-		// a blur's levels round to their texels
-		int		margin = reach ? reach + ( 1 << ( BLUR_LEVELS - 1 ) ) : 0;
-		int		x0 = MAX( 0, box[0] - margin ), y0 = MAX( 0, box[1] - margin );
-		int		x1 = MIN( ui2dLayers.width, box[0] + box[2] + margin );
-		int		y1 = MIN( ui2dLayers.height, box[1] + box[3] + margin );
-
 		// GL's rows go up
 		VectorSet4( glBox, x0, ui2dLayers.height - y1, x1 - x0, y1 - y0 );
 		FBO_FastBlit( fbo, glBox, resolve, glBox, GL_COLOR_BUFFER_BIT, GL_NEAREST );
@@ -610,23 +724,12 @@ static void RB_SaveLayer2D( const layer2DCommand_t *cmd ) {
 
 /*
 ===============
-RB_ResetScissor2D
-
-The whole target to draw in again, as the 2D's scissor state has it
-===============
-*/
-static void RB_ResetScissor2D( void ) {
-	FBO_t	*fbo = RB_Target2D();
-
-	FBO_Bind( fbo );
-	RB_SetGL2D();
-	qglScissor( 0, 0, fbo->width, fbo->height );
-	backEnd.scissor2D = qfalse;
-}
-
-/*
-===============
 RB_Layer2D
+
+Each 2D draw binds its target and sets its scissor itself, so a layer
+command leaves the framebuffer it last drew into bound, and the 2D's
+scissor state forgotten: a backdrop's commands in a row don't go back to
+the 2D target between them
 ===============
 */
 const void *RB_Layer2D( const void *data ) {
@@ -651,8 +754,7 @@ const void *RB_Layer2D( const void *data ) {
 		if ( !t->image.texnum ) {
 			R_MakeTarget2D( t, ui2dLayers.width, ui2dLayers.height, ui2dLayers.samples, ui2dLayers.target );
 		}
-		FBO_Bind( &t->fbo );
-		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+		VectorSet4( ui2dLayers.cleared[ui2dLayers.depth], 0, 0, 0, 0 );
 		ui2dLayers.depth++;
 		ui2dLayers.idleFrames = 0;
 		break;
@@ -668,7 +770,7 @@ const void *RB_Layer2D( const void *data ) {
 		FBO_t		*dst = cmd->destination ? &ui2dLayers.layers[cmd->destination - 1].fbo : tr.renderFbo;
 		image_t		*image;
 		vec4_t		color = { 1, 1, 1, 1 };
-		int			box[4], reach, numFilters = cmd->numFilters, i;
+		int			box[4], written[4], reach, numFilters = cmd->numFilters, i;
 		qboolean	clip;
 
 		reach = RB_CompositeBox2D( cmd, box );
@@ -686,6 +788,10 @@ const void *RB_Layer2D( const void *data ) {
 			image = RB_Filter2D( image, &cmd->filters[i], box );
 		}
 
+		// what RB_Pass2D's scissor lets it write: the box, and a pixel more
+		// to the right and below
+		VectorSet4( written, box[0], box[1], box[2] + 1, box[3] + 1 );
+		RB_ClearLayer2D( cmd->destination, written );
 		FBO_Bind( dst );
 		clip = R_BeginClipTest2D( &cmd->state );
 		RB_Pass2D( image, dst, FILTERMODE_COPY, color, box, NULL,
@@ -701,7 +807,7 @@ const void *RB_Layer2D( const void *data ) {
 		break;
 	}
 
-	RB_ResetScissor2D();
+	RB_ForgetScissor2D();
 	return cmd + 1;
 }
 
@@ -710,12 +816,16 @@ const void *RB_Layer2D( const void *data ) {
 RB_EndFrame2D
 
 The layers a frame left pushed are popped as it ends, and freed when none
-has been pushed for a while
+has been pushed for a while; the 2D target is bound again for what follows
+the 2D, as a layer command leaves the framebuffer it last drew into bound
 ===============
 */
 void RB_EndFrame2D( void ) {
 	ui2dLayers.depth = 0;
 	if ( ui2dLayers.target && ++ui2dLayers.idleFrames > LAYERS2D_IDLE_FRAMES ) {
 		R_ShutdownLayers2D();
+	}
+	if ( tr.renderFbo ) {
+		FBO_Bind( tr.renderFbo );
 	}
 }

@@ -1072,7 +1072,7 @@ const void *RB_ClipMask2D( const void *data ) {
 		return cmd + 1;
 	}
 
-	r_renderer2D.begin( &cmd->state );
+	r_renderer2D.beginMask( &cmd->state );
 	qglEnable( GL_STENCIL_TEST );
 	qglStencilMask( 0xff );
 	if ( cmd->op == CLIPMASK_SET_INVERSE ) {
