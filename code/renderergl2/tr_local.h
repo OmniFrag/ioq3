@@ -2668,7 +2668,7 @@ void R_InitUI2D( void );
 qboolean R_Layers2DAvailable( void );
 void R_InitLayers2D( void );
 void R_ShutdownLayers2D( void );
-struct FBO_s *RB_Target2D( void );
+void RB_BindTarget2D( qboolean color );
 const void *RB_Layer2D( const void *data );
 void RB_EndFrame2D( void );
 const void *RB_Draw2D( const void *data );

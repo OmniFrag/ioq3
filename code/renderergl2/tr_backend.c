@@ -755,7 +755,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 
 	if (glRefConfig.framebufferObject)
 	{
-		FBO_Bind(RB_Target2D());
+		RB_BindTarget2D(qtrue);
 	}
 
 	RB_SetGL2D();
@@ -864,7 +864,7 @@ const void *RB_StretchPic ( const void *data ) {
 	cmd = (const stretchPicCommand_t *)data;
 
 	if (glRefConfig.framebufferObject)
-		FBO_Bind(RB_Target2D());
+		RB_BindTarget2D(qtrue);
 
 	RB_SetGL2D();
 	RB_Scissor2D( NULL );
@@ -962,7 +962,7 @@ static const void *RB_Tris2D( const void *data ) {
 	int		i, j, first;
 
 	if (glRefConfig.framebufferObject)
-		FBO_Bind(RB_Target2D());
+		RB_BindTarget2D(qtrue);
 
 	RB_SetGL2D();
 	RB_Scissor2D( ( cmd->flags & TRIS2D_SCISSOR ) ? cmd->scissor : NULL );
@@ -1684,13 +1684,14 @@ RB_SwapBuffers
 const void	*RB_SwapBuffers( const void *data ) {
 	const swapBuffersCommand_t	*cmd;
 
-	// finish any 2D drawing if needed, and let what follows (the present
-	// and the next frame's clears) reach the whole target
-	RB_Scissor2D( NULL );
+	// finish any 2D drawing if needed; then, with the 2D target bound again
+	// (RB_EndFrame2D), let what follows (the debug views, the present and
+	// the next frame's clears) reach the whole of it
 	if ( tess.numIndexes ) {
 		RB_EndSurface();
 	}
 	RB_EndFrame2D();
+	RB_Scissor2D( NULL );
 
 	// texture swapping test
 	if ( r_showImages->integer ) {

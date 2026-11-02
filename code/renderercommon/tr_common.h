@@ -343,9 +343,10 @@ typedef struct {
 	void	(*updateTexture)( texture2D_t *t, int x, int y, int width, int height, const byte *pixels );
 	// frees what a texture or a geometry has in GL, in the back end
 	void	(*freeGpu)( handle2DKind_t kind, void *object );
-	// the back end: the 2D target, projection and a state's scissor, with
-	// what waits drawn; and a geometry drawn unseen, into the stencil
-	void	(*begin)( const draw2DState_t *state );
+	// the back end, for a clip mask: the 2D target, projection and a
+	// state's scissor, with what waits drawn, for a draw into the stencil
+	// alone; and a geometry drawn unseen, into the stencil
+	void	(*beginMask)( const draw2DState_t *state );
 	void	(*drawUnseen)( const draw2DState_t *state, geometry2D_t *g );
 } renderer2D_t;
 

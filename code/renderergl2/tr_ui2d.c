@@ -572,12 +572,13 @@ static void RB_Draw2DProgram( const draw2DState_t *state, geometry2D_t *g, const
 RB_Begin2D
 
 The 2D target, projection and the state's scissor, with what waits in the
-tessellator drawn first, since these draw at once
+tessellator drawn first, since these draw at once; color, unless only the
+stencil is drawn (RB_BindTarget2D)
 ===============
 */
-static void RB_Begin2D( const draw2DState_t *state ) {
+static void RB_Begin2D( const draw2DState_t *state, qboolean color ) {
 	if ( glRefConfig.framebufferObject ) {
-		FBO_Bind( RB_Target2D() );
+		RB_BindTarget2D( color );
 	}
 	RB_SetGL2D();
 	RB_Scissor2D( ( state->flags & TRIS2D_SCISSOR ) ? state->scissor : NULL );
@@ -603,11 +604,16 @@ static void RB_Draw2DUnseen( const draw2DState_t *state, geometry2D_t *g ) {
 	qglColorMask( colorMask[0], colorMask[1], colorMask[2], colorMask[3] );
 }
 
+// a clip mask's start: it draws only into the stencil
+static void RB_BeginMask2D( const draw2DState_t *state ) {
+	RB_Begin2D( state, qfalse );
+}
+
 const renderer2D_t r_renderer2D = {
 	RC_DRAW_2D, RC_CLIPMASK_2D, RC_DELETE_2D, RC_UPDATE_TEXTURE_2D, RC_LAYER_2D,
 	MAX_RENDER_COMMANDS,
 	R_GetCaps2DRetained, R_CreateTexture2DGL, R_UpdateTexture2DGL, R_FreeGpu2D,
-	RB_Begin2D, RB_Draw2DUnseen
+	RB_BeginMask2D, RB_Draw2DUnseen
 };
 
 /*
@@ -635,7 +641,7 @@ const void *RB_Draw2D( const void *data ) {
 		numIndexes = g->numIndexes;
 	}
 
-	RB_Begin2D( &cmd->state );
+	RB_Begin2D( &cmd->state, qtrue );
 	clip = R_BeginClipTest2D( &cmd->state );
 	if ( R_ShaderState2D( &cmd->state ) ) {
 		RB_Draw2DShader( &cmd->state, verts, indexes, numIndexes );
