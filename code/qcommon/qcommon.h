@@ -2022,6 +2022,10 @@ qboolean	Sys_NumericToAdr( const char *s, netadr_t *a );
 
 qboolean	Sys_IsLANAddress (netadr_t adr);
 void		Sys_ShowIP(void);
+// the machine's own addresses another would reach it at: IPv4's, then
+// IPv6's, neither loopback nor link local, or a family's net_ip address
+// alone; at most max, and how many
+int		NET_LocalAddresses( netadr_t *out, int max );
 
 FILE	*Sys_FOpen( const char *ospath, const char *mode );
 int		Sys_PID( void );

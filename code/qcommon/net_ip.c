@@ -1303,6 +1303,73 @@ void Sys_ShowIP(void) {
 }
 
 
+static const byte	net_loopback6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+static const byte	net_mapped127[13] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127 };
+static const byte	net_none[16];	// 0.0.0.0's or ::'s bytes, every address's
+
+// the address net_ip (type NA_IP) or net_ip6 (NA_IP6) names, if it names one
+static qboolean NET_BoundAdr( netadrtype_t type, netadr_t *a ) {
+	return Sys_StringToAdr( ( type == NA_IP6 ? net_ip6 : net_ip )->string, a, type );
+}
+
+// 0.0.0.0 or ::, every address
+static qboolean NET_IsUnspecified( const netadr_t *a ) {
+	return a->type == NA_IP ? !memcmp( a->ip, net_none, sizeof( a->ip ) ) : !memcmp( a->ip6, net_none, sizeof( a->ip6 ) );
+}
+
+// an address only this computer can reach: 127.0.0.0/8, ::1, or
+// 127.0.0.0/8 mapped into IPv6 (::ffff:127.0.0.0/104)
+static qboolean NET_IsLoopback( const netadr_t *a ) {
+	if ( a->type == NA_IP ) {
+		return a->ip[0] == 127;
+	}
+	return !memcmp( a->ip6, net_loopback6, sizeof( net_loopback6 ) ) || !memcmp( a->ip6, net_mapped127, sizeof( net_mapped127 ) );
+}
+
+// whether an address another machine could reach: not every one, not
+// loopback, and not link local (169.254/16, which no router passes;
+// fe80::/10, which needs a zone)
+static qboolean NET_IsReachable( const netadr_t *a ) {
+	if ( NET_IsUnspecified( a ) || NET_IsLoopback( a ) ) {
+		return qfalse;
+	}
+	return a->type == NA_IP ? !( a->ip[0] == 169 && a->ip[1] == 254 ) : !( a->ip6[0] == 0xfe && ( a->ip6[1] & 0xc0 ) == 0x80 );
+}
+
+/*
+==================
+NET_LocalAddresses
+
+The machine's own addresses, as a person would type or scan them to reach
+it from another (NET_IsReachable): IPv4's first, then IPv6's; for a family
+whose net_ip or net_ip6 names one address, that one alone, as its socket
+answers there only. At most max, and how many, with no port
+==================
+*/
+int NET_LocalAddresses( netadr_t *out, int max ) {
+	netadr_t	a;
+	int			pass, i, n = 0;
+
+	for ( pass = 0; pass < 2; pass++ ) {
+		netadrtype_t	type = pass ? NA_IP6 : NA_IP;
+		qboolean		bound = NET_BoundAdr( type, &a ) && !NET_IsUnspecified( &a );
+
+		for ( i = 0; n < max && i < ( bound ? 1 : numIP ); i++ ) {
+			if ( !bound ) {
+				if ( localIP[i].type != type ) {
+					continue;
+				}
+				SockadrToNetadr( (struct sockaddr *)&localIP[i].addr, &a );
+			}
+			if ( NET_IsReachable( &a ) ) {
+				a.port = 0;
+				out[n++] = a;
+			}
+		}
+	}
+	return n;
+}
+
 //=============================================================================
 
 #define NET_SOCKET_BUFFER	( 2 * 1024 * 1024 )
@@ -2072,16 +2139,9 @@ mapped into IPv6 (::ffff:127.0.0.0/104)
 ====================
 */
 static qboolean NET_BindsLoopback( netadrtype_t type ) {
-	static const byte	loopback6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
-	static const byte	mapped127[13] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127 };
 	netadr_t	adr;
 
-	if( !Sys_StringToAdr( ( type == NA_IP6 ? net_ip6 : net_ip )->string, &adr, type ) )
-		return qfalse;
-	if( type == NA_IP6 )
-		return !memcmp( adr.ip6, loopback6, sizeof( loopback6 ) ) ||
-			!memcmp( adr.ip6, mapped127, sizeof( mapped127 ) );
-	return adr.ip[0] == 127;
+	return NET_BoundAdr( type, &adr ) && NET_IsLoopback( &adr );
 }
 
 /*
