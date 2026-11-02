@@ -115,6 +115,10 @@ static void SV_CheckReportMaps( void ) {
 	}
 	sv_checkStart = &sv_checkMaps[i];
 
+	// an extension's rotation, a map pool, says its own maps
+	if ( Hooks_CheckRotation() ) {
+		return;
+	}
 	// the rotation's maps come from vstr, with no line of their own
 	SV_CheckRotation();
 	if ( startup < sv_numCheckMaps ) {

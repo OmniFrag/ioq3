@@ -557,6 +557,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	if ( com_sv_running->integer ) {
 		Com_Printf( "  map:      %s, %s\n", sv_mapname->string, SV_GametypeName( sv_gametype->integer ) );
 	}
+	Hooks_StartSummary();
 	if ( !Q_stricmp( com_basegame->string, "demoq3" ) ) {
 		data = "the demo's";
 	} else if ( !com_standalone->integer ) {
@@ -641,7 +642,9 @@ SV_StartDefaultMap
 
 Whether a dedicated server with no map started the default one: once its
 startup commands have all run (a config's map or vstr among them), rather
-than wait with none, saying how to choose another
+than wait with none, saying how to choose another. An extension keeping
+the server's rotation (Hooks_StartDefault: hosting/'s map pool) starts
+its own instead
 ================
 */
 qboolean SV_StartDefaultMap( void ) {
@@ -651,6 +654,10 @@ qboolean SV_StartDefaultMap( void ) {
 		return qfalse;
 	}
 	checked = qtrue;
+	// an extension's rotation, a map pool, starts its own
+	if ( Hooks_StartDefault() ) {
+		return qtrue;
+	}
 	if ( FS_ReadFile( "maps/" SV_DEFAULT_MAP ".bsp", NULL ) <= 0 ) {
 		return qfalse;
 	}
@@ -797,6 +804,10 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
+	Hooks_MapLoading( server );
+	// what an extension latched as the map loads (a mode's game type) is
+	// this map's, as SV_Map_f's latch is
+	Cvar_Get( "g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );
 
 	Com_LogMapLoad();
 	Com_Printf ("------ Server Initialization ------\n");

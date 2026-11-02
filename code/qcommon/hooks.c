@@ -270,6 +270,51 @@ qboolean Hooks_WriteServerSettings( void ) {
 	return handled;
 }
 
+/*
+===============
+Hooks_StartDefault, Hooks_StartSummary, Hooks_CheckRotation
+
+A dedicated server's maps' hooks, on every extension, active or not, as
+they run under --check: the first to start a map or say the rotation ends
+the calls
+===============
+*/
+qboolean Hooks_StartDefault( void ) {
+	int	i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->startDefault && engineExtensions[i]->startDefault() ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+void Hooks_StartSummary( void ) {
+	int	i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->startSummary ) {
+			engineExtensions[i]->startSummary();
+		}
+	}
+}
+
+qboolean Hooks_CheckRotation( void ) {
+	int	i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->checkRotation && engineExtensions[i]->checkRotation() ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+void Hooks_MapLoading( const char *map ) {
+	HOOKS_CALL( mapLoading, ( map ) );
+}
+
 void Hooks_MapSpawned( void ) {
 	HOOKS_CALL( mapSpawned, () );
 }

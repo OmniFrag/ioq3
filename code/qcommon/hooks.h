@@ -127,6 +127,20 @@ typedef struct {
 	qboolean	(*readServerSettings)( qboolean reload );
 	qboolean	(*writeServerSettings)( void );
 
+	// A dedicated server's maps, for an extension keeping its rotation (a
+	// map pool), called on the extensions whether or not they're active, as
+	// they run under --check too. startDefault: no map was given and the
+	// startup's commands have all run; start one (a map command) and return
+	// qtrue, which ends the calls, or return qfalse for the next extension
+	// and then the engine's default map. startSummary: print the start
+	// summary's lines of its own, after the map's; every extension's.
+	// checkRotation: under --check, print the maps that follow the
+	// startup's ("  then the pool: ...") and return qtrue, which ends the
+	// calls, where the engine would follow nextmap
+	qboolean	(*startDefault)( void );
+	void		(*startSummary)( void );
+	qboolean	(*checkRotation)( void );
+
 	// What the server does, dedicated or a listen server's, each called
 	// once it has happened. clientNum runs from 0 to sv_maxclients - 1,
 	// and the SV_Ext* accessors below read the client's details.
@@ -151,6 +165,10 @@ typedef struct {
 	// by the game" for a bot the game added but then freed
 	void		(*clientDropped)( int clientNum, const char *reason );
 
+	// A map is about to load: the last map's game has shut down and this
+	// one's hasn't started, so what's set now (a mode's game type, which
+	// latches) is this map's
+	void		(*mapLoading)( const char *map );
 	// A map loaded, and its game started with the clients still connected
 	void		(*mapSpawned)( void );
 	// map_restart restarted the map's game, with every client
@@ -302,6 +320,9 @@ void	Hooks_FrameAborted( void );
 void	Hooks_Shutdown( const char *reason );
 qboolean	Hooks_ReadServerSettings( qboolean reload );
 qboolean	Hooks_WriteServerSettings( void );
+qboolean	Hooks_StartDefault( void );
+void	Hooks_StartSummary( void );
+qboolean	Hooks_CheckRotation( void );
 // a crash stops the program: before the server shuts down
 void	Hooks_Signal( void );
 // the longest a dedicated server with no map may wait, as the extensions
@@ -312,6 +333,7 @@ void	Hooks_ClientConnected( int clientNum );
 void	Hooks_ClientBegin( int clientNum );
 void	Hooks_ClientUserinfoChanged( int clientNum );
 void	Hooks_ClientDropped( int clientNum, const char *reason );
+void	Hooks_MapLoading( const char *map );
 void	Hooks_MapSpawned( void );
 void	Hooks_MapRestarted( void );
 void	Hooks_ServerShutdown( const char *reason );

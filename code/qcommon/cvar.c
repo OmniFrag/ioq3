@@ -422,6 +422,50 @@ static qboolean Cvar_SameString( const char *a, const char *b ) {
 	return a ? b && !strcmp( a, b ) : !b;
 }
 
+// a dedicated server's layers (cvarServerLayer_t): whose each is, what
+// cvar_why calls one with no origin, and cvar_dump's names for it
+static const struct {
+	cvarSource_t	source;
+	const char		*unnamed;
+	const char		*dump, *dumpOrigin;
+} cvar_serverLayers[CVAR_SERVER_LAYERS] = {
+	[CVAR_LAYER_ENTRY] = { CVAR_SOURCE_ENTRY, "the pool's entry", "entry", "entryOrigin" },
+	[CVAR_LAYER_FILE] = { CVAR_SOURCE_FILE, "the server's file", "file", "fileOrigin" },
+	[CVAR_LAYER_MODE] = { CVAR_SOURCE_MODE, "the mode", "mode", "modeOrigin" }
+};
+
+// a source's layer among the server's, or -1
+static int Cvar_ServerLayer( cvarSource_t source ) {
+	int	i;
+
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		if ( cvar_serverLayers[i].source == source ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+============
+Cvar_UnderUser
+
+What a cvar's value is without the player's or a server's: the map pool's
+entry, the server's file, the entry's mode or the default, the first that
+has one; and whose that is
+============
+*/
+const char *Cvar_UnderUser( const cvar_t *var, cvarSource_t *source ) {
+	int	i;
+
+	for ( i = 0; i < CVAR_SERVER_LAYERS && !var->layerStrings[i]; i++ ) {
+	}
+	if ( source ) {
+		*source = i < CVAR_SERVER_LAYERS ? cvar_serverLayers[i].source : CVAR_SOURCE_DEFAULT;
+	}
+	return i < CVAR_SERVER_LAYERS ? var->layerStrings[i] : var->resetString;
+}
+
 /*
 ============
 Cvar_Resolve
@@ -436,21 +480,20 @@ static const char *Cvar_Resolve( const cvar_t *var ) {
 	if ( var->userString ) {
 		return var->userString;
 	}
-	if ( var->fileString ) {
-		return var->fileString;
-	}
-	return var->resetString;
+	return Cvar_UnderUser( var, NULL );
 }
 
 /*
 ============
-Cvar_Apply
+Cvar_Apply, Cvar_ApplyQuietly
 
 Gives a cvar the value its layers resolve to: at once if forced, or else,
-for a latched cvar, after a restart
+for a latched cvar, after a restart, which Cvar_Apply says. A map pool's
+mode or entry sets a latched value as the map loads (Hooks_MapLoading),
+and the load applies it, so Cvar_ApplyQuietly says nothing of a restart
 ============
 */
-static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
+static cvar_t *Cvar_ApplyQuietly( cvar_t *var, qboolean force, qboolean quiet ) {
 	const char *value = Cvar_Resolve( var );
 
 	if ( !strcmp( value, var->string ) ) {
@@ -464,7 +507,9 @@ static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
 
 	if ( !force && ( var->flags & CVAR_LATCH ) ) {
 		if ( !Cvar_SameString( value, var->latchedString ) ) {
-			Com_Printf( "%s will be changed upon restarting.\n", var->name );
+			if ( !quiet ) {
+				Com_Printf( "%s will be changed upon restarting.\n", var->name );
+			}
 			Cvar_SetLayer( &var->latchedString, value );
 			var->modified = qtrue;
 			var->modificationCount++;
@@ -480,6 +525,10 @@ static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
 	var->integer = atoi( var->string );
 
 	return var;
+}
+
+static cvar_t *Cvar_Apply( cvar_t *var, qboolean force ) {
+	return Cvar_ApplyQuietly( var, force, qfalse );
 }
 
 /*
@@ -501,17 +550,30 @@ Cvar_SavedValue
 What the config gets for a cvar, if it's archived: the player's choice,
 where it isn't the default, as a number too (Cvar_SameValue), so a
 value written as "0.800000" by an older engine gives way to a later
-default. Below a server file's value (fileString), that value is the
-default: a choice of the built-in default over it is kept. One no code
-has registered has no default yet, and its value is kept as it is
+default. Below a server file's value (CVAR_LAYER_FILE), that value is the
+default: a choice of the built-in default over it is kept. Over a mode's
+or a pool entry's, which change from map to map, any choice is kept: a
+ctf map's timelimit 0 over its mode's 15 is a choice, though 0 is the
+default. One no code has registered has no default yet, and its value is
+kept as it is
 ============
 */
 static const char *Cvar_SavedValue( const cvar_t *var ) {
-	if ( !var->savedString || ( var->fileString ? Cvar_SameValue( var->savedString, var->fileString ) :
-		!( var->flags & CVAR_USER_CREATED ) && Cvar_SameValue( var->savedString, var->resetString ) ) ) {
+	if ( !var->savedString ) {
 		return NULL;
 	}
-	return var->savedString;
+	// the entry's is above the file's, so the file's value is a choice there
+	if ( var->layerStrings[CVAR_LAYER_ENTRY] ) {
+		return var->savedString;
+	}
+	if ( var->layerStrings[CVAR_LAYER_FILE] ) {
+		return Cvar_SameValue( var->savedString, var->layerStrings[CVAR_LAYER_FILE] ) ? NULL : var->savedString;
+	}
+	if ( var->layerStrings[CVAR_LAYER_MODE] ) {
+		return var->savedString;
+	}
+	return !( var->flags & CVAR_USER_CREATED ) && Cvar_SameValue( var->savedString, var->resetString ) ?
+		NULL : var->savedString;
 }
 
 /*
@@ -707,7 +769,9 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->integer = atoi(var->string);
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->userOrigin = var->savedString = NULL;
-	var->fileString = var->fileOrigin = var->lockOrigin = var->lockString = NULL;
+	var->lockOrigin = var->lockString = NULL;
+	Com_Memset( var->layerStrings, 0, sizeof( var->layerStrings ) );
+	Com_Memset( var->layerOrigins, 0, sizeof( var->layerOrigins ) );
 	var->userSource = CVAR_SOURCE_DEFAULT;
 	var->declaredScope = Cvar_DeclaredScope( var_name );
 	var->serverStale = qfalse;
@@ -748,16 +812,16 @@ Cvar_Source
 ============
 */
 cvarSource_t Cvar_Source( const cvar_t *var ) {
+	cvarSource_t	source;
+
 	if ( var->serverString ) {
 		return CVAR_SOURCE_SERVER;
 	}
 	if ( var->userString ) {
 		return var->userSource;
 	}
-	if ( var->fileString ) {
-		return CVAR_SOURCE_FILE;
-	}
-	return CVAR_SOURCE_DEFAULT;
+	Cvar_UnderUser( var, &source );
+	return source;
 }
 
 // whose value it is, as printing a cvar says it, and as cvar_dump does
@@ -775,7 +839,9 @@ static const struct {
 	[CVAR_SOURCE_SERVER] = { "the server's", "server" },
 	[CVAR_SOURCE_SYSTEM] = { "the system's", "system" },
 	[CVAR_SOURCE_TOOL] = { "a tool's", "tool" },
-	[CVAR_SOURCE_FILE] = { "the server file's", "file" }
+	[CVAR_SOURCE_FILE] = { "the server file's", "file" },
+	[CVAR_SOURCE_ENTRY] = { "the pool entry's", "pool entry" },
+	[CVAR_SOURCE_MODE] = { "the mode's", "mode" }
 };
 
 /*
@@ -1039,8 +1105,9 @@ unsaved. The set's origin is noted before the change hook hears of it
 ============
 */
 static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source, qboolean force ) {
+	int	serverLayer = Cvar_ServerLayer( source );
 	char **layer = source == CVAR_SOURCE_SERVER ? &var->serverString :
-		source == CVAR_SOURCE_FILE ? &var->fileString : &var->userString;
+		serverLayer >= 0 ? &var->layerStrings[serverLayer] : &var->userString;
 	qboolean saves, locked = var->lockOrigin &&
 		( source == CVAR_SOURCE_PLAYER || source == CVAR_SOURCE_TOOL || source == CVAR_SOURCE_SCRIPT );
 	char *old;
@@ -1051,7 +1118,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	// a read only cvar's value is state, never saved, and can be large (a
 	// server's pak lists)
 	saves = source != CVAR_SOURCE_SCRIPT && source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
-		source != CVAR_SOURCE_SYSTEM && source != CVAR_SOURCE_FILE && !locked &&
+		source != CVAR_SOURCE_SYSTEM && serverLayer < 0 && !locked &&
 		!( var->flags & CVAR_ROM ) && !Cvar_SameString( var->savedString, value );
 	if ( source == CVAR_SOURCE_SERVER ) {
 		var->serverStale = qfalse;
@@ -1088,8 +1155,8 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 
 	old = cvar_changeHook && source != CVAR_SOURCE_SERVER && source != CVAR_SOURCE_SYSTEM ? CopyString( var->string ) : NULL;
 	Cvar_SetLayer( layer, value );
-	if ( layer == &var->fileString ) {
-		Cvar_SetLayer( &var->fileOrigin, value ? cvar_setOrigin : NULL );
+	if ( serverLayer >= 0 ) {
+		Cvar_SetLayer( &var->layerOrigins[serverLayer], value ? cvar_setOrigin : NULL );
 	} else if ( layer == &var->userString ) {
 		var->userSource = source;
 		Cvar_SetLayer( &var->userOrigin, NULL );
@@ -1102,7 +1169,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 		Cvar_SetLayer( &var->savedString, value );
 		Cvar_MarkSaved( var );
 	}
-	Cvar_Apply( var, force );
+	Cvar_ApplyQuietly( var, force, source == CVAR_SOURCE_ENTRY || source == CVAR_SOURCE_MODE );
 	if ( old ) {
 		cvar_changeHook( var, old, source );
 		Z_Free( old );
@@ -1669,16 +1736,33 @@ only, write protected, cheat protected), or NULL
 ============
 */
 const char *Cvar_SetFile( const char *var_name, const char *value, const char *origin ) {
+	return Cvar_SetServerLayer( var_name, value, CVAR_SOURCE_FILE, origin );
+}
+
+/*
+============
+Cvar_SetServerLayer
+
+Cvar_SetFile for any of a dedicated server's own layers: its file's
+(CVAR_SOURCE_FILE), the map pool's entry's (CVAR_SOURCE_ENTRY) or its
+mode's (CVAR_SOURCE_MODE)
+============
+*/
+const char *Cvar_SetServerLayer( const char *var_name, const char *value, cvarSource_t source, const char *origin ) {
 	cvar_t		*var = Cvar_FindVar( var_name );
 	const char	*refusal = var ? Cvar_Refusal( var ) : NULL;
+	int			layer = Cvar_ServerLayer( source );
 
-	if ( refusal && !Cvar_SameString( var->fileString, value ) ) {
+	if ( layer < 0 ) {
+		return "not one of a server's layers";
+	}
+	if ( refusal && !Cvar_SameString( var->layerStrings[layer], value ) ) {
 		return refusal;
 	}
 	if ( !var && !Cvar_ValidateString( var_name ) ) {
 		return "not a setting's name";
 	}
-	Cvar_SetFromOrigin( var_name, value, CVAR_SOURCE_FILE, origin );
+	Cvar_SetFromOrigin( var_name, value, source, origin );
 	return NULL;
 }
 
@@ -1960,7 +2044,9 @@ has one, after what Cvar_Print says, and its owner's account
 ============
 */
 void Cvar_Why_f( void ) {
-	cvar_t	*var = Cvar_FromArgs();
+	cvar_t		*var = Cvar_FromArgs();
+	qboolean	above;
+	int			i;
 
 	if ( !var ) {
 		return;
@@ -1979,9 +2065,12 @@ void Cvar_Why_f( void ) {
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
 		Cvar_PlainPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
 	}
-	if ( var->fileString ) {
-		Cvar_PlainPrintf( "  %s sets \"%s" S_COLOR_WHITE "\"%s\n", var->fileOrigin ? var->fileOrigin : "the server's file",
-			var->fileString, var->userString ? ", under the value above" : "" );
+	for ( i = 0, above = var->userString != NULL; i < CVAR_SERVER_LAYERS; i++ ) {
+		if ( var->layerStrings[i] ) {
+			Cvar_PlainPrintf( "  %s sets \"%s" S_COLOR_WHITE "\"%s\n", var->layerOrigins[i] ? var->layerOrigins[i] :
+				cvar_serverLayers[i].unnamed, var->layerStrings[i], above ? ", under the value above" : "" );
+			above = qtrue;
+		}
 	}
 	if ( var->lockOrigin ) {
 		Cvar_PlainPrintf( "  locked: %s sets it%s, so tools can't change it, and the console's change lasts "
@@ -2958,8 +3047,10 @@ static void Cvar_DumpVar( const cvar_t *var ) {
 	Cvar_DumpField( "latched", secret ? NULL : var->latchedString );
 	Cvar_DumpField( "default", secret ? NULL : var->resetString );
 	Cvar_DumpField( "source", cvar_sources[ Cvar_Source( var ) ].name );
-	Cvar_DumpField( "file", secret ? NULL : var->fileString );
-	Cvar_DumpField( "fileOrigin", var->fileOrigin );
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		Cvar_DumpField( cvar_serverLayers[i].dump, secret ? NULL : var->layerStrings[i] );
+		Cvar_DumpField( cvar_serverLayers[i].dumpOrigin, var->layerOrigins[i] );
+	}
 	Cvar_DumpField( "locked", var->lockOrigin );
 	Cvar_DumpAppend( ",\"flags\":[" );
 	for ( i = 0; i < ARRAY_LEN( cvar_flags ); i++ ) {
@@ -3044,6 +3135,7 @@ Unsets a cvar
 cvar_t *Cvar_Unset(cvar_t *cv)
 {
 	cvar_t *next = cv->next;
+	int i;
 
 	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
 	cvar_modifiedFlags |= cv->flags;
@@ -3062,8 +3154,10 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	Cvar_SetLayer( &cv->serverString, NULL );
 	Cvar_ClearUser( cv );
 	Cvar_SetLayer( &cv->savedString, NULL );
-	Cvar_SetLayer( &cv->fileString, NULL );
-	Cvar_SetLayer( &cv->fileOrigin, NULL );
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		Cvar_SetLayer( &cv->layerStrings[i], NULL );
+		Cvar_SetLayer( &cv->layerOrigins[i], NULL );
+	}
 	Cvar_SetLayer( &cv->lockOrigin, NULL );
 	Cvar_SetLayer( &cv->lockString, NULL );
 	Cvar_SetLayer( &cv->reason, NULL );
@@ -3888,16 +3982,21 @@ static int Cvar_CompareOrigins( const void *a, const void *b ) {
 Cvar_WarnFile
 
 Cvar_WarnConfigs for a dedicated server's own file's lines (server.toml),
-which a cvar's player's value doesn't hide
+its pool entry's and mode's included, which a cvar's player's value
+doesn't hide
 ============
 */
 static void Cvar_WarnFile( void ) {
 	cvar_t		*var;
-	const char	*warning;
+	const char	*warning, *origin;
+	int			i;
 
 	for ( var = cvar_vars; var; var = var->next ) {
-		if ( var->fileOrigin && !var->userOrigin && ( warning = Cvar_ConfigWarning( var ) ) != NULL ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s\n", var->fileOrigin, warning );
+		for ( i = 0, origin = NULL; i < CVAR_SERVER_LAYERS && !origin; i++ ) {
+			origin = var->layerOrigins[i];
+		}
+		if ( origin && !var->userOrigin && ( warning = Cvar_ConfigWarning( var ) ) != NULL ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s\n", origin, warning );
 		}
 	}
 }

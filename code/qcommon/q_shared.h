@@ -957,6 +957,15 @@ default values.
 // nothing outside the Cvar_*() functions should modify these fields!
 typedef struct cvar_s cvar_t;
 
+// a dedicated server's layers of a cvar's value, below the player's,
+// highest first (cvar_t's layerStrings)
+typedef enum {
+	CVAR_LAYER_ENTRY,	// the map pool's entry playing (server.toml's [[pool]])
+	CVAR_LAYER_FILE,	// the server's file (server.toml)
+	CVAR_LAYER_MODE,	// the mode the map plays
+	CVAR_SERVER_LAYERS
+} cvarServerLayer_t;
+
 struct cvar_s {
 	char			*name;
 	char			*string;
@@ -996,12 +1005,14 @@ struct cvar_s {
 	char		*userOrigin;	// the config line that set userString ("server.cfg:12", Cmd_Origin), or NULL
 	int		originOrder;	// when it was set, among the cvars a config's line set
 	char		*savedString;
-	// below the player's value, a dedicated server's own file's
-	// (server.toml, Cvar_SetFile), with the line that set it; and what
-	// locked it, the command line or an environment variable, which tools
-	// can't change (Cvar_LockedBy)
-	char		*fileString;
-	char		*fileOrigin;
+	// below the player's value, a dedicated server's own, highest first
+	// (cvarServerLayer_t): its map pool's entry playing, its file
+	// (server.toml) and the mode the map plays (Cvar_SetServerLayer), each
+	// with what set it ("pool entry q3dm17 (server.toml:22)",
+	// "server.toml:12", "mode ctf"); and what locked it, the command line or
+	// an environment variable, which tools can't change (Cvar_LockedBy)
+	char		*layerStrings[CVAR_SERVER_LAYERS];
+	char		*layerOrigins[CVAR_SERVER_LAYERS];
 	char		*lockOrigin;
 	char		*lockString;	// the value it locked, which settings_revert goes back to
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)

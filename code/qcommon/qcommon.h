@@ -802,7 +802,9 @@ typedef enum {
 	CVAR_SOURCE_SYSTEM,	// the system's or browser's own change (fullscreen, a maximized window's size): for this run only
 	CVAR_SOURCE_TOOL,	// a tool managing the program through an engine extension (a hosting panel): saved if archived,
 				// as the console's, and its value runs restricted, as game code's (Cvar_RunsRestricted)
-	CVAR_SOURCE_FILE	// a dedicated server's own file (server.toml), below the player's: never saved
+	CVAR_SOURCE_FILE,	// a dedicated server's own file (server.toml), below the player's: never saved
+	CVAR_SOURCE_ENTRY,	// the map pool's entry playing (server.toml's [[pool]]), above the file: never saved
+	CVAR_SOURCE_MODE	// the mode it plays, built in or server.toml's [mode.*], below the file: never saved
 } cvarSource_t;
 
 cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
@@ -874,6 +876,14 @@ const char	*Cvar_SetFile( const char *var_name, const char *value, const char *o
 // a dedicated server's file's value (CVAR_SOURCE_FILE), below the player's,
 // with the line that set it ("server.toml:12"); NULL drops it. Returns why a
 // set would refuse it (read only, write protected, cheat protected), or NULL
+const char	*Cvar_SetServerLayer( const char *var_name, const char *value, cvarSource_t source, const char *origin );
+// Cvar_SetFile for any of a dedicated server's layers: CVAR_SOURCE_FILE,
+// the map pool entry's CVAR_SOURCE_ENTRY above it or its mode's
+// CVAR_SOURCE_MODE below it, with what set it ("pool entry q3dm17
+// (server.toml:22)", "mode ctf"), which cvar_why prints
+const char	*Cvar_UnderUser( const cvar_t *var, cvarSource_t *source );
+// a cvar's value without the player's or a server's: the pool entry's, the
+// file's, the mode's or the default, and whose (source, if not NULL)
 void	Cvar_DropUser( cvar_t *var );
 // drops the player's value and the saved choice, so the file's or the
 // default shows again: a live change reverted or kept in the file
@@ -886,9 +896,9 @@ const char	*Cvar_LockedBy( const char *var_name );
 void	Cvar_ForEach( void ( *fn )( cvar_t *var, void *context ), void *context );
 // calls fn for every cvar, which it mustn't unset
 void	Cvar_SetChangeHook( void ( *hook )( cvar_t *var, const char *old, cvarSource_t source ) );
-// hook is called after a set changes a cvar's player or file value, with its
-// value before, and the set's source: one at a time, a dedicated server's
-// keeper of its settings (hosting/)
+// hook is called after a set changes a cvar's player, file, pool entry or
+// mode value, with its value before, and the set's source: one at a time, a
+// dedicated server's keeper of its settings (hosting/)
 const char	*Cvar_SavedChoice( const cvar_t *var, int scopes );
 // what a config of these scopes (cvarScope_t bits) saves of it, or NULL
 const char	*Cvar_SourceName( cvarSource_t source );
