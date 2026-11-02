@@ -359,6 +359,9 @@ char *CON_Input( void )
 	char key;
 	field_t *history;
 	size_t Q_UNUSED_VAR size;
+#ifndef DEDICATED
+	char shown[80];
+#endif
 
 	if(ttycon_on)
 	{
@@ -405,15 +408,22 @@ char *CON_Input( void )
 						text[0] = '\0';
 					}
 
-					// push it in history
-					Hist_Add(&TTY_con);
+					// push it in history, but a secret command's words, a
+					// pairing code's, reach neither it nor the log
 					CON_Hide();
-					Com_Printf("%s%s\n", TTY_CONSOLE_PROMPT, TTY_con.buffer);
+					if (Com_IsSecretCommand(TTY_con.buffer, shown, sizeof(shown))) {
+						Com_Printf("%s%s\n", TTY_CONSOLE_PROMPT, shown);
+					} else {
+						Hist_Add(&TTY_con);
+						Com_Printf("%s%s\n", TTY_CONSOLE_PROMPT, TTY_con.buffer);
+					}
 					Field_Clear(&TTY_con);
 					CON_Show();
 #else
-					// push it in history
-					Hist_Add(&TTY_con);
+					// push it in history, but a secret command's words
+					if (!Com_IsSecretCommand(TTY_con.buffer, NULL, 0)) {
+						Hist_Add(&TTY_con);
+					}
 					Q_strncpyz(text, TTY_con.buffer, sizeof(text));
 					Field_Clear(&TTY_con);
 					key = '\n';

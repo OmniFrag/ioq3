@@ -949,13 +949,18 @@ static void SV_FlushRedirect( char *outputbuf ) {
 SVC_RconText
 
 The command an rcon packet carries, for the log, with the value hidden
-when it sets a secret: a private cvar, or a password the game reads
+when it sets a secret: a private cvar, or a password the game reads; and
+a secret command's words (Com_IsSecretCommand), a pairing code's
 ===============
 */
 static const char *SVC_RconText( void ) {
 	static const char *setters[] = { "set", "seta", "sets", "setu", "toggle" };
 	static char	text[MAX_STRING_CHARS];
 	int			name = 2, i;
+
+	if ( Com_IsSecretCommand( Cmd_ArgsFrom( 2 ), text, sizeof( text ) ) ) {
+		return text;
+	}
 
 	for ( i = 0; i < ARRAY_LEN( setters ); i++ ) {
 		if ( !Q_stricmp( Cmd_Argv( 2 ), setters[i] ) ) {

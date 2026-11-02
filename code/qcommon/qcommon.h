@@ -713,6 +713,9 @@ void	Cmd_CommandCompletion( void(*callback)(const char *s) );
 // callback with each valid string
 void Cmd_SetCommandCompletionFunc( const char *command,
 	completionFunc_t complete );
+// a command whose words after its own are a secret (Com_IsSecretCommand)
+void		Cmd_SetCommandSecret( const char *command );
+qboolean	Cmd_IsSecret( const char *command );
 void Cmd_CompleteArgument( const char *command, char *args, int argNum );
 void Cmd_CompleteCfgName( char *args, int argNum );
 
@@ -1174,9 +1177,13 @@ qboolean FS_CreatePath (const char *OSPath);
 // for NULL (identity.h)
 struct identKey_s;
 qboolean	Com_RandomSecret( byte *bytes, int length );
-// a command line whose words are secrets (login, login_set, claim), and
-// the console's echo of a line, which shows only such a line's command
+// a command line whose words are secrets, and whether a command is one
+// (Com_IsSecretWord: the built-in login, login_set and claim, a command
+// marked with Cmd_SetCommandSecret, or an extension's EXT_COMMAND_SECRET
+// client command); and the console's echo of a line, which shows only
+// such a line's command
 qboolean	Com_IsSecretCommand( const char *line, char *shown, int size );
+qboolean	Com_IsSecretWord( const char *word );
 void		Com_EchoField( const char *line );
 const struct identKey_s	*Com_DeviceKey( void );
 const struct identKey_s	*Com_ServerKey( void );

@@ -2119,12 +2119,12 @@ static qboolean SV_IsChatCommand( const char *cmd ) {
 }
 
 // whether a chat line starts with a command whose words are secrets
-// (hooks.h's EXT_COMMAND_SECRET), typed into the chat by mistake:
+// (Com_IsSecretWord), typed into the chat by mistake:
 // "/login alice hunter2", "claim KQ7M-3XRP"; a tell's, or an order's
 // (gc), after the player it goes to
 static qboolean SV_ChatHoldsSecret( const char *chat, const char *text ) {
 	char	word[32];
-	int		n, flags;
+	int		n;
 
 	text += strspn( text, " \"" );
 	if ( Q_stristr( chat, "tell" ) || !Q_stricmp( chat, "gc" ) ) {
@@ -2138,7 +2138,7 @@ static qboolean SV_ChatHoldsSecret( const char *chat, const char *text ) {
 		word[n] = text[n];
 	}
 	word[n] = '\0';
-	return Hooks_FindClientCommand( word, &flags ) >= 0 && ( flags & EXT_COMMAND_SECRET );
+	return Com_IsSecretWord( word );
 }
 
 /*
@@ -2226,7 +2226,6 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 	int		seq;
 	const char	*s;
 	qboolean clientOk = qtrue;
-	int		flags;
 
 	seq = MSG_ReadLong( msg );
 	s = MSG_ReadString( msg );
@@ -2236,9 +2235,12 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 		return qtrue;
 	}
 
-	// a secret command's words aren't printed, even for developers
+	// a secret command's words aren't printed, even for developers, nor
+	// one's whose words run one: "admin login alice hunter2"
 	Cmd_TokenizeString( s );
-	if ( Hooks_FindClientCommand( Cmd_Argv( 0 ), &flags ) >= 0 && ( flags & EXT_COMMAND_SECRET ) ) {
+	if ( !com_developer->integer ) {
+		// nothing's printed
+	} else if ( Com_IsSecretWord( Cmd_Argv( 0 ) ) || Com_IsSecretCommand( Cmd_ArgsFrom( 1 ), NULL, 0 ) ) {
 		Com_DPrintf( "clientCommand: %s : %i : %s (hidden)\n", cl->name, seq, Cmd_Argv( 0 ) );
 	} else {
 		Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );

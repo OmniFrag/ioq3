@@ -1106,6 +1106,7 @@ typedef struct cmd_function_s
 	char					*name;
 	xcommand_t				function;
 	completionFunc_t	complete;
+	qboolean				secret;		// its words are a secret (Cmd_SetCommandSecret)
 } cmd_function_t;
 
 
@@ -1429,6 +1430,7 @@ void	Cmd_AddCommand( const char *cmd_name, xcommand_t function ) {
 	cmd->name = CopyString( cmd_name );
 	cmd->function = function;
 	cmd->complete = NULL;
+	cmd->secret = qfalse;
 	cmd->next = cmd_functions;
 	cmd_functions = cmd;
 }
@@ -1447,6 +1449,29 @@ void Cmd_SetCommandCompletionFunc( const char *command, completionFunc_t complet
 			return;
 		}
 	}
+}
+
+/*
+============
+Cmd_SetCommandSecret, Cmd_IsSecret
+
+A command whose words after its own are a secret, a pairing code, which
+no echo, history or log line keeps (Com_IsSecretCommand); and whether a
+command is one
+============
+*/
+void Cmd_SetCommandSecret( const char *command ) {
+	cmd_function_t	*cmd = Cmd_FindCommand( command );
+
+	if ( cmd ) {
+		cmd->secret = qtrue;
+	}
+}
+
+qboolean Cmd_IsSecret( const char *command ) {
+	cmd_function_t	*cmd = Cmd_FindCommand( command );
+
+	return cmd && cmd->secret;
 }
 
 /*

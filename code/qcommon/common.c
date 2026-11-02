@@ -5907,7 +5907,7 @@ for a secret one (Com_IsSecretCommand)
 ==================
 */
 void Com_EchoField( const char *line ) {
-	char	shown[32];
+	char	shown[80];
 
 	if ( Com_IsSecretCommand( line, shown, sizeof( shown ) ) ) {
 		Com_Printf( "]%s\n", shown );
@@ -5918,43 +5918,66 @@ void Com_EchoField( const char *line ) {
 
 /*
 ==================
+Com_IsSecretWord
+
+Whether a command is one whose words are a secret: login, login_set and
+claim, hosting/'s, which a client must know before it knows its server; a
+console command marked secret (Cmd_SetCommandSecret), a server's
+pair_accept; or a client command an extension runs as a secret
+(EXT_COMMAND_SECRET)
+==================
+*/
+qboolean Com_IsSecretWord( const char *word ) {
+	static const char *const secret[] = { "login", "login_set", "claim" };
+	int		i, flags;
+
+	for ( i = 0; i < ARRAY_LEN( secret ); i++ ) {
+		if ( !Q_stricmp( word, secret[i] ) ) {
+			return qtrue;
+		}
+	}
+	return Cmd_IsSecret( word ) || ( Hooks_FindClientCommand( word, &flags ) >= 0 && ( flags & EXT_COMMAND_SECRET ) );
+}
+
+/*
+==================
 Com_IsSecretCommand
 
 Whether a command line, with or without its leading slash, is one whose
 words are a secret (a password, a claim code), which no console echo,
-history or log may keep: login, login_set and claim, hosting/'s, which a
-client must know before it knows its server. With shown, what may be
-shown instead: "login (hidden)"
+history or log may keep (Com_IsSecretWord). With shown, what may be shown
+instead: "login (hidden)"
 ==================
 */
 qboolean Com_IsSecretCommand( const char *line, char *shown, int size ) {
-	static const char *const secret[] = { "login", "login_set", "claim" };
-	char	word[16];
-	int		i;
+	char	word[64];
 
 	// each command of the line, as the buffer splits it at ; and line
 	// breaks: "say hi; login alice hunter2" runs a login too
 	for ( ; *line; line += strcspn( line, ";\n" ), line += *line ? 1 : 0 ) {
-		const char	*p = line + strspn( line, " \t" );
+		// a quoted command is the same command: "login" alice hunter2,
+		// "/login" alice hunter2
+		const char	*p = line + strspn( line, " \t\"" );
+		int			n;
 
 		if ( *p == '/' || *p == '\\' ) {
 			p++;
+			// and a quote after it: /"login" alice hunter2
+			p += strspn( p, " \t\"" );
 		}
-		// the console's own forwarding, cmd <command>
-		if ( !Q_stricmpn( p, "cmd ", 4 ) ) {
-			p += 4;
+		n = strcspn( p, " \t\";\n" );
+		// the console's own forwarding, cmd <command>, quoted or not
+		if ( n == 3 && !Q_stricmpn( p, "cmd", 3 ) ) {
+			p += 3;
+			p += strspn( p, " \t\"" );
+			n = strcspn( p, " \t\";\n" );
 		}
-		// a quoted command is the same command: "login" alice hunter2
-		p += strspn( p, " \t\"" );
-		Com_Word( p, word, sizeof( word ) );
-		word[strcspn( word, "\"\t" )] = '\0';
-		for ( i = 0; i < ARRAY_LEN( secret ); i++ ) {
-			if ( !Q_stricmp( word, secret[i] ) ) {
-				if ( shown ) {
-					Com_sprintf( shown, size, "%s (hidden)", word );
-				}
-				return qtrue;
+		Q_strncpyz( word, p, MIN( n + 1, (int)sizeof( word ) ) );
+		if ( Com_IsSecretWord( word ) ) {
+			if ( shown ) {
+				Com_sprintf( shown, size, "%s (hidden)", word );
 			}
+			return qtrue;
 		}
 	}
 	return qfalse;

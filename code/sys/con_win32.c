@@ -600,8 +600,18 @@ char *CON_Input( void )
 	qconsole_linelen = 0;
 	CON_Show();
 
-	CON_HistAdd();
-	Com_Printf( "%s\n", qconsole_line );
+	// a secret command's words, a pairing code's, reach neither the
+	// history nor the log (Com_IsSecretCommand)
+	{
+		char	shown[80];
+
+		if ( Com_IsSecretCommand( qconsole_line, shown, sizeof( shown ) ) ) {
+			Com_Printf( "%s\n", shown );
+		} else {
+			CON_HistAdd();
+			Com_Printf( "%s\n", qconsole_line );
+		}
+	}
 
 	return qconsole_line;
 }
