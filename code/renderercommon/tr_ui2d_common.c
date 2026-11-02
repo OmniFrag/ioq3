@@ -861,15 +861,17 @@ R_CompositeLayers2D
 ===============
 */
 void R_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
-	const draw2DState_t *state ) {
+	const draw2DState_t *state, const int *input ) {
 	const filterSlot_t	*slots[MAX_FILTERS2D_PER_COMPOSITE];
 	layer2DCommand_t	*cmd;
 	int					i;
 
-	if ( !layerDepth ) {
+	if ( !R_Layers2DReady() ) {
 		return;
 	}
-	if ( source < 0 || source > layerDepth || destination < 0 || destination > layerDepth || source == destination ) {
+	// none pushed still allows the 2D target onto itself, as a backdrop at
+	// a document's top level is
+	if ( source < 0 || source > layerDepth || destination < 0 || destination > layerDepth ) {
 		ri.Printf( PRINT_WARNING, "CompositeLayers2D: layers %i and %i, of %i\n", source, destination, layerDepth );
 		return;
 	}
@@ -891,6 +893,10 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 	if ( state && !R_CheckState2D( state, NULL, "CompositeLayers2D" ) ) {
 		return;
 	}
+	// an empty input reads nothing
+	if ( input && ( input[2] <= 0 || input[3] <= 0 ) ) {
+		return;
+	}
 
 	cmd = R_QueueLayer2D( LAYER2D_COMPOSITE );
 	if ( !cmd ) {
@@ -907,6 +913,11 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 		cmd->state = *state;
 	} else {
 		Com_Memset( &cmd->state, 0, sizeof( cmd->state ) );
+	}
+	if ( input ) {
+		Com_Memcpy( cmd->input, input, sizeof( cmd->input ) );
+	} else {
+		Com_Memset( cmd->input, 0, sizeof( cmd->input ) );
 	}
 }
 

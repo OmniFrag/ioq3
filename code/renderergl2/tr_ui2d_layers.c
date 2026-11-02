@@ -42,7 +42,7 @@ typedef struct {
 #define BLUR_MAX_SIGMA	4.0f
 #define BLUR_MAX_RADIUS	12		// ui2dfilter_fp.glsl's u_BlurWeights
 
-// the layers are freed after this many frames without one pushed
+// the layers are freed after this many frames without a layer command
 #define LAYERS2D_IDLE_FRAMES	300
 
 static struct {
@@ -341,8 +341,8 @@ void RB_BindTarget2D( qboolean color ) {
 ===============
 RB_FitLayers2D
 
-Makes the layers again for the 2D target, as the first is pushed, when
-it's another, or its size or samples changed
+Makes the layers again for the 2D target, as a layer command comes with
+none pushed, when it's another, or its size or samples changed
 ===============
 */
 static void RB_FitLayers2D( void ) {
@@ -571,18 +571,15 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 
 /*
 ===============
-RB_CompositeBox2D
+RB_CompositeReach2D
 
-What a composite covers: its scissor, grown by its filters' reach, or the
-whole target; and the reach, no more than the target's size. Empty when
-the scissor is off the target
+How far a composite's filters read past what they cover, no more than the
+target's size
 ===============
 */
-static int RB_CompositeBox2D( const layer2DCommand_t *cmd, int box[4] ) {
-	const int	*s = cmd->state.scissor;
-	float		spread = 0;
-	int64_t		x0, y0, x1, y1;
-	int			i, reach;
+static int RB_CompositeReach2D( const layer2DCommand_t *cmd ) {
+	float	spread = 0;
+	int		i;
 
 	for ( i = 0; i < cmd->numFilters; i++ ) {
 		const filter2D_t	*f = &cmd->filters[i];
@@ -593,23 +590,36 @@ static int RB_CompositeBox2D( const layer2DCommand_t *cmd, int box[4] ) {
 			spread += f->params[6] * 3 + MAX( fabsf( f->params[4] ), fabsf( f->params[5] ) );
 		}
 	}
-	reach = (int)ceilf( MIN( spread, (float)( ui2dLayers.width + ui2dLayers.height ) ) );
+	return (int)ceilf( MIN( spread, (float)( ui2dLayers.width + ui2dLayers.height ) ) );
+}
 
-	if ( !( cmd->state.flags & TRIS2D_SCISSOR ) ) {
-		box[0] = box[1] = 0;
-		box[2] = ui2dLayers.width;
-		box[3] = ui2dLayers.height;
-		return reach;
+// rect (x, y, width and height, y down) grown by reach, within the target;
+// the whole target without a rect. Empty where it's off the target
+static void RB_GrowBox2D( const int *rect, int reach, int box[4] ) {
+	int64_t	x0, y0, x1, y1;
+
+	if ( !rect ) {
+		VectorSet4( box, 0, 0, ui2dLayers.width, ui2dLayers.height );
+		return;
 	}
-	x0 = MAX( 0, (int64_t)s[0] - reach );
-	y0 = MAX( 0, (int64_t)s[1] - reach );
-	x1 = MIN( ui2dLayers.width, (int64_t)s[0] + s[2] + reach );
-	y1 = MIN( ui2dLayers.height, (int64_t)s[1] + s[3] + reach );
+	x0 = MAX( 0, (int64_t)rect[0] - reach );
+	y0 = MAX( 0, (int64_t)rect[1] - reach );
+	x1 = MIN( ui2dLayers.width, (int64_t)rect[0] + rect[2] + reach );
+	y1 = MIN( ui2dLayers.height, (int64_t)rect[1] + rect[3] + reach );
 	box[0] = (int)MIN( x0, ui2dLayers.width );
 	box[1] = (int)MIN( y0, ui2dLayers.height );
 	box[2] = (int)MAX( 0, x1 - x0 );
 	box[3] = (int)MAX( 0, y1 - y0 );
-	return reach;
+}
+
+// box (x, y, width and height, y down) of src blitted to the same place in
+// dst, resolving its samples
+static void RB_CopyBox2D( FBO_t *src, FBO_t *dst, const int box[4] ) {
+	ivec4_t	glBox;
+
+	// GL's rows go up
+	VectorSet4( glBox, box[0], ui2dLayers.height - box[1] - box[3], box[2], box[3] );
+	FBO_FastBlit( src, glBox, dst, glBox, GL_COLOR_BUFFER_BIT, GL_NEAREST );
 }
 
 /*
@@ -635,13 +645,10 @@ static FBO_t *RB_LayerFbo2D( int layer, const int box[4], int reach ) {
 	int		x1 = MIN( ui2dLayers.width, box[0] + box[2] + margin + 1 );
 	int		y1 = MIN( ui2dLayers.height, box[1] + box[3] + margin + 1 );
 	int		read[4] = { x0, y0, x1 - x0, y1 - y0 };
-	ivec4_t	glBox;
 
 	RB_ClearLayer2D( layer, read );
 	if ( ui2dLayers.samples && resolve ) {
-		// GL's rows go up
-		VectorSet4( glBox, x0, ui2dLayers.height - y1, x1 - x0, y1 - y0 );
-		FBO_FastBlit( fbo, glBox, resolve, glBox, GL_COLOR_BUFFER_BIT, GL_NEAREST );
+		RB_CopyBox2D( fbo, resolve, read );
 		return resolve;
 	}
 	return fbo;
@@ -667,9 +674,6 @@ static void RB_SaveLayer2D( const layer2DCommand_t *cmd ) {
 
 	if ( !t ) {
 		return;
-	}
-	if ( !ui2dLayers.depth ) {
-		RB_FitLayers2D();
 	}
 	x0 = (int)MAX( 0, b[0] );
 	y0 = (int)MAX( 0, b[1] );
@@ -738,14 +742,18 @@ const void *RB_Layer2D( const void *data ) {
 	if ( tess.numIndexes ) {
 		RB_EndSurface();
 	}
+	// with none pushed, the layers and scratch targets are fitted to the
+	// 2D target, which a composite or save may read alone (a pop comes
+	// only after a push)
+	if ( !ui2dLayers.depth ) {
+		RB_FitLayers2D();
+	}
+	ui2dLayers.idleFrames = 0;
 
 	switch ( cmd->op ) {
 	case LAYER2D_PUSH: {
 		target2D_t	*t;
 
-		if ( !ui2dLayers.depth ) {
-			RB_FitLayers2D();
-		}
 		// the front end counts them too (R_PushLayer2D)
 		if ( ui2dLayers.depth == MAX_LAYERS2D ) {
 			break;
@@ -756,7 +764,6 @@ const void *RB_Layer2D( const void *data ) {
 		}
 		VectorSet4( ui2dLayers.cleared[ui2dLayers.depth], 0, 0, 0, 0 );
 		ui2dLayers.depth++;
-		ui2dLayers.idleFrames = 0;
 		break;
 	}
 
@@ -770,16 +777,25 @@ const void *RB_Layer2D( const void *data ) {
 		FBO_t		*dst = cmd->destination ? &ui2dLayers.layers[cmd->destination - 1].fbo : tr.renderFbo;
 		image_t		*image;
 		vec4_t		color = { 1, 1, 1, 1 };
-		int			box[4], written[4], reach, numFilters = cmd->numFilters, i;
+		const int	*scissor = ( cmd->state.flags & TRIS2D_SCISSOR ) ? cmd->state.scissor : NULL;
+		const int	*input = cmd->input[2] ? cmd->input : NULL;
+		FBO_t		*read;
+		int			box[4], out[4], written[4], reach = RB_CompositeReach2D( cmd ), numFilters = cmd->numFilters, i;
 		qboolean	clip;
 
-		reach = RB_CompositeBox2D( cmd, box );
-		if ( !box[2] || !box[3] ) {
+		// what the filters cover, the input box or the scissor, grown by
+		// their reach; and what's written, the scissor alone with an input
+		RB_GrowBox2D( input ? input : scissor, reach, box );
+		RB_GrowBox2D( scissor, input ? 0 : reach, out );
+		if ( !box[2] || !box[3] || !out[2] || !out[3] ) {
 			break;
 		}
-		image = RB_LayerFbo2D( cmd->source, box, reach )->colorImage[0];
-		// a last opacity goes into the composite
-		if ( numFilters && cmd->filters[numFilters - 1].kind == FILTER2D_OPACITY ) {
+		read = RB_LayerFbo2D( cmd->source, box, reach );
+		image = read->colorImage[0];
+		// a last opacity goes into the composite; with an input, it's a
+		// pass of its own, as into the layer of its own it stands for, so
+		// the pixels are rounded as that layer would round them
+		if ( !input && numFilters && cmd->filters[numFilters - 1].kind == FILTER2D_OPACITY ) {
 			float	alpha = cmd->filters[--numFilters].params[0];
 
 			VectorSet4( color, alpha, alpha, alpha, alpha );
@@ -787,14 +803,35 @@ const void *RB_Layer2D( const void *data ) {
 		for ( i = 0; i < numFilters; i++ ) {
 			image = RB_Filter2D( image, &cmd->filters[i], box );
 		}
-
 		// what RB_Pass2D's scissor lets it write: the box, and a pixel more
 		// to the right and below
-		VectorSet4( written, box[0], box[1], box[2] + 1, box[3] + 1 );
+		VectorSet4( written, out[0], out[1], MIN( out[2] + 1, ui2dLayers.width - out[0] ),
+			MIN( out[3] + 1, ui2dLayers.height - out[1] ) );
+		// unfiltered, the source's own picture: copied within what a pass
+		// over box writes, transparent past it as a filter's target is,
+		// when that's the destination itself (without samples), or the
+		// scissor goes past an input's box
+		if ( image == read->colorImage[0] ) {
+			int		within[4] = { box[0], box[1], MIN( box[2] + 1, ui2dLayers.width - box[0] ),
+						MIN( box[3] + 1, ui2dLayers.height - box[1] ) };
+
+			if ( image == dst->colorImage[0] || !RB_BoxWithin2D( written, within ) ) {
+				target2D_t	*copy = RB_Scratch2D( 0, NULL, NULL );
+				int			x0 = MAX( written[0], within[0] ), y0 = MAX( written[1], within[1] );
+				int			x1 = MIN( written[0] + written[2], within[0] + within[2] );
+				int			y1 = MIN( written[1] + written[3], within[1] + within[3] );
+
+				if ( x1 > x0 && y1 > y0 ) {
+					VectorSet4( within, x0, y0, x1 - x0, y1 - y0 );
+					RB_CopyBox2D( read, &copy->fbo, within );
+				}
+				image = &copy->image;
+			}
+		}
 		RB_ClearLayer2D( cmd->destination, written );
 		FBO_Bind( dst );
 		clip = R_BeginClipTest2D( &cmd->state );
-		RB_Pass2D( image, dst, FILTERMODE_COPY, color, box, NULL,
+		RB_Pass2D( image, dst, FILTERMODE_COPY, color, out, NULL,
 			cmd->blendMode == BLEND2D_REPLACE ? BLEND_REPLACE : BLEND_OVER );
 		if ( clip ) {
 			R_EndClipTest2D();
@@ -815,9 +852,10 @@ const void *RB_Layer2D( const void *data ) {
 ===============
 RB_EndFrame2D
 
-The layers a frame left pushed are popped as it ends, and freed when none
-has been pushed for a while; the 2D target is bound again for what follows
-the 2D, as a layer command leaves the framebuffer it last drew into bound
+The layers a frame left pushed are popped as it ends, and freed when no
+layer command has come for a while; the 2D target is bound again for
+what follows the 2D, as a layer command leaves the framebuffer it last
+drew into bound
 ===============
 */
 void RB_EndFrame2D( void ) {

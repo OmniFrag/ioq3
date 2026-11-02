@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		19
+#define	REF_API_VERSION		20
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -217,11 +217,15 @@ typedef struct {
 	// CompositeLayers2D puts source onto destination (blend2DMode_t)
 	// through the filters, in order, within state's scissor, grown by
 	// the filters' reach, and with TRIS2D_CLIPMASK, where the mask is; a
-	// NULL state is the whole target. What's pushed in a frame is popped
-	// at its end
+	// NULL state is the whole target. With input, a box (x, y, width and
+	// height in the target's pixels, y down), the filters work over it
+	// instead, grown by their reach, and what's written is the scissor's
+	// alone: as through a layer of its own within input, put onto
+	// destination within the scissor. Source may be destination, as for a
+	// backdrop. What's pushed in a frame is popped at its end
 	int		(*PushLayer2D)( void );
 	void	(*CompositeLayers2D)( int source, int destination, int blendMode, const int *filters, int numFilters,
-				const draw2DState_t *state );
+				const draw2DState_t *state, const int *input );
 	void	(*PopLayer2D)( void );
 	// A filter, by name, with its numbers:
 	//   opacity		alpha

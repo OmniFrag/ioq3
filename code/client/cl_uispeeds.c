@@ -186,10 +186,10 @@ static int Speeds_PushLayer2D( void ) {
 }
 
 static void Speeds_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
-		const draw2DState_t *state ) {
+		const draw2DState_t *state, const int *input ) {
 	int64_t start = CallStart( &f.retained );
 
-	real.CompositeLayers2D( source, destination, blendMode, filters, numFilters, state );
+	real.CompositeLayers2D( source, destination, blendMode, filters, numFilters, state, input );
 	CallEnd( &f.retained, start );
 }
 

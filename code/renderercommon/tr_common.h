@@ -320,6 +320,7 @@ typedef struct {
 	draw2DState_t	state;
 	int				numFilters;
 	filter2D_t		filters[MAX_FILTERS2D_PER_COMPOSITE];
+	int				input[4];			// LAYER2D_COMPOSITE's, width 0 for none
 	int				texture, box[4];	// LAYER2D_SAVE's
 } layer2DCommand_t;
 
@@ -369,7 +370,7 @@ int					R_CreatePaint2D( const paint2D_t *paint );
 void				R_DeletePaint2D( int paint );
 int					R_PushLayer2D( void );
 void				R_CompositeLayers2D( int source, int destination, int blendMode, const int *filters, int numFilters,
-						const draw2DState_t *state );
+						const draw2DState_t *state, const int *input );
 void				R_PopLayer2D( void );
 int					R_CreateFilter2D( const char *name, const float *params, int numParams );
 void				R_DeleteFilter2D( int filter );
