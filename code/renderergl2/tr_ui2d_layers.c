@@ -370,15 +370,12 @@ within read (x, y, width and height in the 2D target's pixels, y down):
 a whole clear costs a whole target's pass on a tile-based GPU. read is
 what the composite's passes can read, its blurs' 3 sigma among it, so
 three texels more cover the rest at this level: a blur's radius rounded
-up, a pass's box rounded to its texels, and a linear filter's texel. Past
-the first level, a later filter's blur that isn't halved steps in this
-target's texels, not the 2D target's pixels, so it reads up to its
-largest radius of them more
+up, a pass's box rounded to its texels, and a linear filter's texel
 ===============
 */
 static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t *inUse2, const int read[4] ) {
+	const int	margin = 3;
 	target2D_t	*t = ui2dLayers.scratch[level];
-	int			margin = level ? 3 + BLUR_MAX_RADIUS : 3;
 	int			x0, y0, x1, y1;
 
 	while ( &t->image == inUse1 || &t->image == inUse2 ) {
@@ -467,8 +464,9 @@ static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, c
 ===============
 RB_Blur2D
 
-A Gaussian blur of src at sigma pixels within box, keep untouched: halved
-in size, level by level, until a large sigma is down to BLUR_MAX_SIGMA,
+A Gaussian blur of src at sigma pixels of the 2D target within box, keep
+untouched: halved in size, level by level from src's own (an earlier
+blur's is smaller), until a large sigma is down to BLUR_MAX_SIGMA texels,
 then blurred across and down; read as RB_Scratch2D takes it
 ===============
 */
@@ -476,14 +474,18 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 	float		weights[BLUR_MAX_RADIUS + 1], sum;
 	image_t		*image = src;
 	target2D_t	*t;
-	int			level = 0, radius, i;
+	int			start = 0, level, radius, i;
 
+	// sigma in src's texels
+	while ( start < BLUR_LEVELS - 1 && MAX( 1, ui2dLayers.width >> start ) > src->width ) {
+		start++;
+	}
+	sigma /= 1 << start;
 	if ( sigma < 0.5f ) {
 		return src;
 	}
-	while ( sigma > BLUR_MAX_SIGMA && level < BLUR_LEVELS - 1 ) {
+	for ( level = start; sigma > BLUR_MAX_SIGMA && level < BLUR_LEVELS - 1; level++ ) {
 		sigma *= 0.5f;
-		level++;
 	}
 	radius = MIN( BLUR_MAX_RADIUS, (int)ceilf( sigma * 3.0f ) );
 	for ( i = 0, sum = 0; i <= radius; i++ ) {
@@ -495,7 +497,7 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 	}
 
 	// each halving filtered linearly from the one before
-	for ( i = 1; i <= level; i++ ) {
+	for ( i = start + 1; i <= level; i++ ) {
 		t = RB_Scratch2D( i, image, keep, read );
 		RB_Pass2D( image, &t->fbo, FILTERMODE_COPY, NULL, box, NULL, BLEND_REPLACE );
 		image = &t->image;
