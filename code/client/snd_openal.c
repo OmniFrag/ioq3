@@ -1011,12 +1011,11 @@ static void S_AL_SrcKill(srcHandle_t src)
 		S_AL_NewLoopMaster(curSource, qtrue);
 	}
 
-	// Stop it if it's playing
-	if(curSource->isPlaying)
-	{
-		qalSourceStop(curSource->alSource);
-		curSource->isPlaying = qfalse;
-	}
+	// Stopped whatever isPlaying says: macOS's OpenAL can refuse to detach
+	// the buffer of a source it reports playing (isPlaying can be wrong),
+	// initial or stopped, unless it's stopped first ("Invalid operation")
+	qalSourceStop(curSource->alSource);
+	curSource->isPlaying = qfalse;
 
 	// Detach any buffers
 	qalSourcei(curSource->alSource, AL_BUFFER, 0);
@@ -1776,8 +1775,10 @@ static void S_AL_FreeStreamChannel( int stream )
 	if ((stream < 0) || (stream >= MAX_RAW_STREAMS))
 		return;
 
-	// Detach any buffers
-	qalSourcei(streamSources[stream], AL_BUFFER, 0);
+	// Release the output streamSource first: S_AL_SrcKill stops it and
+	// detaches its buffers, which can't be deleted while queued
+	S_AL_SrcUnlock(streamSourceHandles[stream]);
+	S_AL_SrcKill(streamSourceHandles[stream]);
 
 	// Delete the buffers
 	if (streamNumBuffers[stream] > 0) {
@@ -1785,9 +1786,6 @@ static void S_AL_FreeStreamChannel( int stream )
 		streamNumBuffers[stream] = 0;
 	}
 
-	// Release the output streamSource
-	S_AL_SrcUnlock(streamSourceHandles[stream]);
-	S_AL_SrcKill(streamSourceHandles[stream]);
 	streamSources[stream] = 0;
 	streamSourceHandles[stream] = -1;
 }
@@ -1935,8 +1933,6 @@ void S_AL_StreamDie( int stream )
 		return;
 
 	streamPlaying[stream] = qfalse;
-	qalSourceStop(streamSources[stream]);
-
 	S_AL_FreeStreamChannel(stream);
 }
 
@@ -2682,8 +2678,9 @@ qboolean S_AL_Init( soundInterface_t *si )
 	alContext = qalcCreateContext( alDevice, NULL );
 	if( !alContext )
 	{
-		QAL_Shutdown( );
+		// before QAL_Shutdown, which unloads the library and its calls
 		qalcCloseDevice( alDevice );
+		QAL_Shutdown( );
 		Com_Printf( "Failed to create OpenAL context.\n" );
 		return qfalse;
 	}
