@@ -360,6 +360,16 @@ qboolean Sys_RandomBytes( byte *string, int len )
 
 /*
 ================
+Sys_Environment
+================
+*/
+char **Sys_Environment( void )
+{
+	return _environ;
+}
+
+/*
+================
 Sys_GetCurrentUser
 ================
 */

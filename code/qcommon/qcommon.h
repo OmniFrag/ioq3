@@ -792,8 +792,9 @@ typedef enum {
 	CVAR_SOURCE_SESSION,	// the command line: for this run only
 	CVAR_SOURCE_SERVER,	// a server's requirement, until Cvar_EndServerValues drops it
 	CVAR_SOURCE_SYSTEM,	// the system's or browser's own change (fullscreen, a maximized window's size): for this run only
-	CVAR_SOURCE_TOOL	// a tool managing the program through an engine extension (a hosting panel): saved if archived,
+	CVAR_SOURCE_TOOL,	// a tool managing the program through an engine extension (a hosting panel): saved if archived,
 				// as the console's, and its value runs restricted, as game code's (Cvar_RunsRestricted)
+	CVAR_SOURCE_FILE	// a dedicated server's own file (server.toml), below the player's: never saved
 } cvarSource_t;
 
 cvar_t	*Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t source, qboolean force );
@@ -842,6 +843,7 @@ typedef struct {
 	const char	*type;		// "bool", "enum", "bits", "int", "number", "text", "password"
 	const char	*unit;		// what a number counts, as said after it: "frames a second", "ms"
 	const char	*applies;	// "at once", "next map", "vid_restart", "snd_restart", "restart"; NULL: as its flags say
+	const char	*key;		// a server's file's friendly name for it, "public_name", or NULL for its own
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
@@ -856,6 +858,42 @@ int	Cvar_DeclaredScope( const char *var_name );
 void	Cvar_NoteOrigin( cvar_t *var, const char *origin );
 // where the set that gave a cvar its player's value came from, for
 // cvar_why: a config's line, "server.cfg:12", or a tool, "the tool \"panel\""
+cvar_t	*Cvar_SetFromOrigin( const char *var_name, const char *value, cvarSource_t source, const char *origin );
+// Cvar_SetFrom with that origin, noted as the set takes, before the change
+// hook hears of it
+const char	*Cvar_SetFile( const char *var_name, const char *value, const char *origin );
+// a dedicated server's file's value (CVAR_SOURCE_FILE), below the player's,
+// with the line that set it ("server.toml:12"); NULL drops it. Returns why a
+// set would refuse it (read only, write protected, cheat protected), or NULL
+void	Cvar_DropUser( cvar_t *var );
+// drops the player's value and the saved choice, so the file's or the
+// default shows again: a live change reverted or kept in the file
+void	Cvar_Lock( cvar_t *var, const char *origin );
+// locks a cvar at the value the command line or the environment set
+// (cvar_t's lockOrigin and lockString)
+const char	*Cvar_LockedBy( const char *var_name );
+// what locked a cvar, "the command line" or "OMNIFRAG_SV_HOSTNAME", or NULL:
+// a tool's set is refused, the console's lasts for the run
+void	Cvar_ForEach( void ( *fn )( cvar_t *var, void *context ), void *context );
+// calls fn for every cvar, which it mustn't unset
+void	Cvar_SetChangeHook( void ( *hook )( cvar_t *var, const char *old, cvarSource_t source ) );
+// hook is called after a set changes a cvar's player or file value, with its
+// value before, and the set's source: one at a time, a dedicated server's
+// keeper of its settings (hosting/)
+const char	*Cvar_SavedChoice( const cvar_t *var, int scopes );
+// what a config of these scopes (cvarScope_t bits) saves of it, or NULL
+const char	*Cvar_SourceName( cvarSource_t source );
+// a source's name, as cvar_dump gives it: "file", "player", "tool"
+const cvarDeclaration_t	*Cvar_Declaration( const char *var_name );
+// a cvar's declaration (Cvar_SetDeclarations), by its name, or NULL
+qboolean	Cvar_Secret( const cvar_t *var );
+// whether its value is kept out of what's shown of it: a password's
+const char	*Cvar_ValidValue( cvar_t *var, const char *value );
+// the value as the cvar's range takes it, quietly
+void	Cvar_RangeWords( const cvar_t *var, char *words, int size );
+// its range in words, as help gives it: "whole numbers 10 to 125"
+int		Cvar_UTF8Length( const char *text );
+// how many bytes the UTF-8 character at text takes, or 0 if it isn't one
 
 void	Cvar_WarnConfigs( void );
 // warns of config lines that set a cvar to no effect, once the game is up
@@ -1073,6 +1111,12 @@ void	FS_FreeFileList( char **list );
 qboolean FS_FileExists_HomeData( const char *file );
 
 qboolean FS_CreatePath (const char *OSPath);
+long FS_ReadOSFile( const char *ospath, void **buffer );
+// a file outside the search path, into memory (Z_Free it), or -1
+qboolean FS_ReplaceOSFile( const char *ospath, const void *data, int length, qboolean private );
+qboolean FS_AppendOSFile( const char *ospath, const void *data, int length, qboolean private );
+// writes outside the search path: whole, through a file renamed over it,
+// or added to the end; private ones readable by their user alone
 
 int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, int enableDll);
 
@@ -1278,6 +1322,7 @@ qboolean FS_CheckDirTraversal(const char *checkdir);
 qboolean FS_InvalidGameDir(const char *gamedir);
 // names a server may give the files a client writes (fs_name.c)
 qboolean FS_EngineFolder( const char *name );
+qboolean FS_ValidFolderName( const char *name );
 qboolean FS_ValidDownloadName( const char *name );
 qboolean FS_ValidDownloadPak( const char *gameDir, const char *name );
 // FS_ValidDownloadName's rule for a pak's game directory and name apart, as
@@ -1416,6 +1461,13 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 #define EXIT_NO_NETWORK		5	// a dedicated server can't open its port
 #define EXIT_MAP_ERROR		6	// a dedicated server's map ended with an error
 									// again soon after it was started again
+#define EXIT_CONFIG_ERROR	7	// a dedicated server's own file (server.toml)
+									// doesn't parse or holds a bad value
+qboolean	Com_ReadServerConfig( void );
+// for an extension keeping a dedicated server's settings (Hooks_ReadServerSettings):
+// the engine's own config of them, q3config_server.cfg, applied if there is one
+const char	*Com_ServerSavedValue( const cvar_t *var );
+// what a dedicated server saves of a cvar: its choice where it isn't the default
 void 		Com_Quit_f( void ) Q_NO_RETURN;
 void		Com_Quit( char *reason ) Q_NO_RETURN;
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
@@ -1757,6 +1809,8 @@ void	Sys_UnloadDll( void *dllHandle );
 qboolean Sys_DllExtension( const char *name );
 
 char	*Sys_GetCurrentUser( void );
+char	**Sys_Environment( void );
+// the process's environment variables, NAME=value each, ending with NULL
 
 void	QDECL Sys_Error( const char *error, ...) Q_NO_RETURN Q_PRINTF_FUNC(1, 2);
 void	Sys_ErrorExit( int status, const char *message ) Q_NO_RETURN;

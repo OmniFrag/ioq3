@@ -874,9 +874,9 @@ void Sys_ParseArgs( int argc, char **argv )
 				"map, and reports what they did; it exits 0 if the server would start.\n"
 				"\n"
 				"The server exits 0 when it's quit or stopped, 4 if the game's data isn't\n"
-				"installed, 5 if it can't open its port, and 6 if its map ends with an\n"
-				"error twice within five minutes; after one such error it starts the map\n"
-				"again.\n"
+				"installed, 5 if it can't open its port, 6 if its map ends with an error\n"
+				"twice within five minutes (after one such error it starts the map again),\n"
+				"and 7 if its server.toml doesn't read, which it says with the line.\n"
 #endif
 				"\n"
 				"  +set <cvar> <value>   set a cvar for this run\n"

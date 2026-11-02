@@ -1122,7 +1122,10 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		
 		Q_strcat( remaining, sizeof(remaining), cmd_aux);
 		
+		// its sets' origin, for cvar_why and the settings' history
+		Cmd_PushOrigin( va( "rcon from %s", NET_AdrToString( from ) ), 0 );
 		Cmd_ExecuteString (remaining);
+		Cmd_PopOrigin();
 
 	}
 

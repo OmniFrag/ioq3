@@ -51,7 +51,7 @@ static void Cvar_MarkSaved( const cvar_t *var );
 cvar_t *Cvar_Unset( cvar_t *cv );
 static const cvarDeclaration_t	*cvar_declared;	// the game's declarations (Cvar_SetDeclarations)
 static int			cvar_numDeclared;
-static const cvarDeclaration_t *Cvar_Declaration( const char *var_name );
+const cvarDeclaration_t *Cvar_Declaration( const char *var_name );
 static void Cvar_ForgetModules( cvar_t *var );
 
 /*
@@ -436,6 +436,9 @@ static const char *Cvar_Resolve( const cvar_t *var ) {
 	if ( var->userString ) {
 		return var->userString;
 	}
+	if ( var->fileString ) {
+		return var->fileString;
+	}
 	return var->resetString;
 }
 
@@ -498,13 +501,14 @@ Cvar_SavedValue
 What the config gets for a cvar, if it's archived: the player's choice,
 where it isn't the default, as a number too (Cvar_SameValue), so a
 value written as "0.800000" by an older engine gives way to a later
-default. One no code has registered has no default yet, and its value is
-kept as it is
+default. Below a server file's value (fileString), that value is the
+default: a choice of the built-in default over it is kept. One no code
+has registered has no default yet, and its value is kept as it is
 ============
 */
 static const char *Cvar_SavedValue( const cvar_t *var ) {
-	if ( !var->savedString ||
-		( !( var->flags & CVAR_USER_CREATED ) && Cvar_SameValue( var->savedString, var->resetString ) ) ) {
+	if ( !var->savedString || ( var->fileString ? Cvar_SameValue( var->savedString, var->fileString ) :
+		!( var->flags & CVAR_USER_CREATED ) && Cvar_SameValue( var->savedString, var->resetString ) ) ) {
 		return NULL;
 	}
 	return var->savedString;
@@ -703,6 +707,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->integer = atoi(var->string);
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->userOrigin = var->savedString = NULL;
+	var->fileString = var->fileOrigin = var->lockOrigin = var->lockString = NULL;
 	var->userSource = CVAR_SOURCE_DEFAULT;
 	var->declaredScope = Cvar_DeclaredScope( var_name );
 	var->serverStale = qfalse;
@@ -749,6 +754,9 @@ cvarSource_t Cvar_Source( const cvar_t *var ) {
 	if ( var->userString ) {
 		return var->userSource;
 	}
+	if ( var->fileString ) {
+		return CVAR_SOURCE_FILE;
+	}
 	return CVAR_SOURCE_DEFAULT;
 }
 
@@ -766,7 +774,8 @@ static const struct {
 	[CVAR_SOURCE_SESSION] = { "the command line's", "command line" },
 	[CVAR_SOURCE_SERVER] = { "the server's", "server" },
 	[CVAR_SOURCE_SYSTEM] = { "the system's", "system" },
-	[CVAR_SOURCE_TOOL] = { "a tool's", "tool" }
+	[CVAR_SOURCE_TOOL] = { "a tool's", "tool" },
+	[CVAR_SOURCE_FILE] = { "the server file's", "file" }
 };
 
 /*
@@ -1009,20 +1018,32 @@ void Cvar_SetSafe( const char *var_name, const char *value )
 }
 
 
+// told of each set that changes a cvar's player or file value (Cvar_SetChangeHook)
+static void ( *cvar_changeHook )( cvar_t *var, const char *old, cvarSource_t source );
+
+// where the set under way came from (Cvar_SetFromOrigin), noted as it takes
+static const char *cvar_setOrigin;
+
 /*
 ============
 Cvar_SetVar
 
 Sets a cvar in its source's layer (NULL clears it) and gives it the value
 its layers resolve to. The player's own value is the latest of their
-changes, the command line's or theirs, and only theirs is saved. A set
-that isn't forced is refused (Cvar_Refusal), leaving the layers as they
-were
+changes, the command line's or theirs, and only theirs is saved; a
+dedicated server's file's (CVAR_SOURCE_FILE) is below it, never saved. A
+set that isn't forced is refused (Cvar_Refusal), leaving the layers as
+they were. A cvar the command line or the environment locked (Cvar_Lock)
+refuses a tool's set, and the console's and a script's last for this run,
+unsaved. The set's origin is noted before the change hook hears of it
 ============
 */
 static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source, qboolean force ) {
-	char **layer = source == CVAR_SOURCE_SERVER ? &var->serverString : &var->userString;
-	qboolean saves;
+	char **layer = source == CVAR_SOURCE_SERVER ? &var->serverString :
+		source == CVAR_SOURCE_FILE ? &var->fileString : &var->userString;
+	qboolean saves, locked = var->lockOrigin &&
+		( source == CVAR_SOURCE_PLAYER || source == CVAR_SOURCE_TOOL || source == CVAR_SOURCE_SCRIPT );
+	char *old;
 
 	if ( value ) {
 		value = Cvar_Validate( var, value, qtrue );
@@ -1030,7 +1051,7 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	// a read only cvar's value is state, never saved, and can be large (a
 	// server's pak lists)
 	saves = source != CVAR_SOURCE_SCRIPT && source != CVAR_SOURCE_SESSION && source != CVAR_SOURCE_SERVER &&
-		source != CVAR_SOURCE_SYSTEM &&
+		source != CVAR_SOURCE_SYSTEM && source != CVAR_SOURCE_FILE && !locked &&
 		!( var->flags & CVAR_ROM ) && !Cvar_SameString( var->savedString, value );
 	if ( source == CVAR_SOURCE_SERVER ) {
 		var->serverStale = qfalse;
@@ -1050,19 +1071,43 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 			}
 			return var;
 		}
+		if ( locked && source == CVAR_SOURCE_TOOL ) {
+			Com_Printf( "%s is set by %s, which tools can't change.\n", var->name, var->lockOrigin );
+			return var;
+		}
+		if ( locked && value && strcmp( value, var->string ) ) {
+			if ( cvar_setOrigin ) {
+				Com_Printf( "%s sets %s over %s's value: this lasts until the next start sets it again.\n",
+					cvar_setOrigin, var->name, var->lockOrigin );
+			} else {
+				Com_Printf( "%s is set by %s: this change lasts until the next start sets it again.\n",
+					var->name, var->lockOrigin );
+			}
+		}
 	}
 
+	old = cvar_changeHook && source != CVAR_SOURCE_SERVER && source != CVAR_SOURCE_SYSTEM ? CopyString( var->string ) : NULL;
 	Cvar_SetLayer( layer, value );
-	if ( layer == &var->userString ) {
+	if ( layer == &var->fileString ) {
+		Cvar_SetLayer( &var->fileOrigin, value ? cvar_setOrigin : NULL );
+	} else if ( layer == &var->userString ) {
 		var->userSource = source;
-		// a text set gives it its origin after (Cvar_SetFromText)
 		Cvar_SetLayer( &var->userOrigin, NULL );
+		// a set's, not a reset's, which leaves no value to have come from it
+		if ( cvar_setOrigin && value ) {
+			Cvar_NoteOrigin( var, cvar_setOrigin );
+		}
 	}
 	if ( saves ) {
 		Cvar_SetLayer( &var->savedString, value );
 		Cvar_MarkSaved( var );
 	}
-	return Cvar_Apply( var, force );
+	Cvar_Apply( var, force );
+	if ( old ) {
+		cvar_changeHook( var, old, source );
+		Z_Free( old );
+	}
+	return var;
 }
 
 /*
@@ -1122,6 +1167,25 @@ cvar_t *Cvar_SetFrom( const char *var_name, const char *value, cvarSource_t sour
 		var->untrusted = qfalse;
 		var->pakSet = qfalse;
 	}
+	return var;
+}
+
+/*
+============
+Cvar_SetFromOrigin
+
+Cvar_SetFrom with where the set came from ("server.cfg:12", "the tool
+\"panel\"", "rcon from 203.0.113.5:27960"), noted as it takes, so cvar_why
+and the change hook have it
+============
+*/
+cvar_t *Cvar_SetFromOrigin( const char *var_name, const char *value, cvarSource_t source, const char *origin ) {
+	const char	*outer = cvar_setOrigin;
+	cvar_t		*var;
+
+	cvar_setOrigin = origin;
+	var = Cvar_SetFrom( var_name, value, source, qfalse );
+	cvar_setOrigin = outer;
 	return var;
 }
 
@@ -1229,7 +1293,7 @@ Cvar_Declaration
 A name's declaration, or NULL
 ============
 */
-static const cvarDeclaration_t *Cvar_Declaration( const char *var_name ) {
+const cvarDeclaration_t *Cvar_Declaration( const char *var_name ) {
 	return bsearch( var_name, cvar_declared, cvar_numDeclared, sizeof( cvar_declared[0] ), Cvar_CompareName );
 }
 
@@ -1595,6 +1659,128 @@ void Cvar_NoteOrigin( cvar_t *var, const char *origin ) {
 
 /*
 ============
+Cvar_SetFile
+
+A dedicated server's own file's value for a cvar (server.toml), below the
+player's, with the line that set it; NULL drops it. One no code has
+registered yet is made, as a set makes it, its value its default until
+code registers it. Returns why it was refused, as a set would be (read
+only, write protected, cheat protected), or NULL
+============
+*/
+const char *Cvar_SetFile( const char *var_name, const char *value, const char *origin ) {
+	cvar_t		*var = Cvar_FindVar( var_name );
+	const char	*refusal = var ? Cvar_Refusal( var ) : NULL;
+
+	if ( refusal && !Cvar_SameString( var->fileString, value ) ) {
+		return refusal;
+	}
+	if ( !var && !Cvar_ValidateString( var_name ) ) {
+		return "not a setting's name";
+	}
+	Cvar_SetFromOrigin( var_name, value, CVAR_SOURCE_FILE, origin );
+	return NULL;
+}
+
+/*
+============
+Cvar_DropUser
+============
+*/
+void Cvar_DropUser( cvar_t *var ) {
+	char	*old = cvar_changeHook ? CopyString( var->string ) : NULL;
+	cvarSource_t	source = var->userSource;
+
+	Cvar_ClearUser( var );
+	var->userSource = CVAR_SOURCE_DEFAULT;
+	if ( var->savedString ) {
+		Cvar_SetLayer( &var->savedString, NULL );
+		Cvar_MarkSaved( var );
+	}
+	Cvar_Apply( var, qfalse );
+	if ( old ) {
+		cvar_changeHook( var, old, source );
+		Z_Free( old );
+	}
+}
+
+/*
+============
+Cvar_Lock
+============
+*/
+void Cvar_Lock( cvar_t *var, const char *origin ) {
+	Cvar_SetLayer( &var->lockOrigin, origin );
+	Cvar_SetLayer( &var->lockString, var->userString );
+}
+
+/*
+============
+Cvar_LockedBy
+============
+*/
+const char *Cvar_LockedBy( const char *var_name ) {
+	cvar_t	*var = Cvar_FindVar( var_name );
+
+	return var ? var->lockOrigin : NULL;
+}
+
+/*
+============
+Cvar_ForEach
+
+Calls fn for every cvar, which it mustn't unset
+============
+*/
+void Cvar_ForEach( void ( *fn )( cvar_t *var, void *context ), void *context ) {
+	cvar_t	*var;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->name ) {
+			fn( var, context );
+		}
+	}
+}
+
+/*
+============
+Cvar_SourceName
+
+A source's name, as cvar_dump gives it: "file", "player", "tool"
+============
+*/
+const char *Cvar_SourceName( cvarSource_t source ) {
+	return source >= 0 && source < ARRAY_LEN( cvar_sources ) ? cvar_sources[source].name : "default";
+}
+
+/*
+============
+Cvar_SavedChoice
+
+What a config of these scopes (cvarScope_t bits) saves of a cvar, as
+Cvar_WriteVariables writes it: an archived cvar's choice where it isn't
+the default, or NULL
+============
+*/
+const char *Cvar_SavedChoice( const cvar_t *var, int scopes ) {
+	if ( !( var->flags & CVAR_ARCHIVE ) || !( scopes & CVAR_SCOPE_BIT( Cvar_Scope( var ) ) ) ||
+		!Q_stricmp( var->name, "cl_cdkey" ) ) {
+		return NULL;
+	}
+	return Cvar_SavedValue( var );
+}
+
+/*
+============
+Cvar_SetChangeHook
+============
+*/
+void Cvar_SetChangeHook( void ( *hook )( cvar_t *var, const char *old, cvarSource_t source ) ) {
+	cvar_changeHook = hook;
+}
+
+/*
+============
 Cvar_SetFromText
 
 A set by a command, the player's, or game code's if the command is
@@ -1620,13 +1806,12 @@ static cvar_t *Cvar_SetFromText( const char *var_name, const char *value )
 		return NULL;
 	}
 
-	var = Cvar_SetFrom( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
-		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, qfalse );
+	// a set that takes notes its origin; a refused one leaves the earlier
+	var = Cvar_SetFromOrigin( var_name, value, Cmd_IsScript() || pak ? CVAR_SOURCE_SCRIPT :
+		Cmd_IsRestricted() ? CVAR_SOURCE_GAME : CVAR_SOURCE_PLAYER, Cmd_Origin() );
 
 	if ( var ) {
-		// a set that took: a refused one leaves the earlier origin
 		if ( value && var->userString && !strcmp( var->userString, value ) ) {
-			Cvar_NoteOrigin( var, Cmd_Origin() );
 			var->pakSet = pak;
 		}
 		// what a pak's config set runs restricted when it's run (vstr)
@@ -1793,6 +1978,16 @@ void Cvar_Why_f( void ) {
 	}
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
 		Cvar_PlainPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
+	}
+	if ( var->fileString ) {
+		Cvar_PlainPrintf( "  %s sets \"%s" S_COLOR_WHITE "\"%s\n", var->fileOrigin ? var->fileOrigin : "the server's file",
+			var->fileString, var->userString ? ", under the value above" : "" );
+	}
+	if ( var->lockOrigin ) {
+		Cvar_PlainPrintf( "  locked: %s sets it%s, so tools can't change it, and the console's change lasts "
+			"until the next start\n", var->lockOrigin, var->lockString && !Cvar_SameString( var->lockString,
+			var->userString ) ? va( " to \"%s" S_COLOR_WHITE "\", under the value above for this run",
+			var->lockString ) : "" );
 	}
 	if ( var->reason ) {
 		Cvar_PlainPrintf( "  %s\n", var->reason );
@@ -2290,7 +2485,7 @@ The values a cvar takes, in words, from its range: "whole numbers 10 to
 125", "0 or 1", "numbers 0 or more"; empty with no range
 ============
 */
-static void Cvar_RangeWords( const cvar_t *var, char *words, int size ) {
+void Cvar_RangeWords( const cvar_t *var, char *words, int size ) {
 	const char	*numbers = var->integral ? "whole numbers" : "numbers";
 	qboolean	hasMin = Cvar_HasMin( var ), hasMax = Cvar_HasMax( var );
 	char		min[32], max[32];
@@ -2500,7 +2695,7 @@ Cvar_UTF8Length
 How many bytes the UTF-8 character at text takes, or 0 if it isn't one
 ============
 */
-static int Cvar_UTF8Length( const char *text ) {
+int Cvar_UTF8Length( const char *text ) {
 	const unsigned char	*s = (const unsigned char *)text;
 	int					length, i;
 
@@ -2696,6 +2891,29 @@ static qboolean Cvar_IsSecret( const cvar_t *var, const cvarDeclaration_t *decla
 
 /*
 ============
+Cvar_Secret
+
+Whether a cvar's value is kept out of what's shown of it: a password's,
+a private one's (Cvar_IsSecret)
+============
+*/
+qboolean Cvar_Secret( const cvar_t *var ) {
+	return Cvar_IsSecret( var, Cvar_Declaration( var->name ) );
+}
+
+/*
+============
+Cvar_ValidValue
+
+What a cvar would take a value as, in its range (Cvar_Validate), quietly
+============
+*/
+const char *Cvar_ValidValue( cvar_t *var, const char *value ) {
+	return Cvar_Validate( var, value, qfalse );
+}
+
+/*
+============
 Cvar_ExtRefused
 
 For extensions (hooks.h): whether a settings screen may not show a cvar,
@@ -2740,6 +2958,9 @@ static void Cvar_DumpVar( const cvar_t *var ) {
 	Cvar_DumpField( "latched", secret ? NULL : var->latchedString );
 	Cvar_DumpField( "default", secret ? NULL : var->resetString );
 	Cvar_DumpField( "source", cvar_sources[ Cvar_Source( var ) ].name );
+	Cvar_DumpField( "file", secret ? NULL : var->fileString );
+	Cvar_DumpField( "fileOrigin", var->fileOrigin );
+	Cvar_DumpField( "locked", var->lockOrigin );
 	Cvar_DumpAppend( ",\"flags\":[" );
 	for ( i = 0; i < ARRAY_LEN( cvar_flags ); i++ ) {
 		if ( var->flags & cvar_flags[i].flag ) {
@@ -2841,6 +3062,10 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	Cvar_SetLayer( &cv->serverString, NULL );
 	Cvar_ClearUser( cv );
 	Cvar_SetLayer( &cv->savedString, NULL );
+	Cvar_SetLayer( &cv->fileString, NULL );
+	Cvar_SetLayer( &cv->fileOrigin, NULL );
+	Cvar_SetLayer( &cv->lockOrigin, NULL );
+	Cvar_SetLayer( &cv->lockString, NULL );
 	Cvar_SetLayer( &cv->reason, NULL );
 
 	if(cv->prev)
@@ -3660,6 +3885,25 @@ static int Cvar_CompareOrigins( const void *a, const void *b ) {
 
 /*
 ============
+Cvar_WarnFile
+
+Cvar_WarnConfigs for a dedicated server's own file's lines (server.toml),
+which a cvar's player's value doesn't hide
+============
+*/
+static void Cvar_WarnFile( void ) {
+	cvar_t		*var;
+	const char	*warning;
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( var->fileOrigin && !var->userOrigin && ( warning = Cvar_ConfigWarning( var ) ) != NULL ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s\n", var->fileOrigin, warning );
+		}
+	}
+}
+
+/*
+============
 Cvar_WarnConfigs
 
 Warns, once each and in the order they ran, of a config's lines that set
@@ -3678,6 +3922,7 @@ void Cvar_WarnConfigs( void ) {
 		count += var->userOrigin != NULL;
 	}
 	if ( !count ) {
+		Cvar_WarnFile();
 		return;
 	}
 	set = Z_Malloc( count * sizeof( *set ) );
@@ -3693,4 +3938,5 @@ void Cvar_WarnConfigs( void ) {
 		}
 	}
 	Z_Free( set );
+	Cvar_WarnFile();
 }

@@ -234,6 +234,42 @@ void Hooks_ClientDropped( int clientNum, const char *reason ) {
 	}
 }
 
+/*
+===============
+Hooks_ReadServerSettings
+
+Every extension's, as it may run before the extensions start
+===============
+*/
+qboolean Hooks_ReadServerSettings( qboolean reload ) {
+	qboolean	handled = qfalse;
+	int		i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->readServerSettings && engineExtensions[i]->readServerSettings( reload ) ) {
+			handled = qtrue;
+		}
+	}
+	return handled;
+}
+
+/*
+===============
+Hooks_WriteServerSettings
+===============
+*/
+qboolean Hooks_WriteServerSettings( void ) {
+	qboolean	handled = qfalse;
+	int		i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->writeServerSettings && engineExtensions[i]->writeServerSettings() ) {
+			handled = qtrue;
+		}
+	}
+	return handled;
+}
+
 void Hooks_MapSpawned( void ) {
 	HOOKS_CALL( mapSpawned, () );
 }

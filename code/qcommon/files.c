@@ -34,6 +34,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "unzip.h"
 #include "content.h"
 #include <errno.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#else
+#include <io.h>
+#endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -1015,13 +1021,143 @@ long FS_BaseDir_FOpenFileRead(const char *filename, fileHandle_t *fp)
 
 /*
 ===========
+FS_OpenOSFile
+
+A file outside the search path opened to write, its folders made: a
+private one readable by its user alone (umask 077), as tokens and a
+server's own state are
+===========
+*/
+static FILE *FS_OpenOSFile( const char *ospath, const char *mode, qboolean private ) {
+	FILE	*f;
+#ifndef _WIN32
+	mode_t	saved;
+#endif
+
+	if ( FS_CreatePath( ospath ) ) {
+		return NULL;
+	}
+#ifndef _WIN32
+	saved = umask( private ? 0077 : 0022 );
+#endif
+	f = Sys_FOpen( ospath, mode );
+#ifndef _WIN32
+	umask( saved );
+#endif
+	return f;
+}
+
+/*
+===========
+FS_ReplaceOSFile
+
+Replaces a file outside the search path whole, through a file beside it
+of this process's own, flushed to the disk and renamed over it, so a crash
+leaves the old one or the new: a private one readable by its user alone,
+another keeping the mode it had. Another, an admin's, may be a link, or
+a file a container mounts alone, which a rename can't replace: the link's
+target is replaced, and the mounted file written in place. --check writes
+nothing
+===========
+*/
+qboolean FS_ReplaceOSFile( const char *ospath, const void *data, int length, qboolean private ) {
+	char		target[MAX_OSPATH], tmp[MAX_OSPATH];
+	FILE		*f;
+	qboolean	ok;
+#ifndef _WIN32
+	struct stat	st;
+	qboolean	kept;
+#endif
+
+	if ( com_check ) {
+		return qfalse;
+	}
+	// ospath may be a va() buffer, which the calls below reuse
+	Q_strncpyz( target, ospath, sizeof( target ) );
+#ifndef _WIN32
+	if ( !private ) {
+		// malloc's, as PATH_MAX may be past MAX_OSPATH
+		char	*resolved = realpath( ospath, NULL );
+
+		if ( resolved ) {
+			Q_strncpyz( target, resolved, sizeof( target ) );
+			free( resolved );
+		}
+	}
+#endif
+	if ( Com_sprintf( tmp, sizeof( tmp ), "%s.%d.tmp", target, Sys_PID() ) >= (int)sizeof( tmp ) ) {
+		return qfalse;
+	}
+#ifndef _WIN32
+	kept = !private && stat( target, &st ) == 0;
+#endif
+	f = FS_OpenOSFile( tmp, "wb", private );
+	if ( !f ) {
+		return qfalse;
+	}
+	ok = (int)fwrite( data, 1, length, f ) == length && fflush( f ) == 0;
+#ifdef _WIN32
+	ok = ok && _commit( _fileno( f ) ) == 0;
+#else
+	ok = ok && fsync( fileno( f ) ) == 0;
+	if ( kept ) {
+		ok = ok && fchmod( fileno( f ), st.st_mode & 07777 ) == 0;
+	}
+#endif
+	ok = fclose( f ) == 0 && ok;
+	if ( ok && Sys_Rename( tmp, target ) ) {
+		return qtrue;
+	}
+	remove( tmp );
+	if ( !ok || private ) {
+		return qfalse;
+	}
+	// a mounted file: written in place, as an editor would
+	f = Sys_FOpen( target, "r+b" );
+	if ( !f ) {
+		return qfalse;
+	}
+	ok = (int)fwrite( data, 1, length, f ) == length && fflush( f ) == 0;
+#ifdef _WIN32
+	ok = ok && _chsize( _fileno( f ), length ) == 0;
+#else
+	ok = ok && ftruncate( fileno( f ), length ) == 0;
+#endif
+	return fclose( f ) == 0 && ok;
+}
+
+/*
+===========
+FS_AppendOSFile
+
+Adds to the end of a file outside the search path, made if it isn't
+there, private as FS_OpenOSFile makes it. --check writes nothing
+===========
+*/
+qboolean FS_AppendOSFile( const char *ospath, const void *data, int length, qboolean private ) {
+	FILE		*f;
+	qboolean	ok;
+
+	if ( com_check ) {
+		return qfalse;
+	}
+	f = FS_OpenOSFile( ospath, "ab", private );
+	if ( !f ) {
+		return qfalse;
+	}
+	ok = (int)fwrite( data, 1, length, f ) == length;
+	return fclose( f ) == 0 && ok;
+}
+
+/*
+===========
 FS_ReadOSFile
 
 A file outside the search path, into memory from the main zone (free it
 with Z_Free)
 ===========
 */
-static long FS_ReadOSFile( const char *ospath, void **buffer )
+long FS_ReadOSFile( const char *ospath, void **buffer )
 {
 	FILE	*f = Sys_FOpen( ospath, "rb" );
 	long	length;
@@ -7089,19 +7225,43 @@ FS_ServerDir
 A dedicated server's own directory in each home's game directory, for
 what's its alone: its saved settings, qconsole.log, games.log, PID file
 and bans, while servers sharing a home share paks and scripts.
-"servers/<port>", by the port it answers on (NET_ServerPort), fixed for
-the run before the config is read. "" on a client
+"servers/<sv_instance>", or without a name "servers/<port>", by the port
+it answers on (NET_ServerPort), fixed for the run before the config is
+read. A name is letters, digits, - and _, up to 32, as it's a folder's
+name on every system; another stops the server. "" on a client
 ================
 */
 const char *FS_ServerDir( void )
 {
 	static char	dir[MAX_QPATH];
+	cvar_t		*instance;
+	const char	*c;
 
 	if ( Com_IsClient() ) {
 		return "";
 	}
 	if ( !dir[0] ) {
-		Com_sprintf( dir, sizeof( dir ), "servers/%d", NET_ServerPort() );
+		instance = Cvar_Get( "sv_instance", "", CVAR_INIT | CVAR_PROTECTED );
+		Cvar_SetDescription( instance, "Name of this server among those sharing a home\n"
+			"Its folder is servers/<name> in the game directory, and its Omniwire instance server-<name>; "
+			"empty uses the port, servers/27960, as before. Letters, digits, - and _, up to 32, set on the "
+			"command line or in the environment (OMNIFRAG_SV_INSTANCE)." );
+		for ( c = instance->string; *c; c++ ) {
+			if ( !isalnum( (unsigned char)*c ) && *c != '-' && *c != '_' ) {
+				break;
+			}
+		}
+		// and not one Windows keeps for a device, con or com1
+		if ( *c || strlen( instance->string ) > 32 ||
+			( instance->string[0] && !FS_ValidFolderName( instance->string ) ) ) {
+			Com_ErrorExit( EXIT_CONFIG_ERROR, "sv_instance \"%s\" isn't a server's name: letters, digits, - and _, "
+				"up to 32, and not a name Windows keeps for a device", instance->string );
+		}
+		if ( instance->string[0] ) {
+			Com_sprintf( dir, sizeof( dir ), "servers/%s", instance->string );
+		} else {
+			Com_sprintf( dir, sizeof( dir ), "servers/%d", NET_ServerPort() );
+		}
 	}
 	return dir;
 }

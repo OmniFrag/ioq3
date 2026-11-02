@@ -89,6 +89,17 @@ static qboolean FS_ValidName( const char *name, size_t length ) {
 
 /*
 ================
+FS_ValidFolderName
+
+FS_ValidName for a name of its own, whole
+================
+*/
+qboolean FS_ValidFolderName( const char *name ) {
+	return FS_ValidName( name, strlen( name ) );
+}
+
+/*
+================
 FS_EngineFolder
 
 Whether a valid name (FS_ValidName) is one of the folders the engine keeps
