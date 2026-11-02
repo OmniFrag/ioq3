@@ -365,11 +365,21 @@ RB_Scratch2D
 
 A scratch target at a level, made when first needed, other than the ones
 in use; there are always enough. It's cleared, so what a pass reads past
-the box it drew is transparent, not an earlier composite's
+the box it drew is transparent, not an earlier composite's, but only
+within read (x, y, width and height in the 2D target's pixels, y down):
+a whole clear costs a whole target's pass on a tile-based GPU. read is
+what the composite's passes can read, its blurs' 3 sigma among it, so
+three texels more cover the rest at this level: a blur's radius rounded
+up, a pass's box rounded to its texels, and a linear filter's texel. Past
+the first level, a later filter's blur that isn't halved steps in this
+target's texels, not the 2D target's pixels, so it reads up to its
+largest radius of them more
 ===============
 */
-static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t *inUse2 ) {
+static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t *inUse2, const int read[4] ) {
 	target2D_t	*t = ui2dLayers.scratch[level];
+	int			margin = level ? 3 + BLUR_MAX_RADIUS : 3;
+	int			x0, y0, x1, y1;
 
 	while ( &t->image == inUse1 || &t->image == inUse2 ) {
 		t++;
@@ -378,7 +388,17 @@ static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t
 		R_MakeTarget2D( t, MAX( 1, ui2dLayers.width >> level ), MAX( 1, ui2dLayers.height >> level ), 0, NULL );
 	}
 	FBO_Bind( &t->fbo );
-	FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+	x0 = MAX( 0, ( read[0] >> level ) - margin );
+	y0 = MAX( 0, ( read[1] >> level ) - margin );
+	x1 = MIN( t->fbo.width, ( ( read[0] + read[2] ) >> level ) + margin + 1 );
+	y1 = MIN( t->fbo.height, ( ( read[1] + read[3] ) >> level ) + margin + 1 );
+	if ( x0 > 0 || y0 > 0 || x1 < t->fbo.width || y1 < t->fbo.height ) {
+		ivec4_t	box = { x0, y0, x1 - x0, y1 - y0 };
+
+		RB_ClearBoxes2D( &box, 1 );
+	} else {
+		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+	}
 	return t;
 }
 
@@ -449,10 +469,10 @@ RB_Blur2D
 
 A Gaussian blur of src at sigma pixels within box, keep untouched: halved
 in size, level by level, until a large sigma is down to BLUR_MAX_SIGMA,
-then blurred across and down
+then blurred across and down; read as RB_Scratch2D takes it
 ===============
 */
-static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const int box[4] ) {
+static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const int box[4], const int read[4] ) {
 	float		weights[BLUR_MAX_RADIUS + 1], sum;
 	image_t		*image = src;
 	target2D_t	*t;
@@ -476,7 +496,7 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 
 	// each halving filtered linearly from the one before
 	for ( i = 1; i <= level; i++ ) {
-		t = RB_Scratch2D( i, image, keep );
+		t = RB_Scratch2D( i, image, keep, read );
 		RB_Pass2D( image, &t->fbo, FILTERMODE_COPY, NULL, box, NULL, BLEND_REPLACE );
 		image = &t->image;
 	}
@@ -485,7 +505,7 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 	qglUniform1i( filterUniforms.blurRadius, radius );
 	qglUniform1fv( filterUniforms.blurWeights, radius + 1, weights );
 	for ( i = 0; i < 2; i++ ) {
-		t = RB_Scratch2D( level, image, keep );
+		t = RB_Scratch2D( level, image, keep, read );
 		qglUniform2f( filterUniforms.blurDirection, !i, i );
 		RB_Pass2D( image, &t->fbo, FILTERMODE_BLUR, NULL, box, NULL, BLEND_REPLACE );
 		image = &t->image;
@@ -498,22 +518,22 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 RB_Filter2D
 
 Applies a filter to src within box, into a scratch target, whose image it
-returns
+returns; read as RB_Scratch2D takes it
 ===============
 */
-static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int box[4] ) {
+static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int box[4], const int read[4] ) {
 	const float	*p = filter->params;
 	image_t		*shadow = NULL;
 	target2D_t	*dst;
 	vec4_t		color;
 
 	if ( filter->kind == FILTER2D_BLUR ) {
-		return RB_Blur2D( src, p[0], NULL, box );
+		return RB_Blur2D( src, p[0], NULL, box, read );
 	}
 	if ( filter->kind == FILTER2D_DROP_SHADOW ) {
-		shadow = RB_Blur2D( src, p[6], src, box );
+		shadow = RB_Blur2D( src, p[6], src, box, read );
 	}
-	dst = RB_Scratch2D( 0, src, shadow );
+	dst = RB_Scratch2D( 0, src, shadow, read );
 
 	switch ( filter->kind ) {
 	case FILTER2D_DROP_SHADOW:
@@ -780,7 +800,7 @@ const void *RB_Layer2D( const void *data ) {
 		const int	*scissor = ( cmd->state.flags & TRIS2D_SCISSOR ) ? cmd->state.scissor : NULL;
 		const int	*input = cmd->input[2] ? cmd->input : NULL;
 		FBO_t		*read;
-		int			box[4], out[4], written[4], reach = RB_CompositeReach2D( cmd ), numFilters = cmd->numFilters, i;
+		int			box[4], reads[4], out[4], written[4], reach = RB_CompositeReach2D( cmd ), numFilters = cmd->numFilters, i;
 		qboolean	clip;
 
 		// what the filters cover, the input box or the scissor, grown by
@@ -789,6 +809,22 @@ const void *RB_Layer2D( const void *data ) {
 		RB_GrowBox2D( scissor, input ? 0 : reach, out );
 		if ( !box[2] || !box[3] || !out[2] || !out[3] ) {
 			break;
+		}
+		// what RB_Pass2D's scissor lets it write: the box, and a pixel more
+		// to the right and below
+		VectorSet4( written, out[0], out[1], MIN( out[2] + 1, ui2dLayers.width - out[0] ),
+			MIN( out[3] + 1, ui2dLayers.height - out[1] ) );
+		// what the passes can read of a scratch target (RB_Scratch2D): over
+		// box, a drop shadow's, moved by its offset, and a blur's, by its
+		// radius; and the last pass's, what it writes, which with an input
+		// can go past box
+		RB_GrowBox2D( box, reach, reads );
+		{
+			int		x0 = MIN( reads[0], written[0] ), y0 = MIN( reads[1], written[1] );
+			int		x1 = MAX( reads[0] + reads[2], written[0] + written[2] );
+			int		y1 = MAX( reads[1] + reads[3], written[1] + written[3] );
+
+			VectorSet4( reads, x0, y0, x1 - x0, y1 - y0 );
 		}
 		read = RB_LayerFbo2D( cmd->source, box, reach );
 		image = read->colorImage[0];
@@ -801,12 +837,8 @@ const void *RB_Layer2D( const void *data ) {
 			VectorSet4( color, alpha, alpha, alpha, alpha );
 		}
 		for ( i = 0; i < numFilters; i++ ) {
-			image = RB_Filter2D( image, &cmd->filters[i], box );
+			image = RB_Filter2D( image, &cmd->filters[i], box, reads );
 		}
-		// what RB_Pass2D's scissor lets it write: the box, and a pixel more
-		// to the right and below
-		VectorSet4( written, out[0], out[1], MIN( out[2] + 1, ui2dLayers.width - out[0] ),
-			MIN( out[3] + 1, ui2dLayers.height - out[1] ) );
 		// unfiltered, the source's own picture: copied within what a pass
 		// over box writes, transparent past it as a filter's target is,
 		// when that's the destination itself (without samples), or the
@@ -816,7 +848,7 @@ const void *RB_Layer2D( const void *data ) {
 						MIN( box[3] + 1, ui2dLayers.height - box[1] ) };
 
 			if ( image == dst->colorImage[0] || !RB_BoxWithin2D( written, within ) ) {
-				target2D_t	*copy = RB_Scratch2D( 0, NULL, NULL );
+				target2D_t	*copy = RB_Scratch2D( 0, NULL, NULL, reads );
 				int			x0 = MAX( written[0], within[0] ), y0 = MAX( written[1], within[1] );
 				int			x1 = MIN( written[0] + written[2], within[0] + within[2] );
 				int			y1 = MIN( written[1] + written[3], within[1] + within[3] );
