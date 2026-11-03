@@ -471,6 +471,18 @@ static qboolean R_CheckShape2D( const paint2D_t *paint ) {
 
 /*
 ===============
+R_Caps2D
+
+The retained 2D's caps, what a renderer doesn't set false
+===============
+*/
+static void R_Caps2D( caps2D_t *caps ) {
+	Com_Memset( caps, 0, sizeof( *caps ) );
+	r_renderer2D.caps( caps );
+}
+
+/*
+===============
 R_CreatePaint2D
 
 Keeps a paint once it's checked; 0 when it's malformed, there's no room,
@@ -484,7 +496,7 @@ int R_CreatePaint2D( const paint2D_t *paint ) {
 	if ( !store2DOpen ) {
 		return 0;
 	}
-	r_renderer2D.caps( &caps );
+	R_Caps2D( &caps );
 	if ( !paint || !caps.paints || (unsigned)paint->kind > PAINT2D_MSDF || ( paint->kind == PAINT2D_MSDF && !caps.msdf ) ) {
 		ri.Printf( PRINT_DEVELOPER, "CreatePaint2D: kind %i isn't drawn\n", paint ? (int)paint->kind : -1 );
 		return 0;
@@ -651,7 +663,7 @@ void R_SetClipMask2D( clipMaskOp_t op, int geometry, const draw2DState_t *state 
 	if ( !store2DOpen ) {
 		return;
 	}
-	r_renderer2D.caps( &caps );
+	R_Caps2D( &caps );
 	if ( !caps.clipMask ) {
 		return;
 	}
@@ -741,7 +753,7 @@ static qboolean R_Layers2DReady( void ) {
 	if ( !store2DOpen ) {
 		return qfalse;
 	}
-	r_renderer2D.caps( &caps );
+	R_Caps2D( &caps );
 	return caps.layers;
 }
 
