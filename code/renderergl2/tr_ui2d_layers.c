@@ -71,7 +71,8 @@ enum {
 	FILTERMODE_COLOR_MATRIX,
 	FILTERMODE_BLUR,
 	FILTERMODE_SHADOW,
-	FILTERMODE_MASK
+	FILTERMODE_MASK,
+	FILTERMODE_BLUR_MATRIX
 };
 
 static const vec4_t	transparent = { 0, 0, 0, 0 };
@@ -462,15 +463,39 @@ static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, c
 
 /*
 ===============
+RB_SetColorMatrix2D
+
+A color matrix filter's uniforms
+===============
+*/
+static void RB_SetColorMatrix2D( const filter2D_t *filter ) {
+	const float	*p = filter->params;
+	// by columns, as GL takes it
+	mat4_t		m = { p[0], p[5], p[10], p[15], p[1], p[6], p[11], p[16], p[2], p[7], p[12], p[17], p[3], p[8], p[13], p[18] };
+
+	GLSL_BindProgram( &tr.ui2dFilterShader );
+	qglUniformMatrix4fv( filterUniforms.colorMatrix, 1, GL_FALSE, m );
+	qglUniform4f( filterUniforms.colorOffset, p[4], p[9], p[14], p[19] );
+	qglUniform1f( filterUniforms.colorScale, tr.frameLight );
+}
+
+/*
+===============
 RB_Blur2D
 
 A Gaussian blur of src at sigma pixels of the 2D target within box, keep
 untouched: halved in size, level by level from src's own (an earlier
 blur's is smaller), until a large sigma is down to BLUR_MAX_SIGMA texels,
-then blurred across and down; read as RB_Scratch2D takes it
+then blurred across and down; read as RB_Scratch2D takes it. With
+matrix, a color matrix after the blur, done in its last pass, which saves
+a pass of its own: at the blur's level, before it's scaled up, so it
+differs from the matrix's own pass by a few steps of 255 in some pixels
 ===============
 */
-static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const int box[4], const int read[4] ) {
+static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int box[4], const int read[4] );
+
+static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const int box[4], const int read[4],
+	const filter2D_t *matrix ) {
 	float		weights[BLUR_MAX_RADIUS + 1], sum;
 	image_t		*image = src;
 	target2D_t	*t;
@@ -482,7 +507,7 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 	}
 	sigma /= 1 << start;
 	if ( sigma < 0.5f ) {
-		return src;
+		return matrix ? RB_Filter2D( src, matrix, box, read ) : src;
 	}
 	for ( level = start; sigma > BLUR_MAX_SIGMA && level < BLUR_LEVELS - 1; level++ ) {
 		sigma *= 0.5f;
@@ -503,13 +528,16 @@ static image_t *RB_Blur2D( image_t *src, float sigma, const image_t *keep, const
 		image = &t->image;
 	}
 
+	if ( matrix ) {
+		RB_SetColorMatrix2D( matrix );
+	}
 	GLSL_BindProgram( &tr.ui2dFilterShader );
 	qglUniform1i( filterUniforms.blurRadius, radius );
 	qglUniform1fv( filterUniforms.blurWeights, radius + 1, weights );
 	for ( i = 0; i < 2; i++ ) {
 		t = RB_Scratch2D( level, image, keep, read );
 		qglUniform2f( filterUniforms.blurDirection, !i, i );
-		RB_Pass2D( image, &t->fbo, FILTERMODE_BLUR, NULL, box, NULL, BLEND_REPLACE );
+		RB_Pass2D( image, &t->fbo, i && matrix ? FILTERMODE_BLUR_MATRIX : FILTERMODE_BLUR, NULL, box, NULL, BLEND_REPLACE );
 		image = &t->image;
 	}
 	return image;
@@ -530,10 +558,10 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 	vec4_t		color;
 
 	if ( filter->kind == FILTER2D_BLUR ) {
-		return RB_Blur2D( src, p[0], NULL, box, read );
+		return RB_Blur2D( src, p[0], NULL, box, read, NULL );
 	}
 	if ( filter->kind == FILTER2D_DROP_SHADOW ) {
-		shadow = RB_Blur2D( src, p[6], src, box, read );
+		shadow = RB_Blur2D( src, p[6], src, box, read, NULL );
 	}
 	dst = RB_Scratch2D( 0, src, shadow, read );
 
@@ -546,17 +574,10 @@ static image_t *RB_Filter2D( image_t *src, const filter2D_t *filter, const int b
 		RB_Pass2D( src, &dst->fbo, FILTERMODE_COPY, NULL, box, NULL, BLEND_OVER );
 		break;
 
-	case FILTER2D_COLOR_MATRIX: {
-		// by columns, as GL takes it
-		mat4_t	m = { p[0], p[5], p[10], p[15], p[1], p[6], p[11], p[16], p[2], p[7], p[12], p[17], p[3], p[8], p[13], p[18] };
-
-		GLSL_BindProgram( &tr.ui2dFilterShader );
-		qglUniformMatrix4fv( filterUniforms.colorMatrix, 1, GL_FALSE, m );
-		qglUniform4f( filterUniforms.colorOffset, p[4], p[9], p[14], p[19] );
-		qglUniform1f( filterUniforms.colorScale, tr.frameLight );
+	case FILTER2D_COLOR_MATRIX:
+		RB_SetColorMatrix2D( filter );
 		RB_Pass2D( src, &dst->fbo, FILTERMODE_COLOR_MATRIX, NULL, box, NULL, BLEND_REPLACE );
 		break;
-	}
 
 	case FILTER2D_MASK: {
 		texture2D_t	*mask = R_GetTexture2D( filter->texture, qtrue );
@@ -839,7 +860,17 @@ const void *RB_Layer2D( const void *data ) {
 			VectorSet4( color, alpha, alpha, alpha, alpha );
 		}
 		for ( i = 0; i < numFilters; i++ ) {
-			image = RB_Filter2D( image, &cmd->filters[i], box, reads );
+			// a blur's last pass takes a color matrix after it, as in a
+			// backdrop's blur() saturate() or a filter's blur() grayscale(),
+			// but one adding alpha, which the blur's wider scissor at a
+			// smaller size would spread past the box
+			if ( cmd->filters[i].kind == FILTER2D_BLUR && i + 1 < numFilters &&
+				cmd->filters[i + 1].kind == FILTER2D_COLOR_MATRIX && cmd->filters[i + 1].params[19] <= 0 ) {
+				image = RB_Blur2D( image, cmd->filters[i].params[0], NULL, box, reads, &cmd->filters[i + 1] );
+				i++;
+			} else {
+				image = RB_Filter2D( image, &cmd->filters[i], box, reads );
+			}
 		}
 		// unfiltered, the source's own picture: copied within what a pass
 		// over box writes, transparent past it as a filter's target is,

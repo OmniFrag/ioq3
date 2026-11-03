@@ -5,7 +5,8 @@ uniform sampler2D u_MaskMap;
 // the texture times u_Color, 1 a color matrix, on colors in display units,
 // which the 2D draws at u_ColorScale (tr.frameLight), 2 a blur along
 // u_BlurDirection, 3 its alpha in u_Color, for a shadow, 4 the texture
-// times u_MaskMap's coverage, placed by u_MaskTransform and clear around it
+// times u_MaskMap's coverage, placed by u_MaskTransform and clear around
+// it, 5 the blur then the color matrix, in one pass
 uniform int    u_FilterMode;
 uniform vec4   u_Color;
 uniform vec2   u_InvTexRes;
@@ -21,18 +22,21 @@ uniform vec4   u_MaskChannel;		// which of u_MaskMap's holds its coverage
 varying vec2   var_TexCoord;
 
 
+vec4 ColorMatrix(vec4 texel)
+{
+	vec4 c = vec4(texel.a > 0.0 ? texel.rgb / (texel.a * u_ColorScale) : vec3(0.0), texel.a);
+	vec4 o = clamp(u_ColorMatrix * c + u_ColorOffset, 0.0, 1.0);
+
+	return vec4(o.rgb * (o.a * u_ColorScale), o.a);
+}
+
 void main()
 {
 	vec4 texel = texture2D(u_DiffuseMap, var_TexCoord);
 
 	if (u_FilterMode == 1)
-	{
-		vec4 c = vec4(texel.a > 0.0 ? texel.rgb / (texel.a * u_ColorScale) : vec3(0.0), texel.a);
-		vec4 o = clamp(u_ColorMatrix * c + u_ColorOffset, 0.0, 1.0);
-
-		gl_FragColor = vec4(o.rgb * (o.a * u_ColorScale), o.a);
-	}
-	else if (u_FilterMode == 2)
+		gl_FragColor = ColorMatrix(texel);
+	else if (u_FilterMode == 2 || u_FilterMode == 5)
 	{
 		vec2 step = u_BlurDirection * u_InvTexRes;
 		vec4 sum = texel * u_BlurWeights[0];
@@ -44,6 +48,8 @@ void main()
 			sum += (texture2D(u_DiffuseMap, var_TexCoord + step * float(i)) +
 				texture2D(u_DiffuseMap, var_TexCoord - step * float(i))) * u_BlurWeights[i];
 		}
+		if (u_FilterMode == 5)
+			sum = ColorMatrix(sum);
 		gl_FragColor = sum;
 	}
 	else if (u_FilterMode == 3)
