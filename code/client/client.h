@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
+#include "../qcommon/identity.h"
 #include "../renderercommon/tr_public.h"
 #include "cl_ext.h"
 #include "../ui/ui_public.h"
@@ -44,6 +45,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define QKEY_SIZE 2048
 
 #define	RETRANSMIT_TIMEOUT	3000	// time between connection packet retransmits
+#define	FAST_RETRANSMIT		200		// the same in a connect's fast window (CL_ExtConnect)
+#define	MAX_CONNECT_CANDIDATES	8
 #define	RCON_REPLY_TIMEOUT	10000	// how long a print after an rcon may be its reply (CL_RefusalEnds)
 
 // snapshots are a view of the server at a given time
@@ -191,6 +194,14 @@ typedef struct {
 	qboolean	identityProved;
 	byte		serverKey[32];
 	byte		serverNonce[32];
+	// a connect to several addresses (CL_ExtConnect): each is sent the
+	// challenge request, every FAST_RETRANSMIT until fastUntil, and the
+	// first to answer, as the server with the expected key when there is
+	// one, is the server
+	netadr_t	candidates[MAX_CONNECT_CANDIDATES];
+	int			numCandidates;
+	int			fastUntil, giveUpAt;
+	char		expectedFingerprint[IDENT_FINGERPRINT_SIZE];	// "" for none
 	// the server's content manifest, as connectResponse names it (ofm) or
 	// the last received, which the paks are checked against
 	// (download-protocol.md section 9.1, step 3)

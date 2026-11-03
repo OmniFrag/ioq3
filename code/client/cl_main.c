@@ -1838,6 +1838,87 @@ void CL_Reconnect_f( void ) {
 }
 
 /*
+==================
+CL_ConnectBegin, CL_ConnectSend
+
+A connect's start, shared by connect and CL_ExtConnect: whatever is
+running stopped, then, once clc.serverAddress is set, the state the
+challenge requests go out from
+==================
+*/
+static void CL_ConnectBegin( const char *server ) {
+	Cvar_Set("ui_singlePlayerActive", "0");
+
+	// fire a message off to the motd server
+	CL_RequestMotd();
+
+	// clear any previous "server full" type messages
+	clc.serverMessage[0] = 0;
+
+	if ( com_sv_running->integer && !strcmp( server, "localhost" ) ) {
+		// if running a local server, kill it
+		SV_Shutdown( "Server quit" );
+	}
+
+	// make sure a local server is killed
+	Cvar_Set( "sv_killserver", "1" );
+	SV_Frame( 0 );
+
+	noGameRestart = qtrue;
+	CL_Disconnect( qtrue );
+	Con_Close();
+
+	Q_strncpyz( clc.servername, server, sizeof(clc.servername) );
+}
+
+// what goes by the server's address: the paks played with the player's
+// own versions, and the GUID
+static void CL_ConnectTarget( void ) {
+	const char	*serverString = NET_AdrToStringwPort(clc.serverAddress);
+
+	// the paks played with the player's own versions are that server's
+	if ( !NET_CompareAdr( clc.serverAddress, cls.ownVersionsServer ) ) {
+		FS_ForgetOwnVersions();
+		cls.ownVersionsNote[0] = '\0';
+	}
+
+	if( cl_guidServerUniq->integer )
+		CL_UpdateGUID( serverString, strlen( serverString ) );
+	else
+		CL_UpdateGUID( NULL, 0 );
+}
+
+static void CL_ConnectSend( void ) {
+	// a candidate connect's waits for the server that answers
+	if ( !clc.numCandidates ) {
+		CL_ConnectTarget();
+	}
+
+	// if we aren't playing on a lan, we need to authenticate
+	// with the cd key. A candidate connect always asks for the challenge,
+	// whose answer is the server's
+	if(!clc.numCandidates && NET_IsLocalAddress(clc.serverAddress))
+		clc.state = CA_CHALLENGING;
+	else
+	{
+		clc.state = CA_CONNECTING;
+		
+		// Set a client challenge number that ideally is mirrored back by the server.
+		clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
+	}
+	// a new connect, with a nonce of its own for its key's proof
+	clc.clientNonceSet = qfalse;
+	clc.identityProved = qfalse;
+
+	Key_SetCatcher( 0 );
+	clc.connectTime = -99999;	// CL_CheckForResend() will fire immediately
+	clc.connectPacketCount = 0;
+
+	// server connection string
+	Cvar_Set( "cl_currentServerAddress", clc.servername );
+}
+
+/*
 ================
 CL_Connect_f
 
@@ -1845,7 +1926,6 @@ CL_Connect_f
 */
 void CL_Connect_f( void ) {
 	char	server[MAX_OSPATH];
-	const char	*serverString;
 	int argc = Cmd_Argc();
 	netadrtype_t family = NA_UNSPEC;
 
@@ -1871,28 +1951,7 @@ void CL_Connect_f( void ) {
 	// save arguments for reconnect
 	Q_strncpyz( cl_reconnectArgs, Cmd_Args(), sizeof( cl_reconnectArgs ) );
 
-	Cvar_Set("ui_singlePlayerActive", "0");
-
-	// fire a message off to the motd server
-	CL_RequestMotd();
-
-	// clear any previous "server full" type messages
-	clc.serverMessage[0] = 0;
-
-	if ( com_sv_running->integer && !strcmp( server, "localhost" ) ) {
-		// if running a local server, kill it
-		SV_Shutdown( "Server quit" );
-	}
-
-	// make sure a local server is killed
-	Cvar_Set( "sv_killserver", "1" );
-	SV_Frame( 0 );
-
-	noGameRestart = qtrue;
-	CL_Disconnect( qtrue );
-	Con_Close();
-
-	Q_strncpyz( clc.servername, server, sizeof(clc.servername) );
+	CL_ConnectBegin( server );
 
 	if (!NET_StringToAdr(clc.servername, &clc.serverAddress, family) ) {
 		Com_Printf ("Bad server address\n");
@@ -1903,42 +1962,45 @@ void CL_Connect_f( void ) {
 		clc.serverAddress.port = BigShort( PORT_SERVER );
 	}
 
-	serverString = NET_AdrToStringwPort(clc.serverAddress);
+	Com_Printf( "%s resolved to %s\n", clc.servername, NET_AdrToStringwPort(clc.serverAddress));
 
-	Com_Printf( "%s resolved to %s\n", clc.servername, serverString);
+	CL_ConnectSend();
+}
 
-	// the paks played with the player's own versions are that server's
-	if ( !NET_CompareAdr( clc.serverAddress, cls.ownVersionsServer ) ) {
-		FS_ForgetOwnVersions();
-		cls.ownVersionsNote[0] = '\0';
+/*
+================
+CL_ExtConnect
+
+A connect to whichever of several addresses answers first, as an
+extension starts it: each is sent the challenge request, every
+FAST_RETRANSMIT for fastMsec and then as connect sends it, until one
+answers or giveUpMsec pass. With an expected key's fingerprint, an answer
+from a server that doesn't prove that key is passed over, its address
+dropped, and the connect ends once none is left. name is what the
+connect is shown as
+================
+*/
+void CL_ExtConnect( const char *name, const netadr_t *candidates, int count, int fastMsec, int giveUpMsec,
+	const char *expectedFingerprint ) {
+	int		i;
+
+	if ( count < 1 ) {
+		return;
 	}
-
-	if( cl_guidServerUniq->integer )
-		CL_UpdateGUID( serverString, strlen( serverString ) );
-	else
-		CL_UpdateGUID( NULL, 0 );
-
-	// if we aren't playing on a lan, we need to authenticate
-	// with the cd key
-	if(NET_IsLocalAddress(clc.serverAddress))
-		clc.state = CA_CHALLENGING;
-	else
-	{
-		clc.state = CA_CONNECTING;
-		
-		// Set a client challenge number that ideally is mirrored back by the server.
-		clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
+	count = MIN( count, MAX_CONNECT_CANDIDATES );
+	// reconnect goes to the address that answers, once one does
+	cl_reconnectArgs[0] = '\0';
+	CL_ConnectBegin( name );
+	for ( i = 0; i < count; i++ ) {
+		clc.candidates[i] = candidates[i];
 	}
-	// a new connect, with a nonce of its own for its key's proof
-	clc.clientNonceSet = qfalse;
-	clc.identityProved = qfalse;
-
-	Key_SetCatcher( 0 );
-	clc.connectTime = -99999;	// CL_CheckForResend() will fire immediately
-	clc.connectPacketCount = 0;
-
-	// server connection string
-	Cvar_Set( "cl_currentServerAddress", server );
+	clc.numCandidates = count;
+	clc.serverAddress = candidates[0];
+	clc.fastUntil = fastMsec > 0 ? cls.realtime + fastMsec : 0;
+	clc.giveUpAt = giveUpMsec > 0 ? cls.realtime + giveUpMsec : 0;
+	Q_strncpyz( clc.expectedFingerprint, expectedFingerprint ? expectedFingerprint : "",
+		sizeof( clc.expectedFingerprint ) );
+	CL_ConnectSend();
 }
 
 #define MAX_RCON_MESSAGE 1024
@@ -3184,7 +3246,7 @@ Resend a connect message if the last one has timed out
 =================
 */
 void CL_CheckForResend( void ) {
-	int		port;
+	int		port, wait, i;
 	char	info[MAX_INFO_STRING];
 	char	data[MAX_INFO_STRING + 10 + EXT_MAX_STRING];
 	char	tokens[EXT_MAX_STRING];
@@ -3199,7 +3261,13 @@ void CL_CheckForResend( void ) {
 		return;
 	}
 
-	if ( cls.realtime - clc.connectTime < RETRANSMIT_TIMEOUT ) {
+	// a candidate connect's end, with no answer
+	if ( clc.giveUpAt && clc.state == CA_CONNECTING && cls.realtime - clc.giveUpAt >= 0 ) {
+		Com_Error( ERR_DROP, "No address answered, so the connect stopped." );
+	}
+	// and its fast window, while its routers open
+	wait = clc.fastUntil && cls.realtime - clc.fastUntil < 0 ? FAST_RETRANSMIT : RETRANSMIT_TIMEOUT;
+	if ( cls.realtime - clc.connectTime < wait ) {
 		return;
 	}
 
@@ -3224,8 +3292,9 @@ void CL_CheckForResend( void ) {
 			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", OFX_BUILD ) );
 			// this device's key is proved with a nonce of the connect's own,
 			// the same in every resend; without a key or the randomness for
-			// one, the server's ignores OFX_IDENTITY (identity.h)
-			if ( !clc.clientNonceSet && Com_DeviceKey() ) {
+			// one, the server's ignores OFX_IDENTITY (identity.h). A connect
+			// expecting a server's key asks for its proof without one too
+			if ( !clc.clientNonceSet && ( Com_DeviceKey() || clc.expectedFingerprint[0] ) ) {
 				clc.clientNonceSet = Com_RandomSecret( clc.clientNonce, sizeof( clc.clientNonce ) );
 			}
 			if ( clc.clientNonceSet ) {
@@ -3234,7 +3303,11 @@ void CL_CheckForResend( void ) {
 		}
 		Com_sprintf(data, sizeof(data), "getchallenge %d %s%s", clc.challenge, com_gamename->string, tokens);
 
-		NET_OutOfBandPrint(NS_CLIENT, clc.serverAddress, "%s", data);
+		// a candidate connect's to each candidate, the same challenge: the
+		// first to answer is the server
+		for ( i = 0; i < ( clc.numCandidates ? clc.numCandidates : 1 ); i++ ) {
+			NET_OutOfBandPrint( NS_CLIENT, clc.numCandidates ? clc.candidates[i] : clc.serverAddress, "%s", data );
+		}
 		break;
 		
 	case CA_CHALLENGING:
@@ -3581,9 +3654,11 @@ the connect's own proof. One that doesn't hold leaves the connection
 unproven
 =================
 */
-static qboolean CL_ServerProof( void ) {
+static qboolean CL_ServerProof( netadr_t from ) {
 	extTokens_t	tokens;
 	byte		sig[IDENT_SIG_SIZE], known[IDENT_KEY_SIZE];
+	char		fingerprint[IDENT_FINGERPRINT_SIZE];
+	netadr_t	named = clc.numCandidates ? from : clc.serverAddress;
 
 	if ( Com_ParseExtensionTokens( Cmd_ArgsFrom( 4 ), &tokens ) ||
 		!Ident_ReadServerProof( &tokens, clc.serverNonce, clc.serverKey, sig ) ) {
@@ -3594,21 +3669,67 @@ static qboolean CL_ServerProof( void ) {
 		Com_Printf( "The server's proof of its key doesn't hold: connecting without this device's.\n" );
 		return qfalse;
 	}
+	// another key than a connect expects (CL_ExtConnect) isn't kept for
+	// the address: CL_ExpectedServer passes its server over
+	Ident_Fingerprint( clc.serverKey, fingerprint );
+	if ( clc.expectedFingerprint[0] && Q_stricmp( fingerprint, clc.expectedFingerprint ) ) {
+		return qtrue;
+	}
 	// a different key than this address proved before is said, and the
 	// connection goes on: refusing it waits for the list of servers a
 	// player runs (server-hosting.md, step 5). The address is the one the
 	// player connected to, as a reply from elsewhere is taken too (a
-	// proxy's hand-off), which mustn't escape the check
-	if ( Com_KnownServerKey( NET_AdrToStringwPort( clc.serverAddress ), clc.serverKey, known ) == KNOWN_CHANGED ) {
+	// proxy's hand-off), which mustn't escape the check; for a candidate
+	// connect, the candidate that answered
+	if ( Com_KnownServerKey( NET_AdrToStringwPort( named ), clc.serverKey, known ) == KNOWN_CHANGED ) {
 		char	before[IDENT_FINGERPRINT_SIZE], now[IDENT_FINGERPRINT_SIZE];
 
 		Ident_Fingerprint( known, before );
 		Ident_Fingerprint( clc.serverKey, now );
 		Com_Printf( S_COLOR_YELLOW "WARNING: the server at %s has a different key than before: %s, not %s. If its "
 			"owner didn't make it a new one, it may not be the server you think it is.\n",
-			NET_AdrToStringwPort( clc.serverAddress ), now, before );
+			NET_AdrToStringwPort( named ), now, before );
 	}
 	return qtrue;
+}
+
+/*
+=================
+CL_ExpectedServer
+
+Whether a challengeResponse is from the server CL_ExtConnect expects, by
+the key it proved. One that proves another key has its address dropped
+from the candidates, and with none left the connect ends; one that
+proves none is only passed over
+=================
+*/
+static qboolean CL_ExpectedServer( netadr_t from, qboolean proved ) {
+	char	fingerprint[IDENT_FINGERPRINT_SIZE];
+	int		i;
+
+	if ( proved ) {
+		Ident_Fingerprint( clc.serverKey, fingerprint );
+		if ( !Q_stricmp( fingerprint, clc.expectedFingerprint ) ) {
+			return qtrue;
+		}
+		Com_Printf( "%s answered with key %s, not %s, so it isn't the server asked for.\n",
+			NET_AdrToStringwPort( from ), fingerprint, clc.expectedFingerprint );
+	} else {
+		// a server short of time to sign, under a flood of challenges,
+		// answers unproven: its address stays, and the next answer may prove
+		Com_DPrintf( "%s answered without proving a key, passed over\n", NET_AdrToStringwPort( from ) );
+		return qfalse;
+	}
+	for ( i = 0; i < clc.numCandidates; i++ ) {
+		if ( NET_CompareAdr( from, clc.candidates[i] ) ) {
+			clc.candidates[i] = clc.candidates[--clc.numCandidates];
+			break;
+		}
+	}
+	if ( !clc.numCandidates ) {
+		Com_Error( ERR_DROP, "No address answered as the server asked for, so the connect stopped." );
+	}
+	return qfalse;
 }
 
 /*
@@ -3638,6 +3759,11 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	if (!Q_stricmp(c, "challengeResponse"))
 	{
 		char *strver;
+		uint32_t	ofx = 0;
+		qboolean	proved;
+#ifdef LEGACY_PROTOCOL
+		qboolean	compat = clc.compat;
+#endif
 		int ver;
 	
 		if (clc.state != CA_CONNECTING)
@@ -3706,16 +3832,29 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		}
 
 		// the extensions agreed, after the protocol; never with the legacy one
-		clc.ofx = 0;
 #ifdef LEGACY_PROTOCOL
 		if ( !clc.compat )
 #endif
-			clc.ofx = CL_ServerExtensions( 4, NULL );
+			ofx = CL_ServerExtensions( 4, NULL );
+
+		// the server's key, if it proved it: then this device proves its
+		// own. A connect expecting a key passes over another server's
+		// answer, or one that proves none, before it changes anything, so
+		// the expected server's answer still finds the challenge it sent
+		proved = ( ofx & OFX_IDENTITY ) && clc.clientNonceSet && CL_ServerProof( from );
+		if ( clc.expectedFingerprint[0] && !CL_ExpectedServer( from, proved ) ) {
+#ifdef LEGACY_PROTOCOL
+			// nor the legacy protocol it took for: the expected server's
+			// answer is read as its own
+			clc.compat = compat;
+#endif
+			return;
+		}
+		clc.ofx = ofx;
+		clc.identityProved = proved;
 
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
-		// the server's key, if it proved it: then this device proves its own
-		clc.identityProved = ( clc.ofx & OFX_IDENTITY ) && clc.clientNonceSet && CL_ServerProof();
 		clc.state = CA_CHALLENGING;
 		clc.connectPacketCount = 0;
 		clc.connectTime = -99999;
@@ -3723,6 +3862,15 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		// take this address as the new server address.  This allows
 		// a server proxy to hand off connections to multiple servers
 		clc.serverAddress = from;
+		// a candidate connect has its server: what goes by the server's
+		// address is redone for it, and reconnect goes there
+		if ( clc.numCandidates ) {
+			clc.numCandidates = 0;
+			clc.fastUntil = clc.giveUpAt = 0;
+			CL_ConnectTarget();
+			Q_strncpyz( cl_reconnectArgs, NET_AdrToStringwPort( from ), sizeof( cl_reconnectArgs ) );
+			Cvar_Set( "cl_currentServerAddress", cl_reconnectArgs );
+		}
 		Com_DPrintf ("challengeResponse: %d\n", clc.challenge);
 		return;
 	}
