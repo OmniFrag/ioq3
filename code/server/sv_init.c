@@ -603,7 +603,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	if ( local ) {
 		Com_Printf( "  firewall: not needed, only this computer can connect\n" );
 	} else {
-		Sys_PrintFirewall( NET_Port() );
+		Sys_PrintFirewall( NULL, PRODUCT_NAME " dedicated server", "players", NET_Port(), qfalse );
 	}
 	if ( !sv_rconPassword->string[0] ) {
 		Com_Printf( "  rcon:     off: set rconpassword to use it\n" );

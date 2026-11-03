@@ -1997,6 +1997,6 @@ Sys_PrintFirewall
 Firewalls elsewhere aren't read
 =================
 */
-void Sys_PrintFirewall( int port )
+void Sys_PrintFirewall( const char *program, const char *rule, const char *who, int port, qboolean tcp )
 {
 }

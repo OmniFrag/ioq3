@@ -1542,13 +1542,14 @@ static qboolean Sys_FirewallAny( BSTR text, const WCHAR *match )
 =================
 Sys_FirewallRuleApplies
 
-Whether an inbound rule decides whether players reach this program on
-port: enabled in a current profile, for UDP, for this program or for any
+Whether an inbound rule decides whether other computers reach the program
+exe on port: enabled in a current profile, for the protocol (UDP or TCP),
+for the program or for any
 (not a service's, an app package's or a user's), and for the port, from
 any address to any of this computer's, on any kind of network interface
 =================
 */
-static qboolean Sys_FirewallRuleApplies( INetFwRule *rule, LONG profiles, const WCHAR *exe, int port )
+static qboolean Sys_FirewallRuleApplies( INetFwRule *rule, LONG profiles, const WCHAR *exe, int port, LONG wanted )
 {
 	VARIANT_BOOL			enabled;
 	NET_FW_RULE_DIRECTION	direction;
@@ -1563,7 +1564,7 @@ static qboolean Sys_FirewallRuleApplies( INetFwRule *rule, LONG profiles, const 
 		FAILED( rule->lpVtbl->get_ApplicationName( rule, &text ) ) || !Sys_FirewallAny( text, exe ) ||
 		FAILED( rule->lpVtbl->get_Profiles( rule, &ruleProfiles ) ) || !( ruleProfiles & profiles ) ||
 		FAILED( rule->lpVtbl->get_Protocol( rule, &protocol ) ) ||
-		( protocol != NET_FW_IP_PROTOCOL_UDP && protocol != FIREWALL_PROTOCOL_ANY ) ||
+		( protocol != wanted && protocol != FIREWALL_PROTOCOL_ANY ) ||
 		FAILED( rule->lpVtbl->get_ServiceName( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
 		FAILED( rule->lpVtbl->get_LocalAddresses( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
 		FAILED( rule->lpVtbl->get_RemoteAddresses( rule, &text ) ) || !Sys_FirewallAny( text, NULL ) ||
@@ -1592,13 +1593,13 @@ static qboolean Sys_FirewallRuleApplies( INetFwRule *rule, LONG profiles, const 
 =================
 Sys_Firewall
 
-Whether Windows Firewall lets players on other computers reach this
-program on port, as far as a user without administrator rights can read
-its policy: a block rule wins over an allow rule, and its name goes in
-blocker
+Whether Windows Firewall lets other computers reach the program exe on
+port, by protocol (NET_FW_IP_PROTOCOL_UDP or _TCP), as far as a user
+without administrator rights can read its policy: a block rule wins over
+an allow rule, and its name goes in blocker
 =================
 */
-static firewall_t Sys_Firewall( const WCHAR *exe, int port, char *blocker, int size )
+static firewall_t Sys_Firewall( const WCHAR *exe, int port, LONG protocol, char *blocker, int size )
 {
 	static const NET_FW_PROFILE_TYPE2 types[] = {
 		NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_PUBLIC
@@ -1652,7 +1653,7 @@ static firewall_t Sys_Firewall( const WCHAR *exe, int port, char *blocker, int s
 			SUCCEEDED( V_DISPATCH( &item )->lpVtbl->QueryInterface( V_DISPATCH( &item ),
 				&firewallRuleInterface, (void **)&rule ) ) )
 		{
-			if( Sys_FirewallRuleApplies( rule, profiles, exe, port ) &&
+			if( Sys_FirewallRuleApplies( rule, profiles, exe, port, protocol ) &&
 				SUCCEEDED( rule->lpVtbl->get_Action( rule, &action ) ) )
 			{
 				if( action == NET_FW_ACTION_BLOCK )
@@ -1691,45 +1692,59 @@ done:
 =================
 Sys_PrintFirewall
 
-For a dedicated server's start summary: whether Windows Firewall lets
-players on other computers in, and if not, the netsh lines that would,
-for an administrator to run. Nothing when it can't be read
+For a dedicated server's start summary: whether Windows Firewall lets who
+on other computers reach program (this executable when NULL) on port, and
+if not, the netsh lines that would, for an administrator to run. Nothing
+when it can't be read
 =================
 */
-void Sys_PrintFirewall( int port )
+void Sys_PrintFirewall( const char *program, const char *rule, const char *who, int port, qboolean tcp )
 {
-	WCHAR	exe[ MAX_PATH ];
-	char	path[ MAX_OSPATH ];
-	char	blocker[ 256 ] = "";
+	WCHAR		given[ MAX_PATH ], exe[ MAX_PATH ];
+	char		path[ MAX_OSPATH ];
+	char		blocker[ 256 ] = "";
+	const char	*protocol = tcp ? "TCP" : "UDP";
+	DWORD		length;
 
-	if( !GetModuleFileNameW( NULL, exe, ARRAY_LEN( exe ) ) ||
+	// a program's path is in the system's code page, as the engine's are,
+	// and may be relative (Sys_BinaryPath's argv[0]); rules name it whole
+	if( program )
+	{
+		if( !MultiByteToWideChar( CP_ACP, 0, program, -1, given, ARRAY_LEN( given ) ) )
+			return;
+		length = GetFullPathNameW( given, ARRAY_LEN( exe ), exe, NULL );
+	}
+	else
+		length = GetModuleFileNameW( NULL, exe, ARRAY_LEN( exe ) );
+	if( !length || length >= ARRAY_LEN( exe ) ||
 		!WideCharToMultiByte( CP_UTF8, 0, exe, -1, path, sizeof( path ), NULL, NULL ) )
 		return;
 
-	switch( Sys_Firewall( exe, port, blocker, sizeof( blocker ) ) )
+	switch( Sys_Firewall( exe, port, tcp ? NET_FW_IP_PROTOCOL_TCP : NET_FW_IP_PROTOCOL_UDP,
+		blocker, sizeof( blocker ) ) )
 	{
 		case FIREWALL_OFF:
 			Com_Printf( "  firewall: Windows Firewall is off\n" );
 			return;
 		case FIREWALL_ALLOWS:
-			Com_Printf( "  firewall: Windows Firewall lets players in\n" );
+			Com_Printf( "  firewall: Windows Firewall lets %s in\n", who );
 			return;
 		case FIREWALL_BLOCKS_ALL:
-			Com_Printf( "  firewall: Windows Firewall blocks all incoming connections, so players on other\n"
-				"    computers can't join: its \"Block all incoming connections\" setting is on\n" );
+			Com_Printf( "  firewall: Windows Firewall blocks all incoming connections, so %s on other\n"
+				"    computers can't connect: its \"Block all incoming connections\" setting is on\n", who );
 			return;
 		case FIREWALL_BLOCKS:
-			Com_Printf( "  firewall: Windows Firewall's rule \"%s\" blocks players on other computers.\n"
+			Com_Printf( "  firewall: Windows Firewall's rule \"%s\" blocks %s on other computers.\n"
 				"    To let them in, run as administrator:\n"
-				"    netsh advfirewall firewall delete rule name=\"%s\" dir=in\n", blocker, blocker );
+				"    netsh advfirewall firewall delete rule name=\"%s\" dir=in\n", blocker, who, blocker );
 			break;
 		case FIREWALL_NO_RULE:
-			Com_Printf( "  firewall: no Windows Firewall rule lets players on other computers in yet,\n"
-				"    and Windows may block them. To let them in, run as administrator:\n" );
+			Com_Printf( "  firewall: no Windows Firewall rule lets %s on other computers in yet,\n"
+				"    and Windows may block them. To let them in, run as administrator:\n", who );
 			break;
 		default:
 			return;
 	}
-	Com_Printf( "    netsh advfirewall firewall add rule name=\"" PRODUCT_NAME " dedicated server\" "
-		"dir=in action=allow program=\"%s\" protocol=UDP localport=%d\n", path, port );
+	Com_Printf( "    netsh advfirewall firewall add rule name=\"%s\" "
+		"dir=in action=allow program=\"%s\" protocol=%s localport=%d\n", rule, path, protocol, port );
 }

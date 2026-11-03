@@ -1904,7 +1904,15 @@ void	Sys_Print( const char *msg );
 // the log, crashlog.txt's buffer, nor an extension's print hook
 void	Sys_PrintSecret( const char *msg );
 void	Sys_Notify( const char *state );	// to the service manager, as sd_notify
-void	Sys_PrintFirewall( int port );	// whether Windows Firewall lets players in
+// For a start summary: whether Windows Firewall lets other computers reach
+// a program on a port, UDP or TCP, and the netsh line for a rule that would.
+// program: NULL for this executable; rule: the rule's name in that line;
+// who: who'd be let in ("players")
+void	Sys_PrintFirewall( const char *program, const char *rule, const char *who, int port, qboolean tcp );
+// The folder the running executable is in, its links resolved where the
+// system says (Sys_ExecutablePath), argv[0]'s otherwise, in the system's
+// code page as the engine's other paths are: for a program beside it
+char	*Sys_BinaryPath( void );
 
 // Sys_Milliseconds should only be used for profiling purposes,
 // any game related timing information should come from event timestamps.
