@@ -450,6 +450,13 @@ qboolean Hooks_Connectionless( const netadr_t *from, qboolean proxied ) {
 	return taker != 0;
 }
 
+qboolean Hooks_ClientConnectionless( const netadr_t *from, qboolean proxied ) {
+	int	taker;
+
+	HOOKS_OFFER( taker, clientConnectionless, ( from, proxied ) );
+	return taker != 0;
+}
+
 int Hooks_KeyDown( int key, unsigned time ) {
 	int	taker;
 

@@ -232,6 +232,10 @@ typedef struct {
 	// it: a proxy can name any address, so a service's own messages
 	// should be taken only from packets that came directly
 	qboolean	(*connectionless)( const netadr_t *from, qboolean proxied );
+	// The same for the client: a connectionless packet it doesn't handle
+	// itself, its line in Cmd_Argv and, untokenized, Cmd_Cmd. Every word
+	// is hostile here too
+	qboolean	(*clientConnectionless)( const netadr_t *from, qboolean proxied );
 	// The program printed text: part of a line, a line or several, color
 	// codes and all, but not what a redirect captures (rcon's replies).
 	// What a print hook prints reaches no print hook. Called on the
@@ -358,6 +362,8 @@ void	Hooks_ClientCommandDone( int clientNum );
 void	Hooks_ServerCommand( int clientNum, const char *text );
 // whether an extension took a connectionless packet, its line in Cmd_Argv
 qboolean	Hooks_Connectionless( const netadr_t *from, qboolean proxied );
+// the same for a packet the client doesn't handle
+qboolean	Hooks_ClientConnectionless( const netadr_t *from, qboolean proxied );
 void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );

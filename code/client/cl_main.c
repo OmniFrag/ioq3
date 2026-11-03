@@ -3865,6 +3865,10 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		return;
 	}
 
+	// one the client doesn't know may be an extension's
+	if ( Hooks_ClientConnectionless( &from, NET_PacketProxied() ) ) {
+		return;
+	}
 	Com_DPrintf ("Unknown connectionless packet command.\n");
 }
 
