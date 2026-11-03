@@ -553,6 +553,28 @@ static qboolean R_CheckState2D( const draw2DState_t *state, draw2DState_t *out, 
 			return qfalse;
 		}
 	}
+	if ( state->flags & TRIS2D_CLIPSHAPE ) {
+		caps2D_t	caps;
+		int			i;
+
+		R_Caps2D( &caps );
+		// a shader's stages draw through the tessellator, which takes no
+		// shape: the caller puts it in the clip mask instead
+		if ( !caps.clipShapes || R_ShaderState2D( state ) ) {
+			ri.Printf( PRINT_WARNING, "%s: clip shapes aren't drawn here\n", caller );
+			return qfalse;
+		}
+		for ( i = 0; i < 8; i++ ) {
+			if ( !isfinite( state->clipShape[i] ) || ( i >= 2 && state->clipShape[i] < 0 ) ) {
+				ri.Printf( PRINT_WARNING, "%s: a bad clip shape\n", caller );
+				return qfalse;
+			}
+		}
+		// an empty shape shows nothing
+		if ( state->clipShape[2] <= 0 || state->clipShape[3] <= 0 ) {
+			return qfalse;
+		}
+	}
 	return qtrue;
 }
 
@@ -901,6 +923,10 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 			ri.Printf( PRINT_WARNING, "CompositeLayers2D: no filter %i\n", filters[i] );
 			return;
 		}
+	}
+	if ( state && ( state->flags & TRIS2D_CLIPSHAPE ) ) {
+		ri.Printf( PRINT_WARNING, "CompositeLayers2D: a clip shape\n" );
+		return;
 	}
 	if ( state && !R_CheckState2D( state, NULL, "CompositeLayers2D" ) ) {
 		return;

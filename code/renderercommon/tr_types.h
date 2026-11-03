@@ -87,6 +87,7 @@ typedef struct {
 #define TRIS2D_TEXTURE2D	0x0010	// texture names a UI texture, not a shader
 #define TRIS2D_CLIPMASK		0x0020	// draw only where the clip mask is set
 #define TRIS2D_PAINT		0x0040	// color from paint (a gradient or a shape), times the vertex color
+#define TRIS2D_CLIPSHAPE	0x0080	// draw only inside clipShape, each pixel by how much of it the shape covers; not with a shader's stages
 
 // how 2D triangles are drawn; a renderer that doesn't draw a flag yet
 // leaves the batch out, with a warning
@@ -100,6 +101,10 @@ typedef struct {
 	float		transform[9];
 	float		translate[2];	// added first, RmlUi's translation, with or without the transform
 	int			paint;			// with TRIS2D_PAINT
+	// with TRIS2D_CLIPSHAPE, a rounded box in window pixels, y down,
+	// untransformed: x, y, width, height, and the top left, top right,
+	// bottom right and bottom left corners' radii, circles
+	float		clipShape[8];
 } draw2DState_t;
 
 // indexed triangles drawn in 2D, as a shader draws a picture: a shader made
@@ -117,6 +122,7 @@ typedef struct {
 typedef struct {
 	qboolean	textureA8;			// A8 textures without a conversion to RGBA8
 	qboolean	clipMask;			// stencil clip masks
+	qboolean	clipShapes;			// rounded clip boxes with smooth edges (TRIS2D_CLIPSHAPE)
 	qboolean	paints;				// gradients and rounded boxes on the GPU
 	qboolean	msdf;				// multi-channel distance field text
 	qboolean	layers;				// layers and their filters (PushLayer2D)

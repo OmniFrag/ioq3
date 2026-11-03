@@ -273,7 +273,7 @@ typedef struct {
 
 // the 2D state's flags that tr_ui2d_common.c's draws take, past the
 // immediate batch's
-#define TRIS2D_RETAINED_FLAGS	( TRIS2D_PREMULTIPLIED | TRIS2D_TEXTURE2D | TRIS2D_CLIPMASK | TRIS2D_PAINT )
+#define TRIS2D_RETAINED_FLAGS	( TRIS2D_PREMULTIPLIED | TRIS2D_TEXTURE2D | TRIS2D_CLIPMASK | TRIS2D_PAINT | TRIS2D_CLIPSHAPE )
 #define TRIS2D_ALL_FLAGS		( TRIS2D_IMMEDIATE_FLAGS | TRIS2D_RETAINED_FLAGS )
 
 // a 2D state drawn with a shader's stages, through the tessellator, rather

@@ -22,8 +22,39 @@ uniform vec2   u_MsdfSourceTexel;	// a premultiplied raster's texel the glyph st
 uniform vec2   u_TextureSize;
 #endif
 
+// a clip by a rounded box (TRIS2D_CLIPSHAPE), in the framebuffer's
+// pixels, y up: x, y, width and height, and the radii of its bottom left,
+// bottom right, top right and top left corners
+uniform int    u_ClipShape;
+uniform vec4   u_ClipBox;
+uniform vec4   u_ClipRadii;
+
 varying vec4   var_Color;
 varying vec2   var_TexCoord;
+
+
+// p's signed distance from a rounded box (x, y, width and height), its
+// corners' radii by quadrant: x below and left of its center, y below and
+// right, z above and right, w above and left
+float RoundedBoxDistance(vec2 p, vec4 box, vec4 radii)
+{
+	vec2 halfSize = box.zw * 0.5;
+	vec2 q = p - (box.xy + halfSize);
+	// a corner no rounder than the box allows
+	float r = min(q.x < 0.0 ? (q.y < 0.0 ? radii.x : radii.w) : (q.y < 0.0 ? radii.y : radii.z), min(halfSize.x, halfSize.y));
+	vec2 e = abs(q) - halfSize + r;
+
+	return length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - r;
+}
+
+// how much of the clip's rounded box covers this pixel
+float ClipCoverage()
+{
+	if (u_ClipShape == 0)
+		return 1.0;
+
+	return clamp(0.5 - RoundedBoxDistance(gl_FragCoord.xy, u_ClipBox, u_ClipRadii), 0.0, 1.0);
+}
 
 
 #if defined(USE_PAINT)
@@ -62,13 +93,7 @@ vec4 Gradient(float t)
 // anti-aliased over a pixel, or softened over the feather
 float RoundedBox(vec2 p)
 {
-	vec2 halfSize = u_PaintBox.zw * 0.5;
-	vec2 q = p - (u_PaintBox.xy + halfSize);
-	// a corner no rounder than the box allows
-	float r = min(q.x < 0.0 ? (q.y < 0.0 ? u_PaintRadii.x : u_PaintRadii.w) : (q.y < 0.0 ? u_PaintRadii.y : u_PaintRadii.z),
-		min(halfSize.x, halfSize.y));
-	vec2 e = abs(q) - halfSize + r;
-	float d = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - r;
+	float d = RoundedBoxDistance(p, u_PaintBox, u_PaintRadii);
 	float soft = max(fwidth(d), u_PaintFeather);
 
 	return clamp(0.5 - d / soft, 0.0, 1.0);
@@ -123,7 +148,7 @@ void main()
 			color.rgb *= smoothstep(-width, width, (texel.a - 0.5) * u_MsdfRange);
 		}
 
-		gl_FragColor = color * Msdf(Median(texel));
+		gl_FragColor = color * Msdf(Median(texel)) * ClipCoverage();
 		return;
 	}
 #endif
@@ -163,5 +188,5 @@ void main()
 	}
 #endif
 
-	gl_FragColor = color;
+	gl_FragColor = color * ClipCoverage();
 }

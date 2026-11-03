@@ -34,9 +34,11 @@ static struct {
 	GLint		vertexPremultiplied, colorScale, textureMode;
 	GLint		paintKind, paintRepeat, paintP0, paintP1, numStops, stopPos, stopColor;
 	GLint		paintBox, paintRadii, paintFeather, msdfRange, msdfSourceTexel, textureSize;
+	GLint		clipShape, clipBox, clipRadii;
 
-	int			lastPremultiplied, lastTextureMode, lastTextureWidth, lastTextureHeight;
+	int			lastPremultiplied, lastTextureMode, lastTextureWidth, lastTextureHeight, lastClipShape;
 	float		lastColorScale;
+	float		lastClip[8];	// the clip box and radii set, as uploaded; a width below 0 for none
 	qboolean	painting;
 	paint2D_t	lastPaint;
 } ui2d;
@@ -206,7 +208,8 @@ What GetCaps2D says of the retained 2D
 void R_GetCaps2DRetained( caps2D_t *caps ) {
 	caps->textureA8 = R_TextureR8();
 	caps->clipMask = R_ClipMask2DAvailable();
-	caps->paints = caps->msdf = R_Paints2DAvailable();
+	// the shapes' coverage is ui2d's, as the paints are
+	caps->paints = caps->msdf = caps->clipShapes = R_Paints2DAvailable();
 	caps->maxGeometryVerts = MAX_GEOMETRY2D_VERTS;
 	// the render target's samples, unless the views draw apart from it
 	// (FBO_UseRenderTarget)
@@ -243,10 +246,14 @@ void R_InitUI2D( void ) {
 	ui2d.msdfRange = qglGetUniformLocation( program, "u_MsdfRange" );
 	ui2d.msdfSourceTexel = qglGetUniformLocation( program, "u_MsdfSourceTexel" );
 	ui2d.textureSize = qglGetUniformLocation( program, "u_TextureSize" );
+	ui2d.clipShape = qglGetUniformLocation( program, "u_ClipShape" );
+	ui2d.clipBox = qglGetUniformLocation( program, "u_ClipBox" );
+	ui2d.clipRadii = qglGetUniformLocation( program, "u_ClipRadii" );
 
 	// GL starts them at 0: what's set first is set
-	ui2d.lastPremultiplied = ui2d.lastTextureMode = -1;
+	ui2d.lastPremultiplied = ui2d.lastTextureMode = ui2d.lastClipShape = -1;
 	ui2d.lastColorScale = -1;
+	ui2d.lastClip[2] = -1;
 	ui2d.painting = qtrue;
 
 	R_InitStore2D();
@@ -388,6 +395,43 @@ static void RB_Paint2D( const paint2D_t *paint, const texture2D_t *texture ) {
 
 /*
 ===============
+RB_ClipShape2D
+
+The clip's rounded box (TRIS2D_CLIPSHAPE) for ui2d's coverage, in the
+bound framebuffer's pixels with GL's rows going up, or none
+===============
+*/
+static void RB_ClipShape2D( const float *shape ) {
+	int		height = glState.currentFBO ? glState.currentFBO->height : glConfig.vidHeight;
+
+	if ( !shape ) {
+		if ( ui2d.lastClipShape != 0 ) {
+			qglUniform1i( ui2d.clipShape, 0 );
+			ui2d.lastClipShape = 0;
+		}
+		return;
+	}
+	if ( ui2d.lastClipShape != 1 ) {
+		qglUniform1i( ui2d.clipShape, 1 );
+		ui2d.lastClipShape = 1;
+	}
+	{
+		// top left, top right, bottom right, bottom left as bottom left,
+		// bottom right, top right, top left
+		const float	clip[8] = { shape[0], height - shape[1] - shape[3], shape[2], shape[3],
+			shape[7], shape[6], shape[5], shape[4] };
+
+		// the draws in a clipped element share its shape
+		if ( memcmp( clip, ui2d.lastClip, sizeof( clip ) ) ) {
+			qglUniform4fv( ui2d.clipBox, 1, clip );
+			qglUniform4fv( ui2d.clipRadii, 1, clip + 4 );
+			Com_Memcpy( ui2d.lastClip, clip, sizeof( clip ) );
+		}
+	}
+}
+
+/*
+===============
 RB_Bind2DProgram
 
 The ui2d program set for a state: its matrix, its colors' and texture's
@@ -430,6 +474,7 @@ static void RB_Bind2DProgram( const draw2DState_t *state, qboolean writeColor ) 
 		ui2d.lastColorScale = tr.frameLight;
 	}
 	RB_Paint2D( writeColor && ( state->flags & TRIS2D_PAINT ) ? R_GetPaint2D( state->paint, qtrue ) : NULL, texture );
+	RB_ClipShape2D( writeColor && ( state->flags & TRIS2D_CLIPSHAPE ) ? state->clipShape : NULL );
 
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 	GL_Cull( CT_TWO_SIDED );
