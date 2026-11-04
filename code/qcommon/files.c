@@ -296,6 +296,7 @@ typedef struct searchpath_s {
 	pack_t		*pack;		// only one of pack / dir will be non NULL
 	directory_t	*dir;
 	int			tier;		// the lookups' rank, below FS_TIERS (FS_NextSearch)
+	int			order;		// its place in the lookups' order (FS_IndexOrder)
 } searchpath_t;
 
 static	char		fs_gamedir[MAX_OSPATH];	// this will be a single file name with no separators
@@ -1654,6 +1655,11 @@ static qboolean FS_PakHasFile( const pack_t *pak, const char *name ) {
 	return FS_PakEntry( pak, name ) != NULL;
 }
 
+// whether exec runs no config of this name from a download: all but default.cfg
+static qboolean FS_CachePakRefusesName( const char *filename ) {
+	return Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) != 0;
+}
+
 /*
 ===========
 FS_CachePakRefuses
@@ -1667,7 +1673,7 @@ animation.cfg among them
 */
 static qboolean FS_CachePakRefuses( pack_t *pak, const char *filename ) {
 
-	if ( Q_stricmp( FS_SkipPathPrefix( filename ), "default.cfg" ) ) {
+	if ( FS_CachePakRefusesName( filename ) ) {
 		return qtrue;
 	}
 	// a search passes over every pak above the one that has it
@@ -1700,6 +1706,232 @@ static searchpath_t *FS_NextSearch( const searchpath_t *search ) {
 		}
 	}
 	return NULL;
+}
+
+/*
+=============================================================================
+
+THE NAME INDEX
+
+Every pak's files by name, so a lookup asks only the paks that have the
+name, and the directories, in the lookups' order, rather than every entry:
+built with the search path (FS_Startup), each entry numbered in the
+lookups' order whenever that changes (FS_RankPaks, FS_ReorderPurePaks).
+It holds no rule, only which paks have a name: a lookup still asks each
+entry it visits as it always did, each pak by its own table, so purity,
+tiers and the other rules are as without it. The directories aren't
+indexed, as files come and go in them. fs_index 0 walks the whole path
+instead; fs_indexCheck 1 walks it beside each lookup and says where the two
+differ (2 stops at the first)
+=============================================================================
+*/
+
+// a pak's file in the index, kept apart from the pak's own table, outside the zone
+typedef struct indexEntry_s {
+	const fileInPack_t		*file;
+	searchpath_t			*search;	// its pak's entry in the search path
+	struct indexEntry_s		*next;		// next of any pak's in its chain
+} indexEntry_t;
+
+static indexEntry_t	**fs_index;
+static indexEntry_t	*fs_indexEntries;
+static unsigned int	fs_indexMask;
+static searchpath_t	**fs_indexDirs;		// the directories, in the lookups' order
+static int			fs_numIndexDirs;
+static cvar_t		*fs_indexUse, *fs_indexCheck;
+static int			fs_indexMismatches, fs_indexWalks;
+static int			fs_lookupTimed;			// fs_lookup's timing: 1 of the index, 2 of the walk
+
+// the most paks a lookup takes from the index; a name in more walks the path
+#define INDEX_MAX_PAKS	256
+
+static const char *FS_SearchSource( const searchpath_t *search );
+
+/*
+===========
+FS_IndexHash
+
+A name's hash for the index, over all of it, folding exactly what
+FS_FilenameCompare folds: ASCII case, whatever the locale, and the
+separators it takes as one
+===========
+*/
+static unsigned int FS_IndexHash( const char *name ) {
+	unsigned int	hash = 2166136261u;		// FNV-1a
+	int				c;
+
+	for ( ; *name; name++ ) {
+		c = (unsigned char)*name;
+		if ( c >= 'A' && c <= 'Z' ) {
+			c += 'a' - 'A';
+		} else if ( c == '\\' || c == ':' ) {
+			c = '/';
+		}
+		hash = ( hash ^ (unsigned int)c ) * 16777619u;
+	}
+	return hash;
+}
+
+/*
+===========
+FS_IndexOrder
+
+Numbers the entries in the lookups' order and lists the directories in it
+===========
+*/
+static void FS_IndexOrder( void ) {
+	searchpath_t	*search;
+	int				order = 0;
+
+	fs_numIndexDirs = 0;
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		search->order = order++;
+		if ( search->dir && fs_indexDirs ) {
+			fs_indexDirs[fs_numIndexDirs++] = search;
+		}
+	}
+}
+
+/*
+===========
+FS_IndexClear
+===========
+*/
+static void FS_IndexClear( void ) {
+	free( fs_index );
+	free( fs_indexEntries );
+	if ( fs_indexDirs ) {
+		Z_Free( fs_indexDirs );
+	}
+	fs_index = NULL;
+	fs_indexEntries = NULL;
+	fs_indexDirs = NULL;
+	fs_indexMask = 0;
+	fs_numIndexDirs = 0;
+}
+
+/*
+===========
+FS_IndexBuild
+
+The index of every pak's files, as many slots as files, each chain in the
+path's order (the paks added last first, at each chain's head), so a
+name's paks come mostly in order; and the entries numbered, for the
+lookups before FS_RankPaks numbers them again
+===========
+*/
+static void FS_IndexBuild( void ) {
+	searchpath_t	*search, **paks;
+	indexEntry_t	*entry, **slot;
+	unsigned int	size;
+	int				i, p, numPaks = 0, files = 0, dirs = 0, start = Sys_Milliseconds();
+
+	FS_IndexClear();
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack ) {
+			files += search->pack->numfiles;
+			numPaks++;
+		} else if ( search->dir ) {
+			dirs++;
+		}
+	}
+	for ( size = 1024; size < (unsigned int)files; size *= 2 ) {
+	}
+	fs_indexDirs = Z_Malloc( ( dirs + 1 ) * sizeof( *fs_indexDirs ) );
+	paks = Z_Malloc( ( numPaks + 1 ) * sizeof( *paks ) );
+	fs_index = calloc( size, sizeof( *fs_index ) );
+	fs_indexEntries = malloc( ( files + 1 ) * sizeof( *fs_indexEntries ) );
+	if ( !fs_index || !fs_indexEntries ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: no memory for the file name index, so each lookup asks every pak\n" );
+		free( fs_index );
+		free( fs_indexEntries );
+		fs_index = NULL;
+		fs_indexEntries = NULL;
+		Z_Free( paks );
+		return;
+	}
+	fs_indexMask = size - 1;
+	for ( search = fs_searchpaths, p = 0; search; search = search->next ) {
+		if ( search->pack ) {
+			paks[p++] = search;
+		}
+	}
+	for ( p = numPaks - 1, entry = fs_indexEntries; p >= 0; p-- ) {
+		for ( i = 0; i < paks[p]->pack->numfiles; i++, entry++ ) {
+			entry->file = &paks[p]->pack->buildBuffer[i];
+			entry->search = paks[p];
+			slot = &fs_index[FS_IndexHash( entry->file->name ) & fs_indexMask];
+			entry->next = *slot;
+			*slot = entry;
+		}
+	}
+	Z_Free( paks );
+	FS_IndexOrder();
+	Com_DPrintf( "Indexed %d files of %d paks in %d msec, %d KB\n", files, numPaks, Sys_Milliseconds() - start,
+		(int)( ( size * sizeof( *fs_index ) + files * sizeof( *fs_indexEntries ) +
+		( dirs + 1 ) * sizeof( *fs_indexDirs ) ) / 1024 ) );
+}
+
+/*
+===========
+FS_IndexPaks
+
+The paks that have a name, in the lookups' order, at most INDEX_MAX_PAKS;
+qfalse when the index can't say (none built, fs_index 0, or the name in
+more paks), so the lookup walks the whole path
+===========
+*/
+static qboolean FS_IndexPaks( const char *filename, searchpath_t **paks, int *numPaks ) {
+	const indexEntry_t	*entry;
+	searchpath_t		*swap;
+	int					i, j;
+
+	if ( !fs_index || !fs_indexUse || !fs_indexUse->integer || fs_lookupTimed == 2 ) {
+		return qfalse;
+	}
+	// as FS_FOpenFileReadDir takes it
+	if ( filename[0] == '/' || filename[0] == '\\' ) {
+		filename++;
+	}
+	*numPaks = 0;
+	for ( entry = fs_index[FS_IndexHash( filename ) & fs_indexMask]; entry; entry = entry->next ) {
+		if ( FS_FilenameCompare( entry->file->name, filename ) ) {
+			continue;
+		}
+		// a pak with the name twice is asked once
+		if ( *numPaks && paks[*numPaks - 1] == entry->search ) {
+			continue;
+		}
+		if ( *numPaks == INDEX_MAX_PAKS ) {
+			fs_indexWalks++;
+			return qfalse;
+		}
+		paks[( *numPaks )++] = entry->search;
+	}
+	// in the path's order already; the tiers may move some
+	for ( i = 1; i < *numPaks; i++ ) {
+		for ( j = i; j > 0 && paks[j]->order < paks[j - 1]->order; j-- ) {
+			swap = paks[j];
+			paks[j] = paks[j - 1];
+			paks[j - 1] = swap;
+		}
+	}
+	return qtrue;
+}
+
+/*
+===========
+FS_IndexNext
+
+The next entry a lookup asks: of the name's paks and the directories,
+the earlier in the lookups' order; NULL after the last. *p and *d start at 0
+===========
+*/
+static searchpath_t *FS_IndexNext( searchpath_t **paks, int numPaks, int *p, int *d ) {
+	if ( *d < fs_numIndexDirs && ( *p == numPaks || fs_indexDirs[*d]->order < paks[*p]->order ) ) {
+		return fs_indexDirs[( *d )++];
+	}
+	return *p < numPaks ? paks[( *p )++] : NULL;
 }
 
 /*
@@ -2094,6 +2326,92 @@ const char *FS_LastFileContent( void ) {
 
 /*
 ===========
+FS_TryRead
+
+A read of a file from one search path entry, by the rules every read
+keeps: whether it's there (and so its length, and the entry in
+fs_lastFileSearch)
+===========
+*/
+static qboolean FS_TryRead( searchpath_t *search, const char *filename, fileHandle_t *file, qboolean uniqueFILE,
+	qboolean isExec, qboolean isLocalConfig, long *len )
+{
+	// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
+	// files and pk3dirs, which come with the game, a mod or a download
+	if ( isLocalConfig && FS_IsGameContent( search ) ) {
+		return qfalse;
+	}
+	// and exec runs no config from a download but default.cfg
+	if ( isExec && search->pack && search->pack->cached && FS_CachePakRefuses( search->pack, filename ) ) {
+		return qfalse;
+	}
+	*len = FS_FOpenFileReadDir( filename, search, file, uniqueFILE, qfalse );
+	if ( file == NULL ? *len > 0 : *len >= 0 && *file ) {
+		fs_lastFileSearch = search;
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+===========
+FS_WalkFinds
+
+The entry a lookup would stop at walking the whole path, by FS_TryRead's
+rules, but marking nothing and opening nothing: whether the file is there
+(exists), as FS_FOpenFileReadDir without a handle says, or can be read, as
+FS_SearchHasFile says. fs_indexCheck's other half
+===========
+*/
+static qboolean FS_SearchHasFile( const searchpath_t *search, const char *filename );
+
+static const searchpath_t *FS_WalkFinds( const char *filename, qboolean exists, qboolean isExec, qboolean isLocalConfig )
+{
+	const searchpath_t	*search;
+
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		if ( ( isLocalConfig && FS_IsGameContent( search ) ) ||
+			( isExec && search->pack && search->pack->cached && FS_CachePakRefusesName( filename ) ) ) {
+			continue;
+		}
+		if ( exists ? FS_FOpenFileReadDir( filename, (searchpath_t *)search, NULL, qfalse, qfalse ) > 0
+			: FS_SearchHasFile( search, filename ) ) {
+			return search;
+		}
+	}
+	return NULL;
+}
+
+/*
+===========
+FS_IndexChecked
+
+Under fs_indexCheck, the entry an indexed lookup found against the walk's
+===========
+*/
+static void FS_IndexChecked( const char *filename, const searchpath_t *found, qboolean exists, qboolean isExec,
+	qboolean isLocalConfig )
+{
+	const searchpath_t	*walked;
+
+	// fs_lookup times the lookups alone
+	if ( !fs_indexCheck || !fs_indexCheck->integer || fs_lookupTimed ) {
+		return;
+	}
+	walked = FS_WalkFinds( filename, exists, isExec, isLocalConfig );
+	if ( walked == found ) {
+		return;
+	}
+	fs_indexMismatches++;
+	Com_Printf( S_COLOR_YELLOW "WARNING: fs index: %s from %s, the walk's from %s\n", filename,
+		found ? FS_SearchSource( found ) : "nowhere", walked ? FS_SearchSource( walked ) : "nowhere" );
+	if ( fs_indexCheck->integer > 1 ) {
+		Com_Error( ERR_FATAL, "fs index: %s found apart from the walk (fs_indexCheck 2)", filename );
+	}
+}
+
+/*
+===========
 FS_FOpenFileReadAs
 
 FS_FOpenFileRead, which for exec passes over the configs in the content
@@ -2102,33 +2420,30 @@ cache's paks, but default.cfg
 */
 static long FS_FOpenFileReadAs(const char *filename, fileHandle_t *file, qboolean uniqueFILE, qboolean isExec)
 {
-	searchpath_t *search;
+	searchpath_t *search, *paks[INDEX_MAX_PAKS];
 	long len;
 	qboolean isLocalConfig;
+	int numPaks, p = 0, d = 0;
 
 	if(!fs_searchpaths)
 		Com_Error(ERR_FATAL, "Filesystem call made without initialization");
 
 	fs_lastFileSearch = NULL;
 	isLocalConfig = FS_IsLocalConfig( filename );
-	for(search = FS_NextSearch(NULL); search; search = FS_NextSearch(search))
-	{
-		// autoexec.cfg and q3config.cfg can only be loaded outside of pk3
-		// files and pk3dirs, which come with the game, a mod or a download
-		if (isLocalConfig && FS_IsGameContent(search))
-			continue;
-		// and exec runs no config from a download but default.cfg
-		if (isExec && search->pack && search->pack->cached && FS_CachePakRefuses(search->pack, filename))
-			continue;
-
-		len = FS_FOpenFileReadDir(filename, search, file, uniqueFILE, qfalse);
-
-		if(file == NULL ? len > 0 : len >= 0 && *file)
-		{
-			fs_lastFileSearch = search;
+	if ( FS_IndexPaks( filename, paks, &numPaks ) ) {
+		while ( ( search = FS_IndexNext( paks, numPaks, &p, &d ) ) &&
+			!FS_TryRead( search, filename, file, uniqueFILE, isExec, isLocalConfig, &len ) ) {
+		}
+		FS_IndexChecked( filename, search, file == NULL, isExec, isLocalConfig );
+		if ( search ) {
 			return len;
 		}
-
+	} else {
+		for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+			if ( FS_TryRead( search, filename, file, uniqueFILE, isExec, isLocalConfig, &len ) ) {
+				return len;
+			}
+		}
 	}
 	
 #ifdef FS_MISSING
@@ -2190,14 +2505,16 @@ The entry a read of a file would come from, or NULL
 */
 static const searchpath_t *FS_FileSearch( const char *filename )
 {
-	const searchpath_t	*search;
+	searchpath_t		*paks[INDEX_MAX_PAKS], *search;
+	int					numPaks, p = 0, d = 0;
 
-	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
-		if ( FS_SearchHasFile( search, filename ) ) {
-			return search;
-		}
+	if ( !FS_IndexPaks( filename, paks, &numPaks ) ) {
+		return FS_WalkFinds( filename, qfalse, qfalse, qfalse );
 	}
-	return NULL;
+	while ( ( search = FS_IndexNext( paks, numPaks, &p, &d ) ) && !FS_SearchHasFile( search, filename ) ) {
+	}
+	FS_IndexChecked( filename, search, qfalse, qfalse, qfalse );
+	return search;
 }
 
 /*
@@ -3973,6 +4290,41 @@ const char *FS_SearchDirs( const char *predecessorFile ) {
 
 /*
 ============
+FS_Lookup_f
+
+fs_lookup <name> [count]: where a read of the name comes from, through the
+index and by the walk, and how long a lookup takes each way, as a mean of
+count (1000) lookups of whether it's there, timed without fs_indexCheck's
+walk
+============
+*/
+static void FS_Lookup_f( void ) {
+	const searchpath_t	*search;
+	const char			*name = Cmd_Argv( 1 );
+	int					i, n, count, start, msec[2];
+
+	if ( Cmd_Argc() < 2 ) {
+		Com_Printf( "usage: fs_lookup <name> [count]\n" );
+		return;
+	}
+	count = Cmd_Argc() > 2 ? MAX( atoi( Cmd_Argv( 2 ) ), 1 ) : 1000;
+	search = FS_WalkFinds( name, qtrue, qfalse, FS_IsLocalConfig( name ) );
+	Com_Printf( "%s: %s\n", name, search ? FS_SearchSource( search ) : "not found" );
+	for ( i = 0; i < 2; i++ ) {
+		fs_lookupTimed = i + 1;
+		start = Sys_Milliseconds();
+		for ( n = 0; n < count; n++ ) {
+			FS_FOpenFileRead( name, NULL, qfalse );
+		}
+		msec[i] = Sys_Milliseconds() - start;
+	}
+	fs_lookupTimed = 0;
+	Com_Printf( "%d lookups: %.3f msec each through the index, %.3f by the walk; %d lookups so far of a name in "
+		"more than %d paks, walked\n", count, msec[0] / (float)count, msec[1] / (float)count, fs_indexWalks, INDEX_MAX_PAKS );
+}
+
+/*
+============
 FS_Path_f
 
 ============
@@ -5132,6 +5484,7 @@ static void FS_RankPaks( void ) {
 	signature = FS_PathSignature();
 	fs_rankings += signature != fs_pathSignature;
 	fs_pathSignature = signature;
+	FS_IndexOrder();
 }
 
 /*
@@ -5649,6 +6002,12 @@ void FS_Shutdown( qboolean closemfp ) {
 		}
 	}
 
+	if ( fs_indexMismatches ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: fs index: %d lookups found apart from the walk\n", fs_indexMismatches );
+		fs_indexMismatches = 0;
+	}
+	FS_IndexClear();
+
 	// free everything
 	for(p = fs_searchpaths; p; p = next)
 	{
@@ -5674,6 +6033,7 @@ void FS_Shutdown( qboolean closemfp ) {
 	Cmd_RemoveCommand( "touchFile" );
 	Cmd_RemoveCommand( "which" );
 	Cmd_RemoveCommand( "pakconflicts" );
+	Cmd_RemoveCommand( "fs_lookup" );
 
 #ifdef FS_MISSING
 	if (closemfp) {
@@ -5727,6 +6087,7 @@ static void FS_ReorderPurePaks( void )
 	}
 	// the order a read takes may have changed (FS_Ranking)
 	fs_rankings += fs_reordered;
+	FS_IndexOrder();
 }
 
 /*
@@ -5894,6 +6255,16 @@ static void FS_Startup( const char *gameName )
 	fs_packFiles = 0;
 
 	fs_debug = Cvar_Get( "fs_debug", "0", 0 );
+	fs_indexUse = Cvar_Get( "fs_index", "1", 0 );
+	Cvar_SetDescription( fs_indexUse,
+		"Whether file lookups use the name index of the search path's paks, rather than asking each pak in turn: 1 or 0, to compare" );
+	fs_indexCheck = Cvar_Get( "fs_indexCheck", "0", 0 );
+	Cvar_SetDescription( fs_indexCheck,
+		"Whether each indexed file lookup is checked against asking every pak in turn: 0, 1 to say where they differ, 2 to stop at the first" );
+	// the tests turn it on for a whole run
+	if ( getenv( "OMNIFRAG_TEST_FS_INDEX_CHECK" ) ) {
+		Cvar_Set( "fs_indexCheck", getenv( "OMNIFRAG_TEST_FS_INDEX_CHECK" ) );
+	}
 	fs_mapPakScope = Cvar_Get( "fs_mapPakScope", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( fs_mapPakScope, 0, 1, qtrue );
 	Cvar_SetDescription( fs_mapPakScope,
@@ -5996,6 +6367,10 @@ static void FS_Startup( const char *gameName )
 	Cmd_AddCommand ("touchFile", FS_TouchFile_f );
 	Cmd_AddCommand ("which", FS_Which_f );
 	Cmd_AddCommand ("pakconflicts", FS_PakConflicts_f );
+	Cmd_AddCommand ("fs_lookup", FS_Lookup_f );
+
+	// the name index of the paks found, in the order the lookups go
+	FS_IndexBuild();
 
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=506
 	// reorder the pure pk3 files according to server order
