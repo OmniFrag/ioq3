@@ -1840,6 +1840,108 @@ char *CopyString( const char *in ) {
 }
 
 /*
+========================
+FileList_Add
+
+A name onto a file list, copied; with unique, not one already on it,
+case aside, as the search paths list a file each of them has once
+========================
+*/
+static memtag_t FileList_Tag( void ) {
+	return mainzone ? TAG_GENERAL : TAG_SMALL;
+}
+
+static unsigned int FileList_Hash( const char *name ) {
+	unsigned int	hash = 2166136261u;
+
+	for ( ; *name; name++ ) {
+		hash = ( hash ^ (unsigned char)tolower( *name ) ) * 16777619u;
+	}
+	return hash;
+}
+
+// the hash's slot holding the name, case aside, or the empty one it would go in
+static int FileList_Slot( const fileList_t *list, const char *name ) {
+	int		slot;
+
+	for ( slot = FileList_Hash( name ) & ( list->hashSize - 1 ); list->hash[slot];
+		slot = ( slot + 1 ) & ( list->hashSize - 1 ) ) {
+		if ( !Q_stricmp( list->names[list->hash[slot] - 1], name ) ) {
+			break;
+		}
+	}
+	return slot;
+}
+
+static void FileList_Rehash( fileList_t *list, int hashSize ) {
+	int		i;
+
+	if ( list->hash ) {
+		Z_Free( list->hash );
+	}
+	list->hash = Z_TagMalloc( hashSize * sizeof( *list->hash ), FileList_Tag() );
+	Com_Memset( list->hash, 0, hashSize * sizeof( *list->hash ) );
+	list->hashSize = hashSize;
+	for ( i = 0; i < list->count; i++ ) {
+		list->hash[FileList_Slot( list, list->names[i] )] = i + 1;
+	}
+}
+
+void FileList_Add( fileList_t *list, const char *name, qboolean unique ) {
+	char	**names;
+	int		length, slot = 0;
+
+	if ( unique ) {
+		// at most half full
+		if ( ( list->count + 1 ) * 2 > list->hashSize ) {
+			FileList_Rehash( list, list->hashSize ? list->hashSize * 2 : 256 );
+		}
+		slot = FileList_Slot( list, name );
+		if ( list->hash[slot] ) {
+			return;
+		}
+	}
+	// room for it and the NULL that ends the list
+	if ( list->count + 2 > list->size ) {
+		list->size = list->size ? list->size * 2 : 64;
+		names = Z_TagMalloc( list->size * sizeof( *names ), FileList_Tag() );
+		if ( list->names ) {
+			Com_Memcpy( names, list->names, list->count * sizeof( *names ) );
+			Z_Free( list->names );
+		}
+		list->names = names;
+	}
+	length = strlen( name ) + 1;
+	list->names[list->count] = Z_TagMalloc( length, FileList_Tag() );
+	Com_Memcpy( list->names[list->count], name, length );
+	if ( unique ) {
+		list->hash[slot] = list->count + 1;
+	}
+	list->count++;
+}
+
+/*
+========================
+FileList_Done
+
+The list, ending with a NULL, or NULL for none, and its count
+========================
+*/
+char **FileList_Done( fileList_t *list, int *count ) {
+	char	**names = list->names;
+
+	if ( list->hash ) {
+		Z_Free( list->hash );
+	}
+	*count = list->count;
+	if ( names ) {
+		names[list->count] = NULL;
+	}
+	Com_Memset( list, 0, sizeof( *list ) );
+	return names;
+}
+
+/*
 ==============================================================================
 
 Goals:

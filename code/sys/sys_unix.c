@@ -1104,24 +1104,18 @@ DIRECTORY SCANNING
 ==============================================================
 */
 
-#define MAX_FOUND_FILES 0x1000
-
 /*
 ==================
 Sys_ListFilteredFiles
 ==================
 */
-void Sys_ListFilteredFiles( const char *basedir, char *subdirs, char *filter, char **list, int *numfiles )
+static void Sys_ListFilteredFiles( const char *basedir, char *subdirs, char *filter, fileList_t *list )
 {
 	char          search[MAX_OSPATH], newsubdirs[MAX_OSPATH];
 	char          filename[MAX_OSPATH];
 	DIR           *fdir;
 	struct dirent *d;
 	struct stat   st;
-
-	if ( *numfiles >= MAX_FOUND_FILES - 1 ) {
-		return;
-	}
 
 	if ( basedir[0] == '\0' ) {
 		return;
@@ -1151,17 +1145,13 @@ void Sys_ListFilteredFiles( const char *basedir, char *subdirs, char *filter, ch
 				else {
 					Com_sprintf( newsubdirs, sizeof(newsubdirs), "%s", d->d_name);
 				}
-				Sys_ListFilteredFiles( basedir, newsubdirs, filter, list, numfiles );
+				Sys_ListFilteredFiles( basedir, newsubdirs, filter, list );
 			}
-		}
-		if ( *numfiles >= MAX_FOUND_FILES - 1 ) {
-			break;
 		}
 		Com_sprintf( filename, sizeof(filename), "%s/%s", subdirs, d->d_name );
 		if (!Com_FilterPath( filter, filename, qfalse ))
 			continue;
-		list[ *numfiles ] = CopyString( filename );
-		(*numfiles)++;
+		FileList_Add( list, filename, qfalse );
 	}
 
 	closedir(fdir);
@@ -1178,32 +1168,14 @@ char **Sys_ListFiles( const char *directory, const char *extension, char *filter
 	DIR           *fdir;
 	qboolean      dironly = wantsubs;
 	char          search[MAX_OSPATH];
-	int           nfiles;
-	char          **listCopy;
-	char          *list[MAX_FOUND_FILES];
-	int           i;
+	fileList_t    list = { 0 };
 	struct stat   st;
 
 	int           extLen;
 
 	if (filter) {
-
-		nfiles = 0;
-		Sys_ListFilteredFiles( directory, "", filter, list, &nfiles );
-
-		list[ nfiles ] = NULL;
-		*numfiles = nfiles;
-
-		if (!nfiles)
-			return NULL;
-
-		listCopy = Z_Malloc( ( nfiles + 1 ) * sizeof( *listCopy ) );
-		for ( i = 0 ; i < nfiles ; i++ ) {
-			listCopy[i] = list[i];
-		}
-		listCopy[i] = NULL;
-
-		return listCopy;
+		Sys_ListFilteredFiles( directory, "", filter, &list );
+		return FileList_Done( &list, numfiles );
 	}
 
 	if ( directory[0] == '\0' ) {
@@ -1222,8 +1194,6 @@ char **Sys_ListFiles( const char *directory, const char *extension, char *filter
 	extLen = strlen( extension );
 
 	// search
-	nfiles = 0;
-
 	if ((fdir = opendir(directory)) == NULL) {
 		*numfiles = 0;
 		return NULL;
@@ -1246,30 +1216,12 @@ char **Sys_ListFiles( const char *directory, const char *extension, char *filter
 			}
 		}
 
-		if ( nfiles == MAX_FOUND_FILES - 1 )
-			break;
-		list[ nfiles ] = CopyString( d->d_name );
-		nfiles++;
+		FileList_Add( &list, d->d_name, qfalse );
 	}
-
-	list[ nfiles ] = NULL;
 
 	closedir(fdir);
 
-	// return a copy of the list
-	*numfiles = nfiles;
-
-	if ( !nfiles ) {
-		return NULL;
-	}
-
-	listCopy = Z_Malloc( ( nfiles + 1 ) * sizeof( *listCopy ) );
-	for ( i = 0 ; i < nfiles ; i++ ) {
-		listCopy[i] = list[i];
-	}
-	listCopy[i] = NULL;
-
-	return listCopy;
+	return FileList_Done( &list, numfiles );
 }
 
 /*

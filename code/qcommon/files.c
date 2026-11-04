@@ -3294,8 +3294,6 @@ DIRECTORY SCANNING FUNCTIONS
 =================================================================================
 */
 
-#define	MAX_FOUND_FILES	0x1000
-
 static int FS_ReturnPath( const char *zname, char *zpath, int *depth ) {
 	int len, at, newdep;
 
@@ -3320,28 +3318,6 @@ static int FS_ReturnPath( const char *zname, char *zpath, int *depth ) {
 }
 
 /*
-==================
-FS_AddFileToList
-==================
-*/
-static int FS_AddFileToList( char *name, char *list[MAX_FOUND_FILES], int nfiles ) {
-	int		i;
-
-	if ( nfiles == MAX_FOUND_FILES - 1 ) {
-		return nfiles;
-	}
-	for ( i = 0 ; i < nfiles ; i++ ) {
-		if ( !Q_stricmp( name, list[i] ) ) {
-			return nfiles;		// already in list
-		}
-	}
-	list[nfiles] = CopyString( name );
-	nfiles++;
-
-	return nfiles;
-}
-
-/*
 ===============
 FS_ListFilteredFiles
 
@@ -3352,9 +3328,7 @@ from all search paths
 char **FS_ListFilteredFiles( const char *path, const char *extension,
 	char *filter, int *numfiles, qboolean stripPath,
 	qboolean allowNonPureFilesOnDisk ) {
-	int				nfiles;
-	char			**listCopy;
-	char			*list[MAX_FOUND_FILES];
+	fileList_t		list = { 0 };
 	searchpath_t	*search;
 	int				i;
 	int				pathLength;
@@ -3381,7 +3355,6 @@ char **FS_ListFilteredFiles( const char *path, const char *extension,
 		pathLength--;
 	}
 	extensionLength = strlen( extension );
-	nfiles = 0;
 	FS_ReturnPath(path, zpath, &pathDepth);
 
 	//
@@ -3422,7 +3395,7 @@ char **FS_ListFilteredFiles( const char *path, const char *extension,
 						continue;
 
 					// unique the match
-					nfiles = FS_AddFileToList( name + pathSkip, list, nfiles );
+					FileList_Add( &list, name + pathSkip, qtrue );
 				}
 				else {
 
@@ -3443,7 +3416,7 @@ char **FS_ListFilteredFiles( const char *path, const char *extension,
 					}
 
 					// unique the match
-					nfiles = FS_AddFileToList( name + pathSkip, list, nfiles );
+					FileList_Add( &list, name + pathSkip, qtrue );
 				}
 			}
 		} else if (search->dir) { // scan for files in the filesystem
@@ -3461,27 +3434,14 @@ char **FS_ListFilteredFiles( const char *path, const char *extension,
 				for ( i = 0 ; i < numSysFiles ; i++ ) {
 					// unique the match
 					name = sysFiles[i];
-					nfiles = FS_AddFileToList( name, list, nfiles );
+					FileList_Add( &list, name, qtrue );
 				}
 				Sys_FreeFileList( sysFiles );
 			}
 		}
 	}
 
-	// return a copy of the list
-	*numfiles = nfiles;
-
-	if ( !nfiles ) {
-		return NULL;
-	}
-
-	listCopy = Z_Malloc( ( nfiles + 1 ) * sizeof( *listCopy ) );
-	for ( i = 0 ; i < nfiles ; i++ ) {
-		listCopy[i] = list[i];
-	}
-	listCopy[i] = NULL;
-
-	return listCopy;
+	return FileList_Done( &list, numfiles );
 }
 
 /*
@@ -3897,32 +3857,21 @@ int FS_PathCmp( const char *s1, const char *s2 ) {
 	return 0;		// strings are equal
 }
 
+static int QDECL paksort( const void *a, const void *b );
+
 /*
 ================
 FS_SortFileList
+
+The lists sorted here are unique already, so the sort's stability doesn't
+matter
 ================
 */
 void FS_SortFileList(char **filelist, int numfiles) {
-	int i, j, k, numsortedfiles;
-	char **sortedlist;
-
-	sortedlist = Z_Malloc( ( numfiles + 1 ) * sizeof( *sortedlist ) );
-	sortedlist[0] = NULL;
-	numsortedfiles = 0;
-	for (i = 0; i < numfiles; i++) {
-		for (j = 0; j < numsortedfiles; j++) {
-			if (FS_PathCmp(filelist[i], sortedlist[j]) < 0) {
-				break;
-			}
-		}
-		for (k = numsortedfiles; k > j; k--) {
-			sortedlist[k] = sortedlist[k-1];
-		}
-		sortedlist[j] = filelist[i];
-		numsortedfiles++;
+	// an empty list is NULL, which qsort mustn't be given
+	if ( numfiles > 1 ) {
+		qsort( filelist, numfiles, sizeof( *filelist ), paksort );
 	}
-	Com_Memcpy(filelist, sortedlist, numfiles * sizeof( *filelist ) );
-	Z_Free(sortedlist);
 }
 
 /*

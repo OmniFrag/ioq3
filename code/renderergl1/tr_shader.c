@@ -3002,6 +3002,8 @@ static void ScanAndLoadShaderFiles( void )
 	}
 
 	if ( numShaderFiles > MAX_SHADER_FILES ) {
+		ri.Printf( PRINT_WARNING, "WARNING: %i shader files, of which only the first %i are read\n",
+			numShaderFiles, MAX_SHADER_FILES );
 		numShaderFiles = MAX_SHADER_FILES;
 	}
 	R_ShaderFilesBegin( numShaderFiles );

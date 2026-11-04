@@ -1514,6 +1514,19 @@ int			Com_EventLoop( void );
 sysEvent_t	Com_GetSystemEvent( void );
 
 char		*CopyString( const char *in );
+
+// a list of names that grows as needed, for the file listings: the array
+// and each name from the main zone once there is one, ending with a NULL,
+// as FS_FreeFileList and Sys_FreeFileList free it. Start it zeroed, and
+// add to it all with unique or all without
+typedef struct {
+	char	**names;
+	int		count, size;
+	int		*hash;		// with unique adds: each name's index + 1, by a hash without case
+	int		hashSize;
+} fileList_t;
+void	FileList_Add( fileList_t *list, const char *name, qboolean unique );
+char	**FileList_Done( fileList_t *list, int *count );
 void		Info_Print( const char *s );
 
 void		Com_BeginRedirect (char *buffer, int buffersize, void (*flush)(char *));

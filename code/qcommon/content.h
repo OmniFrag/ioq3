@@ -32,6 +32,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CONTENT_HEADER_SIZE		16
 #define CONTENT_VERSION			1
 #define CONTENT_MAX_RECORDS		4096
+// the server's pak index (installed.dat) holds a record a pak, so it grows
+// with the paks, up to these (a file of about 20 MB)
+#define PAK_INDEX_MAX_RECORDS	65536
 // a path in a record, relative to its root, NUL-padded: a pak whose path
 // is longer isn't indexed
 #define CONTENT_PATH_SIZE		256

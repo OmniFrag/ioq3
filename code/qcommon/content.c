@@ -90,7 +90,7 @@ static int Content_ParseHeader( const byte *data, int length, const char *magic,
 		return -1;
 	}
 	count = Content_Get32( data + 8 );
-	if ( count > CONTENT_MAX_RECORDS || count > (unsigned int)maxRecords ||
+	if ( count > (unsigned int)maxRecords ||
 		(int64_t)length != CONTENT_HEADER_SIZE + (int64_t)count * recordSize ) {
 		return -1;
 	}
@@ -144,7 +144,7 @@ int Content_WritePakIndex( const pakRecord_t *records, int count, byte *out, int
 	byte				*p;
 	int					i, length;
 
-	if ( count < 0 || count > CONTENT_MAX_RECORDS ) {
+	if ( count < 0 || count > PAK_INDEX_MAX_RECORDS ) {
 		return -1;
 	}
 	length = CONTENT_HEADER_SIZE + count * PAK_INDEX_RECORD_SIZE;
@@ -497,10 +497,18 @@ THE SERVER'S PAK INDEX
 ==============================================================
 */
 
-static pakRecord_t	pakIndex[CONTENT_MAX_RECORDS];
-static unsigned int	pakIndexHash[CONTENT_MAX_RECORDS];	// of each record's path
-static int			pakIndexCount;
-static qboolean		pakIndexLoaded;
+// the records, as many as there are paks, up to PAK_INDEX_MAX_RECORDS, and
+// a table of them by path: each slot a record's index + 1, at most half full
+static pakRecord_t	*pakIndex;
+static int			pakIndexCount, pakIndexSize;
+static int			*pakIndexSlots;
+static int			pakIndexSlotsSize;
+static qboolean		pakIndexLoaded, pakIndexFullSaid;
+// installed.dat as this process last read or wrote it, so a load reads it
+// again only when another process sharing the home has written it; and
+// the time just before it was seen, as a write in the second of its mtime
+// keeps the mtime and often the size
+static int64_t		pakIndexFileSize = -1, pakIndexFileMtime, pakIndexFileSeen;
 
 // what to hash once the job running is done
 static pakRecord_t	*pakIndexQueued;
@@ -531,7 +539,7 @@ static const char *Content_PakOSPath( const pakRecord_t *pak ) {
 	return root ? FS_BaseDir_BuildOSPath( root, pak->path ) : NULL;
 }
 
-// a record's key, for a quicker lookup
+// a record's key in the table
 static unsigned int Content_PathHash( int root, const char *path ) {
 	unsigned int	hash = 2166136261u ^ (unsigned int)root;	// FNV-1a
 
@@ -543,46 +551,166 @@ static unsigned int Content_PathHash( int root, const char *path ) {
 
 /*
 =================
+Content_PakIndex_Slot
+
+The table's slot holding the record for a pak's path, or the empty one it
+would go in
+=================
+*/
+static int Content_PakIndex_Slot( int root, const char *path ) {
+	const pakRecord_t	*r;
+	int					slot;
+
+	for ( slot = Content_PathHash( root, path ) & ( pakIndexSlotsSize - 1 ); pakIndexSlots[slot];
+		slot = ( slot + 1 ) & ( pakIndexSlotsSize - 1 ) ) {
+		r = &pakIndex[pakIndexSlots[slot] - 1];
+		if ( r->root == root && !strcmp( r->path, path ) ) {
+			break;
+		}
+	}
+	return slot;
+}
+
+/*
+=================
+Content_PakIndex_Rehash
+
+The table made again for the records, at least twice their count in
+slots; qfalse if there's no memory for it
+=================
+*/
+static qboolean Content_PakIndex_Rehash( int count ) {
+	int		i, size;
+
+	for ( size = 512; size < count * 2; size *= 2 ) {
+	}
+	if ( size != pakIndexSlotsSize ) {
+		free( pakIndexSlots );
+		pakIndexSlotsSize = 0;
+		if ( !( pakIndexSlots = malloc( size * sizeof( *pakIndexSlots ) ) ) ) {
+			return qfalse;
+		}
+		pakIndexSlotsSize = size;
+	}
+	memset( pakIndexSlots, 0, pakIndexSlotsSize * sizeof( *pakIndexSlots ) );
+	for ( i = 0; i < pakIndexCount; i++ ) {
+		pakIndexSlots[Content_PakIndex_Slot( pakIndex[i].root, pakIndex[i].path )] = i + 1;
+	}
+	return qtrue;
+}
+
+/*
+=================
+Content_PakIndex_Unslot
+
+Takes a record out of the table, moving back the ones after it that the
+gap would hide from their probes
+=================
+*/
+static void Content_PakIndex_Unslot( int slot ) {
+	const pakRecord_t	*r;
+	int					next, home, mask = pakIndexSlotsSize - 1;
+
+	pakIndexSlots[slot] = 0;
+	for ( next = ( slot + 1 ) & mask; pakIndexSlots[next]; next = ( next + 1 ) & mask ) {
+		r = &pakIndex[pakIndexSlots[next] - 1];
+		home = Content_PathHash( r->root, r->path ) & mask;
+		// it stays only if its home lies between the gap and it, around
+		if ( ( slot < next ) ? ( home <= slot || home > next ) : ( home <= slot && home > next ) ) {
+			pakIndexSlots[slot] = pakIndexSlots[next];
+			pakIndexSlots[next] = 0;
+			slot = next;
+		}
+	}
+}
+
+/*
+=================
 Content_PakIndex_Load
 
-Reads installed.dat again, as another process sharing the home may have
-written it; a damaged one counts as empty, and is replaced at the next
-write. The first time, also removes what a write cut short left
+Reads installed.dat again when another process sharing the home has
+written it since this one last read or wrote it; a damaged one counts as
+empty, and is replaced at the next write. A record this process used
+since keeps the later of the two times it was last used. Also removes
+what a write cut short left
 =================
 */
 static void Content_PakIndex_Load( void ) {
-	byte	*data;
-	int		i, length;
+	pakRecord_t	*records;
+	byte		*data;
+	int64_t		size = -1, mtime = 0, seen;
+	int			i, count = 0, slot, length, room;
 
 	Content_RemoveStaleTemps();
-	pakIndexLoaded = qtrue;
-	pakIndexCount = 0;
-	data = Content_ReadFile( Content_HomeFile( PAK_INDEX_FILE ),
-		CONTENT_HEADER_SIZE + CONTENT_MAX_RECORDS * PAK_INDEX_RECORD_SIZE, &length );
-	if ( !data ) {
+	seen = time( NULL );
+	if ( !Content_FileStat( Content_HomeFile( PAK_INDEX_FILE ), &size, &mtime ) ) {
+		size = -1;
+	}
+	// one seen in the second it was written may have been written again since
+	if ( pakIndexLoaded && size == pakIndexFileSize && mtime == pakIndexFileMtime &&
+		( size < 0 || mtime < pakIndexFileSeen ) ) {
 		return;
 	}
-	pakIndexCount = Content_ParsePakIndex( data, length, pakIndex, CONTENT_MAX_RECORDS );
-	if ( pakIndexCount < 0 ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: %s is damaged, so its paks will be hashed again\n", PAK_INDEX_FILE );
-		pakIndexCount = 0;
+	data = size < 0 ? NULL : Content_ReadFile( Content_HomeFile( PAK_INDEX_FILE ),
+		CONTENT_HEADER_SIZE + PAK_INDEX_MAX_RECORDS * PAK_INDEX_RECORD_SIZE, &length );
+	if ( data ) {
+		// room for what the file's length says it holds; the parse checks it
+		room = MAX( length - CONTENT_HEADER_SIZE, 0 ) / PAK_INDEX_RECORD_SIZE;
+		records = malloc( ( room ? room : 1 ) * sizeof( *records ) );
+		count = records ? Content_ParsePakIndex( data, length, records, room ) : -1;
+		free( data );
+		if ( count < 0 ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s is damaged, so its paks will be hashed again\n", PAK_INDEX_FILE );
+			free( records );
+			records = NULL;
+			count = 0;
+		}
+	} else {
+		records = NULL;
 	}
-	for ( i = 0; i < pakIndexCount; i++ ) {
-		pakIndexHash[i] = Content_PathHash( pakIndex[i].root, pakIndex[i].path );
-	}
-	free( data );
-}
-
-static int Content_PakIndex_Lookup( int root, const char *path ) {
-	unsigned int	hash = Content_PathHash( root, path );
-	int				i;
-
-	for ( i = 0; i < pakIndexCount; i++ ) {
-		if ( pakIndexHash[i] == hash && pakIndex[i].root == root && !strcmp( pakIndex[i].path, path ) ) {
-			return i;
+	// what this process used since it last read the file
+	for ( i = 0; i < count && pakIndexSlotsSize; i++ ) {
+		slot = Content_PakIndex_Slot( records[i].root, records[i].path );
+		if ( pakIndexSlots[slot] ) {
+			records[i].lastUsed = MAX( records[i].lastUsed, pakIndex[pakIndexSlots[slot] - 1].lastUsed );
 		}
 	}
-	return -1;
+	free( pakIndex );
+	pakIndex = records;
+	pakIndexCount = pakIndexSize = count;
+	pakIndexLoaded = qtrue;
+	pakIndexFileSize = size;
+	pakIndexFileMtime = mtime;
+	pakIndexFileSeen = seen;
+	Content_PakIndex_Rehash( pakIndexCount );
+}
+
+/*
+=================
+Content_PakIndex_Reserve
+
+Room in the records for one more; qfalse if there's no memory for it
+=================
+*/
+static qboolean Content_PakIndex_Reserve( void ) {
+	pakRecord_t	*records;
+	int			size;
+
+	if ( pakIndexCount < pakIndexSize ) {
+		return qtrue;
+	}
+	size = MIN( pakIndexSize ? pakIndexSize * 2 : 256, PAK_INDEX_MAX_RECORDS );
+	if ( size <= pakIndexCount || !( records = realloc( pakIndex, size * sizeof( *records ) ) ) ) {
+		return qfalse;
+	}
+	pakIndex = records;
+	pakIndexSize = size;
+	return qtrue;
+}
+
+// the record for a pak's path, or -1
+static int Content_PakIndex_Lookup( int root, const char *path ) {
+	return pakIndexSlotsSize ? pakIndexSlots[Content_PakIndex_Slot( root, path )] - 1 : -1;
 }
 
 /*
@@ -600,6 +728,9 @@ const pakRecord_t *Content_PakIndex_Find( int root, const char *path, int64_t si
 	if ( i < 0 || pakIndex[i].size != size || pakIndex[i].mtime != mtime ) {
 		return NULL;
 	}
+	// used now, so a full index keeps it over one used longer ago; the next
+	// write keeps the time
+	pakIndex[i].lastUsed = time( NULL );
 	return &pakIndex[i];
 }
 
@@ -627,30 +758,52 @@ const pakRecord_t *Content_PakIndex_FindSHA256( const byte sha256[SHA256_DIGEST_
 Content_PakIndex_Add
 
 A record for a pak just hashed, replacing its path's; when the index is
-full, in place of the one used least recently
+full (PAK_INDEX_MAX_RECORDS, or out of memory), in place of the one used
+least recently, said once
 =================
 */
 static void Content_PakIndex_Write( qboolean prune );
 
 static void Content_PakIndex_Add( const hashItem_t *item, int64_t now ) {
-	pakRecord_t	*r;
-	int			i, j;
+	int		i, j, slot;
 
-	i = Content_PakIndex_Lookup( item->pak.root, item->pak.path );
-	if ( i < 0 && pakIndexCount < CONTENT_MAX_RECORDS ) {
+	// at most half full, with the one it may add
+	if ( ( pakIndexCount + 1 ) * 2 > pakIndexSlotsSize && !Content_PakIndex_Rehash( pakIndexCount + 1 ) ) {
+		return;
+	}
+	slot = Content_PakIndex_Slot( item->pak.root, item->pak.path );
+	if ( pakIndexSlots[slot] ) {
+		i = pakIndexSlots[slot] - 1;
+	} else if ( Content_PakIndex_Reserve() ) {
 		i = pakIndexCount++;
-	} else if ( i < 0 ) {
+		pakIndexSlots[slot] = i + 1;
+	} else {
+		if ( !pakIndexCount ) {
+			return;
+		}
 		for ( i = 0, j = 1; j < pakIndexCount; j++ ) {
 			if ( pakIndex[j].lastUsed < pakIndex[i].lastUsed ) {
 				i = j;
 			}
 		}
+		if ( !pakIndexFullSaid ) {
+			pakIndexFullSaid = qtrue;
+			Com_Printf( S_COLOR_YELLOW "WARNING: the pak index holds its most, %d paks, so %s takes the place of "
+				"%s, used least recently, which is hashed again when it's next needed\n",
+				pakIndexCount, item->pak.path, pakIndex[i].path );
+		}
+		// the record's slot, out of the table, then the new path's; a path
+		// another writer put in twice has the table's slot for its later
+		// record alone, which stays
+		slot = Content_PakIndex_Slot( pakIndex[i].root, pakIndex[i].path );
+		if ( pakIndexSlots[slot] == i + 1 ) {
+			Content_PakIndex_Unslot( slot );
+		}
+		pakIndexSlots[Content_PakIndex_Slot( item->pak.root, item->pak.path )] = i + 1;
 	}
-	r = &pakIndex[i];
-	*r = item->pak;
-	r->flags = 0;
-	r->lastUsed = now;
-	pakIndexHash[i] = Content_PathHash( r->root, r->path );
+	pakIndex[i] = item->pak;
+	pakIndex[i].flags = 0;
+	pakIndex[i].lastUsed = now;
 }
 
 /*
@@ -681,16 +834,22 @@ another sharing the home may
 static void Content_PakIndex_Write( qboolean prune ) {
 	int64_t		size, mtime;
 	const char	*ospath;
+	char		file[MAX_OSPATH];
 	byte		*data;
 	int			i, kept, length;
+	qboolean	written;
 
+	// a copy: the prune's paths and the write's folders reuse the buffer
+	Q_strncpyz( file, Content_HomeFile( PAK_INDEX_FILE ), sizeof( file ) );
 	for ( i = kept = 0; i < pakIndexCount; i++ ) {
 		if ( !prune || !( ospath = Content_PakOSPath( &pakIndex[i] ) ) || Content_FileStat( ospath, &size, &mtime ) ) {
-			pakIndexHash[kept] = pakIndexHash[i];
 			pakIndex[kept++] = pakIndex[i];
 		}
 	}
-	pakIndexCount = kept;
+	if ( kept != pakIndexCount ) {
+		pakIndexCount = kept;
+		Content_PakIndex_Rehash( pakIndexCount );
+	}
 
 	data = malloc( CONTENT_HEADER_SIZE + pakIndexCount * PAK_INDEX_RECORD_SIZE );
 	if ( !data ) {
@@ -698,10 +857,17 @@ static void Content_PakIndex_Write( qboolean prune ) {
 	}
 	length = Content_WritePakIndex( pakIndex, pakIndexCount, data,
 		CONTENT_HEADER_SIZE + pakIndexCount * PAK_INDEX_RECORD_SIZE );
-	if ( !Content_WriteFile( Content_HomeFile( PAK_INDEX_FILE ), data, length ) && !com_check ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( PAK_INDEX_FILE ) );
+	written = Content_WriteFile( file, data, length );
+	if ( !written && !com_check ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", file );
 	}
 	free( data );
+	// as this process wrote it, so the next load needn't read it; one it
+	// couldn't write is read again, as the file isn't what it holds
+	pakIndexFileSeen = time( NULL );
+	if ( !written || !Content_FileStat( file, &pakIndexFileSize, &pakIndexFileMtime ) ) {
+		pakIndexFileSize = -2;
+	}
 }
 
 /*
