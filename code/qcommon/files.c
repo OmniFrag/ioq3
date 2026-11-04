@@ -262,10 +262,13 @@ typedef struct fileInPack_s {
 } fileInPack_t;
 
 typedef struct {
-	char			pakPathname[MAX_OSPATH];	// c:\quake3\baseq3
-	char			pakFilename[MAX_OSPATH];	// c:\quake3\baseq3\pak0.pk3
-	char			pakBasename[MAX_OSPATH];	// pak0
-	char			pakGamename[MAX_OSPATH];	// baseq3
+	// in the pack's own block, after its hash table, each as long as it
+	// is: MAX_OSPATH is PATH_MAX, 4,096 on Linux, and four of those a pak
+	// filled the main zone at about 2,900 paks (P349)
+	char			*pakPathname;				// c:\quake3\baseq3
+	char			*pakFilename;				// c:\quake3\baseq3\pak0.pk3
+	char			*pakBasename;				// pak0
+	char			*pakGamename;				// baseq3
 	unzFile			handle;						// handle to zip file
 	unsigned int	checksum;					// regular checksum
 	int				contentRoot;				// the root it's under, for the pak index
@@ -2920,7 +2923,7 @@ static qboolean FS_IsShaderFile( const char *name )
 	return !Q_stricmpn( name, "scripts/", 8 ) && COM_CompareExtension( name, ".shader" );
 }
 
-static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
+static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const char *pathname, const char *gamename)
 {
 	fileInPack_t	*buildBuffer;
 	pack_t			*pack;
@@ -2929,7 +2932,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 	unz_global_info gi;
 	char			filename_inzip[MAX_ZPATH];
 	unz_file_info	file_info;
-	int				i, len;
+	int				i, len, baseLength;
 	long			hash;
 	int				fs_numHeaderLongs;
 	int				*fs_headerLongs;
@@ -2940,8 +2943,10 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 	uf = unzOpen(zipfile);
 	err = unzGetGlobalInfo (uf,&gi);
 
-	if (err != UNZ_OK)
+	if (err != UNZ_OK) {
+		unzClose( uf );
 		return NULL;
+	}
 
 	len = 0;
 	unzGoToFirstFile(uf);
@@ -2970,20 +2975,29 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename)
 		}
 	}
 
-	pack = Z_Malloc( sizeof( pack_t ) + i * sizeof(fileInPack_t *) );
+	// the base name without .pk3
+	baseLength = strlen( basename );
+	if ( baseLength > 4 && !Q_stricmp( basename + baseLength - 4, ".pk3" ) ) {
+		baseLength -= 4;
+	}
+	pack = Z_Malloc( sizeof( pack_t ) + i * sizeof(fileInPack_t *) + strlen( zipfile ) + 1 + baseLength + 1 +
+		strlen( pathname ) + 1 + strlen( gamename ) + 1 );
 	pack->hashSize = i;
 	pack->hashTable = (fileInPack_t **) (((char *) pack) + sizeof( pack_t ));
 	for(i = 0; i < pack->hashSize; i++) {
 		pack->hashTable[i] = NULL;
 	}
 
-	Q_strncpyz( pack->pakFilename, zipfile, sizeof( pack->pakFilename ) );
-	Q_strncpyz( pack->pakBasename, basename, sizeof( pack->pakBasename ) );
-
-	// strip .pk3 if needed
-	if ( strlen( pack->pakBasename ) > 4 && !Q_stricmp( pack->pakBasename + strlen( pack->pakBasename ) - 4, ".pk3" ) ) {
-		pack->pakBasename[strlen( pack->pakBasename ) - 4] = 0;
-	}
+	// the names after the hash table
+	pack->pakFilename = (char *)( pack->hashTable + pack->hashSize );
+	strcpy( pack->pakFilename, zipfile );
+	pack->pakBasename = pack->pakFilename + strlen( zipfile ) + 1;
+	Com_Memcpy( pack->pakBasename, basename, baseLength );
+	pack->pakBasename[baseLength] = '\0';
+	pack->pakPathname = pack->pakBasename + baseLength + 1;
+	strcpy( pack->pakPathname, pathname );
+	pack->pakGamename = pack->pakPathname + strlen( pathname ) + 1;
+	strcpy( pack->pakGamename, gamename );
 
 	pack->handle = uf;
 	pack->numfiles = gi.number_entry;
@@ -3125,7 +3139,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	if ( overrides ) {
 		overrides[0] = '\0';
 	}
-	pak = FS_LoadZipFile( ospath, name );
+	pak = FS_LoadZipFile( ospath, name, "", gameDir );
 	if ( !pak ) {
 		return "it isn't a zip that loads as a pak";
 	}
@@ -3195,7 +3209,6 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	// entry of the search path's
 	Com_Memset( &added, 0, sizeof( added ) );
 	added.pack = pak;
-	Q_strncpyz( pak->pakGamename, gameDir, sizeof( pak->pakGamename ) );
 	for ( search = fs_searchpaths; search && overrides && !why; search = search->next ) {
 		const pack_t	*other = search->pack;
 
@@ -3262,7 +3275,7 @@ qboolean FS_CompareZipChecksum(const char *zipfile, unsigned int checksum)
 	pack_t *thepak;
 	qboolean matches;
 
-	thepak = FS_LoadZipFile(zipfile, "");
+	thepak = FS_LoadZipFile(zipfile, "", "", "");
 
 	if(!thepak)
 		return qfalse;
@@ -4396,16 +4409,14 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 		if (pakwhich) {
 			// The next .pk3 file is before the next .pk3dir
 			pakfile = FS_BuildOSPath(path, dir, pakfiles[pakfilesi]);
-			if ((pak = FS_LoadZipFile(pakfile, pakfiles[pakfilesi])) == 0) {
+			if ((pak = FS_LoadZipFile(pakfile, pakfiles[pakfilesi], curpath, dir)) == 0) {
 				// This isn't a .pk3, or it couldn't be opened! Next!
 				Com_Printf( S_COLOR_YELLOW "WARNING: couldn't open %s as a pak, so it's left out\n", pakfile );
 				pakfilesi++;
 				continue;
 			}
 
-			Q_strncpyz(pak->pakPathname, curpath, sizeof(pak->pakPathname));
 			// store the game name for downloading
-			Q_strncpyz(pak->pakGamename, dir, sizeof(pak->pakGamename));
 
 			fs_packFiles += pak->numfiles;
 
@@ -4944,7 +4955,7 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 	pack_t				*pak;
 	const char			*refName, *slash;
 	const byte			*hash;
-	char				ospath[MAX_OSPATH];
+	char				ospath[MAX_OSPATH], cachePath[MAX_OSPATH];
 	int					i, entry;
 
 	// (com_dedicated and com_sv_running are registered after the first startup)
@@ -4970,9 +4981,12 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 		// however it was cached; if it's damaged, the next with that checksum.
 		// One the server gives a hash for, by that hash alone (FS_ServerPakHash)
 		hash = FS_ServerPakHash( dir, slash + 1, fs_serverReferencedPaks[i] );
+		// in the game directory's place, where a download used to go, so a
+		// QVM is looked for in one pak a directory (FS_FindVM)
+		Q_strncpyz( cachePath, FS_BaseDir_BuildOSPath( fs_homedatapath->string, dir ), sizeof( cachePath ) );
 		while ( ( entry = hash ? Content_Cache_FindSHA256( hash, ospath, sizeof( ospath ) ) :
 			Content_Cache_Find( fs_serverReferencedPaks[i], dir, ospath, sizeof( ospath ) ) ) >= 0 ) {
-			pak = FS_LoadZipFile( ospath, slash + 1 );
+			pak = FS_LoadZipFile( ospath, slash + 1, cachePath, dir );
 			if ( pak && pak->checksum == fs_serverReferencedPaks[i] ) {
 				break;
 			}
@@ -4986,11 +5000,6 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 		if ( entry < 0 ) {
 			continue;
 		}
-		// in the game directory's place, where a download used to go, so a
-		// QVM is looked for in one pak a directory (FS_FindVM)
-		Q_strncpyz( pak->pakPathname, FS_BaseDir_BuildOSPath( fs_homedatapath->string, dir ),
-			sizeof( pak->pakPathname ) );
-		Q_strncpyz( pak->pakGamename, dir, sizeof( pak->pakGamename ) );
 		pak->cached = qtrue;
 		fs_packFiles += pak->numfiles;
 
