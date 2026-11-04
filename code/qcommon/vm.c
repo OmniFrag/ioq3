@@ -1058,8 +1058,8 @@ VM_GetValue
 
 Answers trap_GetValue( char *value, int valueSize, const char *key ) for the
 current module from its extensions, a table that ends with a NULL key, and
-then for a client module (extModule, else -1) from the engine extensions'
-calls (hooks.h). The buffer is checked as any syscall's is (VMA_STRBUF), so
+then for its module (hooks.h's extModule_t) from the engine extensions'
+calls. The buffer is checked as any syscall's is (VMA_STRBUF), so
 a missing, empty or out-of-bounds one drops the module.
 ============
 */
@@ -1081,7 +1081,7 @@ intptr_t VM_GetValue( intptr_t *args, const vmExtension_t *extensions, int extMo
 			return qtrue;
 		}
 	}
-	return extModule >= 0 && Hooks_ModuleValue( extModule, key, value, valueSize );
+	return Hooks_ModuleValue( extModule, key, value, valueSize );
 }
 
 /*

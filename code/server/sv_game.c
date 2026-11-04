@@ -1266,7 +1266,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 
 
 	case COM_TRAP_GETVALUE:
-		return VM_GetValue( args, sv_gameExtensions, -1 );
+		return VM_GetValue( args, sv_gameExtensions, EXT_MODULE_GAME );
 
 	case COM_TRAP_CVAR_SETDESCRIPTION:
 		// NULL does nothing
@@ -1310,8 +1310,15 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		return 0;
 	}
 
-	default:
+	default: {
+		intptr_t	result;
+
+		// an engine extension's call (hooks.h)
+		if ( Hooks_ModuleCall( EXT_MODULE_GAME, args, &result ) ) {
+			return result;
+		}
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );
+	}
 	}
 	return 0;
 }

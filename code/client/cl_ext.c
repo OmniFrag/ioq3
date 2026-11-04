@@ -91,7 +91,7 @@ int CL_ExtSnapshotEntities( entityState_t *out, int max ) {
 }
 
 int CL_ExtModuleChecksum( extModule_t module ) {
-	return VM_Checksum( module == EXT_MODULE_CGAME ? cgvm : uivm );
+	return VM_Checksum( module == EXT_MODULE_CGAME ? cgvm : module == EXT_MODULE_UI ? uivm : NULL );
 }
 
 // the cvars, which both the server's download and the fast one keep

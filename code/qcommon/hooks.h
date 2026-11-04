@@ -47,10 +47,14 @@ typedef enum {
 	EXT_DRAW_TOP	// after the console, before the debug graph
 } extDrawPoint_t;
 
-// the client's game modules
+// the game modules: the client's cgame and ui, and the server's game,
+// which makes extension calls (moduleCalls) alone. What the client's alone
+// have is sized and counted by EXT_NUM_CLIENT_MODULES
 typedef enum {
 	EXT_MODULE_CGAME,
 	EXT_MODULE_UI,
+	EXT_NUM_CLIENT_MODULES,
+	EXT_MODULE_GAME = EXT_NUM_CLIENT_MODULES,
 	EXT_NUM_MODULES
 } extModule_t;
 
@@ -296,11 +300,13 @@ typedef struct {
 	// the mouse's relative motion, as the ui, cgame or the view would get it
 	qboolean	(*mouseEvent)( int dx, int dy );
 
-	// Extension calls for the client's game modules. moduleCalls ends with
-	// a NULL key; moduleCall answers a module's call of one of them with
-	// its arguments (args[0] is the number, args[1] on the module's), checked
-	// with qcommon.h's VMA_ and VMV_ macros, whose errors name the call by
-	// its key. Linked modules and QVMs both call it
+	// Extension calls for the game modules, the server's game too.
+	// moduleCalls ends with a NULL key; moduleCall answers a module's call
+	// of one of them with its arguments (args[0] is the number, args[1] on
+	// the module's), checked with qcommon.h's VMA_ and VMV_ macros, whose
+	// errors name the call by its key. Linked modules and QVMs both call
+	// it. The hooks after it (moduleShutdown on) are the client's modules'
+	// alone
 	const extModuleCall_t	*moduleCalls;
 	intptr_t	(*moduleCall)( extModule_t module, int trap, intptr_t *args );
 	// A module is shutting down, its own shutdown run: a map's end, a

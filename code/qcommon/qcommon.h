@@ -431,8 +431,8 @@ typedef struct {
 // Extension syscalls, found through trap_GetValue, are numbered from 800 up,
 // clear of every fixed table, and a number is never reused: the engine's
 // own from 800 to 819, then from 900, and the engine extensions' calls for
-// the client's modules (hooks.h's extModuleCall_t) from
-// COM_TRAP_EXTENSION_FIRST to COM_TRAP_EXTENSION_LAST.
+// the game modules, the server's game too (hooks.h's extModuleCall_t),
+// from COM_TRAP_EXTENSION_FIRST to COM_TRAP_EXTENSION_LAST.
 #define	COM_TRAP_EXTENSION_FIRST	820
 #define	COM_TRAP_EXTENSION_LAST		899
 
@@ -534,8 +534,8 @@ intptr_t		QDECL VM_Call( vm_t *vm, int callNum, ... );
 
 void	VM_Debug( int level );
 
-// extModule is the client's module (hooks.h's extModule_t) whose engine
-// extensions also answer, or -1
+// extModule is the module (hooks.h's extModule_t, declared after this) whose
+// engine extensions' calls also answer
 intptr_t	VM_GetValue( intptr_t *args, const vmExtension_t *extensions, int extModule );
 // a QVM's checksum (Com_BlockChecksum of its file), 0 for linked or native
 // code
