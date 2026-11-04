@@ -618,12 +618,37 @@ char *CON_Input( void )
 
 /*
 =================
+CON_WindowsWrite
+
+UTF-8 text goes to a console as UTF-16, past its code page; anything
+else, or a file or pipe, gets the bytes as they are
+=================
+*/
+static void CON_WindowsWrite( const char *text, qboolean utf8 )
+{
+	static WCHAR wide[ MAXPRINTMSG ];
+	HANDLE      out = GetStdHandle( STD_ERROR_HANDLE );
+	DWORD       mode, written;
+	int         length;
+
+	if( utf8 && GetConsoleMode( out, &mode ) &&
+		( length = MultiByteToWideChar( CP_UTF8, 0, text, -1, wide, MAXPRINTMSG ) ) > 1 )
+	{
+		fflush( stderr );
+		WriteConsoleW( out, wide, length - 1, &written, NULL );
+	}
+	else
+		fputs( text, stderr );
+}
+
+/*
+=================
 CON_WindowsColorPrint
 
 Set text colors based on Q3 color codes
 =================
 */
-void CON_WindowsColorPrint( const char *msg )
+static void CON_WindowsColorPrint( const char *msg, qboolean utf8 )
 {
 	static char buffer[ MAXPRINTMSG ];
 	int         length = 0;
@@ -638,7 +663,7 @@ void CON_WindowsColorPrint( const char *msg )
 			if( length > 0 )
 			{
 				buffer[ length ] = '\0';
-				fputs( buffer, stderr );
+				CON_WindowsWrite( buffer, utf8 );
 				length = 0;
 			}
 
@@ -671,8 +696,22 @@ void CON_WindowsColorPrint( const char *msg )
 	if( length > 0 )
 	{
 		buffer[ length ] = '\0';
-		fputs( buffer, stderr );
+		CON_WindowsWrite( buffer, utf8 );
 	}
+}
+
+/*
+==================
+CON_PrintText
+==================
+*/
+static void CON_PrintText( const char *msg, qboolean utf8 )
+{
+	CON_Hide( );
+
+	CON_WindowsColorPrint( msg, utf8 );
+
+	CON_Show( );
 }
 
 /*
@@ -682,9 +721,15 @@ CON_Print
 */
 void CON_Print( const char *msg )
 {
-	CON_Hide( );
+	CON_PrintText( msg, qfalse );
+}
 
-	CON_WindowsColorPrint( msg );
-
-	CON_Show( );
+/*
+==================
+CON_PrintUTF8
+==================
+*/
+void CON_PrintUTF8( const char *msg )
+{
+	CON_PrintText( msg, qtrue );
 }

@@ -75,3 +75,13 @@ void CON_Print( const char *msg )
 	else
 		fputs( msg, stderr );
 }
+
+/*
+==================
+CON_PrintUTF8
+==================
+*/
+void CON_PrintUTF8( const char *msg )
+{
+	CON_Print( msg );
+}

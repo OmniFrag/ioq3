@@ -593,3 +593,13 @@ void CON_Print( const char *msg )
 		ttycon_show_overdue++;
 	}
 }
+
+/*
+==================
+CON_PrintUTF8
+==================
+*/
+void CON_PrintUTF8( const char *msg )
+{
+	CON_Print( msg );
+}

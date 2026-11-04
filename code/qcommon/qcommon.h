@@ -1901,7 +1901,7 @@ void	Sys_SetClipboardData( const char *text );
 
 void	Sys_Print( const char *msg );
 // the console's output alone, for a secret (a token, a claim code): not
-// the log, crashlog.txt's buffer, nor an extension's print hook
+// the log, crashlog.txt's buffer, nor an extension's print hook. UTF-8
 void	Sys_PrintSecret( const char *msg );
 void	Sys_Notify( const char *state );	// to the service manager, as sd_notify
 // For a start summary: whether Windows Firewall lets other computers reach

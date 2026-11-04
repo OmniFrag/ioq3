@@ -588,12 +588,12 @@ Sys_PrintSecret
 
 The console's output alone: not the console log's buffer, which
 crashlog.txt dumps, nor the log or a print hook, as Sys_Print isn't
-either
+either. The text is UTF-8
 =================
 */
 void Sys_PrintSecret( const char *msg )
 {
-	CON_Print( msg );
+	CON_PrintUTF8( msg );
 }
 
 /*
