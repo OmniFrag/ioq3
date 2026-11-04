@@ -44,6 +44,7 @@ int NET_ProxyRead( const byte *data, int length, proxyHeader_t *header ) {
 	case 0:
 		// LOCAL: the proxy's own, whatever its family says
 		header->command = PROXY_LOCAL;
+		header->tlvs = total;
 		return total;
 	case 1:
 		header->command = PROXY_FORWARDED;
@@ -67,6 +68,8 @@ int NET_ProxyRead( const byte *data, int length, proxyHeader_t *header ) {
 	if ( addresses < 2 * size + 4 ) {
 		return -1;
 	}
+	header->tlvs = PROXY_HEADER_SIZE + 2 * size + 4;
+	header->tlvLength = total - header->tlvs;
 	data += PROXY_HEADER_SIZE;
 	Com_Memcpy( header->src, data, size );
 	Com_Memcpy( header->dst, data + size, size );
@@ -76,10 +79,14 @@ int NET_ProxyRead( const byte *data, int length, proxyHeader_t *header ) {
 }
 
 int NET_ProxyWrite( byte *out, int size, const proxyHeader_t *header ) {
-	int	address = header->family == 6 ? 16 : 4;
-	int	total = PROXY_HEADER_SIZE + 2 * address + 4;
+	return NET_ProxyWriteTLVs( out, size, header, NULL, 0 );
+}
 
-	if ( size < total || ( header->family != 4 && header->family != 6 ) ) {
+int NET_ProxyWriteTLVs( byte *out, int size, const proxyHeader_t *header, const byte *tlvs, int tlvLength ) {
+	int	address = header->family == 6 ? 16 : 4;
+	int	total = PROXY_HEADER_SIZE + 2 * address + 4 + tlvLength;
+
+	if ( tlvLength < 0 || size < total || total > PROXY_MAX_HEADER || ( header->family != 4 && header->family != 6 ) ) {
 		return 0;
 	}
 	Com_Memcpy( out, proxySignature, PROXY_SIGNATURE_SIZE );
@@ -94,5 +101,8 @@ int NET_ProxyWrite( byte *out, int size, const proxyHeader_t *header ) {
 	out[2 * address + 1] = (byte)header->srcPort;
 	out[2 * address + 2] = (byte)( header->dstPort >> 8 );
 	out[2 * address + 3] = (byte)header->dstPort;
+	if ( tlvLength ) {
+		Com_Memcpy( out + 2 * address + 4, tlvs, tlvLength );
+	}
 	return total;
 }

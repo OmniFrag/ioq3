@@ -757,10 +757,16 @@ last datagram came, with a header naming it; nothing else is sent one. A
 datagram from a trusted address without a valid header is dropped; from
 anyone else a header isn't read, so it fails as the garbage it is.
 
+A proxy an extension carries (NET_SetCarriedProxy), such as a relay's
+tunnel, is the same but for the framing: the extension reads its
+datagrams and writes the replies, and the routes and real addresses are
+kept here as for any trusted proxy.
+
 ===============================================================================
 */
 
 #define NET_MAX_TRUSTED		32
+#define NET_MAX_CARRIED		4
 #define NET_PROXY_ROUTES	1024	// a power of 2
 #define NET_PROXY_PROBES	16
 #define NET_PROXY_STALE		120000	// msec unused before a route's slot may go to another player
@@ -784,6 +790,14 @@ static int				netTrustedMask[NET_MAX_TRUSTED];
 static int				netTrustedCount;
 static netProxyRoute_t	netProxyRoutes[NET_PROXY_ROUTES];
 static qboolean			netProxyRouted;		// a route may be held
+
+typedef struct {
+	netadr_t		proxy;
+	netCarrier_t	carrier;
+} netCarriedProxy_t;
+
+static netCarriedProxy_t	netCarried[NET_MAX_CARRIED];
+static int					netCarriedCount;
 static qboolean			netPacketProxied;	// the packet being handled came through one
 
 static qboolean NET_IsTrustedProxy( const netadr_t *adr ) {
@@ -796,6 +810,41 @@ static qboolean NET_IsTrustedProxy( const netadr_t *adr ) {
 	return qfalse;
 }
 
+// the slot of the proxy carried at that address and port, or -1
+static int NET_CarriedIndex( const netadr_t *adr ) {
+	int		i;
+
+	for( i = 0; i < netCarriedCount; i++ ) {
+		if( NET_CompareAdr( netCarried[i].proxy, *adr ) )
+			return i;
+	}
+	return -1;
+}
+
+// the carrier of the proxy at that address and port, or NULL
+static const netCarrier_t *NET_ProxyCarrier( const netadr_t *adr ) {
+	int		i = NET_CarriedIndex( adr );
+
+	return i < 0 ? NULL : &netCarried[i].carrier;
+}
+
+// a proxy no longer trusted or carried gets no more replies; a route
+// through one still trusted stays, as the frame's replies are sent before
+// any player's next datagram could bring it back
+static void NET_ProxyForgetRoutes( void ) {
+	int		i;
+
+	netProxyRouted = qfalse;
+	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
+		if( !netProxyRoutes[i].lastUsed )
+			continue;
+		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) || NET_ProxyCarrier( &netProxyRoutes[i].via ) )
+			netProxyRouted = qtrue;
+		else
+			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
+	}
+}
+
 /*
 ==================
 NET_SetTrustedProxies
@@ -805,25 +854,40 @@ masks, which forgets the routes through any proxy no longer among them
 ==================
 */
 void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
-	int		i;
-
 	netTrustedCount = MAX( 0, MIN( count, NET_MAX_TRUSTED ) );
 	if( netTrustedCount ) {
 		Com_Memcpy( netTrusted, adr, netTrustedCount * sizeof( netTrusted[0] ) );
 		Com_Memcpy( netTrustedMask, mask, netTrustedCount * sizeof( netTrustedMask[0] ) );
 	}
-	// a proxy no longer trusted gets no more replies; a route through one
-	// still trusted stays, as the frame's replies are sent before any
-	// player's next datagram could bring it back
-	netProxyRouted = qfalse;
-	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
-		if( !netProxyRoutes[i].lastUsed )
-			continue;
-		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) )
-			netProxyRouted = qtrue;
-		else
-			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
+	NET_ProxyForgetRoutes();
+}
+
+/*
+==================
+NET_SetCarriedProxy
+
+Carry the proxy at that address and port with carrier, replacing what
+carried it before, or with NULL stop carrying it and forget its routes
+==================
+*/
+qboolean NET_SetCarriedProxy( const netadr_t *proxy, const netCarrier_t *carrier ) {
+	int		i = NET_CarriedIndex( proxy );
+
+	if( !carrier ) {
+		if( i < 0 )
+			return qtrue;
+		netCarried[i] = netCarried[--netCarriedCount];
+		NET_ProxyForgetRoutes();
+		return qtrue;
 	}
+	if( i < 0 ) {
+		if( netCarriedCount == NET_MAX_CARRIED )
+			return qfalse;
+		i = netCarriedCount++;
+	}
+	netCarried[i].proxy = *proxy;
+	netCarried[i].carrier = *carrier;
+	return qtrue;
 }
 
 static unsigned NET_ProxyHash( const netadr_t *a ) {
@@ -952,21 +1016,43 @@ made the player's real address, its route kept; qfalse to drop it
 ==================
 */
 static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
-	proxyHeader_t	h;
-	netadr_t		player;
-	int				length;
+	proxyHeader_t		h;
+	netadr_t			player;
+	int					length, offset;
+	const netCarrier_t	*carrier;
 
 	// SOCKS's datagrams come with readcount past a header of its own
-	if( !netTrustedCount || msg->readcount || !NET_IsTrustedProxy( from ) )
+	if( msg->readcount )
 		return qtrue;
-	length = NET_ProxyRead( msg->data, msg->cursize, &h );
-	if( length <= 0 ) {
-		Com_DPrintf( "%s: a trusted proxy's datagram without a PROXY header, dropped\n", NET_AdrToStringwPort( *from ) );
-		return qfalse;
+	if( ( carrier = NET_ProxyCarrier( from ) ) != NULL ) {
+		length = msg->cursize;
+		offset = 0;
+		switch( carrier->receive( from, msg->data, &length, msg->maxsize, &h, &offset ) ) {
+		case NET_CARRIED_DIRECT:
+			return qtrue;
+		case NET_CARRIED_PLAYER:
+			if( h.command == PROXY_FORWARDED && ( h.family == 4 || h.family == 6 ) && offset >= 0 && length >= 0 &&
+				offset + length < msg->maxsize )
+				break;
+			// fall through
+		default:
+			return qfalse;
+		}
+		// the player's datagram follows what's taken off below
+		msg->cursize = offset + length;
+		length = offset;
+	} else {
+		if( !netTrustedCount || !NET_IsTrustedProxy( from ) )
+			return qtrue;
+		length = NET_ProxyRead( msg->data, msg->cursize, &h );
+		if( length <= 0 ) {
+			Com_DPrintf( "%s: a trusted proxy's datagram without a PROXY header, dropped\n", NET_AdrToStringwPort( *from ) );
+			return qfalse;
+		}
+		// its own health check
+		if( h.command == PROXY_LOCAL )
+			return qfalse;
 	}
-	// its own health check
-	if( h.command == PROXY_LOCAL )
-		return qfalse;
 	Com_Memset( &player, 0, sizeof( player ) );
 	if( h.family == 6 ) {
 		player.type = NA_IP6;
@@ -1007,11 +1093,14 @@ proxy is sent it through the proxy, with a header naming them
 */
 qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 	static byte		buf[PROXY_MAX_WRITTEN + MAX_MSGLEN];
-	netProxyRoute_t	*route = NET_ProxyRoute( &to );
-	int				header;
+	netProxyRoute_t		*route = NET_ProxyRoute( &to );
+	const netCarrier_t	*carrier;
+	int					header;
 
 	if( !route )
 		return Sys_SendPacketDirect( length, data, to );
+	if( ( carrier = NET_ProxyCarrier( &route->via ) ) != NULL )
+		return carrier->send( &route->via, &route->header, data, length );
 	// the route's header names this player already: its src is to
 	header = NET_ProxyWrite( buf, sizeof( buf ), &route->header );
 	if( length > (int)sizeof( buf ) - header )

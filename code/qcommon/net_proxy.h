@@ -27,19 +27,22 @@ GNU General Public License for more details.
 #define PROXY_HEADER_SIZE		16		// signature, version and command, family, length
 #define PROXY_MAX_HEADER		( PROXY_HEADER_SIZE + 36 + 512 )	// IPv6's addresses, and TLVs past them
 #define PROXY_MAX_WRITTEN		( PROXY_HEADER_SIZE + 36 )		// what NET_ProxyWrite writes, at most
+#define PROXY_ADDRESSES( family )	( ( family ) == 6 ? 36 : 12 )		// a datagram's addresses and ports
 
 typedef enum {
 	PROXY_LOCAL,		// the proxy's own: a health check, carrying no address
 	PROXY_FORWARDED		// a datagram from src to dst, which the proxy passed on
 } proxyCommand_t;
 
-typedef struct {
+typedef struct proxyHeader_s {
 	proxyCommand_t	command;
 	int				family;			// 4 or 6, for PROXY_FORWARDED
 	byte			src[16];		// the sender's address: its first 4 bytes for IPv4
 	byte			dst[16];		// the address it sent to, the proxy's own
 	unsigned short	srcPort;		// in host order
 	unsigned short	dstPort;
+	int				tlvs;			// where the TLVs past the addresses start, from the header's start
+	int				tlvLength;		// and their bytes, 0 for none
 } proxyHeader_t;
 
 // data's header: its length, which the datagram's payload follows; 0 for
@@ -48,5 +51,8 @@ typedef struct {
 int		NET_ProxyRead( const byte *data, int length, proxyHeader_t *header );
 // a PROXY_FORWARDED header into out: its length, or 0 if size is too small
 int		NET_ProxyWrite( byte *out, int size, const proxyHeader_t *header );
+// the same with tlvLength bytes of TLVs past the addresses, the header's
+// length counting them
+int		NET_ProxyWriteTLVs( byte *out, int size, const proxyHeader_t *header, const byte *tlvs, int tlvLength );
 
 #endif

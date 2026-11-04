@@ -2028,6 +2028,34 @@ qboolean	Sys_SendPacketDirect( int length, const void *data, netadr_t to );
 void		NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count );
 // whether a trusted proxy named the address of the packet being handled
 qboolean	NET_PacketProxied( void );
+// A proxy whose datagrams an extension carries, framing them as it and the
+// proxy agree, such as a relay's tunnel. The engine keeps each player's
+// route and real address as for a trusted proxy (NET_SetTrustedProxies),
+// and the extension reads and writes the datagrams (net_proxy.h)
+typedef enum {
+	NET_CARRIED_DIRECT,		// the proxy's own datagram, taken as from it directly
+	NET_CARRIED_PLAYER,		// a player's, which header names
+	NET_CARRIED_DROP		// nothing to take now: a piece kept, or one that didn't check
+} netCarried_t;
+struct proxyHeader_s;		// net_proxy.h's proxyHeader_t
+typedef struct {
+	// a datagram from the proxy, data's length bytes in a buffer of size:
+	// for NET_CARRIED_PLAYER, the player's datagram at data + offset, its
+	// length in length, and header naming them, as a PROXY header would;
+	// the engine takes off what comes before it
+	netCarried_t	(*receive)( const netadr_t *from, byte *data, int *length, int size,
+						struct proxyHeader_s *header, int *offset );
+	// a datagram to a player routed through the proxy, header naming them:
+	// the extension sends it, in as many datagrams as it takes, with
+	// Sys_SendPacketDirect to via; qfalse, as Sys_SendPacket's, when the
+	// socket couldn't take them now
+	qboolean		(*send)( const netadr_t *via, const struct proxyHeader_s *header,
+						const void *data, int length );
+} netCarrier_t;
+// carry the proxy at that address and port with carrier, or with NULL stop,
+// which forgets every player's route through it; qfalse when as many are
+// carried as can be
+qboolean	NET_SetCarriedProxy( const netadr_t *proxy, const netCarrier_t *carrier );
 int		Sys_SendPackets( int count, int size, int length, const void *data, netadr_t to );
 
 qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
