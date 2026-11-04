@@ -1568,8 +1568,14 @@ qboolean	Com_ReadServerConfig( void );
 // the engine's own config of them, q3config_server.cfg, applied if there is one
 const char	*Com_ServerSavedValue( const cvar_t *var );
 // what a dedicated server saves of a cvar: its choice where it isn't the default
-void 		Com_Quit_f( void ) Q_NO_RETURN;
+void 		Com_Quit_f( void );
 void		Com_Quit( char *reason ) Q_NO_RETURN;
+// Com_Quit, or inside an extension's hook a quit once the hooks return:
+// returns only then
+void		Com_QuitAfterHooks( const char *reason );
+// a quit waits for the hooks to return: what's queued to run meanwhile can
+// stop
+qboolean	Com_QuitPending( void );
 void		Com_GameRestart(int checksumFeed, qboolean disconnect);
 void		Com_QueueReload( void );
 // SIGHUP's: the next frame runs the command line's configs again (reload),

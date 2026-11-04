@@ -218,6 +218,10 @@ static void SV_Map_f( void ) {
 
 	// start up the map
 	SV_SpawnServer( mapname, killBots );
+	// a drain it ended, inside a hook, left the map as it was, to quit
+	if ( sv_drainReason[0] ) {
+		return;
+	}
 
 	// set the cheat value
 	// if the level was started with "map <levelname>", then

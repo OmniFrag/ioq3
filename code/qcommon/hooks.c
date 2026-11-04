@@ -32,8 +32,8 @@ static qboolean	hooks_active[MAX_ENGINE_EXTENSIONS];
 static int	hooks_activeCount;
 static int	hooks_idleMsec = -1;
 // how many of each extension's hooks are running, one inside another's
-// call into the engine say, so a quit a hook asks for doesn't call back
-// into it
+// call into the engine say, so a quit a hook asks for waits for it to
+// return (Hooks_Running), and a fatal error it raises gets its abandon
 static int	hooks_depth[MAX_ENGINE_EXTENSIONS];
 // the print hooks are running, so what they print isn't passed to them
 static qboolean	hooks_printing;
@@ -96,7 +96,9 @@ void Hooks_Init( void ) {
 	}
 	Hooks_CheckModuleCalls();
 	for ( i = 0; engineExtensions[i]; i++ ) {
+		hooks_depth[i]++;
 		hooks_active[i] = engineExtensions[i]->init ? engineExtensions[i]->init() : qtrue;
+		hooks_depth[i]--;
 		if ( hooks_active[i] ) {
 			hooks_activeCount++;
 			if ( engineExtensions[i]->moduleRender ) {
@@ -166,7 +168,26 @@ void Hooks_Signal( void ) {
 
 /*
 ===============
+Hooks_Running
+===============
+*/
+qboolean Hooks_Running( void ) {
+	int	i;
+
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( hooks_depth[i] ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+===============
 Hooks_Shutdown
+
+Each extension's shutdown, or its abandon where its own hook is running:
+a fatal error it raised, as a quit inside a hook waits (Com_Quit_f)
 ===============
 */
 void Hooks_Shutdown( const char *reason ) {
@@ -180,9 +201,15 @@ void Hooks_Shutdown( const char *reason ) {
 	hooks_wantModuleRender = qfalse;
 	hooks_wantDraw = qfalse;
 	for ( i = 0; engineExtensions[i]; i++ ) {
-		// not into one whose own hook is quitting
-		if ( hooks_active[i] && engineExtensions[i]->shutdown && !hooks_depth[i] ) {
-			engineExtensions[i]->shutdown( reason );
+		if ( !hooks_active[i] ) {
+			continue;
+		}
+		if ( !hooks_depth[i] ) {
+			if ( engineExtensions[i]->shutdown ) {
+				engineExtensions[i]->shutdown( reason );
+			}
+		} else if ( engineExtensions[i]->abandon ) {
+			engineExtensions[i]->abandon( reason );
 		}
 	}
 }
@@ -246,8 +273,10 @@ qboolean Hooks_ReadServerSettings( qboolean reload ) {
 	int		i;
 
 	for ( i = 0; engineExtensions[i]; i++ ) {
-		if ( engineExtensions[i]->readServerSettings && engineExtensions[i]->readServerSettings( reload ) ) {
-			handled = qtrue;
+		if ( engineExtensions[i]->readServerSettings ) {
+			hooks_depth[i]++;
+			handled |= engineExtensions[i]->readServerSettings( reload );
+			hooks_depth[i]--;
 		}
 	}
 	return handled;
@@ -263,8 +292,10 @@ qboolean Hooks_WriteServerSettings( void ) {
 	int		i;
 
 	for ( i = 0; engineExtensions[i]; i++ ) {
-		if ( engineExtensions[i]->writeServerSettings && engineExtensions[i]->writeServerSettings() ) {
-			handled = qtrue;
+		if ( engineExtensions[i]->writeServerSettings ) {
+			hooks_depth[i]++;
+			handled |= engineExtensions[i]->writeServerSettings();
+			hooks_depth[i]--;
 		}
 	}
 	return handled;
@@ -282,6 +313,9 @@ the calls
 qboolean Hooks_StartDefault( void ) {
 	int	i;
 
+	// not counted as running (hooks_depth): the map it starts loads the
+	// engine's way, which a fatal error may end, and the extension is
+	// owed its shutdown then
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		if ( engineExtensions[i]->startDefault && engineExtensions[i]->startDefault() ) {
 			return qtrue;
@@ -295,7 +329,9 @@ void Hooks_StartSummary( void ) {
 
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		if ( engineExtensions[i]->startSummary ) {
+			hooks_depth[i]++;
 			engineExtensions[i]->startSummary();
+			hooks_depth[i]--;
 		}
 	}
 }
@@ -303,6 +339,7 @@ void Hooks_StartSummary( void ) {
 qboolean Hooks_CheckRotation( void ) {
 	int	i;
 
+	// not counted as running, as Hooks_StartDefault isn't
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		if ( engineExtensions[i]->checkRotation && engineExtensions[i]->checkRotation() ) {
 			return qtrue;

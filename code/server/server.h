@@ -452,7 +452,7 @@ void SV_ForgetTrustedProxies( void );
 // (short, so getinfo's and getstatus's info strings still hold it)
 #define MAX_DRAIN_REASON	128
 extern	char	sv_drainReason[MAX_DRAIN_REASON];
-void SV_DrainDone( void ) Q_NO_RETURN;
+void SV_DrainDone( void );
 int SV_RateMsec(client_t *client);
 
 

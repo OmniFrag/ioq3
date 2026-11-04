@@ -834,9 +834,11 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		sv_retryTime = Sys_Milliseconds();
 	}
 
-	// a draining server stops as its map ends, rather than start another
+	// a draining server stops as its map ends, rather than start another:
+	// inside a hook, once it returns, the map as it is meanwhile
 	if ( sv_drainReason[0] ) {
 		SV_DrainDone();
+		return;
 	}
 
 	// shut down the existing game if it is running

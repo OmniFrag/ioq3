@@ -501,7 +501,9 @@ static qboolean SV_IsMasterAddress( netadr_t from ) {
 SV_DrainDone
 
 A draining server's end, once its players have left or its map ends:
-said, its players told why, and it exits 0
+said, its players told why, and it exits 0. Inside an extension's hook
+(a map an admin's command starts) it quits once the hooks return, and
+returns meanwhile
 =================
 */
 void SV_DrainDone( void ) {
@@ -512,7 +514,7 @@ void SV_DrainDone( void ) {
 	// in the log, before Com_Quit's own, though an rcon map ended the drain
 	Com_EndRedirect();
 	Com_Printf( "Drained: %s\n", reason );
-	Com_Quit( reason );
+	Com_QuitAfterHooks( reason );
 }
 
 /*
@@ -1908,7 +1910,7 @@ void SV_Frame( int msec ) {
 		// Block until something interesting happens, unless commands wait
 		// to run, a config's after a wait, say, or an extension wants
 		// its next frame sooner (hooks.h)
-		if ( Cbuf_Empty() )
+		if ( Cbuf_Empty() && !Com_QuitPending() )
 			Sys_Sleep( Hooks_IdleMsec() );
 #endif
 
@@ -1924,6 +1926,7 @@ void SV_Frame( int msec ) {
 	// a draining server stops once its players have left, bots aside
 	if ( sv_drainReason[0] && !SV_HumanCount() ) {
 		SV_DrainDone();
+		return;
 	}
 
 	// allow pause if only the local client is connected

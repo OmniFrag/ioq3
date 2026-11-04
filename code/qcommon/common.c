@@ -627,6 +627,10 @@ void QDECL Com_DPrintf( const char *fmt, ...) {
 	Com_Printf ("%s", msg);
 }
 
+// a quit asked for inside a hook, and its reason (Com_Quit_f)
+static qboolean	com_quitPending;
+static char		com_quitReason[MAX_STRING_CHARS];
+
 /*
 =============
 Com_FatalShutdown
@@ -714,8 +718,10 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	} else if (code == ERR_DROP) {
 		Com_Printf ("********************\nERROR: %s\n********************\n", com_errorMessage);
 		// a dedicated server starts its map again, or exits for its service
-		// manager to restart it
-		if ( com_dedicated && com_dedicated->integer && !SV_RestartAfterError( why, sizeof( why ) ) ) {
+		// manager to restart it; one with a quit waiting quits in the next
+		// frame
+		if ( com_dedicated && com_dedicated->integer && !com_quitPending &&
+			!SV_RestartAfterError( why, sizeof( why ) ) ) {
 			com_errorEntered = qfalse;
 			Com_ErrorExit( EXIT_MAP_ERROR, "%s", why );
 		}
@@ -827,11 +833,37 @@ void Com_Quit( char *reason ) {
 
 /*
 =============
+Com_QuitAfterHooks
+
+Quits at once, or, inside an extension's hook, once the hooks have
+returned (Com_Frame), so each extension gets its shutdown: returns only
+then. A quit waiting survives a map change or an error that ends the
+frame, keeps its first reason, and goes at once with the next quit asked
+outside every hook
+=============
+*/
+void Com_QuitAfterHooks( const char *reason ) {
+	if ( Hooks_Running() ) {
+		if ( !com_quitPending ) {
+			Q_strncpyz( com_quitReason, reason, sizeof( com_quitReason ) );
+			com_quitPending = qtrue;
+		}
+		return;
+	}
+	Com_Quit( com_quitPending ? com_quitReason : (char *)reason );
+}
+
+qboolean Com_QuitPending( void ) {
+	return com_quitPending;
+}
+
+/*
+=============
 Com_Quit_f
 =============
 */
 void Com_Quit_f( void ) {
-	Com_Quit( Cmd_Args() );
+	Com_QuitAfterHooks( Cmd_Args() );
 }
 
 
@@ -5446,7 +5478,7 @@ qboolean Com_WaitFrame( void ) {
 	}
 
 	// the next frame quits
-	if ( com_quitSignal )
+	if ( com_quitSignal || com_quitPending )
 		return qtrue;
 
 #ifndef DEDICATED
@@ -5524,6 +5556,9 @@ void Com_Frame( void ) {
 	com_stopSeconds = com_stopTimeout->integer;
 	if ( com_quitSignal ) {
 		Com_Quit( va( "Received signal %d", (int)com_quitSignal ) );
+	}
+	if ( com_quitPending ) {
+		Com_Quit( com_quitReason );
 	}
 
 	timeBeforeFirstEvents =0;

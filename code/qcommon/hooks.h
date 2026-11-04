@@ -116,10 +116,19 @@ typedef struct {
 	// Once, as the program exits: on quit, a fatal error, or SIGTERM,
 	// SIGINT or SIGHUP (on Windows, a console's Ctrl-C or close), which
 	// quit from the main loop as quit does. reason says why, as the
-	// server tells its players. The network is still up. Not called on
-	// an extension whose own hook asks for the quit, since its state may
-	// be half changed, nor after a crash.
+	// server tells its players. The network is still up. A quit run
+	// inside a hook waits for the hooks to return, so every extension
+	// gets this; startDefault and checkRotation, which start maps the
+	// engine's way, don't count as hooks running. Not called after a
+	// crash, nor on an extension whose own hook raised a fatal error:
+	// that one gets abandon.
 	void		(*shutdown)( const char *reason );
+
+	// Once, in place of shutdown, when a fatal error ends the program
+	// while this extension's own hook is running, its state perhaps half
+	// changed. It ends only what would outlive the program, such as child
+	// processes, and calls nothing in the engine, printing included.
+	void		(*abandon)( const char *reason );
 
 	// A dedicated server's own settings, kept the extension's way in place
 	// of the engine's q3config_server.cfg. read is called where the configs
@@ -342,6 +351,8 @@ void	Hooks_Init( void );
 void	Hooks_Frame( void );
 // an ERR_DROP ended the frame, in a hook perhaps
 void	Hooks_FrameAborted( void );
+// whether an extension's hook is running, so a quit waits for it to return
+qboolean	Hooks_Running( void );
 void	Hooks_Shutdown( const char *reason );
 qboolean	Hooks_ReadServerSettings( qboolean reload );
 qboolean	Hooks_WriteServerSettings( void );
