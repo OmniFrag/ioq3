@@ -34,7 +34,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 typedef struct {
 	byte		sha256[SHA256_DIGEST_SIZE];
-	char		*ospath;
+	char		*ospath;		// in its manifest's paths
 	int64_t		size;
 	int64_t		mtime;
 } svManifestPak_t;
@@ -46,11 +46,21 @@ typedef struct {
 	uint64_t		requiredBytes;
 	svManifestPak_t	*paks;			// its entries with a hash
 	int				numPaks;
+	// the paks' paths, end to end: one block from the main zone, as a
+	// server's thousands of paks would fill the small one (P341)
+	char			*paths;
 } svManifest_t;
 
 static svManifest_t	svManifests[2];		// the current one, then the one before
 static byte			svBuildBuffer[OFCM_MAX_SIZE];
 static qboolean		svHashQueued;		// a pak changed since the last build: FS_HashPaks ran
+// the index learned hashes since the last build, and when that was: while
+// it hashes, at most a build a second, as each one stats every pak and
+// gives the manifest a new hash the clients are told, and only the last two
+// are kept for the transfers that asked for them
+static qboolean		svBuildWanted;
+static int			svBuildTime;
+#define BUILD_INTERVAL	1000
 
 static void SV_ContentCloseGone( void );
 
@@ -114,18 +124,20 @@ static void SV_ContentNoteLeftOut( const contentPak_t *pak, manifestListing_t wh
 	Com_Printf( "Content manifest: %s/%s.pk3 %s, so it's sent the classic way\n", pak->gameDir, pak->name, reason );
 }
 
-static void SV_ContentFree( svManifest_t *manifest ) {
-	int		i;
-
-	if ( manifest->data ) {
-		Z_Free( manifest->data );
-	}
-	for ( i = 0; i < manifest->numPaks; i++ ) {
-		Z_Free( manifest->paks[i].ospath );
-	}
+static void SV_ContentFreePaks( svManifest_t *manifest ) {
 	if ( manifest->paks ) {
 		Z_Free( manifest->paks );
 	}
+	if ( manifest->paths ) {
+		Z_Free( manifest->paths );
+	}
+}
+
+static void SV_ContentFree( svManifest_t *manifest ) {
+	if ( manifest->data ) {
+		Z_Free( manifest->data );
+	}
+	SV_ContentFreePaks( manifest );
 	Com_Memset( manifest, 0, sizeof( *manifest ) );
 }
 
@@ -184,8 +196,8 @@ static void SV_ContentReferenced( contentPak_t *paks, int count ) {
 =================
 SV_ContentBuildManifest
 
-At a map load, after the referenced paks are known, and whenever the pak
-index learns hashes
+At a map load, after the referenced paks are known, and after the pak
+index learns hashes (SV_ContentFrame)
 =================
 */
 void SV_ContentBuildManifest( void ) {
@@ -194,9 +206,11 @@ void SV_ContentBuildManifest( void ) {
 	ofcmHeader_t		header;
 	svManifest_t		built;
 	const char			*error = NULL;
-	char				hex[SHA256_HEX_SIZE];
-	int					i, count, unhashed = 0;
+	char				hex[SHA256_HEX_SIZE], *path;
+	int					i, count, length, unhashed = 0, pathBytes = 0;
 
+	svBuildWanted = qfalse;
+	svBuildTime = Sys_Milliseconds();
 	count = FS_ContentPaks( NULL, 0 );
 	paks = Z_Malloc( ( count + 1 ) * sizeof( *paks ) );
 	listing = Z_Malloc( ( count + 1 ) * sizeof( *listing ) );
@@ -223,9 +237,21 @@ void SV_ContentBuildManifest( void ) {
 			svManifestPak_t	*p = &built.paks[built.numPaks++];
 
 			Com_Memcpy( p->sha256, paks[i].sha256, SHA256_DIGEST_SIZE );
-			p->ospath = CopyString( paks[i].ospath );
+			p->ospath = paks[i].ospath;		// the search path's, until copied below
 			p->size = paks[i].size;
 			p->mtime = paks[i].mtime;
+			pathBytes += strlen( p->ospath ) + 1;
+		}
+	}
+	// the paths into one block, as the search path's may go before the
+	// manifest does (a map load restarts the filesystem)
+	if ( pathBytes ) {
+		built.paths = path = Z_Malloc( pathBytes );
+		for ( i = 0; i < built.numPaks; i++ ) {
+			length = strlen( built.paks[i].ospath ) + 1;
+			Com_Memcpy( path, built.paks[i].ospath, length );
+			built.paks[i].ospath = path;
+			path += length;
 		}
 	}
 	Z_Free( listing );
@@ -246,14 +272,10 @@ void SV_ContentBuildManifest( void ) {
 	if ( !built.data ) {
 		// the same as the current one, but a pak hashed again since, as
 		// one touched, has a new time: where the paks are, as they are now
-		for ( i = 0; i < svManifests[0].numPaks; i++ ) {
-			Z_Free( svManifests[0].paks[i].ospath );
-		}
-		if ( svManifests[0].paks ) {
-			Z_Free( svManifests[0].paks );
-		}
+		SV_ContentFreePaks( &svManifests[0] );
 		svManifests[0].paks = built.paks;
 		svManifests[0].numPaks = built.numPaks;
+		svManifests[0].paths = built.paths;
 		svHashQueued = qfalse;
 		return;
 	}
@@ -363,11 +385,16 @@ SV_ContentFrame
 Once a server frame: what the hash job finished goes into the pak index,
 paused or not, and after the server has stopped, so the job it started is
 finished; the content manifest is built again when the index learned
-hashes. Then how content export's job is doing (sv_export.c)
+hashes, at most once a second while it's still hashing and once more when
+it's done. Then how content export's job is doing (sv_export.c)
 =================
 */
 void SV_ContentFrame( void ) {
-	if ( Content_PakIndex_Frame() && com_sv_running->integer ) {
+	if ( Content_PakIndex_Frame() ) {
+		svBuildWanted = qtrue;
+	}
+	if ( svBuildWanted && com_sv_running->integer
+		&& ( !Content_PakIndex_Busy() || Sys_Milliseconds() - svBuildTime >= BUILD_INTERVAL ) ) {
 		SV_ContentBuildManifest();
 	}
 	SV_ExportFrame();
