@@ -58,12 +58,30 @@ static struct {
 	// at each, for a drop shadow's
 	target2D_t	scratch[BLUR_LEVELS][3];
 	FBO_t		saveFbo;					// a saved layer's texture is drawn through
+	// the glass filters' states, two texels each: this frame's and the
+	// frame before's take turns (RB_Glass2D), by the frames counted from 1,
+	// and each glass's last frame drawn, and whether it drew the one before
+	target2D_t	glassStates[2];
+	int			glassFrame, glassTime;
+	float		glassDt;					// seconds the frame before took
+	struct {
+		int			serial;		// the glass's (filter2D_t's glassSerial)
+		int			frame;		// the last it drew in, counted from 1; 0 for none
+		qboolean	start;		// this frame, as it didn't draw the one before
+	} glass[MAX_FILTERS2D];
 } ui2dLayers;
 
 // the ui2dfilter program's uniforms that GLSL_InitUniforms doesn't know
 static struct {
 	GLint	filterMode, colorMatrix, colorOffset, colorScale, blurDirection, blurRadius, blurWeights, maskMap, maskTransform, maskChannel;
+	GLint	clipShape, clipBox, clipRadii;
 } filterUniforms;
+
+// and ui2dglass's
+static struct {
+	GLint	pass, colorScale, box, radii, rim, light, darkColor, lightColor, tint, mode, glow, deform, invTargetRes,
+			stateMap, stateCoord, stateStep, smoothing, fade, start;
+} glassUniforms;
 
 // ui2dfilter's u_FilterMode
 enum {
@@ -180,6 +198,9 @@ void R_ShutdownLayers2D( void ) {
 			R_FreeTarget2D( &ui2dLayers.scratch[i][j] );
 		}
 	}
+	for ( i = 0; i < 2; i++ ) {
+		R_FreeTarget2D( &ui2dLayers.glassStates[i] );
+	}
 	R_FreeFbo2D( &ui2dLayers.saveFbo );
 	Com_Memset( &ui2dLayers, 0, sizeof( ui2dLayers ) );
 }
@@ -208,8 +229,37 @@ void R_InitLayers2D( void ) {
 	filterUniforms.maskMap = qglGetUniformLocation( program, "u_MaskMap" );
 	filterUniforms.maskTransform = qglGetUniformLocation( program, "u_MaskTransform" );
 	filterUniforms.maskChannel = qglGetUniformLocation( program, "u_MaskChannel" );
+	filterUniforms.clipShape = qglGetUniformLocation( program, "u_ClipShape" );
+	filterUniforms.clipBox = qglGetUniformLocation( program, "u_ClipBox" );
+	filterUniforms.clipRadii = qglGetUniformLocation( program, "u_ClipRadii" );
 	GLSL_BindProgram( &tr.ui2dFilterShader );
 	qglUniform1i( filterUniforms.maskMap, TB_LIGHTMAP );
+
+	program = tr.ui2dGlassShader.program;
+	if ( !program ) {
+		return;
+	}
+	glassUniforms.pass = qglGetUniformLocation( program, "u_GlassPass" );
+	glassUniforms.colorScale = qglGetUniformLocation( program, "u_ColorScale" );
+	glassUniforms.box = qglGetUniformLocation( program, "u_GlassBox" );
+	glassUniforms.radii = qglGetUniformLocation( program, "u_GlassRadii" );
+	glassUniforms.rim = qglGetUniformLocation( program, "u_GlassRim" );
+	glassUniforms.light = qglGetUniformLocation( program, "u_GlassLight" );
+	glassUniforms.darkColor = qglGetUniformLocation( program, "u_GlassDarkColor" );
+	glassUniforms.lightColor = qglGetUniformLocation( program, "u_GlassLightColor" );
+	glassUniforms.tint = qglGetUniformLocation( program, "u_GlassTint" );
+	glassUniforms.mode = qglGetUniformLocation( program, "u_GlassMode" );
+	glassUniforms.glow = qglGetUniformLocation( program, "u_GlassGlow" );
+	glassUniforms.deform = qglGetUniformLocation( program, "u_GlassDeform" );
+	glassUniforms.invTargetRes = qglGetUniformLocation( program, "u_InvTargetRes" );
+	glassUniforms.stateMap = qglGetUniformLocation( program, "u_GlassStateMap" );
+	glassUniforms.stateCoord = qglGetUniformLocation( program, "u_GlassStateCoord" );
+	glassUniforms.stateStep = qglGetUniformLocation( program, "u_GlassStateStep" );
+	glassUniforms.smoothing = qglGetUniformLocation( program, "u_GlassSmoothing" );
+	glassUniforms.fade = qglGetUniformLocation( program, "u_GlassFade" );
+	glassUniforms.start = qglGetUniformLocation( program, "u_GlassStart" );
+	GLSL_BindProgram( &tr.ui2dGlassShader );
+	qglUniform1i( glassUniforms.stateMap, TB_LIGHTMAP );
 }
 
 
@@ -239,16 +289,17 @@ static void RB_ForgetScissor2D( void ) {
 RB_ClearBoxes2D
 
 Clears boxes (x, y, width and height, y down) of the bound framebuffer to
-transparent, through the 2D's scissor, which a layer command's own passes
-and blits may have left other than its state says
+transparent, or their alpha alone to 1 (opaque), through the 2D's scissor,
+which a layer command's own passes and blits may have left other than its
+state says
 ===============
 */
-static void RB_ClearBoxes2D( ivec4_t *boxes, int numBoxes ) {
+static void RB_ClearBoxes2D( ivec4_t *boxes, int numBoxes, qboolean opaque ) {
 	int		i;
 
 	RB_ForgetScissor2D();
-	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-	qglClearColor( 0, 0, 0, 0 );
+	qglColorMask( !opaque, !opaque, !opaque, GL_TRUE );
+	qglClearColor( 0, 0, 0, opaque );
 	for ( i = 0; i < numBoxes; i++ ) {
 		if ( boxes[i][2] > 0 && boxes[i][3] > 0 ) {
 			RB_Scissor2D( boxes[i] );
@@ -256,6 +307,26 @@ static void RB_ClearBoxes2D( ivec4_t *boxes, int numBoxes ) {
 		}
 	}
 	qglColorMask( !backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3] );
+}
+
+/*
+===============
+RB_OpaqueWindow2D
+
+The window's alpha set to 1 within box, before a composite or a save reads
+it: the window is opaque, but the 3D view leaves its alpha as its shaders
+wrote it (masks a later stage reads with GL_DST_ALPHA, and dynamic lights
+adding to them, past 1 in a float target), which the filters and the glass
+would take for how much of each texel is there. Nothing after the view
+reads the window's alpha
+===============
+*/
+static void RB_OpaqueWindow2D( const int box[4] ) {
+	ivec4_t	b;
+
+	VectorCopy4( box, b );
+	FBO_Bind( tr.renderFbo );
+	RB_ClearBoxes2D( &b, 1, qtrue );
 }
 
 static qboolean RB_BoxWithin2D( const int in[4], const int out[4] ) {
@@ -303,7 +374,7 @@ static void RB_ClearLayer2D( int layer, const int box[4] ) {
 	}
 	FBO_Bind( &ui2dLayers.layers[layer - 1].fbo );
 	if ( !c[2] && ( b[2] < w || b[3] < h ) ) {
-		RB_ClearBoxes2D( &b, 1 );
+		RB_ClearBoxes2D( &b, 1, qfalse );
 		VectorCopy4( b, c );
 	} else if ( !c[2] ) {
 		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
@@ -317,7 +388,7 @@ static void RB_ClearLayer2D( int layer, const int box[4] ) {
 			{ c[0] + c[2], c[1], w - c[0] - c[2], c[3] }
 		};
 
-		RB_ClearBoxes2D( bands, 4 );
+		RB_ClearBoxes2D( bands, 4, qfalse );
 		VectorSet4( c, 0, 0, w, h );
 	}
 }
@@ -393,7 +464,7 @@ static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t
 	if ( x0 > 0 || y0 > 0 || x1 < t->fbo.width || y1 < t->fbo.height ) {
 		ivec4_t	box = { x0, y0, x1 - x0, y1 - y0 };
 
-		RB_ClearBoxes2D( &box, 1 );
+		RB_ClearBoxes2D( &box, 1, qfalse );
 	} else {
 		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
 	}
@@ -404,19 +475,19 @@ static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t
 ===============
 RB_Quad2D
 
-Draws src through the ui2dfilter program in a mode, as a quad into the
-bound framebuffer, in its 2D projection
+Draws src through a program, its mode or pass set already, as a quad into
+the bound framebuffer, in its 2D projection
 ===============
 */
-static void RB_Quad2D( image_t *src, int mode, const vec4_t color, vec4_t verts[4], vec2_t texCoords[4], int blend ) {
+static void RB_Quad2D( shaderProgram_t *program, image_t *src, const vec4_t color, vec4_t verts[4], vec2_t texCoords[4],
+	int blend ) {
 	vec2_t	invTexRes;
 
 	VectorSet2( invTexRes, 1.0f / src->width, 1.0f / src->height );
-	GLSL_BindProgram( &tr.ui2dFilterShader );
-	GLSL_SetUniformMat4( &tr.ui2dFilterShader, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.projection );
-	GLSL_SetUniformVec4( &tr.ui2dFilterShader, UNIFORM_COLOR, color );
-	GLSL_SetUniformVec2( &tr.ui2dFilterShader, UNIFORM_INVTEXRES, invTexRes );
-	qglUniform1i( filterUniforms.filterMode, mode );
+	GLSL_BindProgram( program );
+	GLSL_SetUniformMat4( program, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.projection );
+	GLSL_SetUniformVec4( program, UNIFORM_COLOR, color );
+	GLSL_SetUniformVec2( program, UNIFORM_INVTEXRES, invTexRes );
 	GL_BindToTMU( src, TB_COLORMAP );
 	GL_State( GLS_DEPTHTEST_DISABLE | blend );
 	GL_Cull( CT_TWO_SIDED );
@@ -425,16 +496,16 @@ static void RB_Quad2D( image_t *src, int mode, const vec4_t color, vec4_t verts[
 
 /*
 ===============
-RB_Pass2D
+RB_ProgramPass2D
 
-Draws src over dst with the ui2dfilter program in a mode, whose other
-uniforms the caller has set: within box (x, y, width and height in the 2D
-target's pixels, y down), moved down and right by offset, the same in
-dst's pixels at a smaller level
+Draws src over dst with a program whose uniforms the caller has set:
+within box (x, y, width and height in the 2D target's pixels, y down),
+moved down and right by offset, the same in dst's pixels at a smaller
+level
 ===============
 */
-static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, const int box[4], const vec2_t offset,
-	int blend ) {
+static void RB_ProgramPass2D( shaderProgram_t *program, image_t *src, FBO_t *dst, const vec4_t color, const int box[4],
+	const vec2_t offset, int blend ) {
 	float	scale = dst->width / (float)ui2dLayers.width;
 	float	ox = offset ? offset[0] * scale : 0, oy = offset ? offset[1] * scale : 0;
 	vec4_t	verts[4], c;
@@ -455,7 +526,20 @@ static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, c
 	} else {
 		VectorSet4( c, 1, 1, 1, 1 );
 	}
-	RB_Quad2D( src, mode, c, verts, texCoords, blend );
+	RB_Quad2D( program, src, c, verts, texCoords, blend );
+}
+
+// the ui2dfilter program's mode for the passes after
+static void RB_FilterMode2D( int mode ) {
+	GLSL_BindProgram( &tr.ui2dFilterShader );
+	qglUniform1i( filterUniforms.filterMode, mode );
+}
+
+// a pass of the ui2dfilter program in a mode
+static void RB_Pass2D( image_t *src, FBO_t *dst, int mode, const vec4_t color, const int box[4], const vec2_t offset,
+	int blend ) {
+	RB_FilterMode2D( mode );
+	RB_ProgramPass2D( &tr.ui2dFilterShader, src, dst, color, box, offset, blend );
 }
 
 #define BLEND_OVER		( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA )
@@ -477,6 +561,26 @@ static void RB_SetColorMatrix2D( const filter2D_t *filter ) {
 	qglUniformMatrix4fv( filterUniforms.colorMatrix, 1, GL_FALSE, m );
 	qglUniform4f( filterUniforms.colorOffset, p[4], p[9], p[14], p[19] );
 	qglUniform1f( filterUniforms.colorScale, tr.frameLight );
+}
+
+/*
+===============
+RB_FilterClipShape2D
+
+The passes after drawn by how much of each pixel a clip shape
+(draw2DState_t's) covers, or wholly for NULL
+===============
+*/
+static void RB_FilterClipShape2D( const float *shape ) {
+	float	clip[8];
+
+	GLSL_BindProgram( &tr.ui2dFilterShader );
+	qglUniform1i( filterUniforms.clipShape, shape != NULL );
+	if ( shape ) {
+		RB_ShapeRowsUp2D( shape, ui2dLayers.height, clip );
+		qglUniform4fv( filterUniforms.clipBox, 1, clip );
+		qglUniform4fv( filterUniforms.clipRadii, 1, clip + 4 );
+	}
 }
 
 /*
@@ -631,6 +735,12 @@ static int RB_CompositeReach2D( const layer2DCommand_t *cmd ) {
 			spread += f->params[0] * 3;
 		} else if ( f->kind == FILTER2D_DROP_SHADOW ) {
 			spread += f->params[6] * 3 + MAX( fabsf( f->params[4] ), fabsf( f->params[5] ) );
+		} else if ( f->kind == FILTER2D_GLASS && ( cmd->state.flags & TRIS2D_CLIPSHAPE ) ) {
+			float	rim, mirror;
+
+			// its mirror, from past the shape's box across or down
+			R_GlassLimits2D( f, cmd->state.clipShape, &rim, &mirror );
+			spread += mirror / GLASS2D_MIRROR * GLASS2D_REACH;
 		}
 	}
 	return (int)ceilf( MIN( spread, (float)( ui2dLayers.width + ui2dLayers.height ) ) );
@@ -670,9 +780,10 @@ static void RB_CopyBox2D( FBO_t *src, FBO_t *dst, const int box[4] ) {
 RB_LayerFbo2D
 
 A framebuffer with a layer's picture within box in its texture: resolved
-from its samples, and for the 2D target, its own render image. The
-filters read past the box by about their reach, so as much more is
-resolved, as a layer without samples has it
+from its samples, and for the 2D target, its own render image, its alpha
+made opaque first (RB_OpaqueWindow2D). The filters read past the box by
+about their reach, so as much more is resolved, as a layer without
+samples has it
 ===============
 */
 static FBO_t *RB_LayerFbo2D( int layer, const int box[4], int reach ) {
@@ -689,6 +800,9 @@ static FBO_t *RB_LayerFbo2D( int layer, const int box[4], int reach ) {
 	int		y1 = MIN( ui2dLayers.height, box[1] + box[3] + margin + 1 );
 	int		read[4] = { x0, y0, x1 - x0, y1 - y0 };
 
+	if ( !layer ) {
+		RB_OpaqueWindow2D( read );
+	}
 	RB_ClearLayer2D( layer, read );
 	if ( ui2dLayers.samples && resolve ) {
 		RB_CopyBox2D( fbo, resolve, read );
@@ -762,11 +876,120 @@ static void RB_SaveLayer2D( const layer2DCommand_t *cmd ) {
 		VectorSet2( texCoords[2], s1, t0 );
 		VectorSet2( texCoords[3], s0, t0 );
 		VectorSet4( color, 1 / tr.frameLight, 1 / tr.frameLight, 1 / tr.frameLight, 1 );
-		RB_Quad2D( src->colorImage[0], FILTERMODE_COPY, color, verts, texCoords, BLEND_REPLACE );
+		RB_FilterMode2D( FILTERMODE_COPY );
+		RB_Quad2D( &tr.ui2dFilterShader, src->colorImage[0], color, verts, texCoords, BLEND_REPLACE );
 	}
 
 	qglNamedFramebufferTexture2DEXT( dst->frameBuffer, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0 );
 	dst->colorImage[0] = NULL;
+}
+
+/*
+===============
+RB_GlassStates2D
+
+A state texture of the glass filters', made when first needed, two
+texels a glass: this frame's (1) or the frame before's (0)
+===============
+*/
+static target2D_t *RB_GlassStates2D( int now ) {
+	target2D_t	*t = &ui2dLayers.glassStates[( ui2dLayers.glassFrame + now ) & 1];
+
+	if ( !t->image.texnum ) {
+		R_MakeTarget2D( t, MAX_FILTERS2D * 2, 1, 0, NULL );
+		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+		FBO_Bind( &t->fbo );
+		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
+	}
+	return t;
+}
+
+/*
+===============
+RB_GlassState2D
+
+A composite's glass filter (ui2dglass_fp.glsl) set for its shape, and its
+state for this frame drawn from frost, the filters' result before it, and
+the frame before's state; it starts again when the glass didn't draw the
+frame before. RB_Glass2D then draws the glass, which reads it
+===============
+*/
+static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glass, image_t *frost ) {
+	const float	*p = glass->params;
+	const float	*glow = cmd->glassGlow, *m = cmd->glassDeform;
+	int			s = glass->glassState, width = MAX_FILTERS2D * 2, frame = ui2dLayers.glassFrame + 1;
+	target2D_t	*before = RB_GlassStates2D( 0 ), *now = RB_GlassStates2D( 1 );
+	float		shape[8], rim, mirror, dt = ui2dLayers.glassDt, det = m[0] * m[3] - m[1] * m[2];
+	vec4_t		verts[4], white = { 1, 1, 1, 1 };
+	vec2_t		texCoords[4] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };
+
+	// a glass composited again this frame keeps its first's start; a new one
+	// in a slot the frame before's had starts afresh
+	if ( ui2dLayers.glass[s].serial != glass->glassSerial ) {
+		ui2dLayers.glass[s].serial = glass->glassSerial;
+		ui2dLayers.glass[s].frame = 0;
+	}
+	if ( ui2dLayers.glass[s].frame != frame ) {
+		ui2dLayers.glass[s].start = ui2dLayers.glass[s].frame != frame - 1;
+		ui2dLayers.glass[s].frame = frame;
+	}
+	RB_ShapeRowsUp2D( cmd->state.clipShape, ui2dLayers.height, shape );
+	R_GlassLimits2D( glass, cmd->state.clipShape, &rim, &mirror );
+
+	GLSL_BindProgram( &tr.ui2dGlassShader );
+	qglUniform1f( glassUniforms.colorScale, tr.frameLight );
+	qglUniform4fv( glassUniforms.box, 1, shape );
+	qglUniform4fv( glassUniforms.radii, 1, shape + 4 );
+	qglUniform4f( glassUniforms.rim, rim, mirror, p[GLASS2D_HIGHLIGHT], p[GLASS2D_EDGE] );
+	qglUniform2f( glassUniforms.light, p[GLASS2D_LIGHT_X], p[GLASS2D_LIGHT_Y] );
+	qglUniform3f( glassUniforms.darkColor, p[GLASS2D_DARK_COLOR], p[GLASS2D_DARK_COLOR + 1], p[GLASS2D_DARK_COLOR + 2] );
+	qglUniform3f( glassUniforms.lightColor, p[GLASS2D_LIGHT_COLOR], p[GLASS2D_LIGHT_COLOR + 1], p[GLASS2D_LIGHT_COLOR + 2] );
+	qglUniform4f( glassUniforms.tint, p[GLASS2D_TINT_MIN], p[GLASS2D_TINT_MAX], p[GLASS2D_DARK_GOAL], p[GLASS2D_LIGHT_GOAL] );
+	qglUniform1i( glassUniforms.mode, (int)p[GLASS2D_TINT] );
+	// rows up, as the shape's
+	qglUniform4f( glassUniforms.glow, glow[0], ui2dLayers.height - glow[1], glow[2], glow[3] );
+	// the deformation's inverse, rows up, which takes a pixel back to where
+	// it lies on the shape
+	qglUniform4f( glassUniforms.deform, m[3] / det, m[1] / det, m[2] / det, m[0] / det );
+	qglUniform2f( glassUniforms.invTargetRes, 1.0f / ui2dLayers.width, 1.0f / ui2dLayers.height );
+	qglUniform2f( glassUniforms.stateCoord, ( s * 2 + 0.5f ) / width, 0.5f );
+	qglUniform1f( glassUniforms.stateStep, 1.0f / width );
+	// light past 0.62, dark again below 0.45
+	qglUniform4f( glassUniforms.smoothing, 1 - expf( -dt / p[GLASS2D_SMOOTHING] ), 1 - expf( -dt / p[GLASS2D_RELEASE] ),
+		0.62f, 0.45f );
+	// how far the look turns toward dark or light this frame
+	qglUniform1f( glassUniforms.fade, p[GLASS2D_FADE] > 0 ? MIN( dt / p[GLASS2D_FADE], 1 ) : 1 );
+	qglUniform1i( glassUniforms.start, ui2dLayers.glass[s].start );
+
+	// the state's two texels, every channel whatever the color mask
+	FBO_Bind( &now->fbo );
+	RB_SetGL2D();
+	qglScissor( s * 2, 0, 2, 1 );
+	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	VectorSet4( verts[0], 0, 0, 0, 1 );
+	VectorSet4( verts[1], width, 0, 0, 1 );
+	VectorSet4( verts[2], width, 1, 0, 1 );
+	VectorSet4( verts[3], 0, 1, 0, 1 );
+	GL_BindToTMU( &before->image, TB_LIGHTMAP );
+	qglUniform1i( glassUniforms.pass, 1 );
+	RB_Quad2D( &tr.ui2dGlassShader, frost, white, verts, texCoords, BLEND_REPLACE );
+	qglColorMask( !backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3] );
+}
+
+/*
+===============
+RB_Glass2D
+
+A composite's last pass through its glass filter, set and its state drawn
+by RB_GlassState2D: from frost onto dst within out
+===============
+*/
+static void RB_Glass2D( image_t *frost, FBO_t *dst, const int out[4], const vec4_t color, int blend ) {
+	GL_BindToTMU( &RB_GlassStates2D( 1 )->image, TB_LIGHTMAP );
+	GLSL_BindProgram( &tr.ui2dGlassShader );
+	qglUniform1i( glassUniforms.pass, 0 );
+	RB_ProgramPass2D( &tr.ui2dGlassShader, frost, dst, color, out, NULL, blend );
 }
 
 /*
@@ -822,8 +1045,10 @@ const void *RB_Layer2D( const void *data ) {
 		vec4_t		color = { 1, 1, 1, 1 };
 		const int	*scissor = ( cmd->state.flags & TRIS2D_SCISSOR ) ? cmd->state.scissor : NULL;
 		const int	*input = cmd->input[2] ? cmd->input : NULL;
+		const float	*shape = ( cmd->state.flags & TRIS2D_CLIPSHAPE ) ? cmd->state.clipShape : NULL;
+		const filter2D_t	*glass = NULL;
 		FBO_t		*read;
-		int			box[4], reads[4], out[4], written[4], reach = RB_CompositeReach2D( cmd ), numFilters = cmd->numFilters, i;
+		int			box[4], reads[4], out[4], written[4], reach = RB_CompositeReach2D( cmd ), numFilters = cmd->numFilters, blend, i;
 		qboolean	clip;
 
 		// what the filters cover, the input box or the scissor, grown by
@@ -859,6 +1084,11 @@ const void *RB_Layer2D( const void *data ) {
 
 			VectorSet4( color, alpha, alpha, alpha, alpha );
 		}
+		// a glass is the last pass, drawn within the shape (the front end
+		// leaves one without a shape out)
+		if ( numFilters && cmd->filters[numFilters - 1].kind == FILTER2D_GLASS ) {
+			glass = &cmd->filters[--numFilters];
+		}
 		for ( i = 0; i < numFilters; i++ ) {
 			// a blur's last pass takes a color matrix after it, as in a
 			// backdrop's blur() saturate() or a filter's blur() grayscale(),
@@ -893,11 +1123,22 @@ const void *RB_Layer2D( const void *data ) {
 				image = &copy->image;
 			}
 		}
+		if ( glass ) {
+			RB_GlassState2D( cmd, glass, image );
+		}
 		RB_ClearLayer2D( cmd->destination, written );
 		FBO_Bind( dst );
 		clip = R_BeginClipTest2D( &cmd->state );
-		RB_Pass2D( image, dst, FILTERMODE_COPY, color, out, NULL,
-			cmd->blendMode == BLEND2D_REPLACE ? BLEND_REPLACE : BLEND_OVER );
+		blend = cmd->blendMode == BLEND2D_REPLACE ? BLEND_REPLACE : BLEND_OVER;
+		if ( glass ) {
+			RB_Glass2D( image, dst, out, color, blend );
+		} else {
+			RB_FilterClipShape2D( shape );
+			RB_Pass2D( image, dst, FILTERMODE_COPY, color, out, NULL, blend );
+			if ( shape ) {
+				RB_FilterClipShape2D( NULL );
+			}
+		}
 		if ( clip ) {
 			R_EndClipTest2D();
 		}
@@ -924,7 +1165,14 @@ drew into bound
 ===============
 */
 void RB_EndFrame2D( void ) {
+	int		now = ri.Milliseconds();
+
 	ui2dLayers.depth = 0;
+	// the glass filters' states take turns, and smooth over the time the
+	// frame took, as long as 0.1 s at most
+	ui2dLayers.glassFrame++;
+	ui2dLayers.glassDt = Com_Clamp( 0, 0.1f, ( now - ui2dLayers.glassTime ) * 0.001f );
+	ui2dLayers.glassTime = now;
 	if ( ui2dLayers.target && ++ui2dLayers.idleFrames > LAYERS2D_IDLE_FRAMES ) {
 		R_ShutdownLayers2D();
 	}

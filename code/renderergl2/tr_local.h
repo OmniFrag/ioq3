@@ -1673,6 +1673,7 @@ typedef struct {
 	shaderProgram_t textureColorShader;
 	shaderProgram_t ui2dShader;
 	shaderProgram_t ui2dFilterShader;
+	shaderProgram_t ui2dGlassShader;
 	shaderProgram_t fogShader[FOGDEF_COUNT];
 	shaderProgram_t dlightShader[DLIGHTDEF_COUNT];
 	shaderProgram_t lightallShader[LIGHTDEF_COUNT];
@@ -2663,6 +2664,7 @@ void RB_Scissor2D( const int *rect );
 void R_GetCaps2DRetained( caps2D_t *caps );
 qboolean R_Paints2DAvailable( void );
 void R_InitUI2D( void );
+void RB_ShapeRowsUp2D( const float *shape, int height, float out[8] );
 
 // tr_ui2d_layers.c: the layers and their filters
 qboolean R_Layers2DAvailable( void );

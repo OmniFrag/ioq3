@@ -214,6 +214,7 @@ void R_GetCaps2DRetained( caps2D_t *caps ) {
 	// the render target's samples, unless the views draw apart from it
 	// (FBO_UseRenderTarget)
 	caps->layers = R_Layers2DAvailable();
+	caps->glass = caps->layers && caps->clipShapes && tr.ui2dGlassShader.program;
 	caps->multisample = tr.renderFbo && tr.renderFbo == tr.renderTargetFbo && tr.renderTargetResolveFbo ?
 		tr.multisample : 0;
 }
@@ -395,6 +396,27 @@ static void RB_Paint2D( const paint2D_t *paint, const texture2D_t *texture ) {
 
 /*
 ===============
+RB_ShapeRowsUp2D
+
+A 2D state's clip shape (window pixels, y down; radii top left, top right,
+bottom right, bottom left) as the shaders take it, in a framebuffer height
+pixels high with GL's rows going up: its box, then its radii by quadrant,
+bottom left, bottom right, top right and top left
+===============
+*/
+void RB_ShapeRowsUp2D( const float *shape, int height, float out[8] ) {
+	out[0] = shape[0];
+	out[1] = height - shape[1] - shape[3];
+	out[2] = shape[2];
+	out[3] = shape[3];
+	out[4] = shape[7];
+	out[5] = shape[6];
+	out[6] = shape[5];
+	out[7] = shape[4];
+}
+
+/*
+===============
 RB_ClipShape2D
 
 The clip's rounded box (TRIS2D_CLIPSHAPE) for ui2d's coverage, in the
@@ -416,11 +438,9 @@ static void RB_ClipShape2D( const float *shape ) {
 		ui2d.lastClipShape = 1;
 	}
 	{
-		// top left, top right, bottom right, bottom left as bottom left,
-		// bottom right, top right, top left
-		const float	clip[8] = { shape[0], height - shape[1] - shape[3], shape[2], shape[3],
-			shape[7], shape[6], shape[5], shape[4] };
+		float	clip[8];
 
+		RB_ShapeRowsUp2D( shape, height, clip );
 		// the draws in a clipped element share its shape
 		if ( memcmp( clip, ui2d.lastClip, sizeof( clip ) ) ) {
 			qglUniform4fv( ui2d.clipBox, 1, clip );

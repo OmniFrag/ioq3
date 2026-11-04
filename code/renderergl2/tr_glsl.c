@@ -54,6 +54,7 @@ extern const char *fallbackShader_ui2d_vp;
 extern const char *fallbackShader_ui2d_fp;
 extern const char *fallbackShader_ui2dfilter_vp;
 extern const char *fallbackShader_ui2dfilter_fp;
+extern const char *fallbackShader_ui2dglass_fp;
 extern const char *fallbackShader_tonemap_vp;
 extern const char *fallbackShader_tonemap_fp;
 extern const char* fallbackShader_greyscale_vp;
@@ -1405,6 +1406,27 @@ void GLSL_InitGPUShaders(void)
 		GLSL_FinishGPUShader(&tr.ui2dFilterShader);
 
 		numEtcShaders++;
+
+		// a glass filter's passes, apart from the other filters', which
+		// keep their short program; without it, no glass filters
+		optionalProgram = qtrue;
+		Q_strcat(extradefines, 1024, va("#define GLASS2D_SQUEEZE %f\n#define GLASS2D_CORNER %f\n", GLASS2D_SQUEEZE,
+			GLASS2D_CORNER));
+		if (GLSL_InitGPUShader(&tr.ui2dGlassShader, "ui2dglass", attribs, qtrue, extradefines, qtrue, fallbackShader_ui2dfilter_vp, fallbackShader_ui2dglass_fp))
+		{
+			GLSL_InitUniforms(&tr.ui2dGlassShader);
+
+			GLSL_SetUniformInt(&tr.ui2dGlassShader, UNIFORM_DIFFUSEMAP, TB_COLORMAP);
+
+			GLSL_FinishGPUShader(&tr.ui2dGlassShader);
+
+			numEtcShaders++;
+		}
+		else
+		{
+			ri.Printf(PRINT_DEVELOPER, "WARNING: the ui2dglass program didn't compile or link: no glass filters\n");
+		}
+		optionalProgram = qfalse;
 	}
 
 	for (i = 0; i < FOGDEF_COUNT; i++)
@@ -1786,6 +1808,7 @@ void GLSL_ShutdownGPUShaders(void)
 	GLSL_DeleteGPUShader(&tr.textureColorShader);
 	GLSL_DeleteGPUShader(&tr.ui2dShader);
 	GLSL_DeleteGPUShader(&tr.ui2dFilterShader);
+	GLSL_DeleteGPUShader(&tr.ui2dGlassShader);
 
 	for ( i = 0; i < FOGDEF_COUNT; i++)
 		GLSL_DeleteGPUShader(&tr.fogShader[i]);

@@ -126,6 +126,7 @@ typedef struct {
 	qboolean	paints;				// gradients and rounded boxes on the GPU
 	qboolean	msdf;				// multi-channel distance field text
 	qboolean	layers;				// layers and their filters (PushLayer2D)
+	qboolean	glass;				// glass filters (CreateGlassFilter2D)
 	int			multisample;		// samples of the 2D target, and so of the layers; 0 for none
 	int			maxTextureSize;		// an image's widest side
 	int			maxGeometryVerts;	// a retained geometry's vertexes, 0 for none
@@ -186,6 +187,38 @@ typedef enum {
 
 // the most filters one CompositeLayers2D applies
 #define MAX_FILTERS2D_PER_COMPOSITE	8
+
+// a glass filter's tint (glass2D_t)
+typedef enum {
+	GLASS2D_DARK,		// a dark tint, for light text: more of it over brighter backdrops
+	GLASS2D_LIGHT,		// a light tint, for dark text: more of it over darker ones
+	GLASS2D_EITHER		// dark or light by the backdrop's brightness, slowly, with two thresholds
+} glassTint2D_t;
+
+// A glass filter (CreateGlassFilter2D): the last of a composite's filters,
+// drawn within its clip shape (TRIS2D_CLIPSHAPE). What the filters before
+// it made is never drawn larger than it is: the face shows its own place,
+// and a band at the rim shows what's just outside the edge mirrored in,
+// then the inside squeezed toward the edge. In the band, a highlight lit
+// from lightAngle and a dark hairline at the edge; over it all a tint, as
+// much as brings the backdrop's brightness to a goal, smoothed from frame
+// to frame on the GPU
+typedef struct {
+	float			rimWidth;		// the band, in pixels: 0 to 96, and a quarter of the shape's shorter side at most
+	float			refraction;		// how much of the band mirrors what's outside, 0 to 1 of the most (GLASS2D_MIRROR)
+	float			lightAngle;		// where the light comes from, radians clockwise from up
+	float			highlight;		// the rim's highlight, 0 to 1
+	float			edge;			// the dark hairline, 0 to 1
+	glassTint2D_t	tint;
+	byte			darkColor[3], lightColor[3];	// the tints
+	float			tintMin, tintMax;		// how much of the tint, 0 to 1
+	// the brightest the backdrop may average under the dark tint, and the
+	// darkest under the light one, 0 to 1
+	float			darkGoal, lightGoal;
+	float			smoothing;		// seconds the choice of dark or light takes to follow the backdrop, 0.1 to 5
+	float			release;		// seconds the tint takes to ease back after a flash, 0.05 to 2
+	float			fade;			// seconds the look takes to turn from dark to light or back, 0 (at once) to 2
+} glass2D_t;
 
 typedef enum {
 	RT_MODEL,

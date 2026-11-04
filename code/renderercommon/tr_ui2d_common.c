@@ -51,6 +51,7 @@ typedef struct {
 typedef struct {
 	qboolean	deleted;
 	filter2D_t	filter;
+	qboolean	warned;		// a glass composited without a shape, once
 } filterSlot_t;
 
 static void	*textures[MAX_TEXTURES2D], *geometries[MAX_GEOMETRIES2D], *paints[MAX_PAINTS2D], *filterSlots[MAX_FILTERS2D];
@@ -68,6 +69,9 @@ static struct {
 };
 
 static qboolean	store2DOpen;	// between the renderer's start and its stop
+static float	glassGlow[4];	// SetGlassGlow2D's
+static float	glassDeform[4] = { 1, 0, 0, 1 };	// SetGlassDeform2D's
+static int		glassMade;		// the glass filters made, for their serials
 static int		layerDepth;		// the layers the front end has pushed this frame
 static int		geometryBytes;	// the vertexes and indexes kept, of MAX_GEOMETRY2D_BYTES
 
@@ -175,6 +179,9 @@ GL too with freeGpu, when its context stays
 void R_InitStore2D( void ) {
 	store2DOpen = qtrue;
 	layerDepth = 0;
+	Com_Memset( glassGlow, 0, sizeof( glassGlow ) );
+	glassGlow[2] = 1;
+	R_SetGlassDeform2D( NULL );
 	// the new stencil holds anything: the first mask clears it
 	clipOn = qfalse;
 	clipValue = 0xff;
@@ -923,12 +930,18 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 			ri.Printf( PRINT_WARNING, "CompositeLayers2D: no filter %i\n", filters[i] );
 			return;
 		}
-	}
-	if ( state && ( state->flags & TRIS2D_CLIPSHAPE ) ) {
-		ri.Printf( PRINT_WARNING, "CompositeLayers2D: a clip shape\n" );
-		return;
+		if ( slots[i]->filter.kind == FILTER2D_GLASS && i < numFilters - 1 ) {
+			ri.Printf( PRINT_WARNING, "CompositeLayers2D: a glass filter before the last\n" );
+			return;
+		}
 	}
 	if ( state && !R_CheckState2D( state, NULL, "CompositeLayers2D" ) ) {
+		return;
+	}
+	// a shape's coverage blends the edge over what's there, which replacing
+	// it can't
+	if ( state && ( state->flags & TRIS2D_CLIPSHAPE ) && blendMode == BLEND2D_REPLACE ) {
+		ri.Printf( PRINT_WARNING, "CompositeLayers2D: a clip shape replacing\n" );
 		return;
 	}
 	// an empty input reads nothing
@@ -943,10 +956,23 @@ void R_CompositeLayers2D( int source, int destination, int blendMode, const int 
 	cmd->source = source;
 	cmd->destination = destination;
 	cmd->blendMode = blendMode;
+	// a glass draws within its shape, and is left out without one
+	if ( numFilters && slots[numFilters - 1]->filter.kind == FILTER2D_GLASS ) {
+		if ( !state || !( state->flags & TRIS2D_CLIPSHAPE ) ) {
+			filterSlot_t	*glass = R_GetSlot2D( HANDLE2D_FILTER, filters[--numFilters], qfalse );
+
+			if ( !glass->warned ) {
+				ri.Printf( PRINT_WARNING, "CompositeLayers2D: glass filter %i without a clip shape\n", filters[numFilters] );
+				glass->warned = qtrue;
+			}
+		}
+	}
 	cmd->numFilters = numFilters;
 	for ( i = 0; i < numFilters; i++ ) {
 		cmd->filters[i] = slots[i]->filter;
 	}
+	Com_Memcpy( cmd->glassGlow, glassGlow, sizeof( glassGlow ) );
+	Com_Memcpy( cmd->glassDeform, glassDeform, sizeof( glassDeform ) );
 	if ( state ) {
 		cmd->state = *state;
 	} else {
@@ -1014,6 +1040,154 @@ int R_CreateMaskFilter2D( int texture, int x, int y ) {
 	slot->filter.params[0] = x;
 	slot->filter.params[1] = y;
 	return R_AddSlot2D( HANDLE2D_FILTER, slot );
+}
+
+/*
+===============
+R_CreateGlassFilter2D
+
+A glass once its numbers are checked, each clamped to its range (glass2D_t);
+its handle names its state too. What keeps the glass fair is the clamps
+here and R_GlassLimits2D, as nothing else reaches the shader
+===============
+*/
+int R_CreateGlassFilter2D( const glass2D_t *glass ) {
+	filterSlot_t	*slot;
+	caps2D_t		caps;
+	float			*p;
+	int				i, handle;
+
+	if ( !glass || !R_Layers2DReady() ) {
+		return 0;
+	}
+	R_Caps2D( &caps );
+	if ( !caps.glass ) {
+		return 0;
+	}
+	if ( !isfinite( glass->rimWidth ) || !isfinite( glass->refraction ) || !isfinite( glass->lightAngle ) ||
+		!isfinite( glass->highlight ) || !isfinite( glass->edge ) || !isfinite( glass->tintMin ) ||
+		!isfinite( glass->tintMax ) || !isfinite( glass->darkGoal ) || !isfinite( glass->lightGoal ) ||
+		!isfinite( glass->smoothing ) || !isfinite( glass->release ) || !isfinite( glass->fade ) ) {
+		ri.Printf( PRINT_WARNING, "CreateGlassFilter2D: a number that isn't one\n" );
+		return 0;
+	}
+	if ( (unsigned)glass->tint > GLASS2D_EITHER ) {
+		ri.Printf( PRINT_WARNING, "CreateGlassFilter2D: tint %i\n", glass->tint );
+		return 0;
+	}
+	slot = calloc( 1, sizeof( *slot ) );
+	if ( !slot ) {
+		return 0;
+	}
+	slot->filter.kind = FILTER2D_GLASS;
+	p = slot->filter.params;
+	p[GLASS2D_RIM] = Com_Clamp( 0, 96, glass->rimWidth );
+	p[GLASS2D_REFRACTION] = Com_Clamp( 0, 1, glass->refraction );
+	// clockwise from up, as rows going up have it
+	p[GLASS2D_LIGHT_X] = sinf( glass->lightAngle );
+	p[GLASS2D_LIGHT_Y] = cosf( glass->lightAngle );
+	p[GLASS2D_HIGHLIGHT] = Com_Clamp( 0, 1, glass->highlight );
+	p[GLASS2D_EDGE] = Com_Clamp( 0, 1, glass->edge );
+	p[GLASS2D_TINT] = glass->tint;
+	for ( i = 0; i < 3; i++ ) {
+		p[GLASS2D_DARK_COLOR + i] = glass->darkColor[i] / 255.0f;
+		p[GLASS2D_LIGHT_COLOR + i] = glass->lightColor[i] / 255.0f;
+	}
+	p[GLASS2D_TINT_MIN] = Com_Clamp( 0, 1, glass->tintMin );
+	p[GLASS2D_TINT_MAX] = Com_Clamp( p[GLASS2D_TINT_MIN], 1, glass->tintMax );
+	p[GLASS2D_DARK_GOAL] = Com_Clamp( 0, 1, glass->darkGoal );
+	p[GLASS2D_LIGHT_GOAL] = Com_Clamp( 0, 1, glass->lightGoal );
+	p[GLASS2D_SMOOTHING] = Com_Clamp( 0.1f, 5, glass->smoothing );
+	p[GLASS2D_RELEASE] = Com_Clamp( 0.05f, 2, glass->release );
+	p[GLASS2D_FADE] = Com_Clamp( 0, 2, glass->fade );
+
+	handle = R_AddSlot2D( HANDLE2D_FILTER, slot );
+	if ( handle ) {
+		slot->filter.glassState = handle - 1;
+		slot->filter.glassSerial = ++glassMade;
+	}
+	return handle;
+}
+
+/*
+===============
+R_SetGlassGlow2D
+
+The glow the glass composites queued from now on show
+===============
+*/
+void R_SetGlassGlow2D( float x, float y, float radius, float strength ) {
+	if ( !isfinite( x ) || !isfinite( y ) || !isfinite( radius ) || !isfinite( strength ) ) {
+		ri.Printf( PRINT_WARNING, "SetGlassGlow2D: a number that isn't one\n" );
+		return;
+	}
+	glassGlow[0] = x;
+	glassGlow[1] = y;
+	glassGlow[2] = MAX( radius, 1 );
+	glassGlow[3] = Com_Clamp( 0, 1, strength );
+}
+
+/*
+===============
+R_SetGlassDeform2D
+
+The shape the glass composites queued from now on are drawn as: a matrix
+near enough the identity, NULL for the identity
+===============
+*/
+void R_SetGlassDeform2D( const float *deform ) {
+	static const float	identity[4] = { 1, 0, 0, 1 };
+	int					i;
+
+	if ( deform ) {
+		float	det = deform[0] * deform[3] - deform[1] * deform[2];
+
+		for ( i = 0; i < 4; i++ ) {
+			if ( !isfinite( deform[i] ) || fabsf( deform[i] - identity[i] ) > 0.5f ) {
+				break;
+			}
+		}
+		if ( i < 4 || det < 0.5f || det > 2 ) {
+			ri.Printf( PRINT_WARNING, "SetGlassDeform2D: a matrix too far from the identity\n" );
+			return;
+		}
+	}
+	Com_Memcpy( glassDeform, deform ? deform : identity, sizeof( glassDeform ) );
+}
+
+/*
+===============
+R_GlassLimits2D
+
+A glass's band and mirror, in pixels, for a shape (draw2DState_t's clip
+shape): the band no wider than a quarter of the shape's shorter side, so
+what it reads of the inside stays well inside the shape, and its outer m,
+the mirror, refraction times GLASS2D_MIRROR of it. At depth t from the
+edge, the band
+(b wide) shows what's at depth s(t), below 0 outside:
+
+  t < m:	s = -GLASS2D_SQUEEZE * t, what's within GLASS2D_SQUEEZE times
+			the mirror outside the edge, mirrored in
+  t >= m:	s = t - m ((b - t) / (b - m))^3, the inside from the edge at m
+			to the face at b
+
+The mirror's slope is -GLASS2D_SQUEEZE, and the rest's 1 + 3m (b - t)^2 /
+(b - m)^3: more than 3 next to the mirror at refraction 1, falling to 1 at
+the face, which meets the band without a crease. So nothing in the band is
+drawn larger than it is. Along the band, at a rounded corner, what's read
+further out lies on a longer arc, so it's squeezed there too. Around a
+corner the mirror widens, m times 1 + (GLASS2D_CORNER - 1) sin 2a for the
+normal's angle a: as m varies, so does what a pixel reads along the band,
+by m' ((b - t) / (b - m))^3 at most, which falls toward the face as the
+cube of the depth left, faster than the squeeze across the band (its
+square) and along the arc (its cube, and a pixel on) leave room for it, so
+the corner enlarges nothing either. The band's own width doesn't widen
+round a corner: its shear would reach the face, where nothing is squeezed
+===============
+*/
+void R_GlassLimits2D( const filter2D_t *glass, const float shape[8], float *rim, float *mirror ) {
+	*rim = MIN( glass->params[GLASS2D_RIM], 0.25f * MIN( shape[2], shape[3] ) );
+	*mirror = glass->params[GLASS2D_REFRACTION] * GLASS2D_MIRROR * *rim;
 }
 
 /*

@@ -260,15 +260,40 @@ typedef enum {
 	FILTER2D_BLUR,			// sigma
 	FILTER2D_DROP_SHADOW,	// red, green, blue, alpha, x, y, sigma
 	FILTER2D_COLOR_MATRIX,	// a 4x5 matrix by rows
-	FILTER2D_MASK			// texture's x and y (CreateMaskFilter2D)
+	FILTER2D_MASK,			// texture's x and y (CreateMaskFilter2D)
+	FILTER2D_GLASS			// glass2D_t's, by GLASS2D_* (CreateGlassFilter2D)
 } filter2DKind_t;
 
 #define MAX_FILTER2D_PARAMS	20
+
+// a glass's numbers in a filter's, checked and clamped; its light as a
+// unit vector toward it, rows up, and its colors from 0 to 1
+enum {
+	GLASS2D_RIM, GLASS2D_REFRACTION, GLASS2D_LIGHT_X, GLASS2D_LIGHT_Y, GLASS2D_HIGHLIGHT, GLASS2D_EDGE,
+	GLASS2D_TINT,
+	GLASS2D_DARK_COLOR, GLASS2D_LIGHT_COLOR = GLASS2D_DARK_COLOR + 3,
+	GLASS2D_TINT_MIN = GLASS2D_LIGHT_COLOR + 3, GLASS2D_TINT_MAX, GLASS2D_DARK_GOAL, GLASS2D_LIGHT_GOAL,
+	GLASS2D_SMOOTHING, GLASS2D_RELEASE, GLASS2D_FADE
+};
+
+// a glass's band: at refraction 1, its outer GLASS2D_MIRROR shows what's
+// just outside the edge, mirrored in and each pixel GLASS2D_SQUEEZE of
+// what's there, widening to GLASS2D_CORNER times that mid-corner; the rest
+// of it shows the inside squeezed toward the edge (R_GlassLimits2D)
+#define GLASS2D_MIRROR		0.45f
+#define GLASS2D_SQUEEZE		4.0f
+#define GLASS2D_CORNER		1.4f
+// how far past its box, across or down, a glass reads, by its band's
+// width: GLASS2D_SQUEEZE times the mirror, and round a corner the most of
+// (1 + (GLASS2D_CORNER - 1) sin 2a) cos a for the normal's angle a, 1.19
+#define GLASS2D_REACH		( GLASS2D_MIRROR * GLASS2D_SQUEEZE * 1.19f )
 
 typedef struct {
 	filter2DKind_t	kind;
 	float			params[MAX_FILTER2D_PARAMS];
 	int				texture;		// a mask's
+	int				glassState;		// a glass's state, its handle's slot
+	int				glassSerial;	// which glass it is, counted as they're made, so a new one starts afresh
 } filter2D_t;
 
 // the 2D state's flags that tr_ui2d_common.c's draws take, past the
@@ -321,6 +346,8 @@ typedef struct {
 	int				numFilters;
 	filter2D_t		filters[MAX_FILTERS2D_PER_COMPOSITE];
 	int				input[4];			// LAYER2D_COMPOSITE's, width 0 for none
+	float			glassGlow[4];		// with a glass, SetGlassGlow2D's when it was queued
+	float			glassDeform[4];		// and SetGlassDeform2D's, the identity for none
 	int				texture, box[4];	// LAYER2D_SAVE's
 } layer2DCommand_t;
 
@@ -376,6 +403,9 @@ int					R_CreateFilter2D( const char *name, const float *params, int numParams )
 void				R_DeleteFilter2D( int filter );
 int					R_SaveLayer2D( const int box[4] );
 int					R_CreateMaskFilter2D( int texture, int x, int y );
+int					R_CreateGlassFilter2D( const glass2D_t *glass );
+void				R_SetGlassGlow2D( float x, float y, float radius, float strength );
+void				R_SetGlassDeform2D( const float *deform );
 // the frame's layers are popped as it ends (RE_EndFrame)
 void				R_EndFrame2D( void );
 // an immediate batch with TRIS2D_RETAINED_FLAGS
@@ -390,6 +420,7 @@ void				R_StraightColors2D( polyVert2D_t *verts, int numVerts );
 const polyVert2D_t	*R_StraightVerts2D( geometry2D_t *g );
 void				R_Transform2DMatrix( const draw2DState_t *state, float out[16] );
 void				R_Transform2DPoint( const float matrix[16], const float in[2], float out[2] );
+void				R_GlassLimits2D( const filter2D_t *glass, const float shape[8], float *rim, float *mirror );
 qboolean			R_BeginClipTest2D( const draw2DState_t *state );
 void				R_EndClipTest2D( void );
 const void			*RB_ClipMask2D( const void *data );

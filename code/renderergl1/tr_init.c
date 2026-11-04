@@ -1532,6 +1532,9 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.DeleteFilter2D = R_DeleteFilter2D;
 	re.SaveLayer2D = R_SaveLayer2D;
 	re.CreateMaskFilter2D = R_CreateMaskFilter2D;
+	re.CreateGlassFilter2D = R_CreateGlassFilter2D;
+	re.SetGlassGlow2D = R_SetGlassGlow2D;
+	re.SetGlassDeform2D = R_SetGlassDeform2D;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 
