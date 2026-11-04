@@ -1815,10 +1815,15 @@ CopyString
 
  NOTE:	never write over the memory CopyString returns because
 		memory from a memstatic_t might be returned
+
+ A string longer than MAX_CVAR_VALUE_STRING goes in the main zone, once
+ there is one: the small zone is fixed (s_smallZoneTotal), for the many
+ short names and values. Z_Free frees either, by the block's tag
 ========================
 */
 char *CopyString( const char *in ) {
 	char	*out;
+	int		length;
 
 	if (!in[0]) {
 		return ((char *)&emptystring) + sizeof(memblock_t);
@@ -1828,8 +1833,9 @@ char *CopyString( const char *in ) {
 			return ((char *)&numberstring[in[0]-'0']) + sizeof(memblock_t);
 		}
 	}
-	out = S_Malloc (strlen(in)+1);
-	strcpy (out, in);
+	length = strlen( in ) + 1;
+	out = Z_TagMalloc( length, ( length <= MAX_CVAR_VALUE_STRING || !mainzone ) ? TAG_SMALL : TAG_GENERAL );
+	Com_Memcpy( out, in, length );
 	return out;
 }
 
@@ -3616,8 +3622,8 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 		Z_Free( text );
 		return qtrue;
 	}
-	// applying it cuts its text into lines; a copy from the main zone, as
-	// a config can outgrow the small one CopyString uses
+	// applying it cuts its text into lines, so it gets a copy: the
+	// file's text is kept, for the next write to compare with
 	text = Z_Malloc( strlen( file->text ) + 1 );
 	strcpy( text, file->text );
 	Com_ImportConfig( text, path, NULL, qfalse );
