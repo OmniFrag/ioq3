@@ -286,23 +286,37 @@ static void Cvar_FormatValue( char *buf, int size, float value ) {
 	}
 }
 
+static qboolean Cvar_NamedValue( const cvar_t *var, const char *value, char *words, int size );
+
 /*
 ============
 Cvar_Validate
+
+A value as the cvar takes it: a number held in its range, or an enum's
+name it doesn't have (Cvar_NamedValue) taken as its default
 ============
 */
 static const char *Cvar_Validate( cvar_t *var,
     const char *value, qboolean warn )
 {
 	static char s[ MAX_CVAR_VALUE_STRING ];
+	char words[ MAX_STRING_CHARS ];
 	float valuef;
 	qboolean changed = qfalse;
 
-	if( !var->validate )
-		return value;
-
 	if( !value )
 		return value;
+
+	if( !var->validate )
+	{
+		if( Cvar_NamedValue( var, value, words, sizeof( words ) ) )
+			return value;
+
+		if( warn )
+			Com_Printf( "WARNING: cvar '%s' takes %s, setting to %s\n", var->name, words, var->resetString );
+
+		return var->resetString;
+	}
 
 	if( Q_isanumber( value ) )
 	{
@@ -949,6 +963,58 @@ static qboolean Cvar_NextLine( cvarTextReader_t *reader ) {
 
 /*
 ============
+Cvar_NamedValue
+
+Whether a cvar takes a value as one of its names: an enum of named
+values, which its declaration calls an enum and which has no range and a
+default that isn't a number, takes only the values its description names
+(Cvar_ValueLine), as Omniwire's settings.set does, and its default. Its
+names in words
+("auto or always") into words; any other cvar takes any value, words
+empty
+============
+*/
+static qboolean Cvar_NamedValue( const cvar_t *var, const char *value, char *words, int size ) {
+	const cvarDeclaration_t	*declaration;
+	cvarTextReader_t		reader;
+	qboolean				found = qfalse;
+	int						count = 0, last = 0;
+	char					name[MAX_STRING_CHARS];
+
+	words[0] = '\0';
+	// the cheap checks first: every set of a cvar with no range comes here
+	if ( var->validate || Q_isanumber( var->resetString ) ) {
+		return qtrue;
+	}
+	declaration = Cvar_Declaration( var->name );
+	if ( !declaration || !declaration->type || strcmp( declaration->type, "enum" ) ) {
+		return qtrue;
+	}
+	// no va(): a caller's value may be in its buffers
+	for ( Cvar_StartReading( &reader, var->description ); Cvar_NextLine( &reader ); ) {
+		if ( !reader.value ) {
+			continue;
+		}
+		found |= !strcmp( value, reader.value );
+		last = strlen( words );
+		if ( count++ ) {
+			Q_strcat( words, size, ", " );
+		}
+		Q_strcat( words, size, reader.value );
+	}
+	// "a, b or c"
+	if ( count > 1 && !strncmp( words + last, ", ", 2 ) ) {
+		Q_strncpyz( name, words + last + 2, sizeof( name ) );
+		words[last] = '\0';
+		Q_strcat( words, size, " or " );
+		Q_strcat( words, size, name );
+	}
+	// its default too, whatever its names say
+	return found || !count || !strcmp( value, var->resetString );
+}
+
+/*
+============
 Cvar_PrintSource
 
 Whose value a cvar has, after it, unless it's the default
@@ -1125,8 +1191,14 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 		serverLayer >= 0 ? &var->layerStrings[serverLayer] : &var->userString;
 	qboolean saves, locked = var->lockOrigin &&
 		( source == CVAR_SOURCE_PLAYER || source == CVAR_SOURCE_TOOL || source == CVAR_SOURCE_SCRIPT );
-	char *old;
+	char *old, words[MAX_STRING_CHARS];
 
+	// an enum's name it doesn't have is refused, as a read only cvar's set
+	// is, where an engine's forced set takes its default (Cvar_Validate)
+	if ( value && !force && !Cvar_NamedValue( var, value, words, sizeof( words ) ) ) {
+		Com_Printf( "%s takes %s, not \"%s\".\n", var->name, words, value );
+		return var;
+	}
 	if ( value ) {
 		value = Cvar_Validate( var, value, qtrue );
 	}
@@ -1747,7 +1819,7 @@ A dedicated server's own file's value for a cvar (server.toml), below the
 player's, with the line that set it; NULL drops it. One no code has
 registered yet is made, as a set makes it, its value its default until
 code registers it. Returns why it was refused, as a set would be (read
-only, write protected, cheat protected), or NULL
+only, write protected, cheat protected, "auto or always only"), or NULL
 ============
 */
 const char *Cvar_SetFile( const char *var_name, const char *value, const char *origin ) {
@@ -1764,6 +1836,7 @@ mode's (CVAR_SOURCE_MODE)
 ============
 */
 const char *Cvar_SetServerLayer( const char *var_name, const char *value, cvarSource_t source, const char *origin ) {
+	static char	only[MAX_STRING_CHARS];
 	cvar_t		*var = Cvar_FindVar( var_name );
 	const char	*refusal = var ? Cvar_Refusal( var ) : NULL;
 	int			layer = Cvar_ServerLayer( source );
@@ -1773,6 +1846,10 @@ const char *Cvar_SetServerLayer( const char *var_name, const char *value, cvarSo
 	}
 	if ( refusal && !Cvar_SameString( var->layerStrings[layer], value ) ) {
 		return refusal;
+	}
+	if ( var && value && !Cvar_NamedValue( var, value, only, sizeof( only ) ) ) {
+		Q_strcat( only, sizeof( only ), " only" );
+		return only;
 	}
 	if ( !var && !Cvar_ValidateString( var_name ) ) {
 		return "not a setting's name";
@@ -2603,7 +2680,8 @@ static const struct {
 Cvar_RangeWords
 
 The values a cvar takes, in words, from its range: "whole numbers 10 to
-125", "0 or 1", "numbers 0 or more"; empty with no range
+125", "0 or 1", "numbers 0 or more"; an enum's names, "auto or always"
+(Cvar_NamedValue); empty with neither
 ============
 */
 void Cvar_RangeWords( const cvar_t *var, char *words, int size ) {
@@ -2613,6 +2691,8 @@ void Cvar_RangeWords( const cvar_t *var, char *words, int size ) {
 
 	words[0] = '\0';
 	if ( !var->validate ) {
+		// an enum's names, or nothing
+		Cvar_NamedValue( var, "", words, size );
 		return;
 	}
 	Cvar_FormatValue( min, sizeof( min ), var->min );
@@ -3415,15 +3495,35 @@ the value but not the choice saved: a mod's narrower range mustn't
 rewrite an admin's saved fraglimit for good
 =====================
 */
+static void Cvar_ValidateLayers( cvar_t *var, qboolean keepSaved );
+
 static void Cvar_SetRange( cvar_t *var, float min, float max, qboolean integral, qboolean keepSaved )
 {
 	var->validate = qtrue;
 	var->min = min;
 	var->max = max;
 	var->integral = integral;
+	Cvar_ValidateLayers( var, keepSaved );
+}
 
-	// Force an initial range check, of the default and each layer
+/*
+=====================
+Cvar_ValidateLayers
+
+What a cvar takes, once it's known (a range, an enum's names), checked
+in its default and each layer set before
+=====================
+*/
+static void Cvar_ValidateLayers( cvar_t *var, qboolean keepSaved )
+{
+	int		i;
+
 	Cvar_SetLayer( &var->resetString, Cvar_Validate( var, var->resetString, qfalse ) );
+	// a server's own layers (server.toml's, a mode's, an entry's), set
+	// before code registered the cvar, kept as the saved value is
+	for ( i = 0; i < CVAR_SERVER_LAYERS && !keepSaved; i++ )
+		if ( var->layerStrings[i] )
+			Cvar_SetLayer( &var->layerStrings[i], Cvar_Validate( var, var->layerStrings[i], qtrue ) );
 	if ( var->serverString )
 		Cvar_SetLayer( &var->serverString, Cvar_Validate( var, var->serverString, qtrue ) );
 	if ( var->userString )
@@ -3482,9 +3582,31 @@ The cvar's own description: kept for later while a game module's is in
 place
 =====================
 */
+// whether the default and each layer are among an enum's names
+// (Cvar_NamedValue), as they are for any other cvar
+static qboolean Cvar_LayersNamed( const cvar_t *var )
+{
+	const char	*layers[4 + CVAR_SERVER_LAYERS] = { var->resetString, var->serverString, var->userString,
+		var->savedString };
+	char		words[MAX_STRING_CHARS];
+	int			i;
+
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ )
+		layers[4 + i] = var->layerStrings[i];
+	for ( i = 0; i < ARRAY_LEN( layers ); i++ )
+		if ( layers[i] && !Cvar_NamedValue( var, layers[i], words, sizeof( words ) ) )
+			return qfalse;
+	return qtrue;
+}
+
 void Cvar_SetDescription( cvar_t *var, const char *var_description )
 {
 	Cvar_CopyDescription( var->own ? &var->own->description : &var->description, var_description );
+	// an enum's names, checked in what a config or the command line set
+	// before them; only when one isn't a name, as checking applies a
+	// latched value at once (Cvar_ValidateLayers' forced Cvar_Apply)
+	if ( !var->own && !Cvar_LayersNamed( var ) )
+		Cvar_ValidateLayers( var, qfalse );
 }
 
 /*
