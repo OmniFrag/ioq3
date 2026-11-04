@@ -414,13 +414,15 @@ const char	*CL_ExtServerAddress( void );
 // A connect to whichever of several addresses answers first: each is sent
 // the challenge request every FAST_RETRANSMIT msec for the first
 // fastMsec, while routers open, then at connect's pace, until one answers
-// or giveUpMsec pass. With an expected key's fingerprint
+// or giveUpMsec pass. delays, when given, holds back each address that
+// many msec from the start, so a last resort is asked only once the others
+// haven't answered. With an expected key's fingerprint
 // (Ident_Fingerprint), a server that proves another key has its address
 // dropped, one that proves none is passed over, and the connect ends once
 // no address is left. connect itself expects no key. name is what the
 // connect is shown as
-void		CL_ExtConnect( const char *name, const netadr_t *candidates, int count, int fastMsec, int giveUpMsec,
-				const char *expectedFingerprint );
+void		CL_ExtConnect( const char *name, const netadr_t *candidates, const int *delays, int count, int fastMsec,
+				int giveUpMsec, const char *expectedFingerprint );
 // the server's info as the gamestate gave it (CS_SERVERINFO: mapname,
 // sv_hostname, sv_maxclients and the game's keys, such as g_needpass);
 // a demo's, as it was recorded; "" before a gamestate, and for one too

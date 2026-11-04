@@ -195,10 +195,13 @@ typedef struct {
 	byte		serverKey[32];
 	byte		serverNonce[32];
 	// a connect to several addresses (CL_ExtConnect): each is sent the
-	// challenge request, every FAST_RETRANSMIT until fastUntil, and the
-	// first to answer, as the server with the expected key when there is
-	// one, is the server
-	netadr_t	candidates[MAX_CONNECT_CANDIDATES];
+	// challenge request from its own time on, every FAST_RETRANSMIT until
+	// fastUntil, and the first to answer, as the server with the expected
+	// key when there is one, is the server
+	struct {
+		netadr_t	adr;
+		int			from;		// cls.realtime it's first sent to
+	}			candidates[MAX_CONNECT_CANDIDATES];
 	int			numCandidates;
 	int			fastUntil, giveUpAt;
 	char		expectedFingerprint[IDENT_FINGERPRINT_SIZE];	// "" for none

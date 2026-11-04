@@ -1980,8 +1980,8 @@ dropped, and the connect ends once none is left. name is what the
 connect is shown as
 ================
 */
-void CL_ExtConnect( const char *name, const netadr_t *candidates, int count, int fastMsec, int giveUpMsec,
-	const char *expectedFingerprint ) {
+void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *delays, int count, int fastMsec,
+	int giveUpMsec, const char *expectedFingerprint ) {
 	int		i;
 
 	if ( count < 1 ) {
@@ -1992,7 +1992,8 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, int count, int
 	cl_reconnectArgs[0] = '\0';
 	CL_ConnectBegin( name );
 	for ( i = 0; i < count; i++ ) {
-		clc.candidates[i] = candidates[i];
+		clc.candidates[i].adr = candidates[i];
+		clc.candidates[i].from = cls.realtime + ( delays ? MAX( 0, delays[i] ) : 0 );
 	}
 	clc.numCandidates = count;
 	clc.serverAddress = candidates[0];
@@ -3265,8 +3266,15 @@ void CL_CheckForResend( void ) {
 	if ( clc.giveUpAt && clc.state == CA_CONNECTING && cls.realtime - clc.giveUpAt >= 0 ) {
 		Com_Error( ERR_DROP, "No address answered, so the connect stopped." );
 	}
-	// and its fast window, while its routers open
+	// and its fast window, while its routers open; a candidate come due
+	// since the last send (connectTime) is sent to at once, not at the next
+	// resend
 	wait = clc.fastUntil && cls.realtime - clc.fastUntil < 0 ? FAST_RETRANSMIT : RETRANSMIT_TIMEOUT;
+	for ( i = 0; clc.state == CA_CONNECTING && i < clc.numCandidates; i++ ) {
+		if ( clc.candidates[i].from - clc.connectTime > 0 && cls.realtime - clc.candidates[i].from >= 0 ) {
+			wait = 0;
+		}
+	}
 	if ( cls.realtime - clc.connectTime < wait ) {
 		return;
 	}
@@ -3303,10 +3311,13 @@ void CL_CheckForResend( void ) {
 		}
 		Com_sprintf(data, sizeof(data), "getchallenge %d %s%s", clc.challenge, com_gamename->string, tokens);
 
-		// a candidate connect's to each candidate, the same challenge: the
-		// first to answer is the server
+		// a candidate connect's to each candidate due, the same challenge:
+		// the first to answer is the server
 		for ( i = 0; i < ( clc.numCandidates ? clc.numCandidates : 1 ); i++ ) {
-			NET_OutOfBandPrint( NS_CLIENT, clc.numCandidates ? clc.candidates[i] : clc.serverAddress, "%s", data );
+			if ( clc.numCandidates && cls.realtime - clc.candidates[i].from < 0 ) {
+				continue;
+			}
+			NET_OutOfBandPrint( NS_CLIENT, clc.numCandidates ? clc.candidates[i].adr : clc.serverAddress, "%s", data );
 		}
 		break;
 		
@@ -3721,7 +3732,7 @@ static qboolean CL_ExpectedServer( netadr_t from, qboolean proved ) {
 		return qfalse;
 	}
 	for ( i = 0; i < clc.numCandidates; i++ ) {
-		if ( NET_CompareAdr( from, clc.candidates[i] ) ) {
+		if ( NET_CompareAdr( from, clc.candidates[i].adr ) ) {
 			clc.candidates[i] = clc.candidates[--clc.numCandidates];
 			break;
 		}
