@@ -32,6 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "unzip.h"
+#include "pak_dir.h"
 #include "content.h"
 #include <errno.h>
 #ifndef _WIN32
@@ -249,17 +250,7 @@ static const char *FS_RetailPakGame( unsigned int checksum, int *index ) {
 // NOW defined in build files
 //#define PRE_RELEASE_TADEMO
 
-#define MAX_ZPATH			256
 #define	MAX_SEARCH_PATHS	4096
-#define MAX_FILEHASH_SIZE	1024
-
-typedef struct fileInPack_s {
-	char					*name;		// name of the file
-	unsigned long			pos;		// file info position in zip
-	unsigned long			len;		// uncompress file size
-	unsigned long			crc;		// its contents' CRC-32 (pakconflicts)
-	struct	fileInPack_s*	next;		// next file in the hash
-} fileInPack_t;
 
 typedef struct {
 	// in the pack's own block, after its hash table, each as long as it
@@ -522,31 +513,6 @@ return load stack
 int FS_LoadStack( void )
 {
 	return fs_loadStack;
-}
-
-/*
-================
-return a hash value for the filename
-================
-*/
-static long FS_HashFileName( const char *fname, int hashSize ) {
-	int		i;
-	long	hash;
-	char	letter;
-
-	hash = 0;
-	i = 0;
-	while (fname[i] != '\0') {
-		letter = tolower(fname[i]);
-		if (letter =='.') break;				// don't include extension
-		if (letter =='\\') letter = '/';		// damn path names
-		if (letter == PATH_SEP) letter = '/';		// damn path names
-		hash+=(long)(letter)*(i+119);
-		i++;
-	}
-	hash = (hash ^ (hash >> 10) ^ (hash >> 20));
-	hash &= (hashSize-1);
-	return hash;
 }
 
 static fileHandle_t	FS_HandleForFile(void) {
@@ -3211,14 +3177,6 @@ ZIP FILE LOADING
 
 /*
 =================
-FS_LoadZipFile
-
-Creates a new pak_t in the search chain for the contents
-of a zip file.
-=================
-*/
-/*
-=================
 FS_IsMapFile
 
 Whether a pak's file is a map, maps/<name>.bsp, with either separator, as
@@ -3243,77 +3201,44 @@ static qboolean FS_IsShaderFile( const char *name )
 	return !Q_stricmpn( name, "scripts/", 8 ) && COM_CompareExtension( name, ".shader" );
 }
 
+/*
+=================
+FS_LoadZipFile
+
+Creates a new pak_t in the search chain for the contents
+of a zip file.
+=================
+*/
 static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const char *pathname, const char *gamename)
 {
-	fileInPack_t	*buildBuffer;
 	pack_t			*pack;
 	unzFile			uf;
-	int				err;
 	unz_global_info gi;
-	char			filename_inzip[MAX_ZPATH];
-	unz_file_info	file_info;
-	int				i, numfiles, len, baseLength;
-	long			hash;
-	int				fs_numHeaderLongs;
-	int				*fs_headerLongs;
-	char			*namePtr;
-
-	fs_numHeaderLongs = 0;
+	int				i, numfiles, len, hashSize, baseLength;
 
 	uf = unzOpen(zipfile);
-	err = unzGetGlobalInfo (uf,&gi);
-
-	if (err != UNZ_OK) {
+	if (unzGetGlobalInfo (uf,&gi) != UNZ_OK) {
 		unzClose( uf );
 		return NULL;
 	}
 
-	len = 0;
-	unzGoToFirstFile(uf);
-	for (i = 0; i < gi.number_entry; i++)
-	{
-		err = unzGetCurrentFileInfo(uf, &file_info, filename_inzip, sizeof(filename_inzip), NULL, 0, NULL, 0);
-		if (err != UNZ_OK) {
-			break;
-		}
-		// unzip leaves a name that fills the buffer unterminated
-		filename_inzip[sizeof(filename_inzip) - 1] = '\0';
-		len += strlen(filename_inzip) + 1;
-		unzGoToNextFile(uf);
-	}
-	// a directory record that can't be read ends the list: the entries
-	// after it have no name
-	numfiles = i;
+	numfiles = PakDir_Count( uf, gi.number_entry, &len );
 	if ( numfiles < gi.number_entry ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: %s: read %d of its %d entries, so the rest are left out\n",
 			zipfile, numfiles, (int)gi.number_entry );
 	}
-
-	buildBuffer = Z_Malloc( (numfiles * sizeof( fileInPack_t )) + len );
-	namePtr = ((char *) buildBuffer) + numfiles * sizeof( fileInPack_t );
-	fs_headerLongs = Z_Malloc( ( numfiles + 1 ) * sizeof(int) );
-	fs_headerLongs[ fs_numHeaderLongs++ ] = LittleLong( fs_checksumFeed );
-
-	// get the hash table size from the number of files in the zip
-	// because lots of custom pk3 files have less than 32 or 64 files
-	for (i = 1; i <= MAX_FILEHASH_SIZE; i <<= 1) {
-		if (i > numfiles) {
-			break;
-		}
-	}
+	hashSize = PakDir_HashSize( numfiles );
 
 	// the base name without .pk3
 	baseLength = strlen( basename );
 	if ( baseLength > 4 && !Q_stricmp( basename + baseLength - 4, ".pk3" ) ) {
 		baseLength -= 4;
 	}
-	pack = Z_Malloc( sizeof( pack_t ) + i * sizeof(fileInPack_t *) + strlen( zipfile ) + 1 + baseLength + 1 +
+	pack = Z_Malloc( sizeof( pack_t ) + hashSize * sizeof(fileInPack_t *) + strlen( zipfile ) + 1 + baseLength + 1 +
 		strlen( pathname ) + 1 + strlen( gamename ) + 1 );
-	pack->hashSize = i;
+	// Z_Malloc clears the block, the hash table with it
+	pack->hashSize = hashSize;
 	pack->hashTable = (fileInPack_t **) (((char *) pack) + sizeof( pack_t ));
-	for(i = 0; i < pack->hashSize; i++) {
-		pack->hashTable[i] = NULL;
-	}
 
 	// the names after the hash table
 	pack->pakFilename = (char *)( pack->hashTable + pack->hashSize );
@@ -3327,46 +3252,17 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 	strcpy( pack->pakGamename, gamename );
 
 	pack->handle = uf;
-	unzGoToFirstFile(uf);
+	pack->numfiles = PakDir_Read( uf, numfiles, len, fs_checksumFeed, pack->hashTable, pack->hashSize,
+		&pack->buildBuffer, &pack->checksum, &pack->pure_checksum );
 
-	for (i = 0; i < numfiles; i++)
-	{
-		err = unzGetCurrentFileInfo(uf, &file_info, filename_inzip, sizeof(filename_inzip), NULL, 0, NULL, 0);
-		if (err != UNZ_OK) {
-			break;
-		}
-		// unzip leaves a name that fills the buffer unterminated
-		filename_inzip[sizeof(filename_inzip) - 1] = '\0';
-		if (file_info.uncompressed_size > 0) {
-			fs_headerLongs[fs_numHeaderLongs++] = LittleLong(file_info.crc);
-		}
-		Q_strlwr( filename_inzip );
-		// either separator, as the lookups take both (FS_FilenameCompare)
-		pack->holdsMap |= FS_IsMapFile( filename_inzip );
-		pack->holdsCode |= !strncmp( filename_inzip, "vm", 2 ) &&
-			( filename_inzip[2] == '/' || filename_inzip[2] == '\\' ) && COM_CompareExtension( filename_inzip, ".qvm" );
-		hash = FS_HashFileName(filename_inzip, pack->hashSize);
-		buildBuffer[i].name = namePtr;
-		strcpy( buildBuffer[i].name, filename_inzip );
-		namePtr += strlen(filename_inzip) + 1;
-		// store the file position in the zip
-		buildBuffer[i].pos = unzGetOffset(uf);
-		buildBuffer[i].len = file_info.uncompressed_size;
-		buildBuffer[i].crc = file_info.crc;
-		buildBuffer[i].next = pack->hashTable[hash];
-		pack->hashTable[hash] = &buildBuffer[i];
-		unzGoToNextFile(uf);
+	// either separator, as the lookups take both (FS_FilenameCompare)
+	for (i = 0; i < pack->numfiles; i++) {
+		const char	*name = pack->buildBuffer[i].name;
+
+		pack->holdsMap |= FS_IsMapFile( name );
+		pack->holdsCode |= !strncmp( name, "vm", 2 ) && ( name[2] == '/' || name[2] == '\\' ) &&
+			COM_CompareExtension( name, ".qvm" );
 	}
-	pack->numfiles = i;
-
-	pack->checksum = Com_BlockChecksum( &fs_headerLongs[ 1 ], sizeof(*fs_headerLongs) * ( fs_numHeaderLongs - 1 ) );
-	pack->pure_checksum = Com_BlockChecksum( fs_headerLongs, sizeof(*fs_headerLongs) * fs_numHeaderLongs );
-	pack->checksum = LittleLong( pack->checksum );
-	pack->pure_checksum = LittleLong( pack->pure_checksum );
-
-	Z_Free(fs_headerLongs);
-
-	pack->buildBuffer = buildBuffer;
 	return pack;
 }
 

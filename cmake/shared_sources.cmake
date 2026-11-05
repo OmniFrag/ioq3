@@ -32,6 +32,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/md4.c
     ${SOURCE_DIR}/qcommon/md5.c
     ${SOURCE_DIR}/qcommon/msg.c
+    ${SOURCE_DIR}/qcommon/pak_dir.c
     ${SOURCE_DIR}/qcommon/net_chan.c
     ${SOURCE_DIR}/qcommon/net_ip.c
     ${SOURCE_DIR}/qcommon/net_proxy.c
