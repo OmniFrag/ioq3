@@ -1226,6 +1226,8 @@ void		Log_Prepare( const char *ospath );
 // before a .log is opened to append to (FS_FOpenFileAppend_HomeData)
 long long	Log_SplitBytes( void );
 qboolean	Log_HasRoom( void );
+// the bytes the logs and their old files take, -1 before any log opens
+long long	Log_Bytes( void );
 void		Log_Check( void );
 void		Log_MapLoad( void );
 qboolean	Log_Paused( void );

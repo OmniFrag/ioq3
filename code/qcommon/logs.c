@@ -233,6 +233,12 @@ static qboolean Log_Archive( const char *name, int *day, int *number, qboolean *
 	return *number > 0;
 }
 
+// whether a file in a log's directory counts against the budget: a
+// finished log (Log_Archive says so), a log, or one being compressed
+static qboolean Log_Counts( const char *name, qboolean archive ) {
+	return archive || COM_CompareExtension( name, ".log" ) || COM_CompareExtension( name, ".log.gz.tmp" );
+}
+
 /*
 =============
 Log_Queue
@@ -616,8 +622,7 @@ static void Log_Prune( void ) {
 
 			// logs, and the one being compressed, count; only finished
 			// ones, not being compressed, may be deleted
-			if ( !archive && !COM_CompareExtension( names[i][j], ".log" ) &&
-				!COM_CompareExtension( names[i][j], ".log.gz.tmp" ) ) {
+			if ( !Log_Counts( names[i][j], archive ) ) {
 				continue;
 			}
 			Com_sprintf( path, sizeof( path ), "%s%c%s", logDirs[i], PATH_SEP, names[i][j] );
@@ -696,6 +701,40 @@ static void Log_Prune( void ) {
 			"free (com_logFreeSpace)\n", logPausedAt, com_logFreeSpace->integer );
 	}
 	pruning = qfalse;
+}
+
+/*
+=============
+Log_Bytes
+
+The bytes the logs and their old files take, as com_logSpace counts them:
+-1 while no log has been opened
+=============
+*/
+long long Log_Bytes( void ) {
+	long long	total = 0;
+	char		**names, path[MAX_OSPATH];
+	int			i, j, count, day, number;
+	qboolean	compressed;
+	struct stat	st;
+
+	if ( !numLogDirs ) {
+		return -1;
+	}
+	for ( i = 0; i < numLogDirs; i++ ) {
+		names = Sys_ListFiles( logDirs[i], "", NULL, &count, qfalse );
+		for ( j = 0; j < count; j++ ) {
+			if ( !Log_Counts( names[j], Log_Archive( names[j], &day, &number, &compressed ) ) ) {
+				continue;
+			}
+			Com_sprintf( path, sizeof( path ), "%s%c%s", logDirs[i], PATH_SEP, names[j] );
+			if ( stat( path, &st ) == 0 ) {
+				total += st.st_size;
+			}
+		}
+		Sys_FreeFileList( names );
+	}
+	return total;
 }
 
 /*
