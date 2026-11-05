@@ -44,8 +44,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CLC_SLOTS			2				// transfers open or asked for at once (section 6.1)
 #define CLC_MAX_PAKS		64				// missing paks a gamestate lists, at most
 #define CLC_MAX_DONE		64				// hashes a connection is done with
-#define CLC_LARGEST			OFD_MAX_LARGEST	// native UDP's datagrams
-#define CLC_CHUNK			OFD_MAX_CHUNK	// what CLC_LARGEST implies (OFD_ChunkSize)
 #define CLC_RECEIVED		4096			// packet numbers remembered for the acks
 #define CLC_ARRIVALS		32				// arrival times kept, for the ack spacing
 
@@ -194,6 +192,23 @@ enum {
 static const char *dropNames[DROP_COUNT] = {
 	"invalid", "address", "key", "state", "unasked", "stale", "range"
 };
+
+// The largest datagram a connection asks for (section 5.5), and the chunk
+// that implies (OFD_ChunkSize): native UDP's, or for a web client one its
+// data channel carries whole on the unordered channel, as a fragment
+// (NET_WEB_FRAGMENT_SIZE): one longer would go on the reliable channel,
+// ordered under the protocol's own acks and resends. By the address the
+// content datagrams go to and come from (CL_ContentSend, CL_ContentPacket)
+#if NET_WEB_FRAGMENT_SIZE < OFD_MIN_LARGEST
+#error "a web client's fragment must hold a content datagram"
+#endif
+static int CL_ContentLargest( void ) {
+	return clc.netchan.remoteAddress.type == NA_WEB ? MIN( NET_WEB_FRAGMENT_SIZE, OFD_MAX_LARGEST ) : OFD_MAX_LARGEST;
+}
+
+static int CL_ContentChunk( void ) {
+	return OFD_ChunkSize( CL_ContentLargest() );
+}
 
 static struct {
 	clcPhase_t		phase;
@@ -476,7 +491,7 @@ static int64_t CL_ContentWhole( const clcSlot_t *s ) {
 	if ( !s->open ) {
 		return s->offset;
 	}
-	return MIN( (int64_t)s->offset + (int64_t)s->cumulative * CLC_CHUNK, (int64_t)s->fileSize );
+	return MIN( (int64_t)s->offset + (int64_t)s->cumulative * CL_ContentChunk(), (int64_t)s->fileSize );
 }
 
 /*
@@ -674,9 +689,9 @@ static qboolean CL_ContentRaceDropped( int fetch, int lane, const char *why ) {
 	}
 	// every chunk the fast lane has, as CL_ContentData counts them
 	if ( lane == CLC_LANE_WEB ) {
-		f->valid = (int64_t)s->offset + (int64_t)s->chunks * CLC_CHUNK;
+		f->valid = (int64_t)s->offset + (int64_t)s->chunks * CL_ContentChunk();
 		if ( s->chunks && CL_ContentHas( s->have, s->numChunks - 1 ) ) {
-			f->valid -= (int64_t)s->offset + (int64_t)s->numChunks * CLC_CHUNK - s->fileSize;
+			f->valid -= (int64_t)s->offset + (int64_t)s->numChunks * CL_ContentChunk() - s->fileSize;
 		}
 	}
 	Com_Printf( "%s/%s.pk3 comes %s alone: %s\n", f->gameDir, f->name,
@@ -845,10 +860,11 @@ sends again only what it hasn't seen acked (section 6.2)
 =================
 */
 static qboolean CL_ContentData( clcSlot_t *s, const ofdData_t *data, byte flags, int64_t now ) {
-	int64_t		at = (int64_t)s->offset + (int64_t)data->chunkIndex * CLC_CHUNK;
+	int			chunk = CL_ContentChunk();
+	int64_t		at = (int64_t)s->offset + (int64_t)data->chunkIndex * chunk;
 	qboolean	last = data->chunkIndex == s->numChunks - 1;
 
-	if ( data->chunkIndex >= s->numChunks || data->length != ( last ? s->fileSize - at : CLC_CHUNK ) ||
+	if ( data->chunkIndex >= s->numChunks || data->length != ( last ? s->fileSize - at : chunk ) ||
 		!( flags & OFD_FLAG_LAST ) != !last ) {
 		clContent.drops[DROP_RANGE]++;
 		return qtrue;
@@ -1006,7 +1022,7 @@ static void CL_ContentOverflowed( uint32_t pn ) {
 	if ( clContent.receiveWindow <= floor || pn <= clContent.overflowUntil ) {
 		return;
 	}
-	clContent.overflowUntil = pn + clContent.receiveWindow / OFD_MAX_DATAGRAM;
+	clContent.overflowUntil = pn + clContent.receiveWindow / ( OFD_HEADER_SIZE + OFD_DATA_HEADER + CL_ContentChunk() );
 	clContent.receiveWindow = MAX( clContent.receiveWindow / 2, floor );
 	if ( !clContent.overflowShown ) {
 		clContent.overflowShown = qtrue;
@@ -1049,7 +1065,7 @@ static void CL_ContentSend( int64_t now ) {
 		}
 		r->offset = s->offset;
 		r->requestClass = OFD_CLASS_LOADING;
-		r->largest = CLC_LARGEST;
+		r->largest = CL_ContentLargest();
 		s->lastSent = now;
 		if ( !s->firstSent ) {
 			s->firstSent = now;
@@ -1238,7 +1254,7 @@ static void CL_ContentOpen( const ofdOpen_t *open ) {
 
 	// what the request implies, and the content manifest says
 	// and a serial no other open transfer has (never 0, which the codec checks)
-	if ( open->kind != ( f ? OFD_KIND_PAK : OFD_KIND_MANIFEST ) || chunk != CLC_CHUNK ||
+	if ( open->kind != ( f ? OFD_KIND_PAK : OFD_KIND_MANIFEST ) || chunk != CL_ContentChunk() ||
 		open->startOffset != s->offset ||
 		( f && ( open->fileSize != f->size || memcmp( open->sha256, f->sha256, SHA256_DIGEST_SIZE ) ) ) ||
 		CL_ContentFindSlot( open->serial, 0 ) ) {

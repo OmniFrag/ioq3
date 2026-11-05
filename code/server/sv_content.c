@@ -775,8 +775,9 @@ static void SV_ContentAdmit( void *arg, const ofdRequest_t *request, int slot, s
 			return;
 		}
 		f->block = Z_Malloc( CONTENT_BLOCK );
-		Com_Printf( "Fast download: client %d gets %s from byte %u\n", (int)( cl - svs.clients ),
-			strrchr( ospath, PATH_SEP ) ? strrchr( ospath, PATH_SEP ) + 1 : ospath, request->offset );
+		Com_Printf( "Fast download: client %d gets %s from byte %u, in datagrams of %d bytes\n",
+			(int)( cl - svs.clients ), strrchr( ospath, PATH_SEP ) ? strrchr( ospath, PATH_SEP ) + 1 : ospath,
+			request->offset, request->largest );
 	}
 	f->blockStart = -1;
 	Com_Memcpy( f->sha256, out->sha256, SHA256_DIGEST_SIZE );
