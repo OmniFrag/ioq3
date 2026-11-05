@@ -1450,6 +1450,23 @@ void Sys_PlatformForceStop( int signal, const char *message, const char *pidFile
 
 /*
 ==============
+Sys_PlatformAppendFile
+==============
+*/
+void Sys_PlatformAppendFile( const char *path, const char *text, int length )
+{
+	HANDLE	f = CreateFileA( path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
+	DWORD	written;
+
+	if( f == INVALID_HANDLE_VALUE )
+		return;
+	WriteFile( f, text, (DWORD)length, &written, NULL );
+	CloseHandle( f );
+}
+
+/*
+==============
 Sys_PlatformInit
 
 Windows specific initialisation

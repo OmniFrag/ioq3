@@ -1731,6 +1731,24 @@ void Sys_PlatformForceStop( int stopped, const char *message, const char *pidFil
 
 /*
 ==============
+Sys_PlatformAppendFile
+==============
+*/
+void Sys_PlatformAppendFile( const char *path, const char *text, int length )
+{
+	int f = open( path, O_WRONLY | O_APPEND );
+
+	if( f == -1 )
+		return;
+	if( write( f, text, length ) != length )
+	{
+		// nowhere to say it
+	}
+	close( f );
+}
+
+/*
+==============
 Sys_PlatformInit
 
 Unix specific initialisation

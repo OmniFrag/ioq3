@@ -434,6 +434,89 @@ static Q_NO_RETURN void Sys_Exit( int exitCode )
 	exit( exitCode );
 }
 
+static char *Sys_StopAppend( char *p, const char *end, const char *text, int number );
+
+// the file the program's end is noted in (Sys_SetExitNote), "" for none
+static char exitNotePath[ MAX_OSPATH ];
+
+/*
+=================
+Sys_SetExitNote
+=================
+*/
+void Sys_SetExitNote( const char *path )
+{
+	Q_strncpyz( exitNotePath, path ? path : "", sizeof( exitNotePath ) );
+}
+
+/*
+=================
+Sys_SignalName
+
+A signal's name, which is the same on every system where its number may
+not be, and what it means, as the system's own messages say: "SIGSEGV
+Segmentation fault"; or NULL
+=================
+*/
+static const char *Sys_SignalName( int signal )
+{
+	switch( signal )
+	{
+		case SIGSEGV: return "SIGSEGV Segmentation fault";
+		case SIGILL: return "SIGILL Illegal instruction";
+		case SIGFPE: return "SIGFPE Floating point exception";
+		case SIGABRT: return "SIGABRT Aborted";
+		case SIGTERM: return "SIGTERM Terminated";
+		case SIGINT: return "SIGINT Interrupt";
+#ifdef SIGBUS
+		case SIGBUS: return "SIGBUS Bus error";
+#endif
+#ifdef SIGTRAP
+		case SIGTRAP: return "SIGTRAP Trace/breakpoint trap";
+#endif
+#ifdef SIGQUIT
+		case SIGQUIT: return "SIGQUIT Quit";
+#endif
+#ifdef SIGHUP
+		case SIGHUP: return "SIGHUP Hangup";
+#endif
+		default: return NULL;
+	}
+}
+
+/*
+=================
+Sys_NoteExit
+
+Appends how the program ends to the exit note's file, if there is one
+and it's there: "end <how> <number>", then the signal's name and meaning
+or the error's message on the same line. Safe in a signal's handler
+=================
+*/
+static void Sys_NoteExit( const char *how, int number, const char *text )
+{
+	char  line[ 320 ];
+	char  *p = line, *end = line + sizeof( line ) - 1;
+
+	if( !exitNotePath[ 0 ] )
+		return;
+
+	p = Sys_StopAppend( p, end, "end ", -1 );
+	p = Sys_StopAppend( p, end, how, -1 );
+	if( number >= 0 )
+		p = Sys_StopAppend( p, end, " ", number );
+	if( text && *text )
+	{
+		p = Sys_StopAppend( p, end, " ", -1 );
+		// one line, however many the message has
+		for( ; *text && p < end; text++ )
+			*p++ = (unsigned char)*text < ' ' ? ' ' : *text;
+	}
+	*p++ = '\n';
+
+	Sys_PlatformAppendFile( exitNotePath, line, (int)( p - line ) );
+}
+
 /*
 =================
 Sys_Quit
@@ -441,6 +524,7 @@ Sys_Quit
 */
 void Sys_Quit( void )
 {
+	Sys_NoteExit( "quit", -1, NULL );
 	Sys_Exit( 0 );
 }
 
@@ -610,6 +694,8 @@ void Sys_Error( const char *error, ... )
 	Q_vsnprintf (string, sizeof(string), error, argptr);
 	va_end (argptr);
 
+	// before the dialog, which a client may leave open
+	Sys_NoteExit( "error", 3, string );
 	Sys_ErrorDialog( string );
 
 	Sys_Exit( 3 );
@@ -626,6 +712,7 @@ would offer safe settings at the next start
 */
 void Sys_ErrorExit( int status, const char *message )
 {
+	Sys_NoteExit( "exit", status, message );
 	Sys_Dialog( DT_ERROR, message, "Error" );
 
 	Sys_RemovePIDFile( );
@@ -1101,6 +1188,8 @@ void Sys_ForceStop( int signal, int seconds )
 	}
 	*p = '\0';
 
+	// a stop not answered in time, or asked for again before the quit
+	Sys_NoteExit( seconds > 0 ? "timeout" : "again", signal, Sys_SignalName( signal ) );
 	Sys_PlatformForceStop( signal, message,
 		!Com_IsClient( ) && pidFileWritten[ 0 ] ? pidFileWritten : NULL );
 }
@@ -1169,6 +1258,14 @@ void Sys_SigHandler( int signal )
 	else
 	{
 		signalcaught = qtrue;
+		// first, as the shutdown below may fault again; SIGQUIT is a stop
+		// at once that someone asked for, not a crash
+#ifdef SIGQUIT
+		if( signal == SIGQUIT )
+			Sys_NoteExit( "stop", signal, Sys_SignalName( signal ) );
+		else
+#endif
+			Sys_NoteExit( "signal", signal, Sys_SignalName( signal ) );
 		// what code built with -fsanitize-trap=bounds (or gcc's
 		// -fsanitize-undefined-trap-on-error) raises on an index past an
 		// array's end, rather than read or write beyond it: an illegal

@@ -1918,6 +1918,17 @@ char	**Sys_Environment( void );
 
 void	QDECL Sys_Error( const char *error, ...) Q_NO_RETURN Q_PRINTF_FUNC(1, 2);
 void	Sys_ErrorExit( int status, const char *message ) Q_NO_RETURN;
+void	Sys_SetExitNote( const char *path );
+// a file, there already, that the program's end is noted in, a line it
+// appends as it exits: "end quit", "end signal 11 SIGSEGV Segmentation
+// fault" (a fatal signal, by its name and what it means), "end stop 3
+// SIGQUIT Quit" (a stop at once, asked for), "end timeout 15 SIGTERM
+// Terminated" (a stop it didn't answer in time), "end again 2 SIGINT
+// Interrupt" (a stop asked for again before it quit), "end error 3
+// <message>" (Sys_Error), "end exit <status> <message>" (Sys_ErrorExit).
+// An end that runs no code, as SIGKILL's or a power cut's, notes nothing,
+// so a file a program writes as it starts and finds again with no end
+// tells it the last run was killed. NULL or "" for none
 void	Sys_Quit (void) Q_NO_RETURN;
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 void	Sys_SetClipboardData( const char *text );

@@ -87,6 +87,8 @@ void Sys_SigHandler( int signal );
 void Sys_StopTimedOut( void );
 void Sys_PlatformStopTimer( int seconds );
 void Sys_PlatformForceStop( int signal, const char *message, const char *pidFile );
+// appends to a file that's there, making none: safe in a signal's handler
+void Sys_PlatformAppendFile( const char *path, const char *text, int length );
 void Sys_ErrorDialog( const char *error );
 dialogResult_t Sys_PlatformDialog( dialogType_t type, const char *message, const char *title );
 void Sys_AnsiColorPrint( const char *msg );
