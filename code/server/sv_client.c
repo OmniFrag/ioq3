@@ -801,6 +801,10 @@ gotnewcl:
 #else
 	Netchan_Setup(NS_SERVER, &newcl->netchan, from, qport, challenge, qfalse);
 #endif
+	newcl->proxied = NET_PacketProxied();
+	if ( !newcl->proxied ) {
+		NET_ProxyForget( &from );
+	}
 	if ( fragmentSize ) {
 		Netchan_SetFragmentSize( &newcl->netchan, fragmentSize );
 		// a web client's, which an admin may want to tell apart
@@ -908,6 +912,31 @@ void SV_FreeClient(client_t *client)
 	SV_Netchan_FreeQueue(client);
 	SV_CloseDownload(client);
 	SV_ContentFreeClient(client);
+}
+
+/*
+=====================
+SV_ClientAt
+
+Whether a client in the game is at this address. With directOnly, only one
+that came directly: a trusted proxy that names it is never believed, as
+its route would send that client's game to the proxy
+=====================
+*/
+qboolean SV_ClientAt( const netadr_t *adr, qboolean directOnly ) {
+	client_t	*cl;
+	int			i;
+
+	if ( !com_sv_running || !com_sv_running->integer || !svs.clients ) {
+		return qfalse;
+	}
+	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+		if ( cl->state >= CS_CONNECTED && !( directOnly && cl->proxied )
+			&& NET_CompareAdr( *adr, cl->netchan.remoteAddress ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*

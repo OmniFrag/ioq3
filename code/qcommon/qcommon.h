@@ -1860,6 +1860,9 @@ void SV_Shutdown( char *finalmsg );
 qboolean SV_RestartAfterError( char *why, int size );
 void SV_Frame( int msec );
 void SV_PacketEvent( netadr_t from, msg_t *msg );
+// whether a client in the game is at this address: with directOnly, one
+// that came directly, so a proxy naming it is never believed
+qboolean SV_ClientAt( const netadr_t *adr, qboolean directOnly );
 int SV_FrameMsec(void);
 int SV_FrameLength( void );
 qboolean SV_GameCommand( void );
@@ -2058,6 +2061,9 @@ qboolean	NET_ProxySocketAddress( netadr_t *out );
 // closes it, retiring the routes through it, whose players' replies are
 // dropped until they go stale
 void		NET_CloseProxySocket( void );
+// forgets the route a proxy left for the address of a player who
+// connected directly
+void		NET_ProxyForget( const netadr_t *player );
 // whether a trusted proxy named the address of the packet being handled
 qboolean	NET_PacketProxied( void );
 

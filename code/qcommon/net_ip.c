@@ -1236,6 +1236,13 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 		Com_Memcpy( player.ip, h.src, 4 );
 	}
 	player.port = BigShort( (short)h.srcPort );
+	// a player in the game directly: a proxy naming them is lying, or
+	// passing on a datagram whose source was spoofed, and keeping a route
+	// would send that player's game to the proxy
+	if( SV_ClientAt( &player, qtrue ) ) {
+		Com_DPrintf( "%s: a proxy named a player in the game directly, dropped\n", NET_AdrToStringwPort( player ) );
+		return qfalse;
+	}
 	NET_ProxyKeep( &player, from, &h );
 	*from = player;
 	netPacketProxied = qtrue;
@@ -1243,6 +1250,22 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 	msg->cursize -= length;
 	memmove( msg->data, msg->data + length, msg->cursize );
 	return qtrue;
+}
+
+/*
+==================
+NET_ProxyForget
+
+A player who connected directly, by a challenge's round trip, which no one
+spoofing their address could make: a route a proxy left for their address
+is forgotten, so their game goes to them
+==================
+*/
+void NET_ProxyForget( const netadr_t *player ) {
+	netProxyRoute_t	*r = NET_ProxyRoute( player );
+
+	if( r )
+		Com_Memset( r, 0, sizeof( *r ) );
 }
 
 /*

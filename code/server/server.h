@@ -254,6 +254,7 @@ typedef struct client_s {
 
 	int				oldServerTime;
 	qboolean		csUpdated[MAX_CONFIGSTRINGS];
+	qboolean		proxied;		// it connected through a trusted proxy, which names its address
 	
 #ifdef LEGACY_PROTOCOL
 	qboolean		compat;

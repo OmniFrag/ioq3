@@ -1412,6 +1412,12 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 				i, (unsigned short)BigShort( cl->netchan.remoteAddress.port ),
 				(unsigned short)BigShort( from.port ) );
 			cl->netchan.remoteAddress.port = from.port;
+			// it may have come another way: through a proxy, or directly
+			// where a proxy's route was left
+			cl->proxied = NET_PacketProxied();
+			if ( !cl->proxied ) {
+				NET_ProxyForget( &from );
+			}
 			SV_ClientPacket( cl, msg );
 			return;
 		}
