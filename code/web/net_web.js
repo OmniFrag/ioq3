@@ -144,7 +144,12 @@ addToLibrary({
         var at = c.address.lastIndexOf(':');
         var ip = c.address.slice(0, at).replace(/^\[|\]$/g, ''), port = c.address.slice(at + 1);
         var priority = (preference[c.kind] << 24 | (65535 - i) << 8 | 255) >>> 0;
-        lines.push('a=candidate:' + (i + 1) + ' 1 udp ' + priority + ' ' + ip + ' ' + port + ' typ ' + c.kind);
+        // Firefox drops a candidate other than a host one without its
+        // related address; the answer doesn't carry the gateway's base, and
+        // the unspecified address of the candidate's family, port 0, is
+        // the form a browser itself writes to hide one
+        lines.push('a=candidate:' + (i + 1) + ' 1 udp ' + priority + ' ' + ip + ' ' + port + ' typ ' + c.kind
+          + (c.kind == 'host' ? '' : ' raddr ' + (ip.includes(':') ? '::' : '0.0.0.0') + ' rport 0'));
       });
       lines.push('a=end-of-candidates');
       return lines.join('\r\n') + '\r\n';
