@@ -1106,13 +1106,18 @@ static qboolean NET_ProxyRetired( const netProxyRoute_t *r ) {
 	return r->onProxySocket && ( r->proxyGeneration != netProxyGeneration || proxy_socket == INVALID_SOCKET );
 }
 
+// unused for NET_PROXY_STALE
+static qboolean NET_ProxyStale( const netProxyRoute_t *r, int now ) {
+	return now - r->lastUsed >= NET_PROXY_STALE;
+}
+
 // whether a route's slot may go to another player: empty, or unused long
 // enough. A retired one also holds while a client is at its address, as
 // its slot freed would send that client's replies straight to the address
 static qboolean NET_ProxyFree( const netProxyRoute_t *r, int now ) {
 	if( !r->lastUsed )
 		return qtrue;
-	return now - r->lastUsed >= NET_PROXY_STALE && !( NET_ProxyRetired( r ) && SV_ClientAt( &r->player, qfalse ) );
+	return NET_ProxyStale( r, now ) && !( NET_ProxyRetired( r ) && SV_ClientAt( &r->player, qfalse ) );
 }
 
 // whether r may be given to another player before s: empty or stale
@@ -1192,6 +1197,22 @@ static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const pr
 	netProxyRouted = qtrue;
 }
 
+// a datagram straight from an address whose route is retired or stale: the
+// route is forgotten, so the address is answered directly, as a later
+// subscriber of a carrier NAT's given the address would need to join. A
+// player behind a proxy keeps theirs fresh, and one still in the game
+// keeps theirs, retired or not, so no one spoofing the address can turn
+// that client's game toward it
+static void NET_ProxyCameDirectly( const netadr_t *from ) {
+	netProxyRoute_t	*r = NET_ProxyRoute( from );
+
+	if( r && ( NET_ProxyRetired( r ) || NET_ProxyStale( r, Sys_Milliseconds() | 1 ) )
+		&& !SV_ClientAt( &r->player, qfalse ) ) {
+		Com_DPrintf( "%s: came directly, so its stale route is forgotten\n", NET_AdrToStringwPort( *from ) );
+		NET_ProxyForget( from );
+	}
+}
+
 /*
 ==================
 NET_ProxyInbound
@@ -1234,8 +1255,10 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 		msg->cursize = offset + length;
 		length = offset;
 	} else {
-		if( !netTrustedCount || !NET_IsTrustedProxy( from ) )
+		if( !netTrustedCount || !NET_IsTrustedProxy( from ) ) {
+			NET_ProxyCameDirectly( from );
 			return qtrue;
+		}
 		length = NET_ProxyRead( msg->data, msg->cursize, &h );
 		if( length <= 0 ) {
 			Com_DPrintf( "%s: a trusted proxy's datagram without a PROXY header, dropped\n", NET_AdrToStringwPort( *from ) );
