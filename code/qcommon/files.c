@@ -2932,7 +2932,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 	unz_global_info gi;
 	char			filename_inzip[MAX_ZPATH];
 	unz_file_info	file_info;
-	int				i, len, baseLength;
+	int				i, numfiles, len, baseLength;
 	long			hash;
 	int				fs_numHeaderLongs;
 	int				*fs_headerLongs;
@@ -2961,16 +2961,23 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 		len += strlen(filename_inzip) + 1;
 		unzGoToNextFile(uf);
 	}
+	// a directory record that can't be read ends the list: the entries
+	// after it have no name
+	numfiles = i;
+	if ( numfiles < gi.number_entry ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s: read %d of its %d entries, so the rest are left out\n",
+			zipfile, numfiles, (int)gi.number_entry );
+	}
 
-	buildBuffer = Z_Malloc( (gi.number_entry * sizeof( fileInPack_t )) + len );
-	namePtr = ((char *) buildBuffer) + gi.number_entry * sizeof( fileInPack_t );
-	fs_headerLongs = Z_Malloc( ( gi.number_entry + 1 ) * sizeof(int) );
+	buildBuffer = Z_Malloc( (numfiles * sizeof( fileInPack_t )) + len );
+	namePtr = ((char *) buildBuffer) + numfiles * sizeof( fileInPack_t );
+	fs_headerLongs = Z_Malloc( ( numfiles + 1 ) * sizeof(int) );
 	fs_headerLongs[ fs_numHeaderLongs++ ] = LittleLong( fs_checksumFeed );
 
 	// get the hash table size from the number of files in the zip
 	// because lots of custom pk3 files have less than 32 or 64 files
 	for (i = 1; i <= MAX_FILEHASH_SIZE; i <<= 1) {
-		if (i > gi.number_entry) {
+		if (i > numfiles) {
 			break;
 		}
 	}
@@ -3000,10 +3007,9 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 	strcpy( pack->pakGamename, gamename );
 
 	pack->handle = uf;
-	pack->numfiles = gi.number_entry;
 	unzGoToFirstFile(uf);
 
-	for (i = 0; i < gi.number_entry; i++)
+	for (i = 0; i < numfiles; i++)
 	{
 		err = unzGetCurrentFileInfo(uf, &file_info, filename_inzip, sizeof(filename_inzip), NULL, 0, NULL, 0);
 		if (err != UNZ_OK) {
@@ -3031,6 +3037,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 		pack->hashTable[hash] = &buildBuffer[i];
 		unzGoToNextFile(uf);
 	}
+	pack->numfiles = i;
 
 	pack->checksum = Com_BlockChecksum( &fs_headerLongs[ 1 ], sizeof(*fs_headerLongs) * ( fs_numHeaderLongs - 1 ) );
 	pack->pure_checksum = Com_BlockChecksum( fs_headerLongs, sizeof(*fs_headerLongs) * fs_numHeaderLongs );
