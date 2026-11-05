@@ -3,13 +3,14 @@
 // two data channels the gateway agrees by id, "q3" unordered and never
 // resent, "oob" reliable.
 //
-// A connection's offer goes to its signal, a path on the page's own server,
-// as fields rather than SDP (docs/contracts.md section 9): the ICE username
-// fragment and password, the DTLS certificate's SHA-256, and the
-// candidates. The answer comes back as the same fields, from which the
-// remote description is written; the gateway is the DTLS client. Joining
-// by code finds the answer through the rendezvous instead, and only that
-// part changes.
+// A connection's offer goes to its signal as fields rather than SDP
+// (docs/contracts.md section 9): the ICE username fragment and password,
+// the DTLS certificate's SHA-256, and the candidates. The answer comes back
+// as the same fields, from which the remote description is written; the
+// gateway is the DTLS client. The signal is a function: rtc_connect's
+// posts to a path on the page's own server (NetWeb.post), and joining by
+// code's (the game's own join_web.js) asks the rendezvous and checks the
+// answer's signature, with this file unchanged.
 //
 // Packets the engine sends before both channels open wait, a few, and go
 // then. Received ones wait in one queue for the engine's next frame; past
@@ -35,15 +36,20 @@ addToLibrary({
     GATHER_MS: 3000,
     OPEN_MS: 10000,
 
+    // A connection whose offer goes to signal, a function of the offer's
+    // fields that resolves to the answer's, or to { refused: why }. Its
+    // errors end the connection, an Error with plain set in its own words.
     // oobAbove: a connectionless packet longer than this goes on oob, as
     // the gateway's replies do: an unreliable message that long is split
-    // by SCTP, and lost with either part
-    open: function(signal, oobAbove) {
+    // by SCTP, and lost with either part. iceServers: RTCIceServers for
+    // the browser's own candidates. The connection's id, or 0 without
+    // WebRTC
+    openWith: function(signal, oobAbove, iceServers) {
       if (typeof RTCPeerConnection != 'function' || NetWeb.next > 65535) return 0;
       var peer = { id: NetWeb.next++, oobAbove: oobAbove, pending: [], open: false, failure: '', closed: false };
       NetWeb.peers[peer.id] = peer;
-      NetWeb.start(peer, signal).catch(function(e) {
-        NetWeb.fail(peer, 'The connection to the server failed: ' + (e && e.message || e) + '.');
+      NetWeb.start(peer, signal, iceServers || []).catch(function(e) {
+        NetWeb.fail(peer, e && e.plain ? e.message : 'The connection to the server failed: ' + (e && e.message || e) + '.');
       });
       return peer.id;
     },
@@ -59,8 +65,40 @@ addToLibrary({
       }
     },
 
-    start: async function(peer, signal) {
-      var pc = peer.pc = new RTCPeerConnection();
+    // A POST of body to url, on the page's own server, within OPEN_MS: its
+    // response's status, ok and json(), the body read within the time too.
+    // The URL parser reads a backslash as a slash and drops tabs, so the
+    // origin is checked after it, not on the text
+    request: async function(url, body) {
+      url = new URL(url, location.href);
+      if (url.origin != location.origin) throw new Error('its signal is on another server');
+      // a signal that never answers fails, as no route would, and so does
+      // one whose headers come and whose body doesn't
+      var abort = new AbortController();
+      var timer = setTimeout(function() { abort.abort(); }, NetWeb.OPEN_MS);
+      try {
+        var response = await fetch(url, { method: 'POST', body: body, signal: abort.signal });
+        var text = await response.text();
+        return { status: response.status, ok: response.ok, json: async function() { return JSON.parse(text); } };
+      } catch (e) {
+        throw abort.signal.aborted ? new Error("its signal didn't answer") : e;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+
+    // the signal of a path on the page's own server, which answers the
+    // offer's fields with the answer's
+    post: function(path) {
+      return async function(offer) {
+        var response = await NetWeb.request(path, JSON.stringify(offer));
+        if (!response.ok) throw new Error('its signal answered ' + response.status);
+        return response.json();
+      };
+    },
+
+    start: async function(peer, signal, iceServers) {
+      var pc = peer.pc = new RTCPeerConnection({ iceServers: iceServers });
       peer.q3 = pc.createDataChannel('q3', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
       peer.oob = pc.createDataChannel('oob', { negotiated: true, id: 1 });
       [peer.q3, peer.oob].forEach(function(channel) {
@@ -85,23 +123,7 @@ addToLibrary({
       ]);
       if (peer.closed) return;
 
-      // on the page's own server only: the URL parser reads a backslash as
-      // a slash and drops tabs, so "/\host" would be another server's
-      var url = new URL(signal, location.href);
-      if (url.origin != location.origin) throw new Error('its signal is on another server');
-      // and a signal that never answers fails, as no route would
-      var abort = new AbortController();
-      var timer = setTimeout(function() { abort.abort(); }, NetWeb.OPEN_MS);
-      var answer;
-      try {
-        var response = await fetch(url, { method: 'POST', body: JSON.stringify(NetWeb.offer(pc.localDescription.sdp)), signal: abort.signal });
-        if (!response.ok) throw new Error('its signal answered ' + response.status);
-        answer = await response.json();
-      } catch (e) {
-        throw abort.signal.aborted ? new Error("its signal didn't answer") : e;
-      } finally {
-        clearTimeout(timer);
-      }
+      var answer = await signal(NetWeb.offer(pc.localDescription.sdp));
       if (peer.closed) return;
       if (answer && typeof answer.refused == 'string') {
         throw new Error('the server turned it down (' + answer.refused.slice(0, 40) + ')');
@@ -210,7 +232,7 @@ addToLibrary({
 
   NetWeb_Open__deps: ['$NetWeb', '$UTF8ToString'],
   NetWeb_Open: function(signal, oobAbove) {
-    return NetWeb.open(UTF8ToString(signal), oobAbove);
+    return NetWeb.openWith(NetWeb.post(UTF8ToString(signal)), oobAbove);
   },
 
   NetWeb_Send__deps: ['$NetWeb'],

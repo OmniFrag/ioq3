@@ -1877,7 +1877,10 @@ static void CL_ConnectBegin( const char *server ) {
 // what goes by the server's address: the paks played with the player's
 // own versions, and the GUID
 static void CL_ConnectTarget( void ) {
-	const char	*serverString = NET_AdrToStringwPort(clc.serverAddress);
+	// a web connection's address is an id that starts again in each page,
+	// so a join, which expects the server's key, goes by its fingerprint
+	const char	*serverString = clc.serverAddress.type == NA_WEB && clc.expectedFingerprint[0] ?
+		clc.expectedFingerprint : NET_AdrToStringwPort( clc.serverAddress );
 
 	// the paks played with the player's own versions are that server's
 	if ( !NET_CompareAdr( clc.serverAddress, cls.ownVersionsServer ) ) {
@@ -2015,8 +2018,9 @@ CL_RtcConnect_f
 rtc_connect <path>: a connect through the browser (P7). The page opens a
 WebRTC connection and posts its offer to the path, on the page's own
 server, which answers with the server's gateway's; the connect then goes
-over that connection as over UDP. Joining by code will find the answer
-through the rendezvous instead; until then this is for tests
+over that connection as over UDP. For tests that play the rendezvous's
+part themselves: players join by code, whose answer comes through the
+rendezvous
 ================
 */
 static void CL_RtcConnect_f( void ) {
