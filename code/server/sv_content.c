@@ -54,6 +54,7 @@ typedef struct {
 static svManifest_t	svManifests[2];		// the current one, then the one before
 static byte			svBuildBuffer[OFCM_MAX_SIZE];
 static qboolean		svHashQueued;		// a pak changed since the last build: FS_HashPaks ran
+static int			svUnhashedSaid;		// the paks not hashed yet, as the last manifest line said
 // the index learned hashes since the last build, and when that was: while
 // it hashes, at most a build a second, as each one stats every pak and
 // gives the manifest a new hash the clients are told, and only the last two
@@ -269,6 +270,7 @@ void SV_ContentBuildManifest( void ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: no content manifest: %s, so every pak is sent the classic way\n", error );
 		return;
 	}
+	svHashQueued = qfalse;
 	if ( !built.data ) {
 		// the same as the current one, but a pak hashed again since, as
 		// one touched, has a new time: where the paks are, as they are now
@@ -276,19 +278,21 @@ void SV_ContentBuildManifest( void ) {
 		svManifests[0].paks = built.paks;
 		svManifests[0].numPaks = built.numPaks;
 		svManifests[0].paths = built.paths;
-		svHashQueued = qfalse;
-		return;
+	} else {
+		SV_ContentFree( &svManifests[1] );
+		svManifests[1] = svManifests[0];
+		svManifests[0] = built;
+		SV_ContentCloseGone();
 	}
-
-	SV_ContentFree( &svManifests[1] );
-	svManifests[1] = svManifests[0];
-	svManifests[0] = built;
-	svHashQueued = qfalse;
-	SV_ContentCloseGone();
-
-	Com_SHA256Hex( built.sha256, hex );
-	Com_Printf( "Content manifest %.12s: %d paks required (%llu bytes), %d optional; %d not hashed yet\n",
-		hex, header.numRequired, (unsigned long long)header.requiredBytes, header.numOptional, unhashed );
+	// the bytes hold all the line says but the paks not hashed yet, so it's
+	// said again when only that count changed, as when paks past the most a
+	// manifest holds are hashed
+	if ( built.data || unhashed != svUnhashedSaid ) {
+		svUnhashedSaid = unhashed;
+		Com_SHA256Hex( svManifests[0].sha256, hex );
+		Com_Printf( "Content manifest %.12s: %d paks required (%llu bytes), %d optional; %d not hashed yet\n",
+			hex, header.numRequired, (unsigned long long)header.requiredBytes, header.numOptional, unhashed );
+	}
 }
 
 /*
