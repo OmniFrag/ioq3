@@ -148,6 +148,18 @@ static SOCKET	ip_socket = INVALID_SOCKET;
 static SOCKET	ip6_socket = INVALID_SOCKET;
 static SOCKET	socks_socket = INVALID_SOCKET;
 static SOCKET	multicast6_socket = INVALID_SOCKET;
+// the gateway's own, on loopback (NET_ProxySocketAddress), and its address
+static SOCKET	proxy_socket = INVALID_SOCKET;
+static netadr_t	proxy_socket_adr;
+// the packet being handled came on proxy_socket, and the one being sent
+// goes out of it
+static qboolean	netFromProxySocket, netSendOnProxySocket;
+// counts the gateway socket's openings and secrets: a route from an earlier
+// one is retired
+static int		netProxyGeneration;
+
+SOCKET	NET_IPSocket( char *net_interface, int port, int *err );
+SOCKET	NET_IP6Socket( char *net_interface, int port, struct sockaddr_in6 *bindto, int *err );
 
 // Keep track of currently joined multicast group.
 static struct ipv6_mreq curgroup;
@@ -165,6 +177,7 @@ typedef struct {
 	qboolean ip;
 	qboolean ip6;
 	qboolean multicast6;
+	qboolean proxy;
 } netsocks_t;
 
 #define	MAX_IPS		32
@@ -612,6 +625,27 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 	struct sockaddr_storage from;
 	socklen_t	fromlen;
 	int		err;
+
+	netFromProxySocket = qfalse;
+	if(proxy_socket != INVALID_SOCKET && readsocks->proxy)
+	{
+		fromlen = sizeof(from);
+		ret = recvfrom( proxy_socket, (void *)net_message->data, net_message->maxsize, 0, (struct sockaddr *) &from, &fromlen );
+		if (ret == SOCKET_ERROR)
+		{
+			err = socketError;
+			if( err != EAGAIN && err != ECONNRESET )
+				Com_Printf( "NET_GetPacket: %s\n", NET_ErrorString() );
+		}
+		else if( ret < net_message->maxsize )
+		{
+			SockadrToNetadr( (struct sockaddr *) &from, net_from );
+			net_message->readcount = 0;
+			net_message->cursize = ret;
+			netFromProxySocket = qtrue;
+			return qtrue;
+		}
+	}
 	
 	if(ip_socket != INVALID_SOCKET && readsocks->ip)
 	{
@@ -762,12 +796,14 @@ tunnel, is the same but for the framing: the extension reads its
 datagrams and writes the replies, and the routes and real addresses are
 kept here as for any trusted proxy.
 
-Any program on this computer can send from loopback, so a server whose
-gateway proxies for players gives it a secret for each of its starts
-(NET_SetProxySecret). Then a header from a trusted proxy on loopback must
-carry the secret as a TLV (PROXY_TLV_SECRET), or the datagram is dropped:
-no other program here can name a player's address. Proxies elsewhere
-don't know it, and don't need it.
+A server whose gateway proxies for browser players gives it a socket of
+its own (NET_ProxySocketAddress), on loopback and a port the system picks,
+and a secret for each of the gateway's starts (NET_SetProxySecret). From
+that socket only a header carrying the secret as a TLV (PROXY_TLV_SECRET)
+is taken: any program on this computer can send to it, and none but the
+gateway can name a player's address there. The replies to its players go
+back out of it. The other sockets keep the rule above, so a proxy the
+owner lists on loopback works as before.
 
 ===============================================================================
 */
@@ -786,6 +822,8 @@ typedef struct {
 	proxyHeader_t	header;		// that datagram's, whose dst its replies name
 	int				lastUsed;	// Sys_Milliseconds, odd; 0 for an empty slot
 	int				hits;		// its datagrams, up to NET_PROXY_HITS: a player's outweighs a query's
+	qboolean		onProxySocket;	// it came on the gateway's socket, which replies go out of
+	int				proxyGeneration;	// that socket's and secret's when it came (netProxyGeneration)
 } netProxyRoute_t;
 
 #define NET_PROXY_HITS		1000000
@@ -808,8 +846,6 @@ static int					netCarriedCount;
 static byte				netProxySecret[PROXY_MAX_SECRET];
 static int				netProxySecretLength;	// 0 for none
 static qboolean			netPacketProxied;	// the packet being handled came through one
-
-static qboolean NET_IsLoopback( const netadr_t *a );
 
 static qboolean NET_IsTrustedProxy( const netadr_t *adr ) {
 	int		i;
@@ -849,11 +885,21 @@ static void NET_ProxyForgetRoutes( void ) {
 	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
 		if( !netProxyRoutes[i].lastUsed )
 			continue;
-		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) || NET_ProxyCarrier( &netProxyRoutes[i].via ) )
+		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) || NET_ProxyCarrier( &netProxyRoutes[i].via )
+			|| netProxyRoutes[i].onProxySocket )
 			netProxyRouted = qtrue;
 		else
 			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
 	}
+}
+
+// the routes kept from the gateway's socket retired: its secret changed, or
+// it closed. Each is kept, so its player's replies are dropped rather than
+// sent straight to the address the gateway named, until a new datagram
+// takes its place or it goes stale
+static void NET_ProxyRetireSocketRoutes( void ) {
+	netProxyGeneration++;
+	NET_ProxyForgetRoutes();
 }
 
 /*
@@ -877,14 +923,12 @@ void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
 ==================
 NET_SetProxySecret
 
-The secret every header from a trusted proxy on loopback must carry, up to
-PROXY_MAX_SECRET bytes; a length of 0 asks for none. A new one forgets the
-routes through a proxy on loopback, named under the old one or none
+The secret every PROXY header on the gateway's socket must carry, up to
+PROXY_MAX_SECRET bytes; a length of 0 takes none there. A new one retires
+the routes kept from that socket, named under the old one or none
 ==================
 */
 void NET_SetProxySecret( const byte *secret, int length ) {
-	int		i;
-
 	if( length > PROXY_MAX_SECRET )
 		Com_Printf( S_COLOR_YELLOW "WARNING: a proxy secret of %d bytes cut to %d, which no header carrying it whole matches\n",
 			length, PROXY_MAX_SECRET );
@@ -895,13 +939,64 @@ void NET_SetProxySecret( const byte *secret, int length ) {
 	Com_Memset( netProxySecret, 0, sizeof( netProxySecret ) );
 	if( length )
 		Com_Memcpy( netProxySecret, secret, length );
-	// a route through loopback came from a header checked against the old
-	// secret, or none, so it may not be this gateway's
-	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
-		if( netProxyRoutes[i].lastUsed && NET_IsLoopback( &netProxyRoutes[i].via ) && !NET_ProxyCarrier( &netProxyRoutes[i].via ) )
-			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
+	// a route from the gateway's socket came from a header checked against
+	// the old secret, or none, so it may not be this gateway's
+	NET_ProxyRetireSocketRoutes();
+}
+
+/*
+==================
+NET_ProxySocketAddress
+
+The gateway's own socket on loopback, opened on its first call: 127.0.0.1,
+or ::1 where IPv4 is off or won't open, on a port the system picks, so
+servers sharing a game port on several addresses each have their own. Its
+datagrams are read as the others are, but only a PROXY header carrying
+the secret is taken from it, and replies to the players it names go back
+out of it. qfalse when it can't be opened
+==================
+*/
+qboolean NET_ProxySocketAddress( netadr_t *out ) {
+	struct sockaddr_storage	address;
+	socklen_t				length = sizeof( address );
+	int						err;
+
+	if( proxy_socket == INVALID_SOCKET ) {
+		qboolean	v4 = !net_enabled || ( net_enabled->integer & NET_ENABLEV4 ) || !( net_enabled->integer & NET_ENABLEV6 );
+		qboolean	v6 = net_enabled && ( net_enabled->integer & NET_ENABLEV6 );
+
+		// IPv6's where IPv4 is off, or doesn't open (a system without it)
+		if( v4 )
+			proxy_socket = NET_IPSocket( "127.0.0.1", PORT_ANY, &err );
+		if( proxy_socket == INVALID_SOCKET && v6 )
+			proxy_socket = NET_IP6Socket( "::1", PORT_ANY, NULL, &err );
+		if( proxy_socket == INVALID_SOCKET )
+			return qfalse;
+		if( getsockname( proxy_socket, (struct sockaddr *) &address, &length ) == SOCKET_ERROR ) {
+			closesocket( proxy_socket );
+			proxy_socket = INVALID_SOCKET;
+			return qfalse;
+		}
+		SockadrToNetadr( (struct sockaddr *) &address, &proxy_socket_adr );
 	}
-	NET_ProxyForgetRoutes();
+	*out = proxy_socket_adr;
+	return qtrue;
+}
+
+/*
+==================
+NET_CloseProxySocket
+
+The gateway's socket closed, and the routes through it retired: their
+players' replies are dropped until they go stale
+==================
+*/
+void NET_CloseProxySocket( void ) {
+	if( proxy_socket == INVALID_SOCKET )
+		return;
+	closesocket( proxy_socket );
+	proxy_socket = INVALID_SOCKET;
+	NET_ProxyRetireSocketRoutes();
 }
 
 /*
@@ -1002,9 +1097,11 @@ NET_ProxyKeep
 The route a player's datagram just came by, for its replies: its own slot,
 else the first of its probes NET_ProxyBefore gives up. A live route moves
 to another port of the same proxy host (one that started again, or sends
-each player from a port of its own), but not to another host until it's
-stale: a datagram isn't checked here, so one spoofed to another trusted
-relay mustn't take a player's replies away
+each player from a port of its own), but not to another host, or between
+the gateway's socket and the others, until it's stale: a datagram isn't
+checked here, so one spoofed to another trusted relay, or sent from
+loopback to the game port without the gateway's secret, mustn't take a
+player's replies away
 ==================
 */
 static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const proxyHeader_t *header ) {
@@ -1016,7 +1113,10 @@ static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const pr
 	for( i = 0; i < NET_PROXY_PROBES; i++ ) {
 		r = NET_ProxySlot( hash, i );
 		if( r->lastUsed && NET_CompareAdr( r->player, *player ) ) {
-			if( now - r->lastUsed < NET_PROXY_STALE && !NET_CompareBaseAdr( r->via, *via ) ) {
+			// the gateway's socket is another proxy than one on loopback
+			// at the game port, though both come from 127.0.0.1
+			if( now - r->lastUsed < NET_PROXY_STALE && ( !NET_CompareBaseAdr( r->via, *via )
+				|| r->onProxySocket != netFromProxySocket ) ) {
 				char	who[NET_ADDRSTRMAXLEN], came[NET_ADDRSTRMAXLEN];
 
 				// each its own copy, as the strings share a buffer
@@ -1043,6 +1143,8 @@ static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const pr
 	slot->player = *player;
 	slot->via = *via;
 	slot->header = *header;
+	slot->onProxySocket = netFromProxySocket;
+	slot->proxyGeneration = netProxyGeneration;
 	slot->lastUsed = now;
 	if( slot->hits < NET_PROXY_HITS )
 		slot->hits++;
@@ -1066,7 +1168,14 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 	// SOCKS's datagrams come with readcount past a header of its own
 	if( msg->readcount )
 		return qtrue;
-	if( ( carrier = NET_ProxyCarrier( from ) ) != NULL ) {
+	if( netFromProxySocket ) {
+		// the gateway's socket: a header carrying the secret, or nothing,
+		// whoever it came from
+		length = NET_ProxyRead( msg->data, msg->cursize, &h );
+		if( length <= 0 || h.command == PROXY_LOCAL || !netProxySecretLength
+			|| !NET_ProxyHasTLV( msg->data, &h, PROXY_TLV_SECRET, netProxySecret, netProxySecretLength ) )
+			return qfalse;
+	} else if( ( carrier = NET_ProxyCarrier( from ) ) != NULL ) {
 		length = msg->cursize;
 		offset = 0;
 		switch( carrier->receive( from, msg->data, &length, msg->maxsize, &h, &offset ) ) {
@@ -1094,11 +1203,6 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 		// its own health check
 		if( h.command == PROXY_LOCAL )
 			return qfalse;
-		if( netProxySecretLength && NET_IsLoopback( from )
-			&& !NET_ProxyHasTLV( msg->data, &h, PROXY_TLV_SECRET, netProxySecret, netProxySecretLength ) ) {
-			Com_DPrintf( "%s: a PROXY header from this computer without the gateway's secret, dropped\n", NET_AdrToStringwPort( *from ) );
-			return qfalse;
-		}
 	}
 	Com_Memset( &player, 0, sizeof( player ) );
 	if( h.family == 6 ) {
@@ -1146,13 +1250,30 @@ qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 
 	if( !route )
 		return Sys_SendPacketDirect( length, data, to );
-	if( ( carrier = NET_ProxyCarrier( &route->via ) ) != NULL )
+	// one from the gateway's socket, closed or with another secret since:
+	// dropped while fresh, then the address is as any other
+	if( route->onProxySocket && ( route->proxyGeneration != netProxyGeneration || proxy_socket == INVALID_SOCKET ) ) {
+		if( ( Sys_Milliseconds() | 1 ) - route->lastUsed < NET_PROXY_STALE )
+			return qtrue;
+		return Sys_SendPacketDirect( length, data, to );
+	}
+	// one from the gateway's socket goes back out of it, as it came
+	if( !route->onProxySocket && ( carrier = NET_ProxyCarrier( &route->via ) ) != NULL )
 		return carrier->send( &route->via, &route->header, data, length );
 	// the route's header names this player already: its src is to
 	header = NET_ProxyWrite( buf, sizeof( buf ), &route->header );
 	if( length > (int)sizeof( buf ) - header )
 		return qtrue;
 	Com_Memcpy( buf + header, data, length );
+	if( route->onProxySocket ) {
+		qboolean	sent;
+
+		// out of the gateway's socket, which its packets came to
+		netSendOnProxySocket = qtrue;
+		sent = Sys_SendPacketDirect( header + length, buf, route->via );
+		netSendOnProxySocket = qfalse;
+		return sent;
+	}
 	return Sys_SendPacketDirect( header + length, buf, route->via );
 }
 
@@ -1173,10 +1294,11 @@ qboolean Sys_SendPacketDirect( int length, const void *data, netadr_t to ) {
 		return qtrue;
 	}
 
-	if( (ip_socket == INVALID_SOCKET && to.type == NA_IP) ||
+	if( !netSendOnProxySocket && (
+		(ip_socket == INVALID_SOCKET && to.type == NA_IP) ||
 		(ip_socket == INVALID_SOCKET && to.type == NA_BROADCAST) ||
 		(ip6_socket == INVALID_SOCKET && to.type == NA_IP6) ||
-		(ip6_socket == INVALID_SOCKET && to.type == NA_MULTICAST6) )
+		(ip6_socket == INVALID_SOCKET && to.type == NA_MULTICAST6) ) )
 		return qtrue;
 
 	if(to.type == NA_MULTICAST6 && (net_enabled->integer & NET_DISABLEMCAST))
@@ -1185,7 +1307,7 @@ qboolean Sys_SendPacketDirect( int length, const void *data, netadr_t to ) {
 	memset(&addr, 0, sizeof(addr));
 	NetadrToSockadr( &to, (struct sockaddr *) &addr );
 
-	if( usingSocks && to.type == NA_IP ) {
+	if( usingSocks && to.type == NA_IP && !netSendOnProxySocket ) {
 		socksBuf[0] = 0;	// reserved
 		socksBuf[1] = 0;
 		socksBuf[2] = 0;	// fragment (not fragmented)
@@ -1196,10 +1318,13 @@ qboolean Sys_SendPacketDirect( int length, const void *data, netadr_t to ) {
 		ret = sendto( ip_socket, socksBuf, length+10, 0, &socksRelayAddr, sizeof(socksRelayAddr) );
 	}
 	else {
+		SOCKET	ip = netSendOnProxySocket ? proxy_socket : ip_socket;
+		SOCKET	ip6 = netSendOnProxySocket ? proxy_socket : ip6_socket;
+
 		if(addr.ss_family == AF_INET)
-			ret = sendto( ip_socket, data, length, 0, (struct sockaddr *) &addr, sizeof(struct sockaddr_in) );
+			ret = sendto( ip, data, length, 0, (struct sockaddr *) &addr, sizeof(struct sockaddr_in) );
 		else if(addr.ss_family == AF_INET6)
-			ret = sendto( ip6_socket, data, length, 0, (struct sockaddr *) &addr, sizeof(struct sockaddr_in6) );
+			ret = sendto( ip6, data, length, 0, (struct sockaddr *) &addr, sizeof(struct sockaddr_in6) );
 	}
 	if( ret == SOCKET_ERROR ) {
 		int err = socketError;
@@ -2704,6 +2829,8 @@ NET_Shutdown
 ====================
 */
 void NET_Shutdown( void ) {
+	// open whatever net_enabled says: the gateway's, not the game port's
+	NET_CloseProxySocket();
 	if ( !networkingEnabled ) {
 		return;
 	}
@@ -2768,7 +2895,7 @@ The sockets to wait on with poll(), which takes descriptors past
 FD_SETSIZE, which pk3s can push the sockets to
 ====================
 */
-static void NET_PollFds(struct pollfd fds[3])
+static void NET_PollFds(struct pollfd fds[4])
 {
 	fds[0].fd = ip_socket;
 	fds[0].events = POLLIN;
@@ -2778,6 +2905,9 @@ static void NET_PollFds(struct pollfd fds[3])
 
 	fds[2].fd = (multicast6_socket != ip6_socket) ? multicast6_socket : INVALID_SOCKET;
 	fds[2].events = POLLIN;
+
+	fds[3].fd = proxy_socket;
+	fds[3].events = POLLIN;
 }
 
 /*
@@ -2788,13 +2918,14 @@ Reads the sockets poll() returned, those with a pending error too, which
 reading clears, or poll() would keep returning at once
 ====================
 */
-static void NET_PollEvent(const struct pollfd fds[3])
+static void NET_PollEvent(const struct pollfd fds[4])
 {
 	netsocks_t readsocks;
 
 	readsocks.ip         = fds[0].revents != 0;
 	readsocks.ip6        = fds[1].revents != 0;
 	readsocks.multicast6 = fds[2].revents != 0;
+	readsocks.proxy      = fds[3].revents != 0;
 
 	NET_Event(&readsocks);
 }
@@ -2810,7 +2941,7 @@ Sleeps msec or until something happens on the network
 void NET_Sleep(int msec)
 {
 #ifndef _WIN32
-	struct pollfd fds[3];
+	struct pollfd fds[4];
 	int retval;
 
 	if(msec < 0)
@@ -2861,6 +2992,13 @@ void NET_Sleep(int msec)
 		if(highestfd == INVALID_SOCKET || multicast6_socket > highestfd)
 			highestfd = multicast6_socket;
 	}
+	if(proxy_socket != INVALID_SOCKET)
+	{
+		FD_SET(proxy_socket, &fdr);
+
+		if(highestfd == INVALID_SOCKET || proxy_socket > highestfd)
+			highestfd = proxy_socket;
+	}
 
 	if(highestfd == INVALID_SOCKET)
 	{
@@ -2881,6 +3019,7 @@ void NET_Sleep(int msec)
 		readsocks.ip = ip_socket != INVALID_SOCKET && FD_ISSET(ip_socket, &fdr);
 		readsocks.ip6 = ip6_socket != INVALID_SOCKET && FD_ISSET(ip6_socket, &fdr);
 		readsocks.multicast6 = multicast6_socket != INVALID_SOCKET && FD_ISSET(multicast6_socket, &fdr);
+		readsocks.proxy = proxy_socket != INVALID_SOCKET && FD_ISSET(proxy_socket, &fdr);
 
 		NET_Event(&readsocks);
 	}
@@ -2951,7 +3090,7 @@ NET_SleepUntil. Returns qfalse if it couldn't wait
 */
 static qboolean NET_WaitNs( int64_t ns )
 {
-	SOCKET			sockets[3];
+	SOCKET			sockets[4];
 	HANDLE			handles[2];
 	LARGE_INTEGER	due;
 	DWORD			woke = WAIT_FAILED;
@@ -2967,6 +3106,7 @@ static qboolean NET_WaitNs( int64_t ns )
 	sockets[0] = ip_socket;
 	sockets[1] = ip6_socket;
 	sockets[2] = multicast6_socket != ip6_socket ? multicast6_socket : INVALID_SOCKET;
+	sockets[3] = proxy_socket;
 	for( selected = 0; selected < ARRAY_LEN( sockets ); selected++ )
 	{
 		if( sockets[selected] != INVALID_SOCKET &&
@@ -3007,7 +3147,7 @@ NET_SleepUntil. Returns qfalse if it couldn't wait
 */
 static qboolean NET_WaitNs( int64_t ns )
 {
-	struct pollfd	fds[3];
+	struct pollfd	fds[4];
 	struct timespec	timeout;
 	int				retval;
 

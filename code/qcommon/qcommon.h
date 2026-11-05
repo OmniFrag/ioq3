@@ -2039,11 +2039,18 @@ qboolean	Sys_SendPacketDirect( int length, const void *data, netadr_t to );
 // sv_trustedProxies): addresses and their masks, NET_CompareBaseAdrMask's;
 // none forgets every player's route through one
 void		NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count );
-// the secret a trusted proxy on loopback must carry in each header
+// the secret every PROXY header on the gateway's socket must carry
 // (net_proxy.h's PROXY_TLV_SECRET), new at each start of the gateway that
 // proxies for players, so no other program on this computer can name an
-// address; a length of 0 asks for none
+// address there; a length of 0 takes none there
 void		NET_SetProxySecret( const byte *secret, int length );
+// the gateway's own socket on loopback, opened on the first call, on a port
+// the system picks: only PROXY headers carrying the secret are taken from
+// it, and replies to their players go out of it; qfalse if it can't open
+qboolean	NET_ProxySocketAddress( netadr_t *out );
+// closes it, retiring the routes through it, whose players' replies are
+// dropped until they go stale
+void		NET_CloseProxySocket( void );
 // whether a trusted proxy named the address of the packet being handled
 qboolean	NET_PacketProxied( void );
 // A proxy whose datagrams an extension carries, framing them as it and the
