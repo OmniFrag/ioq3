@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/content.h"
 
 
 /*
@@ -774,6 +775,42 @@ qboolean SV_RetryMap( void ) {
 
 /*
 ================
+SV_CheckPureList
+
+With sv_pure on, the paks' checksums reach clients only as sv_paks in the
+systeminfo string. Info_SetValueForKey_Big leaves out a value that doesn't
+fit beside the others, saying only "BIG Info string length exceeded", and
+with no list a client isn't held to any pak. Past 8 KB the server's own
+lists are cut too, FS_LoadedPakPureChecksums among them, which
+SV_VerifyPaks_f checks clients against, so it turns away clients that
+have every pak. This says so once a map, and changes nothing that's sent.
+================
+*/
+void SV_CheckPureList( void ) {
+	const char	*paks = Cvar_VariableString( "sv_paks" );
+	int			total;
+
+	// sv_paks is set as the map starts: with sv_pure turned on since, it's empty
+	if ( !sv_pure->integer || sv.pureListWarned || !*paks
+		|| *Info_ValueForKey( sv.configstrings[CS_SYSTEMINFO], "sv_paks" ) ) {
+		return;
+	}
+	sv.pureListWarned = qtrue;
+	total = FS_ContentPaks( NULL, 0 );
+	// each checksum is followed by a space, one cut short is not
+	if ( Q_CountChar( paks, ' ' ) < total ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_pure is on, but the pure list of %d paks is too long for the "
+			"systeminfo string, so it isn't sent, and the server's own copy is cut short: clients may be "
+			"refused as unpure\n", total );
+	} else {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_pure is on, but the pure list of %d paks doesn't fit in the "
+			"systeminfo string with the server's other settings, so it isn't sent: clients aren't held to "
+			"any of them\n", total );
+	}
+}
+
+/*
+================
 SV_SpawnServer
 
 Change the server to a new map, taking all connected
@@ -1017,6 +1054,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	Q_strncpyz( systemInfo, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( systemInfo ) );
 	cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 	SV_SetConfigstring( CS_SYSTEMINFO, systemInfo );
+	SV_CheckPureList();
 
 	SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO ) );
 	cvar_modifiedFlags &= ~CVAR_SERVERINFO;

@@ -89,6 +89,8 @@ typedef struct {
 
 	int				restartTime;
 	int				time;
+
+	qboolean		pureListWarned;		// SV_CheckPureList said so this map
 } server_t;
 
 
@@ -465,6 +467,7 @@ void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 
 void SV_ChangeMaxClients( void );
 void SV_SpawnServer( char *server, qboolean killBots );
+void SV_CheckPureList( void );
 qboolean SV_StartDefaultMap( void );
 qboolean SV_RetryMap( void );
 void SV_NoteStartupMap( const char *map, qboolean found );

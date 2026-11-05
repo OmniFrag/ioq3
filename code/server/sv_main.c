@@ -1973,6 +1973,7 @@ void SV_Frame( int msec ) {
 	}
 	if ( cvar_modifiedFlags & CVAR_SYSTEMINFO ) {
 		SV_SetConfigstring( CS_SYSTEMINFO, Cvar_InfoString_Big( CVAR_SYSTEMINFO ) );
+		SV_CheckPureList();
 		cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 	}
 
