@@ -2059,7 +2059,7 @@ void		NET_SetProxySecret( const byte *secret, int length );
 // it, and replies to their players go out of it; qfalse if it can't open
 qboolean	NET_ProxySocketAddress( netadr_t *out );
 // closes it, retiring the routes through it, whose players' replies are
-// dropped until they go stale
+// dropped while their clients are in the game
 void		NET_CloseProxySocket( void );
 // forgets the route a proxy left for the address of a player who
 // connected directly
