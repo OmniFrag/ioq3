@@ -762,6 +762,13 @@ tunnel, is the same but for the framing: the extension reads its
 datagrams and writes the replies, and the routes and real addresses are
 kept here as for any trusted proxy.
 
+Any program on this computer can send from loopback, so a server whose
+gateway proxies for players gives it a secret for each of its starts
+(NET_SetProxySecret). Then a header from a trusted proxy on loopback must
+carry the secret as a TLV (PROXY_TLV_SECRET), or the datagram is dropped:
+no other program here can name a player's address. Proxies elsewhere
+don't know it, and don't need it.
+
 ===============================================================================
 */
 
@@ -798,7 +805,11 @@ typedef struct {
 
 static netCarriedProxy_t	netCarried[NET_MAX_CARRIED];
 static int					netCarriedCount;
+static byte				netProxySecret[PROXY_MAX_SECRET];
+static int				netProxySecretLength;	// 0 for none
 static qboolean			netPacketProxied;	// the packet being handled came through one
+
+static qboolean NET_IsLoopback( const netadr_t *a );
 
 static qboolean NET_IsTrustedProxy( const netadr_t *adr ) {
 	int		i;
@@ -858,6 +869,37 @@ void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
 	if( netTrustedCount ) {
 		Com_Memcpy( netTrusted, adr, netTrustedCount * sizeof( netTrusted[0] ) );
 		Com_Memcpy( netTrustedMask, mask, netTrustedCount * sizeof( netTrustedMask[0] ) );
+	}
+	NET_ProxyForgetRoutes();
+}
+
+/*
+==================
+NET_SetProxySecret
+
+The secret every header from a trusted proxy on loopback must carry, up to
+PROXY_MAX_SECRET bytes; a length of 0 asks for none. A new one forgets the
+routes through a proxy on loopback, named under the old one or none
+==================
+*/
+void NET_SetProxySecret( const byte *secret, int length ) {
+	int		i;
+
+	if( length > PROXY_MAX_SECRET )
+		Com_Printf( S_COLOR_YELLOW "WARNING: a proxy secret of %d bytes cut to %d, which no header carrying it whole matches\n",
+			length, PROXY_MAX_SECRET );
+	length = MAX( 0, MIN( length, PROXY_MAX_SECRET ) );
+	if( length == netProxySecretLength && ( !length || !memcmp( netProxySecret, secret, length ) ) )
+		return;
+	netProxySecretLength = length;
+	Com_Memset( netProxySecret, 0, sizeof( netProxySecret ) );
+	if( length )
+		Com_Memcpy( netProxySecret, secret, length );
+	// a route through loopback came from a header checked against the old
+	// secret, or none, so it may not be this gateway's
+	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
+		if( netProxyRoutes[i].lastUsed && NET_IsLoopback( &netProxyRoutes[i].via ) && !NET_ProxyCarrier( &netProxyRoutes[i].via ) )
+			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
 	}
 	NET_ProxyForgetRoutes();
 }
@@ -1052,6 +1094,11 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 		// its own health check
 		if( h.command == PROXY_LOCAL )
 			return qfalse;
+		if( netProxySecretLength && NET_IsLoopback( from )
+			&& !NET_ProxyHasTLV( msg->data, &h, PROXY_TLV_SECRET, netProxySecret, netProxySecretLength ) ) {
+			Com_DPrintf( "%s: a PROXY header from this computer without the gateway's secret, dropped\n", NET_AdrToStringwPort( *from ) );
+			return qfalse;
+		}
 	}
 	Com_Memset( &player, 0, sizeof( player ) );
 	if( h.family == 6 ) {

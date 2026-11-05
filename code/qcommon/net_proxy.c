@@ -106,3 +106,33 @@ int NET_ProxyWriteTLVs( byte *out, int size, const proxyHeader_t *header, const 
 	}
 	return total;
 }
+
+qboolean NET_ProxyHasTLV( const byte *data, const proxyHeader_t *header, int type, const byte *value, int length ) {
+	const byte	*tlv = data + header->tlvs;
+	int			rest = header->tlvLength;
+
+	while ( rest > 0 ) {
+		int	size, i;
+		byte	differ = 0;
+
+		if ( rest < 3 ) {
+			return qfalse;
+		}
+		size = ( tlv[1] << 8 ) | tlv[2];
+		if ( size > rest - 3 ) {
+			return qfalse;
+		}
+		if ( tlv[0] == type && size == length ) {
+			// every byte, wherever they differ
+			for ( i = 0; i < length; i++ ) {
+				differ |= tlv[3 + i] ^ value[i];
+			}
+			if ( !differ ) {
+				return qtrue;
+			}
+		}
+		tlv += 3 + size;
+		rest -= 3 + size;
+	}
+	return qfalse;
+}

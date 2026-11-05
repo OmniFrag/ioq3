@@ -28,6 +28,12 @@ GNU General Public License for more details.
 #define PROXY_MAX_HEADER		( PROXY_HEADER_SIZE + 36 + 512 )	// IPv6's addresses, and TLVs past them
 #define PROXY_MAX_WRITTEN		( PROXY_HEADER_SIZE + 36 )		// what NET_ProxyWrite writes, at most
 #define PROXY_ADDRESSES( family )	( ( family ) == 6 ? 36 : 12 )		// a datagram's addresses and ports
+// OmniFrag's TLV for the per-start secret a server gives its gateway, in
+// the PROXY protocol's custom range (0xe0 to 0xef), clear of the types
+// cloud load balancers put there (Google Cloud's 0xe0, AWS's 0xea and
+// Azure's 0xee); the gateway's omnifrag-proxy has it as TLV_SECRET
+#define PROXY_TLV_SECRET		0xe4
+#define PROXY_MAX_SECRET		32
 
 typedef enum {
 	PROXY_LOCAL,		// the proxy's own: a health check, carrying no address
@@ -54,5 +60,10 @@ int		NET_ProxyWrite( byte *out, int size, const proxyHeader_t *header );
 // the same with tlvLength bytes of TLVs past the addresses, the header's
 // length counting them
 int		NET_ProxyWriteTLVs( byte *out, int size, const proxyHeader_t *header, const byte *tlvs, int tlvLength );
+// whether data's header, as NET_ProxyRead read it into header, has a TLV of
+// that type whose value is exactly length bytes of value, compared in time
+// that doesn't depend on where they differ; qfalse for TLVs that run past
+// the header
+qboolean	NET_ProxyHasTLV( const byte *data, const proxyHeader_t *header, int type, const byte *value, int length );
 
 #endif
