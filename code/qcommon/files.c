@@ -3136,6 +3136,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	pack_t			*pak;
 	const searchpath_t	*search;
 	searchpath_t	added;
+	unz_global_info	gi;
 	unz_file_info	info;
 	char			entry[MAX_ZPATH], retail[MAX_QPATH];
 	const char		*why = NULL, *code;
@@ -3150,8 +3151,12 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	if ( !pak ) {
 		return "it isn't a zip that loads as a pak";
 	}
+	// FS_LoadZipFile keeps the entries before a record it can't read
+	if ( unzGetGlobalInfo( pak->handle, &gi ) != UNZ_OK || pak->numfiles < gi.number_entry ) {
+		why = "its directory can't be read";
+	}
 	unzGoToFirstFile( pak->handle );
-	for ( i = 0; i < pak->numfiles; i++, unzGoToNextFile( pak->handle ) ) {
+	for ( i = 0; !why && i < pak->numfiles; i++, unzGoToNextFile( pak->handle ) ) {
 		if ( unzGetCurrentFileInfo( pak->handle, &info, entry, sizeof( entry ), NULL, 0, NULL, 0 ) != UNZ_OK ) {
 			why = "its directory can't be read";
 			break;
