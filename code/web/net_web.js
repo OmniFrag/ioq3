@@ -25,6 +25,8 @@ addToLibrary({
     // the queue's length, and the packets kept per connection before it
     // opens
     MAX_RECEIVED: 1024,
+    // the engine's MAX_MSGLEN, the most it reads of one (net_web.c)
+    MAX_MESSAGE: 16384,
     MAX_PENDING: 16,
     // bytes waiting on q3 past which a send is refused, as a full socket's
     BUFFERED_MAX: 65536,
@@ -46,17 +48,24 @@ addToLibrary({
       return peer.id;
     },
 
+    // a message from the server, queued for the engine while there's room;
+    // one longer than the engine reads isn't kept, or a server could fill
+    // the queue with the largest messages SCTP takes, and nor is a text
+    // one, whose length a string's isn't
+    take: function(peer, data) {
+      if (!(data instanceof ArrayBuffer) || data.byteLength > NetWeb.MAX_MESSAGE) return;
+      if (NetWeb.received.length - NetWeb.head < NetWeb.MAX_RECEIVED) {
+        NetWeb.received.push({ id: peer.id, data: new Uint8Array(data) });
+      }
+    },
+
     start: async function(peer, signal) {
       var pc = peer.pc = new RTCPeerConnection();
       peer.q3 = pc.createDataChannel('q3', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
       peer.oob = pc.createDataChannel('oob', { negotiated: true, id: 1 });
       [peer.q3, peer.oob].forEach(function(channel) {
         channel.binaryType = 'arraybuffer';
-        channel.onmessage = function(e) {
-          if (NetWeb.received.length - NetWeb.head < NetWeb.MAX_RECEIVED) {
-            NetWeb.received.push({ id: peer.id, data: new Uint8Array(e.data) });
-          }
-        };
+        channel.onmessage = function(e) { NetWeb.take(peer, e.data); };
         channel.onopen = function() { NetWeb.opened(peer); };
         channel.onclose = function() { NetWeb.fail(peer, 'The server closed the connection.'); };
       });
