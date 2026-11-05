@@ -285,6 +285,7 @@ typedef struct {
 	qboolean	connected;
 	uint32_t	ofx;				// the extensions agreed on challengeResponse (exttokens.h), 0 for none
 	uint64_t	contentKey;			// with them, the key every connect on this challenge is sent, 0 until the first
+	int			fragmentSize;		// the client's off, which challengeResponse repeats, 0 for none
 	// with OFX_IDENTITY, the nonces the proofs sign (identity.h): the
 	// client's ofc, and this server's ofn, made with each challenge
 	byte		clientNonce[32];

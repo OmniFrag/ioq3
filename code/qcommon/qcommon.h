@@ -142,7 +142,11 @@ typedef enum {
 	NA_IP,
 	NA_IP6,
 	NA_MULTICAST6,
-	NA_UNSPEC
+	NA_UNSPEC,
+	// a web client's connection to a server through the browser
+	// (code/web/net_web.c): the connection's id in port, as is, not in
+	// network order
+	NA_WEB
 } netadrtype_t;
 
 typedef enum {
@@ -253,6 +257,8 @@ typedef struct {
 	byte		unsentBuffer[MAX_MSGLEN];
 
 	int			challenge;
+	// the fragment size both ends agreed on, 0 for the classic one
+	int			fragmentSize;
 	int		lastSentTime;
 	int		lastSentSize;
 
@@ -263,6 +269,7 @@ typedef struct {
 
 void Netchan_Init( int qport );
 void Netchan_Setup(netsrc_t sock, netchan_t *chan, netadr_t adr, int qport, int challenge, qboolean compat);
+void Netchan_SetFragmentSize( netchan_t *chan, int size );
 
 void Netchan_Transmit( netchan_t *chan, int length, const byte *data );
 void Netchan_TransmitNextFragment( netchan_t *chan );
@@ -2053,6 +2060,44 @@ qboolean	NET_ProxySocketAddress( netadr_t *out );
 void		NET_CloseProxySocket( void );
 // whether a trusted proxy named the address of the packet being handled
 qboolean	NET_PacketProxied( void );
+
+// The fragment size a web client asks for (off, exttokens.h): a classic
+// fragment is longer than the gateway's largest SCTP chunk, so SCTP would
+// split its data channel message, and losing either part loses it. One of
+// this, with the netchan's header, goes in one chunk, which the gateway's
+// test the_web_clients_packets_and_q3_replies_fit_one_sctp_chunk checks.
+// The page sends connectionless packets longer than it on the reliable
+// channel, as the gateway does its replies (OOB_REPLY)
+#define NET_WEB_FRAGMENT_SIZE	1024
+
+// Why the connection to a server at the address failed or closed, as its
+// transport knows, or NULL while it may still work: a UDP socket never
+// knows, so only a web client's connections say
+const char	*NET_ConnectionFailure( netadr_t adr );
+// Ends the connection to a server at the address, for a transport that
+// keeps one
+void		NET_CloseConnection( netadr_t adr );
+
+#ifdef __EMSCRIPTEN__
+// A web client's connections to servers through the browser (NA_WEB,
+// code/web/net_web.c, its page's half in net_web.js): a WebRTC peer
+// connection each, with an unordered channel without resends for the game
+// and a reliable one for long connectionless replies.
+//
+// Opens one whose offer the page posts to signal, a path on its own
+// server, which answers with the server's (contracts.md section 9's
+// fields); qfalse when the browser has no WebRTC. The connection carries
+// packets once open, and those sent before are kept for then, a few
+qboolean	NET_WebOpen( const char *signal, netadr_t *adr );
+// why a connection failed or closed, or NULL while it's opening or open
+const char	*NET_WebFailure( netadr_t adr );
+// closes it once what was sent has had a moment to go
+void		NET_WebClose( netadr_t adr );
+// sends a packet: qfalse when the connection can't take it now
+qboolean	NET_WebSend( netadr_t to, const void *data, int length );
+// hands the client every packet the connections received
+void		NET_WebEvent( void );
+#endif
 // A proxy whose datagrams an extension carries, framing them as it and the
 // proxy agree, such as a relay's tunnel. The engine keeps each player's
 // route and real address as for a trusted proxy (NET_SetTrustedProxies),

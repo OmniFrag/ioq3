@@ -259,7 +259,8 @@ void LAN_RecentServer( const char *name, netadr_t adr ) {
 	char *p, *entry, *at;
 	int kept = 1;
 
-	if ( NET_IsLocalAddress( adr ) ) {
+	// nor a web connection's, whose id means nothing to the next page
+	if ( NET_IsLocalAddress( adr ) || adr.type == NA_WEB ) {
 		return;
 	}
 	Q_strncpyz( address, NET_AdrToStringwPort( adr ), sizeof( address ) );

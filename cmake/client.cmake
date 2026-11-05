@@ -51,6 +51,11 @@ if(USE_WEB_AUDIO)
     list(APPEND CLIENT_DEFINITIONS USE_WEB_AUDIO)
 endif()
 
+# the browser's connections to servers (NA_WEB), with net_web.js
+if(EMSCRIPTEN)
+    list(APPEND CLIENT_SOURCES ${SOURCE_DIR}/web/net_web.c)
+endif()
+
 add_git_dependency(${SOURCE_DIR}/client/cl_console.c)
 
 set(CLIENT_BINARY ${CLIENT_NAME})
@@ -97,6 +102,11 @@ target_link_libraries(          ${CLIENT_BINARY} PRIVATE ${COMMON_LIBRARIES} ${C
 target_link_options(            ${CLIENT_BINARY} PRIVATE ${CLIENT_LINK_OPTIONS})
 
 set_output_dirs(${CLIENT_BINARY})
+
+if(EMSCRIPTEN)
+    # relinked when the page's half of the network changes
+    set_property(TARGET ${CLIENT_BINARY} APPEND PROPERTY LINK_DEPENDS ${SOURCE_DIR}/web/net_web.js)
+endif()
 
 if(NOT USE_RENDERER_DLOPEN)
     target_sources(${CLIENT_BINARY} PRIVATE

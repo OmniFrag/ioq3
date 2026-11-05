@@ -77,6 +77,17 @@ const char	*Com_ExtensionValue( const extTokens_t *tokens, const char *key );
 // ofx's value: 1 to 8 lowercase hex digits
 qboolean	Com_ParseExtensionBits( const char *value, uint32_t *bits );
 
+// off: the fragment size a client asks for on getchallenge, which the
+// server's challengeResponse repeats when it agrees, and both netchans then
+// split messages at: a web client's transport carries a datagram whole
+// only below the classic 1300 (net_chan.c's FRAGMENT_SIZE). Decimal
+#define EXT_FRAGMENT_MIN	500
+#define EXT_FRAGMENT_MAX	1300
+
+// off's value, from EXT_FRAGMENT_MIN to EXT_FRAGMENT_MAX in decimal with
+// no leading zero; 0 for none (value NULL) or one malformed
+int			Com_ParseFragmentSize( const char *value );
+
 // ofk's value: exactly OFK_DIGITS lowercase hex digits
 qboolean	Com_ParseExtensionKey( const char *value, uint64_t *key );
 void		Com_ExtensionKeyString( uint64_t key, char string[OFK_DIGITS + 1] );

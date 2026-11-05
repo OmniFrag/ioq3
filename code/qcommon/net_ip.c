@@ -496,6 +496,10 @@ qboolean NET_CompareBaseAdrMask(netadr_t a, netadr_t b, int netmask)
 	if (a.type == NA_LOOPBACK)
 		return qtrue;
 
+	// a web connection is its id
+	if (a.type == NA_WEB)
+		return a.port == b.port;
+
 	if(a.type == NA_IP)
 	{
 		addra = (byte *) &a.ip;
@@ -559,6 +563,8 @@ const char	*NET_AdrToString (netadr_t a)
 		Com_sprintf (s, sizeof(s), "loopback");
 	else if (a.type == NA_BOT)
 		Com_sprintf (s, sizeof(s), "bot");
+	else if (a.type == NA_WEB)
+		Com_sprintf (s, sizeof(s), "web:%hu", a.port);
 	else if (a.type == NA_IP || a.type == NA_IP6)
 	{
 		struct sockaddr_storage sadr;
@@ -580,6 +586,8 @@ const char	*NET_AdrToStringwPort (netadr_t a)
 		Com_sprintf (s, sizeof(s), "loopback");
 	else if (a.type == NA_BOT)
 		Com_sprintf (s, sizeof(s), "bot");
+	else if (a.type == NA_WEB)
+		Com_sprintf (s, sizeof(s), "%s", NET_AdrToString(a));
 	else if(a.type == NA_IP)
 		Com_sprintf(s, sizeof(s), "%s:%hu", NET_AdrToString(a), ntohs(a.port));
 	else if(a.type == NA_IP6)
@@ -608,6 +616,21 @@ qboolean	NET_CompareAdr (netadr_t a, netadr_t b)
 
 qboolean	NET_IsLocalAddress( netadr_t adr ) {
 	return adr.type == NA_LOOPBACK;
+}
+
+const char *NET_ConnectionFailure( netadr_t adr ) {
+#ifdef __EMSCRIPTEN__
+	if ( adr.type == NA_WEB )
+		return NET_WebFailure( adr );
+#endif
+	return NULL;
+}
+
+void NET_CloseConnection( netadr_t adr ) {
+#ifdef __EMSCRIPTEN__
+	if ( adr.type == NA_WEB )
+		NET_WebClose( adr );
+#endif
 }
 
 //=============================================================================
@@ -1288,6 +1311,10 @@ qboolean Sys_SendPacketDirect( int length, const void *data, netadr_t to ) {
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
 
+#ifdef __EMSCRIPTEN__
+	if( to.type == NA_WEB )
+		return NET_WebSend( to, data, length );
+#endif
 	if( to.type != NA_BROADCAST && to.type != NA_IP && to.type != NA_IP6 && to.type != NA_MULTICAST6)
 	{
 		Com_Error( ERR_FATAL, "Sys_SendPacketDirect: bad address type" );
@@ -2946,6 +2973,12 @@ void NET_Sleep(int msec)
 
 	if(msec < 0)
 		msec = 0;
+
+#ifdef __EMSCRIPTEN__
+	// what the browser's connections received since; the page's own loop
+	// waits between frames, so nothing waits for them
+	NET_WebEvent();
+#endif
 
 	NET_PollFds(fds);
 

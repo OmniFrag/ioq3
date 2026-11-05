@@ -49,6 +49,24 @@ uint32_t SV_AskedExtensions( int firstArg ) {
 
 /*
 =================
+SV_AskedFragmentSize
+
+The fragment size a client's tokens, the command's arguments from firstArg
+on, ask for (off): a transport of its own that can't carry the classic
+fragment whole. 0 when they ask for none, or are malformed
+=================
+*/
+static int SV_AskedFragmentSize( int firstArg ) {
+	extTokens_t	tokens;
+
+	if ( Com_ParseExtensionTokens( Cmd_ArgsFrom( firstArg ), &tokens ) ) {
+		return 0;
+	}
+	return Com_ParseFragmentSize( Com_ExtensionValue( &tokens, "off" ) );
+}
+
+/*
+=================
 SV_SendChallengeResponse
 
 The challenge, echoing the client's, with the extensions agreed after it
@@ -62,6 +80,10 @@ static void SV_SendChallengeResponse( challenge_t *challenge, int clientChalleng
 	tokens[0] = '\0';
 	if ( challenge->ofx ) {
 		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", challenge->ofx ) );
+	}
+	// the fragment size it asked for, which this server splits at too
+	if ( challenge->fragmentSize ) {
+		Com_AppendExtensionToken( tokens, sizeof( tokens ), "off", va( "%d", challenge->fragmentSize ) );
 	}
 	// this server's key, proved over both nonces (identity.h)
 	if ( challenge->ofx & OFX_IDENTITY ) {
@@ -195,6 +217,7 @@ void SV_GetChallenge(netadr_t from)
 	// made at its first connect
 	challenge->ofx = SV_AskedExtensions( 3 );
 	challenge->contentKey = 0;
+	challenge->fragmentSize = SV_AskedFragmentSize( 3 );
 	// a key's proof needs the client's nonce, this server's key and a
 	// nonce of its own: without one of them, the connection proves nothing.
 	// Each is a signature, so all addresses together get 50 a second,
@@ -510,6 +533,7 @@ void SV_DirectConnect( netadr_t from ) {
 	char		*ip;
 	uint32_t	ofx = 0;
 	uint64_t	contentKey = 0;
+	int			fragmentSize = 0;
 	qboolean	identityProven = qfalse;
 	byte		identity[IDENT_KEY_SIZE];
 	char		tokens[EXT_MAX_STRING];
@@ -641,6 +665,7 @@ void SV_DirectConnect( netadr_t from ) {
 				Com_RandomBytes( (byte *)&challengeptr->contentKey, sizeof( challengeptr->contentKey ) );
 			}
 			contentKey = challengeptr->contentKey;
+			fragmentSize = challengeptr->fragmentSize;
 			identityProven = ( ofx & OFX_IDENTITY ) && SV_ClientProof( challengeptr, identity );
 		}
 
@@ -776,6 +801,11 @@ gotnewcl:
 #else
 	Netchan_Setup(NS_SERVER, &newcl->netchan, from, qport, challenge, qfalse);
 #endif
+	if ( fragmentSize ) {
+		Netchan_SetFragmentSize( &newcl->netchan, fragmentSize );
+		// a web client's, which an admin may want to tell apart
+		Com_Printf( "Client %i: fragments of %i bytes\n", clientNum, fragmentSize );
+	}
 	// init the netchan queue
 	newcl->netchan_end_queue = &newcl->netchan_start_queue;
 

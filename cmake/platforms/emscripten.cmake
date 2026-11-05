@@ -45,6 +45,8 @@ list(APPEND CLIENT_LINK_OPTIONS
     -sEXPORT_NAME=${CLIENT_NAME}
     # the page keeps the home in the browser's storage (client.html.in)
     -lidbfs.js
+    # the browser's connections to servers (code/web/net_web.c)
+    --js-library=${SOURCE_DIR}/web/net_web.js
 )
 
 option(EMSCRIPTEN_PRELOAD_FILE "Preload game files into .data file" OFF)

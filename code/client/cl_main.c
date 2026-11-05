@@ -1599,6 +1599,9 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	
 	CL_ClearState ();
 
+	// a transport's connection to the server ends with it
+	NET_CloseConnection( clc.serverAddress );
+
 	// wipe the client connection
 	Com_Memset( &clc, 0, sizeof( clc ) );
 
@@ -2003,6 +2006,41 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 		sizeof( clc.expectedFingerprint ) );
 	CL_ConnectSend();
 }
+
+#ifdef __EMSCRIPTEN__
+/*
+================
+CL_RtcConnect_f
+
+rtc_connect <path>: a connect through the browser (P7). The page opens a
+WebRTC connection and posts its offer to the path, on the page's own
+server, which answers with the server's gateway's; the connect then goes
+over that connection as over UDP. Joining by code will find the answer
+through the rendezvous instead; until then this is for tests
+================
+*/
+static void CL_RtcConnect_f( void ) {
+	const char	*path = Cmd_Argv( 1 );
+	netadr_t	adr;
+	char		name[NET_ADDRSTRMAXLEN];
+
+	if ( Cmd_Argc() != 2 || path[0] != '/' || path[1] == '/' ) {
+		Com_Printf( "usage: rtc_connect <path on this page's own server>\n" );
+		return;
+	}
+	// opened first: the connect's start closes the one before
+	if ( !NET_WebOpen( path, &adr ) ) {
+		Com_Printf( "This browser can't connect to servers: it has no WebRTC.\n" );
+		return;
+	}
+	// reconnect needs a new connection, so it has nothing to go back to
+	cl_reconnectArgs[0] = '\0';
+	Q_strncpyz( name, NET_AdrToString( adr ), sizeof( name ) );
+	CL_ConnectBegin( name );
+	clc.serverAddress = adr;
+	CL_ConnectSend();
+}
+#endif
 
 #define MAX_RCON_MESSAGE 1024
 
@@ -3308,6 +3346,10 @@ void CL_CheckForResend( void ) {
 			if ( clc.clientNonceSet ) {
 				Ident_AppendHex( tokens, sizeof( tokens ), "ofc", clc.clientNonce );
 			}
+			// fragments the browser's connection carries whole
+			if ( clc.serverAddress.type == NA_WEB ) {
+				Com_AppendExtensionToken( tokens, sizeof( tokens ), "off", va( "%d", NET_WEB_FRAGMENT_SIZE ) );
+			}
 		}
 		Com_sprintf(data, sizeof(data), "getchallenge %d %s%s", clc.challenge, com_gamename->string, tokens);
 
@@ -3657,6 +3699,37 @@ static uint32_t CL_ServerExtensions( int firstArg, uint64_t *key ) {
 
 /*
 =================
+CL_ServerFragmentSize
+
+The fragment size challengeResponse's tokens agree to: the one this
+client asked for, repeated (off), or 0 for the classic one, never with
+the legacy protocol
+=================
+*/
+static int CL_ServerFragmentSize( void ) {
+	extTokens_t	tokens;
+	int			size;
+
+	if ( clc.serverAddress.type != NA_WEB || Com_ParseExtensionTokens( Cmd_ArgsFrom( 4 ), &tokens ) ) {
+		return 0;
+	}
+#ifdef LEGACY_PROTOCOL
+	if ( clc.compat ) {
+		return 0;
+	}
+#endif
+	size = Com_ParseFragmentSize( Com_ExtensionValue( &tokens, "off" ) );
+	if ( size != NET_WEB_FRAGMENT_SIZE ) {
+		if ( size ) {
+			Com_DPrintf( "challengeResponse: off %d, not the %d asked for\n", size, NET_WEB_FRAGMENT_SIZE );
+		}
+		return 0;
+	}
+	return size;
+}
+
+/*
+=================
 CL_ServerProof
 
 Whether challengeResponse's tokens prove the server's key over this
@@ -3863,6 +3936,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		}
 		clc.ofx = ofx;
 		clc.identityProved = proved;
+		clc.fragmentSize = CL_ServerFragmentSize();
 
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
@@ -3937,7 +4011,10 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		}
 #ifdef LEGACY_PROTOCOL
 		else {
+			// nor the fragment size: compat can be set after
+			// challengeResponse, and such a server splits at the classic one
 			clc.ofx = 0;
+			clc.fragmentSize = 0;
 		}
 #endif
 		Com_DPrintf( "connectResponse: extensions %x\n", clc.ofx );
@@ -3949,6 +4026,10 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		Netchan_Setup(NS_CLIENT, &clc.netchan, from, Cvar_VariableValue("net_qport"),
 			      clc.challenge, qfalse);
 #endif
+		// what challengeResponse agreed, as the server's netchan splits
+		if ( clc.fragmentSize ) {
+			Netchan_SetFragmentSize( &clc.netchan, clc.fragmentSize );
+		}
 
 		clc.state = CA_CONNECTED;
 		clc.lastPacketSentTime = -9999;		// send first packet immediately
@@ -4118,6 +4199,27 @@ void CL_CheckTimeout( void ) {
 		}
 	} else {
 		cl.timeoutcount = 0;
+	}
+}
+
+/*
+==================
+CL_CheckConnection
+
+A connection its transport knows failed or closed, as a web client's
+does, ends the connect, or the game, at once and says why, rather than at
+a timeout
+==================
+*/
+static void CL_CheckConnection( void ) {
+	const char	*failure;
+
+	if ( clc.state < CA_CONNECTING || clc.state == CA_CINEMATIC ) {
+		return;
+	}
+	failure = NET_ConnectionFailure( clc.serverAddress );
+	if ( failure ) {
+		Com_Error( ERR_DROP, "%s", failure );
 	}
 }
 
@@ -4384,6 +4486,7 @@ void CL_Frame ( int msec ) {
 	// if we haven't gotten a packet in a long time,
 	// drop the connection
 	CL_CheckTimeout();
+	CL_CheckConnection();
 
 	// send intentions now
 	CL_SendCmd();
@@ -5227,6 +5330,9 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
+#ifdef __EMSCRIPTEN__
+	Cmd_AddCommand( "rtc_connect", CL_RtcConnect_f );
+#endif
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);
 	Cmd_AddCommand ("globalservers", CL_GlobalServers_f);
@@ -5311,6 +5417,9 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");
+#ifdef __EMSCRIPTEN__
+	Cmd_RemoveCommand( "rtc_connect" );
+#endif
 	Cmd_RemoveCommand ("reconnect");
 	Cmd_RemoveCommand ("localservers");
 	Cmd_RemoveCommand ("globalservers");

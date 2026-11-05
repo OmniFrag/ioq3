@@ -186,6 +186,9 @@ typedef struct {
 	// them, the bits challengeResponse agreed
 	uint32_t	ofx;
 	uint64_t	contentKey;
+	// the fragment size the server agreed to on challengeResponse (off),
+	// which the netchan splits at; 0 for the classic one
+	int			fragmentSize;
 	// with OFX_IDENTITY, this connect's nonce (ofc), and once the server
 	// proved its key on challengeResponse, the key and its nonce, which
 	// the connect's proof of this device signs (identity.h)

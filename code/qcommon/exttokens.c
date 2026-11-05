@@ -174,6 +174,30 @@ qboolean Com_ParseExtensionBits( const char *value, uint32_t *bits ) {
 
 /*
 =================
+Com_ParseFragmentSize
+=================
+*/
+int Com_ParseFragmentSize( const char *value ) {
+	int		size = 0;
+	int		i;
+
+	if ( !value || value[0] == '0' ) {
+		return 0;
+	}
+	for ( i = 0; value[i] >= '0' && value[i] <= '9'; i++ ) {
+		if ( i == 4 ) {
+			return 0;
+		}
+		size = size * 10 + value[i] - '0';
+	}
+	if ( value[i] || size < EXT_FRAGMENT_MIN || size > EXT_FRAGMENT_MAX ) {
+		return 0;
+	}
+	return size;
+}
+
+/*
+=================
 Com_ParseExtensionKey
 =================
 */

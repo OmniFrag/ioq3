@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "exttokens.h"
 
 /*
 
@@ -50,6 +51,13 @@ to the new value before sending out any replies.
 #define	MAX_PACKETLEN			1400		// max size of a network packet
 
 #define	FRAGMENT_SIZE			(MAX_PACKETLEN - 100)
+#if FRAGMENT_SIZE != EXT_FRAGMENT_MAX
+#error "off's largest size must be the classic fragment size"
+#endif
+
+// a channel's fragment size: the classic one, unless both ends agreed on
+// a smaller one (Netchan_SetFragmentSize)
+#define CHAN_FRAGMENT_SIZE( chan )	( (chan)->fragmentSize ? (chan)->fragmentSize : FRAGMENT_SIZE )
 #define	PACKET_HEADER			10			// two ints and a short
 
 #define	FRAGMENT_BIT	(1U<<31)
@@ -100,6 +108,22 @@ void Netchan_Setup(netsrc_t sock, netchan_t *chan, netadr_t adr, int qport, int 
 }
 
 /*
+==============
+Netchan_SetFragmentSize
+
+The fragment size both ends agreed on (off, exttokens.h), from
+EXT_FRAGMENT_MIN to EXT_FRAGMENT_MAX; both must split at the same size, as
+a fragment shorter than it is the last
+==============
+*/
+void Netchan_SetFragmentSize( netchan_t *chan, int size ) {
+	if ( size < EXT_FRAGMENT_MIN || size > EXT_FRAGMENT_MAX ) {
+		Com_Error( ERR_DROP, "Netchan_SetFragmentSize: size = %i", size );
+	}
+	chan->fragmentSize = size;
+}
+
+/*
 =================
 Netchan_TransmitNextFragment
 
@@ -129,7 +153,7 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
 
 	// copy the reliable message to the packet first
-	fragmentLength = FRAGMENT_SIZE;
+	fragmentLength = CHAN_FRAGMENT_SIZE( chan );
 	if ( chan->unsentFragmentStart  + fragmentLength > chan->unsentLength ) {
 		fragmentLength = chan->unsentLength - chan->unsentFragmentStart;
 	}
@@ -159,7 +183,7 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 	// that is exactly the fragment length still needs to send
 	// a second packet of zero length so that the other side
 	// can tell there aren't more to follow
-	if ( chan->unsentFragmentStart == chan->unsentLength && fragmentLength != FRAGMENT_SIZE ) {
+	if ( chan->unsentFragmentStart == chan->unsentLength && fragmentLength != CHAN_FRAGMENT_SIZE( chan ) ) {
 		chan->outgoingSequence++;
 		chan->unsentFragments = qfalse;
 	}
@@ -184,7 +208,7 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 	chan->unsentFragmentStart = 0;
 
 	// fragment large reliable messages
-	if ( length >= FRAGMENT_SIZE ) {
+	if ( length >= CHAN_FRAGMENT_SIZE( chan ) ) {
 		chan->unsentFragments = qtrue;
 		chan->unsentLength = length;
 		Com_Memcpy( chan->unsentBuffer, data, length );
@@ -370,7 +394,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		chan->fragmentLength += fragmentLength;
 
 		// if this wasn't the last fragment, don't process anything
-		if ( fragmentLength == FRAGMENT_SIZE ) {
+		if ( fragmentLength == CHAN_FRAGMENT_SIZE( chan ) ) {
 			return qfalse;
 		}
 
