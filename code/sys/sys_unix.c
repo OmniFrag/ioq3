@@ -884,6 +884,23 @@ FILE *Sys_FCreateReadable( const char *ospath )
 
 /*
 ==================
+Sys_FOpenPrivate
+
+As Sys_FOpen, but a file it makes is readable by its user alone, whatever
+the umask
+==================
+*/
+FILE *Sys_FOpenPrivate( const char *ospath, const char *mode )
+{
+	mode_t	saved = umask( 0077 );
+	FILE	*f = Sys_FOpen( ospath, mode );
+
+	umask( saved );
+	return f;
+}
+
+/*
+==================
 Sys_HardLink
 ==================
 */

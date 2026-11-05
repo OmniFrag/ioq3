@@ -1028,8 +1028,8 @@ long FS_BaseDir_FOpenFileRead(const char *filename, fileHandle_t *fp)
 FS_OpenOSFile
 
 A file outside the search path opened to write, its folders made: a
-private one readable by its user alone (umask 077), as tokens and a
-server's own state are
+private one readable by its user alone (Sys_FOpenPrivate), as tokens and
+a server's own state are
 ===========
 */
 static FILE *FS_OpenOSFile( const char *ospath, const char *mode, qboolean private ) {
@@ -1041,8 +1041,11 @@ static FILE *FS_OpenOSFile( const char *ospath, const char *mode, qboolean priva
 	if ( FS_CreatePath( ospath ) ) {
 		return NULL;
 	}
+	if ( private ) {
+		return Sys_FOpenPrivate( ospath, mode );
+	}
 #ifndef _WIN32
-	saved = umask( private ? 0077 : 0022 );
+	saved = umask( 0022 );
 #endif
 	f = Sys_FOpen( ospath, mode );
 #ifndef _WIN32

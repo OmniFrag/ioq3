@@ -2093,6 +2093,10 @@ qboolean Sys_MkdirReadable( const char *path );
 // a new file, for writing, others can read; NULL if anything is there
 // already, so a link to elsewhere is never written through
 FILE	*Sys_FCreateReadable( const char *ospath );
+// a file opened as Sys_FOpen does, to write or append, that its user
+// alone can read (on Windows, the system and the administrators too), not
+// what the folder passes down
+FILE	*Sys_FOpenPrivate( const char *ospath, const char *mode );
 // to, a hard link to the file from on the same volume; qfalse where there
 // can't be one, and the caller copies instead
 qboolean Sys_HardLink( const char *from, const char *to );

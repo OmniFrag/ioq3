@@ -38,6 +38,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <io.h>
 #include <conio.h>
 #include <wincrypt.h>
+#include <sddl.h>
+#include <aclapi.h>
 #include <shlobj.h>
 #include <psapi.h>
 // netfw.h's GUIDs, which no import library has, are defined here
@@ -466,15 +468,27 @@ const char *Sys_Dirname( char *path )
 
 /*
 ==============
+Sys_BadOSPath
+
+Whether Windows would open another file than the path names: it ignores
+trailing spaces and periods, which can get around Quake 3 file system
+restrictions
+==============
+*/
+static qboolean Sys_BadOSPath( const char *ospath )
+{
+	size_t length = strlen( ospath );
+
+	return length == 0 || ospath[length-1] == ' ' || ospath[length-1] == '.';
+}
+
+/*
+==============
 Sys_FOpen
 ==============
 */
 FILE *Sys_FOpen( const char *ospath, const char *mode ) {
-	size_t length;
-
-	// Windows API ignores all trailing spaces and periods which can get around Quake 3 file system restrictions.
-	length = strlen( ospath );
-	if ( length == 0 || ospath[length-1] == ' ' || ospath[length-1] == '.' ) {
+	if ( Sys_BadOSPath( ospath ) ) {
 		return NULL;
 	}
 
@@ -525,6 +539,32 @@ qboolean Sys_MkdirReadable( const char *path )
 
 /*
 ==================
+Sys_FileFromHandle
+
+A handle opened to write as a FILE, with mode's ("wb" or "ab"); the
+handle is closed if it can't be
+==================
+*/
+static FILE *Sys_FileFromHandle( HANDLE handle, const char *mode )
+{
+	int		fd = _open_osfhandle( (intptr_t)handle, ( mode[0] == 'a' ? _O_APPEND : 0 ) | _O_WRONLY | _O_BINARY );
+	FILE	*f;
+
+	if( fd < 0 )
+	{
+		CloseHandle( handle );
+		return NULL;
+	}
+
+	f = _fdopen( fd, mode );
+	if( !f )
+		_close( fd );
+
+	return f;
+}
+
+/*
+==================
 Sys_FCreateReadable
 
 CREATE_NEW, so a link planted at ospath is never followed
@@ -534,24 +574,184 @@ FILE *Sys_FCreateReadable( const char *ospath )
 {
 	HANDLE	handle = CreateFile( ospath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
 		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL );
-	int		fd;
-	FILE	*f;
 
 	if( handle == INVALID_HANDLE_VALUE )
 		return NULL;
 
-	fd = _open_osfhandle( (intptr_t)handle, _O_WRONLY | _O_BINARY );
-	if( fd < 0 )
+	return Sys_FileFromHandle( handle, "wb" );
+}
+
+/*
+==================
+Sys_PrivateDescriptor
+
+A security descriptor whose access list allows this process's user, the
+system and the administrators alone, and inherits nothing from the folder,
+with that list in *dacl: made once, as the user never changes. NULL if the
+user can't be found
+==================
+*/
+static PSECURITY_DESCRIPTOR sys_privateDescriptor;
+static PACL sys_privateDacl;
+
+static BOOL CALLBACK Sys_MakePrivateDescriptor( PINIT_ONCE once, PVOID parameter, PVOID *context )
+{
+	HANDLE		token;
+	DWORD		size = 0;
+	TOKEN_USER	*user;
+	LPSTR		sid = NULL;
+	char		sddl[256];
+	BOOL		present = FALSE, defaulted = FALSE;
+
+	if( !OpenProcessToken( GetCurrentProcess( ), TOKEN_QUERY, &token ) )
+		return TRUE;
+
+	GetTokenInformation( token, TokenUser, NULL, 0, &size );
+	user = size ? malloc( size ) : NULL;
+	if( user && GetTokenInformation( token, TokenUser, user, size, &size ) &&
+		ConvertSidToStringSidA( user->User.Sid, &sid ) )
+	{
+		// P: protected from the folder's; FA: all, for the user, SY and BA
+		Com_sprintf( sddl, sizeof( sddl ), "D:P(A;;FA;;;%s)(A;;FA;;;SY)(A;;FA;;;BA)", sid );
+		if( ConvertStringSecurityDescriptorToSecurityDescriptorA( sddl, SDDL_REVISION_1, &sys_privateDescriptor, NULL ) &&
+			( !GetSecurityDescriptorDacl( sys_privateDescriptor, &present, &sys_privateDacl, &defaulted ) || !present ) )
+		{
+			LocalFree( sys_privateDescriptor );
+			sys_privateDescriptor = NULL;
+		}
+		LocalFree( sid );
+	}
+	free( user );
+	CloseHandle( token );
+	return TRUE;
+}
+
+static PSECURITY_DESCRIPTOR Sys_PrivateDescriptor( PACL *dacl )
+{
+	static INIT_ONCE	once = INIT_ONCE_STATIC_INIT;
+
+	InitOnceExecuteOnce( &once, Sys_MakePrivateDescriptor, NULL, NULL );
+	*dacl = sys_privateDacl;
+	return sys_privateDescriptor;
+}
+
+/*
+==================
+Sys_AllowsOnly
+
+Whether an access list allows no one but those the private one allows: a
+list that only denies, or allows less, is private too
+==================
+*/
+static qboolean Sys_AllowsOnly( PACL held, PACL dacl )
+{
+	ACL_SIZE_INFORMATION	info;
+	ACE_HEADER				*ace;
+	ACCESS_ALLOWED_ACE		*ours;
+	DWORD					i, j;
+
+	if( !GetAclInformation( held, &info, sizeof( info ), AclSizeInformation ) )
+		return qfalse;
+
+	for( i = 0; i < info.AceCount; i++ )
+	{
+		if( !GetAce( held, i, (LPVOID *)&ace ) )
+			return qfalse;
+		if( ace->AceType == ACCESS_DENIED_ACE_TYPE )
+			continue;
+		if( ace->AceType != ACCESS_ALLOWED_ACE_TYPE )
+			return qfalse;
+		for( j = 0; ; j++ )
+		{
+			if( !GetAce( dacl, j, (LPVOID *)&ours ) )
+				return qfalse;
+			if( EqualSid( (PSID)&( (ACCESS_ALLOWED_ACE *)ace )->SidStart, (PSID)&ours->SidStart ) )
+				break;
+		}
+	}
+
+	return qtrue;
+}
+
+/*
+==================
+Sys_KeepPrivate
+
+An open file that was there already given the private access list, unless
+it has a protected one that allows no one else: a file the server keeps
+adding to (history) gets it once, not at every write, and one another user
+made with a protected list that lets everyone in gets it too
+==================
+*/
+static qboolean Sys_KeepPrivate( HANDLE handle, PACL dacl )
+{
+	PSECURITY_DESCRIPTOR			current = NULL;
+	SECURITY_DESCRIPTOR_CONTROL		control = 0;
+	DWORD							revision;
+	PACL							held = NULL;
+	qboolean						kept;
+
+	if( GetSecurityInfo( handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, &held, NULL,
+		&current ) == ERROR_SUCCESS )
+	{
+		// a NULL list allows everyone
+		kept = GetSecurityDescriptorControl( current, &control, &revision ) && ( control & SE_DACL_PROTECTED ) &&
+			held && Sys_AllowsOnly( held, dacl );
+		LocalFree( current );
+		if( kept )
+			return qtrue;
+	}
+
+	return SetSecurityInfo( handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+		NULL, NULL, dacl, NULL ) == ERROR_SUCCESS;
+}
+
+/*
+==================
+Sys_FOpenPrivate
+
+As Sys_FOpen, to write ("wb") or append ("ab"), but the file is readable
+by this process's user, the system and the administrators alone, as a
+umask of 077 leaves one elsewhere: what the folder would pass down to it
+(another user's, everyone's) is set aside. One written is made anew, this
+user's, so a file another user put there first is never written into; one
+appended to there already gets the list too, unless this user can't
+change its list (an elevated run made it), when it's appended to as
+Sys_FOpen would
+==================
+*/
+FILE *Sys_FOpenPrivate( const char *ospath, const char *mode )
+{
+	PACL				dacl;
+	SECURITY_ATTRIBUTES	attributes = { sizeof( attributes ), Sys_PrivateDescriptor( &dacl ), FALSE };
+	qboolean			append = mode[0] == 'a';
+	HANDLE				handle;
+
+	if( Sys_BadOSPath( ospath ) || !attributes.lpSecurityDescriptor )
+		return NULL;
+
+	if( !append )
+		DeleteFile( ospath );
+
+	// a new file takes the descriptor as it's made
+	handle = CreateFile( ospath, GENERIC_WRITE | WRITE_DAC | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE,
+		&attributes, append ? OPEN_ALWAYS : CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL );
+	if( handle == INVALID_HANDLE_VALUE && append && GetLastError( ) == ERROR_ACCESS_DENIED )
+	{
+		handle = CreateFile( ospath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL, NULL );
+		return handle == INVALID_HANDLE_VALUE ? NULL : Sys_FileFromHandle( handle, mode );
+	}
+	if( handle == INVALID_HANDLE_VALUE )
+		return NULL;
+
+	if( append && GetLastError( ) == ERROR_ALREADY_EXISTS && !Sys_KeepPrivate( handle, dacl ) )
 	{
 		CloseHandle( handle );
 		return NULL;
 	}
 
-	f = _fdopen( fd, "wb" );
-	if( !f )
-		_close( fd );
-
-	return f;
+	return Sys_FileFromHandle( handle, mode );
 }
 
 /*
