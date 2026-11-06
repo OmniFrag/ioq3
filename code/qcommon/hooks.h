@@ -145,6 +145,13 @@ typedef struct {
 	void		(*startSummary)( void );
 	qboolean	(*checkRotation)( void );
 
+	// The console's status command printed the server's map and players,
+	// or that it isn't running: print lines of the extension's own after
+	// them, such as the program's uptime. Not called when the output is
+	// redirected (rcon's reply, a tool's), which stays as stock prints it
+	// for the admin bots and tools that parse it
+	void		(*status)( void );
+
 	// What the server does, dedicated or a listen server's, each called
 	// once it has happened. clientNum runs from 0 to sv_maxclients - 1,
 	// and the SV_Ext* accessors below read the client's details.
@@ -341,6 +348,9 @@ qboolean	Hooks_WriteServerSettings( void );
 qboolean	Hooks_StartDefault( void );
 void	Hooks_StartSummary( void );
 qboolean	Hooks_CheckRotation( void );
+// the status command's lines of the extensions' own, after its players,
+// on the console alone (not under a redirect)
+void	Hooks_Status( void );
 // a crash stops the program: before the server shuts down
 void	Hooks_Signal( void );
 // the longest a dedicated server with no map may wait, as the extensions

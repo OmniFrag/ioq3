@@ -1342,6 +1342,9 @@ static int SV_Strlen( const char *str ) {
 /*
 ================
 SV_Status_f
+
+The map and its players, then on the console the engine extensions'
+lines (Hooks_Status)
 ================
 */
 static void SV_Status_f( void ) {
@@ -1354,6 +1357,7 @@ static void SV_Status_f( void ) {
 	// make sure server is running
 	if ( !com_sv_running->integer ) {
 		Com_Printf( "Server is not running.\n" );
+		Hooks_Status();
 		return;
 	}
 
@@ -1408,6 +1412,7 @@ static void SV_Status_f( void ) {
 		Com_Printf ("\n");
 	}
 	Com_Printf ("\n");
+	Hooks_Status();
 }
 
 /*

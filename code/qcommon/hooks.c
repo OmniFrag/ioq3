@@ -311,6 +311,15 @@ qboolean Hooks_CheckRotation( void ) {
 	return qfalse;
 }
 
+void Hooks_Status( void ) {
+	// rcon's reply to status, and a tool's, stays as stock prints it, for
+	// the admin bots and tools that parse it
+	if ( Com_IsRedirecting() ) {
+		return;
+	}
+	HOOKS_CALL( status, () );
+}
+
 void Hooks_MapLoading( const char *map ) {
 	HOOKS_CALL( mapLoading, ( map ) );
 }
