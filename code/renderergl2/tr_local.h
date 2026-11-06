@@ -1473,6 +1473,7 @@ typedef struct {
 	
 	qboolean framebufferMultisample;
 	qboolean framebufferBlit;
+	qboolean framebufferBlitScaled;	// a multisampled blit resolving into a smaller box
 
 	qboolean depthClamp;
 	qboolean seamlessCubeMap;
@@ -2673,6 +2674,7 @@ void R_ShutdownLayers2D( void );
 void RB_BindTarget2D( qboolean color );
 const void *RB_Layer2D( const void *data );
 void RB_EndFrame2D( void );
+void RB_ScreenMean3D( FBO_t *view, ivec4_t box );
 const void *RB_Draw2D( const void *data );
 
 void RE_BeginFrame( stereoFrame_t stereoFrame );

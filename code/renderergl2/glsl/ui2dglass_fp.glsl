@@ -1,6 +1,6 @@
 uniform sampler2D u_DiffuseMap;		// the filters' result before the glass: the frost
 uniform sampler2D u_GlassStateMap;	// the glass pass: this frame's state; the state pass: the frame before's
-uniform sampler2D u_GlassScreenMap;	// the state pass: the window's picture, for the screen's brightness
+uniform sampler2D u_GlassScreenMap;	// the state pass: the screen drawn at MEAN_SIZE, for its mean
 
 // A glass filter's two passes (tr_ui2d_layers.c), written from published
 // math: u_GlassPass 0 the glass, the composite's last pass, into its
@@ -46,6 +46,9 @@ varying vec2   var_TexCoord;		// the glass pass's quad covers the target: p / it
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 // a state texel's height: the state is three rows high
 const float STATE_ROW = 1.0 / 3.0;
+// the screen's mean's texels (tr_ui2d_layers.c's SCREEN_MEAN_WIDTH and
+// SCREEN_MEAN_HEIGHT)
+const vec2 MEAN_SIZE = vec2(32.0, 32.0);
 // a flash, which the tint meets at once: the backdrop this much brighter
 // than the frame before (darker, under a light tint), and the screen's
 // brightness this much too, as an explosion or a muzzle flash lights it;
@@ -106,21 +109,23 @@ float FrostLuma(vec2 at)
 	return dot(Straight(texture2D(u_DiffuseMap, at)), LUMA);
 }
 
-// the window's brightness at a 3x3 grid a sixth in from each edge, in
-// display units (its alpha is the 3D view's leftovers, not coverage)
+// the screen's mean brightness in display units: the 3D view's, or the
+// window's without one, drawn at MEAN_SIZE once a frame (RB_TakeScreenMean2D),
+// each linear read where four texels meet taking their mean, so these
+// take all of theirs (its alpha is the view's leftovers, not coverage)
 float ScreenLuma()
 {
 	float y = 0.0;
 
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 16; i++)
 	{
-		for (int j = 0; j < 3; j++)
+		for (int j = 0; j < 16; j++)
 		{
-			vec2 at = vec2(float(i), float(j)) / 3.0 + 1.0 / 6.0;
+			vec2 at = (2.0 * vec2(float(i), float(j)) + 1.0) / MEAN_SIZE;
 			y += dot(texture2D(u_GlassScreenMap, at).rgb / u_ColorScale, LUMA);
 		}
 	}
-	return clamp(y / 9.0, 0.0, 1.0);
+	return clamp(y / 256.0, 0.0, 1.0);
 }
 
 // how much of a tint brings a backdrop whose brightness is y to its goal: a

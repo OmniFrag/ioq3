@@ -1887,6 +1887,11 @@ const void *RB_PostProcess(const void *data)
 		if (resolveFbo && r_flares->integer && !r_depthPrepass->integer)
 			FBO_FastBlit(dstFbo, NULL, resolveFbo, NULL, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 
+		// the view's mean, which a glass's flash needs up (RB_ScreenMean3D)
+		VectorSet4(dstBox, backEnd.viewParms.viewportX, backEnd.viewParms.viewportY,
+			backEnd.viewParms.viewportWidth, backEnd.viewParms.viewportHeight);
+		RB_ScreenMean3D(dstFbo, dstBox);
+
 		return (const void *)(cmd + 1);
 	}
 
@@ -1961,6 +1966,10 @@ const void *RB_PostProcess(const void *data)
 		RB_DrawScaledView(srcFbo);
 	else if (srcFbo != dstFbo)
 		FBO_FastBlit(srcFbo, srcBox, dstFbo, dstBox, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+	// the view's mean, which a glass's flash needs up, from its resolved and
+	// finished picture (RB_ScreenMean3D)
+	RB_ScreenMean3D(srcFbo, srcBox);
 
 #if 0
 	if (0)

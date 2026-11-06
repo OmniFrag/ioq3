@@ -64,7 +64,11 @@ static struct {
 	// the one before
 	target2D_t	glassStates[2];
 	int			glassFrame, glassTime;
-	int			screenFrame;				// the frame the screen's points were last resolved in
+	int			glassDrawn;					// the last frame a glass's state was drawn in
+	// the screen's mean, a flash's measure (RB_TakeScreenMean2D), and the frame
+	// it was taken in
+	target2D_t	screenMean;
+	int			screenFrame, screenArea;	// and the area of the view it's from
 	float		glassDt;					// seconds the frame before took
 	struct {
 		int			serial;		// the glass's (filter2D_t's glassSerial)
@@ -113,21 +117,21 @@ qboolean R_Layers2DAvailable( void ) {
 ===============
 R_MakeTarget2D
 
-A target width by height, RGBA8; drawn into a renderbuffer with samples;
-with the 2D target's depth and stencil when shared
+A target width by height in format; drawn into a renderbuffer with
+samples; with the 2D target's depth and stencil when shared
 ===============
 */
-static void R_MakeTarget2D( target2D_t *t, int width, int height, int samples, FBO_t *shared ) {
+static void R_MakeTarget2D( target2D_t *t, int width, int height, int format, int samples, FBO_t *shared ) {
 	FBO_t	*texFbo = samples ? &t->resolveFbo : &t->fbo;
 
 	Com_Memset( t, 0, sizeof( *t ) );
 	t->image.width = t->image.uploadWidth = width;
 	t->image.height = t->image.uploadHeight = height;
-	t->image.internalFormat = GL_RGBA8;
+	t->image.internalFormat = format;
 	t->image.dataFormat = GL_RGBA;
 	t->image.dataType = GL_UNSIGNED_BYTE;
 	qglGenTextures( 1, &t->image.texnum );
-	qglTextureImage2DEXT( t->image.texnum, GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+	qglTextureImage2DEXT( t->image.texnum, GL_TEXTURE_2D, 0, format, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
 	qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
 	qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
 	qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
@@ -144,7 +148,7 @@ static void R_MakeTarget2D( target2D_t *t, int width, int height, int samples, F
 		t->fbo.width = width;
 		t->fbo.height = height;
 		qglGenFramebuffers( 1, &t->fbo.frameBuffer );
-		FBO_CreateBuffer( &t->fbo, GL_RGBA8, 0, samples );
+		FBO_CreateBuffer( &t->fbo, format, 0, samples );
 		R_CheckFBO( &t->resolveFbo );
 	}
 	if ( shared ) {
@@ -203,6 +207,7 @@ void R_ShutdownLayers2D( void ) {
 	for ( i = 0; i < 2; i++ ) {
 		R_FreeTarget2D( &ui2dLayers.glassStates[i] );
 	}
+	R_FreeTarget2D( &ui2dLayers.screenMean );
 	R_FreeFbo2D( &ui2dLayers.saveFbo );
 	Com_Memset( &ui2dLayers, 0, sizeof( ui2dLayers ) );
 }
@@ -456,7 +461,7 @@ static target2D_t *RB_Scratch2D( int level, const image_t *inUse1, const image_t
 		t++;
 	}
 	if ( !t->image.texnum ) {
-		R_MakeTarget2D( t, MAX( 1, ui2dLayers.width >> level ), MAX( 1, ui2dLayers.height >> level ), 0, NULL );
+		R_MakeTarget2D( t, MAX( 1, ui2dLayers.width >> level ), MAX( 1, ui2dLayers.height >> level ), GL_RGBA8, 0, NULL );
 	}
 	FBO_Bind( &t->fbo );
 	x0 = MAX( 0, ( read[0] >> level ) - margin );
@@ -898,7 +903,7 @@ static target2D_t *RB_GlassStates2D( int now ) {
 	target2D_t	*t = &ui2dLayers.glassStates[( ui2dLayers.glassFrame + now ) & 1];
 
 	if ( !t->image.texnum ) {
-		R_MakeTarget2D( t, MAX_FILTERS2D, 3, 0, NULL );
+		R_MakeTarget2D( t, MAX_FILTERS2D, 3, GL_RGBA8, 0, NULL );
 		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
 		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
 		FBO_Bind( &t->fbo );
@@ -907,33 +912,96 @@ static target2D_t *RB_GlassStates2D( int now ) {
 	return t;
 }
 
+// the screen's mean is drawn at this size, ui2dglass_fp.glsl's MEAN_SIZE
+#define SCREEN_MEAN_WIDTH	32
+#define SCREEN_MEAN_HEIGHT	32
+
+// whether the screen's mean was taken this frame
+static qboolean RB_ScreenMeanTaken2D( void ) {
+	return ui2dLayers.screenFrame == ui2dLayers.glassFrame + 1;
+}
+
 /*
 ===============
-RB_ScreenSamples2D
+RB_TakeScreenMean2D
 
-The window's picture, where a glass's state reads the screen's
-brightness, a 3x3 grid from a sixth in from each edge (ui2dglass_fp.glsl's
-ScreenLuma): resolved from its samples around those points once a frame,
-at its first glass. A flash brightens the screen broadly; a turn moves
-the picture but hardly changes its average
+What src holds within box (all of it with none), drawn at 32 by 32
+texels, each from its own part of the picture, which a glass's state
+averages (ui2dglass_fp.glsl's ScreenLuma) for the screen's brightness, to
+tell a flash, which brightens the screen broadly, from a turn, which moves
+the picture but hardly changes its mean. A multisampled src is resolved
+straight into those texels where desktop GL can (the target then in the
+frame's own format, as such a blit needs), else as a whole first
 ===============
 */
-static image_t *RB_ScreenSamples2D( void ) {
-	static const float	at[3] = { 1.0f / 6, 0.5f, 5.0f / 6 };
-	int					i, j, box[4];
+static void RB_TakeScreenMean2D( FBO_t *src, ivec4_t box ) {
+	target2D_t	*t = &ui2dLayers.screenMean;
 
-	if ( tr.msaaResolveFbo && ui2dLayers.screenFrame != ui2dLayers.glassFrame + 1 ) {
-		ui2dLayers.screenFrame = ui2dLayers.glassFrame + 1;
-		// 4 by 4 around each, so the two texels a linear read there blends
-		// are resolved however the point rounds, and with GL's rows going up
-		for ( i = 0; i < 3; i++ ) {
-			for ( j = 0; j < 3; j++ ) {
-				VectorSet4( box, (int)( at[i] * ui2dLayers.width ) - 1, (int)( at[j] * ui2dLayers.height ) - 1, 4, 4 );
-				RB_CopyBox2D( tr.renderFbo, tr.msaaResolveFbo, box );
-			}
-		}
+	if ( !src->colorImage[0] && !tr.msaaResolveFbo ) {
+		return;
 	}
-	return tr.msaaResolveFbo ? tr.msaaResolveFbo->colorImage[0] : tr.renderFbo->colorImage[0];
+	if ( !t->image.texnum ) {
+		R_MakeTarget2D( t, SCREEN_MEAN_WIDTH, SCREEN_MEAN_HEIGHT, glRefConfig.framebufferBlitScaled && tr.msaaResolveFbo
+			? tr.msaaResolveFbo->colorImage[0]->internalFormat : GL_RGBA8, 0, NULL );
+	}
+	// every channel, whatever the color mask
+	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+	if ( src->colorImage[0] ) {
+		FBO_Blit( src, box, NULL, &t->fbo, NULL, NULL, NULL, 0 );
+	} else if ( glRefConfig.framebufferBlitScaled
+		&& t->image.internalFormat == tr.msaaResolveFbo->colorImage[0]->internalFormat ) {
+		// a target made while the views drew apart is RGBA8, which such a
+		// blit from another format refuses
+		FBO_FastBlit( src, box, &t->fbo, NULL, GL_COLOR_BUFFER_BIT, GL_SCALED_RESOLVE_FASTEST_EXT );
+	} else {
+		FBO_FastBlit( src, box, tr.msaaResolveFbo, box, GL_COLOR_BUFFER_BIT, GL_NEAREST );
+		FBO_Blit( tr.msaaResolveFbo, box, NULL, &t->fbo, NULL, NULL, NULL, 0 );
+	}
+	qglColorMask( !backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3] );
+	// FBO_Blit leaves the target's viewport, which the 2D drawn next sets
+	// again only when it knows its own is gone (RB_SetGL2D)
+	backEnd.projection2D = qfalse;
+	ui2dLayers.screenFrame = ui2dLayers.glassFrame + 1;
+}
+
+/*
+===============
+RB_ScreenMean3D
+
+The screen's mean from a view of the world, at its end (RB_PostProcess),
+while glass is drawn: without the 2D, so a panel opening over it isn't
+taken for a flash. view holds it within box; the frame's largest view's,
+as a smaller one drawn first may be a window within it
+===============
+*/
+void RB_ScreenMean3D( FBO_t *view, ivec4_t box ) {
+	int		area = box[2] * box[3];
+
+	// glassDrawn 0 is none, as after R_ShutdownLayers2D, whose glassFrame is
+	// 0 too
+	if ( !tr.ui2dGlassShader.program || !ui2dLayers.glassDrawn || ui2dLayers.glassDrawn < ui2dLayers.glassFrame
+		|| ( RB_ScreenMeanTaken2D() && area <= ui2dLayers.screenArea ) ) {
+		return;
+	}
+	RB_TakeScreenMean2D( view, box );
+	ui2dLayers.screenArea = area;
+}
+
+/*
+===============
+RB_WindowMean2D
+
+The screen's mean from the 2D target as it is, where no view of the world
+gave it this frame: at a menu with no map, or the first frame glass is
+drawn. Taken before a glass's composite resolves its backdrop, which the
+whole window's resolve would otherwise overwrite
+===============
+*/
+static void RB_WindowMean2D( void ) {
+	if ( !RB_ScreenMeanTaken2D() ) {
+		RB_TakeScreenMean2D( tr.renderFbo, NULL );
+		ui2dLayers.screenArea = 0;
+	}
 }
 
 // how far a value easing with time constant tau goes in dt: all the way
@@ -973,6 +1041,7 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 		ui2dLayers.glass[s].start = !ui2dLayers.glass[s].frame || ui2dLayers.glass[s].frame != frame - 1;
 		ui2dLayers.glass[s].frame = frame;
 	}
+	ui2dLayers.glassDrawn = frame;
 	RB_ShapeRowsUp2D( cmd->state.clipShape, ui2dLayers.height, shape );
 	R_GlassLimits2D( glass, cmd->state.clipShape, &rim, &mirror );
 
@@ -1001,9 +1070,9 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 		RB_Ease2D( dt, p[GLASS2D_RISE] ), p[GLASS2D_FADE] > 0 ? MIN( dt / p[GLASS2D_FADE], 1 ) : 1 );
 	qglUniform1i( glassUniforms.start, ui2dLayers.glass[s].start );
 
-	// the state's three texels, every channel whatever the color mask, from
-	// the screen's picture too
-	GL_BindToTMU( RB_ScreenSamples2D(), TB_NORMALMAP );
+	// the state's three texels, every channel whatever the color mask, with
+	// the screen's mean too
+	GL_BindToTMU( &ui2dLayers.screenMean.image, TB_NORMALMAP );
 	FBO_Bind( &now->fbo );
 	RB_SetGL2D();
 	qglScissor( s, 0, 1, 3 );
@@ -1070,7 +1139,7 @@ const void *RB_Layer2D( const void *data ) {
 		}
 		t = &ui2dLayers.layers[ui2dLayers.depth];
 		if ( !t->image.texnum ) {
-			R_MakeTarget2D( t, ui2dLayers.width, ui2dLayers.height, ui2dLayers.samples, ui2dLayers.target );
+			R_MakeTarget2D( t, ui2dLayers.width, ui2dLayers.height, GL_RGBA8, ui2dLayers.samples, ui2dLayers.target );
 		}
 		VectorSet4( ui2dLayers.cleared[ui2dLayers.depth], 0, 0, 0, 0 );
 		ui2dLayers.depth++;
@@ -1117,6 +1186,12 @@ const void *RB_Layer2D( const void *data ) {
 			int		y1 = MAX( reads[1] + reads[3], written[1] + written[3] );
 
 			VectorSet4( reads, x0, y0, x1 - x0, y1 - y0 );
+		}
+		for ( i = 0; i < numFilters; i++ ) {
+			if ( cmd->filters[i].kind == FILTER2D_GLASS ) {
+				RB_WindowMean2D();
+				break;
+			}
 		}
 		read = RB_LayerFbo2D( cmd->source, box, reach );
 		image = read->colorImage[0];

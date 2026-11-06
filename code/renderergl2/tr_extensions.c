@@ -113,6 +113,20 @@ void GLimp_InitExtraExtensions(void)
 		ri.Printf(PRINT_ALL, result[2], extension);
 	}
 
+	// a multisampled framebuffer resolved straight into a smaller one, as
+	// the glass's screen mean takes the view (RB_ScreenMean3D)
+	extension = "GL_EXT_framebuffer_multisample_blit_scaled";
+	glRefConfig.framebufferBlitScaled = qfalse;
+	if (glRefConfig.framebufferMultisample && !qglesMajorVersion && SDL_GL_ExtensionSupported(extension))
+	{
+		glRefConfig.framebufferBlitScaled = qtrue;
+		ri.Printf(PRINT_ALL, result[1], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
 	//
 	// OpenGL ES extensions
 	//

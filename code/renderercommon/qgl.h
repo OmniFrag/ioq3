@@ -354,6 +354,9 @@ QGL_EXT_direct_state_access_PROCS;
 #ifndef GL_GPU_DISJOINT_EXT
 #define GL_GPU_DISJOINT_EXT 0x8FBB
 #endif
+#ifndef GL_SCALED_RESOLVE_FASTEST_EXT
+#define GL_SCALED_RESOLVE_FASTEST_EXT 0x90BA
+#endif
 
 extern int qglMajorVersion, qglMinorVersion;
 // timer queries (GL_ARB_timer_query, EXT_disjoint_timer_query), with the
