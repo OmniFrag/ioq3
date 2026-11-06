@@ -1364,6 +1364,7 @@ qboolean FS_FilenameCompare( const char *s1, const char *s2 );
 
 qboolean FS_RetailPak( const char *download, char *retail, int size );
 qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char *retail, int size );
+qboolean FS_DemoPak0Checksum( unsigned int checksum );
 // whether a download's pak ("<game>/<name>") is one of the game's own, known
 // by checksum, and its own name
 qboolean FS_InstalledPakNamed( const char *download );

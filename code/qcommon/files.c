@@ -7022,6 +7022,21 @@ qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char
 
 /*
 ================
+FS_DemoPak0Checksum
+
+Whether a pak's checksum is the demo's pak0's, whatever its name
+================
+*/
+qboolean FS_DemoPak0Checksum( unsigned int checksum ) {
+#ifndef STANDALONE
+	return checksum == DEMO_PAK0_CHECKSUM;
+#else
+	return qfalse;
+#endif
+}
+
+/*
+================
 FS_ChooseDemo
 
 With the full game's pak0 nowhere, and no base game asked for, plays the
