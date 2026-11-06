@@ -204,13 +204,25 @@ static const char *Content_HomeFile( const char *file ) {
 =================
 Content_MakeDirs
 
-The content folders, without FS_CreatePath's fatal error where the home
-can't take them: what's written there then fails, and says so
+The content folders, and each folder above them that's missing, as a new
+home has none until something's written there (a connect from the command
+line downloads before the config is saved); without FS_CreatePath's fatal
+error where the home can't take them: what's written there then fails, and
+says so
 =================
 */
 static void Content_MakeDirs( void ) {
-	Sys_Mkdir( Content_HomeFile( "cache" ) );
-	Sys_Mkdir( Content_HomeFile( CONTENT_DIR ) );
+	char	path[MAX_OSPATH], *c;
+
+	Q_strncpyz( path, Content_HomeFile( CONTENT_DIR ), sizeof( path ) );
+	for ( c = path + 1; *c; c++ ) {
+		if ( *c == PATH_SEP ) {
+			*c = '\0';
+			Sys_Mkdir( path );
+			*c = PATH_SEP;
+		}
+	}
+	Sys_Mkdir( path );
 }
 
 /*
