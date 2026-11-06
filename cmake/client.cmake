@@ -126,7 +126,6 @@ foreach(LIBRARY IN LISTS CLIENT_DEPLOY_LIBRARIES)
             ${LIBRARY}
             $<TARGET_FILE_DIR:${CLIENT_BINARY}>)
 
-    install(FILES ${LIBRARY} DESTINATION
-        # install() requires a relative path hence:
-        $<PATH:RELATIVE_PATH,$<TARGET_FILE_DIR:${CLIENT_BINARY}>,${CMAKE_BINARY_DIR}/$<CONFIG>>)
+    # installed beside the client (installer.cmake)
+    set_property(TARGET ${CLIENT_BINARY} APPEND PROPERTY INSTALL_FILES ${LIBRARY})
 endforeach()
