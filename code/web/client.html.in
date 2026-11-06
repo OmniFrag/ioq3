@@ -38,6 +38,15 @@ canvas:focus { outline: none; }
 #leaving svg { width: 48px; height: 48px; transform: rotate(-90deg); }
 #leaving circle { fill: none; }
 #leaving .track { stroke: rgba(0, 0, 0, 0.7); stroke-width: 8; }
+/* What the page asks before the game data downloads: an agreement to
+   accept, or the player's own files to choose. It takes clicks and its
+   words can be copied. */
+#ask { position: fixed; inset: 0; display: grid; place-items: center; font: 16px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); }
+#ask[hidden] { display: none; }
+#ask > div { background: rgba(0, 0, 0, 0.85); border-radius: 8px; padding: 16px 24px; max-width: min(44em, 90vw); max-height: 90dvh; overflow: auto; user-select: text; }
+#ask pre { white-space: pre-wrap; text-align: left; max-height: 55dvh; overflow: auto; font: 13px/1.4 ui-monospace, monospace; background: rgba(255, 255, 255, 0.06); padding: 8px; }
+#ask button, #ask label { font: inherit; margin: 8px 8px 0 0; padding: 6px 16px; border-radius: 6px; border: 1px solid rgb(120, 120, 120); background: rgb(40, 40, 40); color: inherit; cursor: pointer; display: inline-block; }
+#ask input[type=file] { display: none; }
 #leaving .fill { stroke: rgb(235, 235, 235); stroke-width: 4; stroke-dasharray: 1; stroke-dashoffset: 1; }
 #leaving.holding .fill { animation: leaving-fill var(--ring-fill) linear var(--ring-after) forwards; }
 @keyframes leaving-fill { to { stroke-dashoffset: 0; } }
@@ -49,6 +58,7 @@ canvas:focus { outline: none; }
 <canvas id=canvas tabindex=0></canvas>
 <div id=status hidden><div><span></span><progress hidden></progress></div></div>
 <div id=hints><div id=hint class=hint></div><div id=play class=hint></div></div>
+<div id=ask hidden></div>
 <div id=leaving><svg viewBox="0 0 48 48"><circle class=track cx=24 cy=24 r=20 /><circle class=fill cx=24 cy=24 r=20 pathLength=1 /></svg><span>Leaving fullscreen</span></div>
 
 <script type=module>
@@ -99,14 +109,15 @@ if (!webgl)
 
 // First set up the command line arguments and the Emscripten filesystem.
 const urlParams = new URLSearchParams(window.location.search);
-const com_basegame = urlParams.get('com_basegame') || BASEGAME;
+// The URL's game directory, or the config's (P358: a server's own page
+// names the one it plays), or BASEGAME; set once the config is in
+const urlBasegame = urlParams.get('com_basegame');
+let com_basegame = urlBasegame || BASEGAME;
 const fs_basegame = urlParams.get('fs_basegame') || '';
 const fs_game = urlParams.get('fs_game') || '';
 // Set for this visit only. The web's defaults, and a touch device's, are the
 // engine's; the canvas has its CSS box's size, and r_mode isn't used
-let generatedArguments = `
-    +set com_basegame "${com_basegame}"
-`;
+let generatedArguments = '';
 if (fs_basegame) generatedArguments += ` +set fs_basegame "${fs_basegame}" `;
 if (fs_game) generatedArguments += ` +set fs_game "${fs_game}" `;
 // ?fullscreen=0 plays this visit in the page's window, and 1 fullscreen
@@ -812,6 +823,122 @@ const configWritten = () => {
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveHome(); });
 addEventListener('pagehide', saveHome);
 
+// What the page asks the player, over the game: build(box, done) fills the
+// box, and calls done once it has its answer
+const askBox = document.getElementById('ask');
+const ask = (build) => new Promise((resolve) => {
+    const box = document.createElement('div');
+    askBox.replaceChildren(box);
+    build(box, () => {
+        askBox.hidden = true;
+        askBox.replaceChildren();
+        resolve();
+    });
+    showStatus();
+    askBox.hidden = false;
+});
+const paragraph = (box, text) => box.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
+const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+const store = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
+// FNV-1a's 32 bits, in hex: which text was accepted
+const textHash = (text) => {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+    return (hash >>> 0).toString(16);
+};
+
+// The agreement the config names, which files marked "agreement" download
+// only once the player has accepted: its whole text, after one line of the
+// page's on why it's shown (PLAN D11). The browser remembers an accepted
+// text, and asks again when it changes.
+const agree = async (agreement) => {
+    const response = await fetch(new URL(agreement.src, dataURL)).catch(() => null);
+    if (!response?.ok) failDownload(agreement.src, response);
+    const text = await response.text();
+    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    if (stored(key)) return;
+    await ask((box, done) => {
+        paragraph(box, `This server plays ${typeof agreement.for == 'string' ? agreement.for : 'game data'}, which comes with the agreement below. Accept it to download the data and play.`);
+        box.appendChild(Object.assign(document.createElement('pre'), { textContent: text }));
+        const accept = box.appendChild(Object.assign(document.createElement('button'), { textContent: 'Accept' }));
+        accept.addEventListener('click', () => {
+            store(key, '1');
+            done();
+        });
+    });
+};
+
+// Files the player brings from their own copy of the game, from its CD or
+// the folder it's installed in, chosen as files or as that whole folder and
+// matched by name, one in a folder of the file's game directory first (a
+// whole install has a pak0.pk3 in each). They're kept in the browser (IndexedDB) for the next
+// visit; one it won't keep is asked for again then.
+const ownDatabase = () => new Promise((resolve) => {
+    try {
+        const request = indexedDB.open(`${CLIENT_NAME}-own`, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('files');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+    } catch {
+        resolve(null);
+    }
+});
+const ownRequest = (db, mode, use) => new Promise((resolve) => {
+    if (!db) return resolve(undefined);
+    try {
+        const request = use(db.transaction('files', mode).objectStore('files'));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(undefined);
+    } catch {
+        resolve(undefined);
+    }
+});
+const fileName = (src) => src.match(/[^/]+$/)[0];
+const bring = async (own) => {
+    const db = await ownDatabase();
+    const have = new Map();
+    const kept = await Promise.all(own.map((file) => ownRequest(db, 'readonly', (files) => files.get(file.src.toLowerCase()))));
+    own.forEach((file, i) => { if (kept[i] instanceof Blob) have.set(file.src, kept[i]); });
+    const missing = () => own.filter((file) => !have.has(file.src));
+    if (missing().length) await ask((box, done) => {
+        const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
+        paragraph(box, `This server's game data comes from your own copy of the game: from its CD, or the ${folders} folder where it's installed. Choose the files, or that folder.`);
+        const left = paragraph(box, '');
+        const show = () => { left.textContent = `Still needed: ${missing().map((file) => fileName(file.src)).join(', ')}.`; };
+        const chooser = (label, folder) => {
+            const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true });
+            if (folder) input.webkitdirectory = true;
+            else input.accept = '.pk3';
+            const button = box.appendChild(Object.assign(document.createElement('label'), { textContent: label }));
+            button.appendChild(input);
+            input.addEventListener('change', () => {
+                const named = (f, chosen) => fileName(f.src).toLowerCase() === chosen.name.toLowerCase();
+                // the folder a chosen file is in, when a folder was chosen
+                const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
+                const take = (file, chosen) => {
+                    have.set(file.src, chosen);
+                    ownRequest(db, 'readwrite', (files) => files.put(chosen, file.src.toLowerCase()));
+                };
+                const chosenFiles = [...input.files];
+                for (const chosen of chosenFiles) {
+                    const file = missing().find((f) => named(f, chosen) && folderOf(chosen) === f.src.split('/')[0].toLowerCase());
+                    if (file) take(file, chosen);
+                }
+                for (const chosen of chosenFiles) {
+                    const file = missing().find((f) => named(f, chosen));
+                    if (file && ![...have.values()].includes(chosen)) take(file, chosen);
+                }
+                if (missing().length) show();
+                else done();
+            });
+        };
+        chooser('Choose files', false);
+        chooser('Choose a folder', true);
+        show();
+    });
+    return own.map((file) => ({ ...file, blob: have.get(file.src) }));
+};
+
 // Download the files the config lists for the game, all at once, showing
 // their progress against the sizes the server gives. A pak that's missing
 // is an error; other files may be, such as the QVMs a build that links its
@@ -819,11 +946,17 @@ addEventListener('pagehide', saveHome);
 const megabytes = (bytes) => Math.round(bytes / 1e6);
 const downloadGame = async (FS) => {
     const config = await configPromise;
-    const files = [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir).flatMap((gamedir) => {
+    const gamedirs = [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir);
+    const files = gamedirs.flatMap((gamedir) => {
         if (config[gamedir]?.files) return config[gamedir].files;
         console.warn(`Game directory '${gamedir}' cannot be used. It must have files listed in ${configFilename}.`);
         return [];
     });
+    const own = gamedirs.flatMap((gamedir) => Array.isArray(config[gamedir]?.own) ? config[gamedir].own : []);
+    if (files.some((file) => file.agreement) && config.agreement?.src) await agree(config.agreement);
+    // the player's own files read as the rest download
+    const brought = own.length ? await bring(own) : [];
+    const read = Promise.all(brought.map(async (file) => ({ ...file, data: new Uint8Array(await file.blob.arrayBuffer()) })));
     const downloading = new AbortController();
     const stop = (name, response) => {
         downloading.abort();
@@ -883,9 +1016,18 @@ const downloadGame = async (FS) => {
         // to size if it was grown
         FS.writeFile(`${dst}/${src.match(/[^/]+$/)[0]}`, size < data.length ? data.slice(0, size) : data, { canOwn: true });
     }));
+    if (brought.length) showStatus('Reading your files…');
+    for (const { src, dst, data } of await read) {
+        FS.mkdirTree(dst);
+        FS.writeFile(`${dst}/${fileName(src)}`, data, { canOwn: true });
+    }
 };
 
 const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
+const startConfig = await configPromise;
+if (!urlBasegame && typeof startConfig.basegame == 'string' && /^[\w.-]+$/.test(startConfig.basegame))
+    com_basegame = startConfig.basegame;
+generatedArguments = ` +set com_basegame "${com_basegame}" ${generatedArguments}`;
 ioquake3({
     canvas: canvas,
     present,
