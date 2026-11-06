@@ -58,11 +58,13 @@ static struct {
 	// at each, for a drop shadow's
 	target2D_t	scratch[BLUR_LEVELS][3];
 	FBO_t		saveFbo;					// a saved layer's texture is drawn through
-	// the glass filters' states, two texels each: this frame's and the
-	// frame before's take turns (RB_Glass2D), by the frames counted from 1,
-	// and each glass's last frame drawn, and whether it drew the one before
+	// the glass filters' states, a column of three texels each: this
+	// frame's and the frame before's take turns (RB_Glass2D), by the frames
+	// counted from 1, and each glass's last frame drawn, and whether it drew
+	// the one before
 	target2D_t	glassStates[2];
 	int			glassFrame, glassTime;
+	int			screenFrame;				// the frame the screen's points were last resolved in
 	float		glassDt;					// seconds the frame before took
 	struct {
 		int			serial;		// the glass's (filter2D_t's glassSerial)
@@ -80,7 +82,7 @@ static struct {
 // and ui2dglass's
 static struct {
 	GLint	pass, colorScale, box, radii, rim, light, darkColor, lightColor, tint, mode, glow, deform, invTargetRes,
-			stateMap, stateCoord, stateStep, smoothing, start;
+			stateMap, screenMap, stateCoord, smoothing, start;
 } glassUniforms;
 
 // ui2dfilter's u_FilterMode
@@ -253,12 +255,13 @@ void R_InitLayers2D( void ) {
 	glassUniforms.deform = qglGetUniformLocation( program, "u_GlassDeform" );
 	glassUniforms.invTargetRes = qglGetUniformLocation( program, "u_InvTargetRes" );
 	glassUniforms.stateMap = qglGetUniformLocation( program, "u_GlassStateMap" );
+	glassUniforms.screenMap = qglGetUniformLocation( program, "u_GlassScreenMap" );
 	glassUniforms.stateCoord = qglGetUniformLocation( program, "u_GlassStateCoord" );
-	glassUniforms.stateStep = qglGetUniformLocation( program, "u_GlassStateStep" );
 	glassUniforms.smoothing = qglGetUniformLocation( program, "u_GlassSmoothing" );
 	glassUniforms.start = qglGetUniformLocation( program, "u_GlassStart" );
 	GLSL_BindProgram( &tr.ui2dGlassShader );
 	qglUniform1i( glassUniforms.stateMap, TB_LIGHTMAP );
+	qglUniform1i( glassUniforms.screenMap, TB_NORMALMAP );
 }
 
 
@@ -887,21 +890,50 @@ static void RB_SaveLayer2D( const layer2DCommand_t *cmd ) {
 ===============
 RB_GlassStates2D
 
-A state texture of the glass filters', made when first needed, two
-texels a glass: this frame's (1) or the frame before's (0)
+A state texture of the glass filters', made when first needed, a column
+of three texels a glass: this frame's (1) or the frame before's (0)
 ===============
 */
 static target2D_t *RB_GlassStates2D( int now ) {
 	target2D_t	*t = &ui2dLayers.glassStates[( ui2dLayers.glassFrame + now ) & 1];
 
 	if ( !t->image.texnum ) {
-		R_MakeTarget2D( t, MAX_FILTERS2D * 2, 1, 0, NULL );
+		R_MakeTarget2D( t, MAX_FILTERS2D, 3, 0, NULL );
 		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
 		qglTextureParameteriEXT( t->image.texnum, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
 		FBO_Bind( &t->fbo );
 		FBO_ClearWhole( GL_COLOR_BUFFER_BIT, transparent );
 	}
 	return t;
+}
+
+/*
+===============
+RB_ScreenSamples2D
+
+The window's picture, where a glass's state reads the screen's
+brightness, a 3x3 grid from a sixth in from each edge (ui2dglass_fp.glsl's
+ScreenLuma): resolved from its samples around those points once a frame,
+at its first glass. A flash brightens the screen broadly; a turn moves
+the picture but hardly changes its average
+===============
+*/
+static image_t *RB_ScreenSamples2D( void ) {
+	static const float	at[3] = { 1.0f / 6, 0.5f, 5.0f / 6 };
+	int					i, j, box[4];
+
+	if ( tr.msaaResolveFbo && ui2dLayers.screenFrame != ui2dLayers.glassFrame + 1 ) {
+		ui2dLayers.screenFrame = ui2dLayers.glassFrame + 1;
+		// 4 by 4 around each, so the two texels a linear read there blends
+		// are resolved however the point rounds, and with GL's rows going up
+		for ( i = 0; i < 3; i++ ) {
+			for ( j = 0; j < 3; j++ ) {
+				VectorSet4( box, (int)( at[i] * ui2dLayers.width ) - 1, (int)( at[j] * ui2dLayers.height ) - 1, 4, 4 );
+				RB_CopyBox2D( tr.renderFbo, tr.msaaResolveFbo, box );
+			}
+		}
+	}
+	return tr.msaaResolveFbo ? tr.msaaResolveFbo->colorImage[0] : tr.renderFbo->colorImage[0];
 }
 
 // how far a value easing with time constant tau goes in dt: all the way
@@ -923,7 +955,7 @@ frame before. RB_Glass2D then draws the glass, which reads it
 static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glass, image_t *frost ) {
 	const float	*p = glass->params;
 	const float	*glow = cmd->glassGlow, *m = cmd->glassDeform;
-	int			s = glass->glassState, width = MAX_FILTERS2D * 2, frame = ui2dLayers.glassFrame + 1;
+	int			s = glass->glassState, width = MAX_FILTERS2D, frame = ui2dLayers.glassFrame + 1;
 	target2D_t	*before = RB_GlassStates2D( 0 ), *now = RB_GlassStates2D( 1 );
 	float		shape[8], rim, mirror, dt = ui2dLayers.glassDt, det = m[0] * m[3] - m[1] * m[2];
 	vec4_t		verts[4], white = { 1, 1, 1, 1 };
@@ -960,8 +992,8 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 	// it lies on the shape
 	qglUniform4f( glassUniforms.deform, m[3] / det, m[1] / det, m[2] / det, m[0] / det );
 	qglUniform2f( glassUniforms.invTargetRes, 1.0f / ui2dLayers.width, 1.0f / ui2dLayers.height );
-	qglUniform2f( glassUniforms.stateCoord, ( s * 2 + 0.5f ) / width, 0.5f );
-	qglUniform1f( glassUniforms.stateStep, 1.0f / width );
+	// the first of its three rows; the shader steps up by a third
+	qglUniform2f( glassUniforms.stateCoord, ( s + 0.5f ) / width, 0.5f / 3 );
 	// this frame's steps: the slow brightness's, the tint's easing back and
 	// thickening toward a gentle brightening, and the look's turn, at an
 	// even pace
@@ -969,19 +1001,24 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 		RB_Ease2D( dt, p[GLASS2D_RISE] ), p[GLASS2D_FADE] > 0 ? MIN( dt / p[GLASS2D_FADE], 1 ) : 1 );
 	qglUniform1i( glassUniforms.start, ui2dLayers.glass[s].start );
 
-	// the state's two texels, every channel whatever the color mask
+	// the state's three texels, every channel whatever the color mask, from
+	// the screen's picture too
+	GL_BindToTMU( RB_ScreenSamples2D(), TB_NORMALMAP );
 	FBO_Bind( &now->fbo );
 	RB_SetGL2D();
-	qglScissor( s * 2, 0, 2, 1 );
+	qglScissor( s, 0, 1, 3 );
 	qglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
 	VectorSet4( verts[0], 0, 0, 0, 1 );
 	VectorSet4( verts[1], width, 0, 0, 1 );
-	VectorSet4( verts[2], width, 1, 0, 1 );
-	VectorSet4( verts[3], 0, 1, 0, 1 );
+	VectorSet4( verts[2], width, 3, 0, 1 );
+	VectorSet4( verts[3], 0, 3, 0, 1 );
 	GL_BindToTMU( &before->image, TB_LIGHTMAP );
 	qglUniform1i( glassUniforms.pass, 1 );
 	RB_Quad2D( &tr.ui2dGlassShader, frost, white, verts, texCoords, BLEND_REPLACE );
 	qglColorMask( !backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3] );
+	// the glass draws into the window next, which mustn't stay bound to a
+	// sampler the program has
+	GL_BindToTMU( tr.whiteImage, TB_NORMALMAP );
 }
 
 /*

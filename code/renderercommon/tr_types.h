@@ -220,7 +220,8 @@ typedef struct {
 	float			fade;			// seconds the look takes to turn from dark to light or back, 0 (at once) to 2
 	// seconds the tint takes to thicken as the backdrop brightens gently
 	// (darkens, under a light tint), 0 (at once) to 1; a flash, a fifth
-	// brighter or more in a frame, thickens it at once whatever this is
+	// brighter or more in a frame with the screen brighter too, thickens it
+	// at once whatever this is
 	float			rise;
 } glass2D_t;
 

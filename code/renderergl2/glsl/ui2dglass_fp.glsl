@@ -1,10 +1,11 @@
 uniform sampler2D u_DiffuseMap;		// the filters' result before the glass: the frost
 uniform sampler2D u_GlassStateMap;	// the glass pass: this frame's state; the state pass: the frame before's
+uniform sampler2D u_GlassScreenMap;	// the state pass: the window's picture, for the screen's brightness
 
 // A glass filter's two passes (tr_ui2d_layers.c), written from published
 // math: u_GlassPass 0 the glass, the composite's last pass, into its
-// destination; 1 its state, the two texels of a glass in the state
-// texture, just before. The ideas are two open-source Flutter packages'
+// destination; 1 its state, the column of three texels of a glass in the
+// state texture, just before. The ideas are two open-source Flutter packages'
 // (MIT): a hairline just inside the edge, a second, weaker lobe of light
 // facing away, and light or dark chosen with two thresholds; and those of
 // a later version of one and an Android library (Apache-2.0): a flat face
@@ -33,8 +34,7 @@ uniform int    u_GlassMode;		// 0 dark, 1 light, 2 either, by the state
 // a press's glow: where, rows up, the pixels it fades over, its strength
 uniform vec4   u_GlassGlow;
 uniform vec2   u_InvTargetRes;		// 1 / the 2D target's size
-uniform vec2   u_GlassStateCoord;	// the glass's first state texel's center; the second is a texel right
-uniform float  u_GlassStateStep;	// a state texel's width
+uniform vec2   u_GlassStateCoord;	// the glass's first state texel's center; the others are rows above it
 // the state pass's steps this frame: the slow brightness's weight, the
 // tint's brightness's weight easing back and following a gentle
 // brightening, and how far the look turns toward the one chosen
@@ -44,9 +44,13 @@ uniform int    u_GlassStart;		// 1 when the glass wasn't drawn the frame before
 varying vec2   var_TexCoord;		// the glass pass's quad covers the target: p / its size
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-// a flash: the backdrop this much brighter than the frame before (darker,
-// under a light tint), which the tint meets at once
-const float FLASH = 0.2;
+// a state texel's height: the state is three rows high
+const float STATE_ROW = 1.0 / 3.0;
+// a flash, which the tint meets at once: the backdrop this much brighter
+// than the frame before (darker, under a light tint), and the screen's
+// brightness this much too, as an explosion or a muzzle flash lights it;
+// a turn moves the picture under a glass but hardly changes the screen's
+const float FLASH = 0.2, FLASH_SCREEN = 0.06;
 // the slow brightness's thresholds: up to light past one, down to dark
 // again below the other
 const float LIGHT_ABOVE = 0.62, DARK_BELOW = 0.45;
@@ -102,29 +106,51 @@ float FrostLuma(vec2 at)
 	return dot(Straight(texture2D(u_DiffuseMap, at)), LUMA);
 }
 
-// how much of a tint brings a backdrop whose brightness is y to its goal
+// the window's brightness at a 3x3 grid a sixth in from each edge, in
+// display units (its alpha is the 3D view's leftovers, not coverage)
+float ScreenLuma()
+{
+	float y = 0.0;
+
+	for (int i = 0; i < 3; i++)
+	{
+		for (int j = 0; j < 3; j++)
+		{
+			vec2 at = vec2(float(i), float(j)) / 3.0 + 1.0 / 6.0;
+			y += dot(texture2D(u_GlassScreenMap, at).rgb / u_ColorScale, LUMA);
+		}
+	}
+	return clamp(y / 9.0, 0.0, 1.0);
+}
+
+// how much of a tint brings a backdrop whose brightness is y to its goal: a
+// dark tint only darkens and a light one only lightens, so a backdrop
+// already past the goal gets the least tint. (Lifting a backdrop darker than
+// a dark tint toward the goal would take the most, and the tint would jump
+// from the least to the most as the backdrop crossed the tint's brightness.)
 float TintAmount(float y, vec3 tint, float goal)
 {
-	float den = y - dot(tint, LUMA);
+	float ty = dot(tint, LUMA);
+	float den = goal > ty ? max(y - ty, 0.02) : min(y - ty, -0.02);
 
-	den = den < 0.0 ? min(den, -0.02) : max(den, 0.02);
 	return clamp((y - goal) / den, u_GlassTint.x, u_GlassTint.y);
 }
 
 void main()
 {
 	vec2 halfSize = u_GlassBox.zw * 0.5;
-	vec4 s0 = texture2D(u_GlassStateMap, u_GlassStateCoord);
-	vec4 s1 = texture2D(u_GlassStateMap, u_GlassStateCoord + vec2(u_GlassStateStep, 0.0));
+	vec4 s1 = texture2D(u_GlassStateMap, u_GlassStateCoord + vec2(0.0, STATE_ROW));
 
 	if (u_GlassPass == 1)
 	{
+		vec4 s0 = texture2D(u_GlassStateMap, u_GlassStateCoord);
+		vec4 s2 = texture2D(u_GlassStateMap, u_GlassStateCoord + vec2(0.0, 2.0 * STATE_ROW));
 		// the frost's brightness at five points of the shape
 		vec2 c = (u_GlassBox.xy + halfSize) * u_InvTargetRes;
 		vec2 o = halfSize * 0.5 * u_InvTargetRes;
 		float y = (FrostLuma(c) + FrostLuma(c + o) + FrostLuma(c - o) +
 			FrostLuma(c + vec2(o.x, -o.y)) + FrostLuma(c + vec2(-o.x, o.y))) * 0.2;
-		float slow = y, tintY = y;
+		float slow = y, tintY = y, screen = ScreenLuma();
 		float light = y >= 0.55 ? 1.0 : 0.0;
 		float look = light;
 
@@ -138,14 +164,17 @@ void main()
 
 			// the tint's brightness follows where more tint is needed,
 			// brighter under a dark tint and darker under a light one: at
-			// once for a flash, the backdrop's jump since the frame before,
-			// and quickly for a gentler change; and eases back otherwise
+			// once for a flash, a jump since the frame before both under the
+			// glass and across the screen, and quickly for a gentler change;
+			// and eases back otherwise
 			tintY = Unpack16(s1.rg);
 			bool dark = u_GlassMode == 2 ? light < 0.5 : u_GlassMode == 0;
-			float before = (s0.a - 0.6) / 0.4;
+			float before = (s0.a - 0.6) / 0.4, screenBefore = Unpack16(s2.rg);
 			float more = dark ? y - tintY : tintY - y;
 			float jump = dark ? y - before : before - y;
-			tintY += (y - tintY) * (more > 0.0 ? (jump > FLASH ? 1.0 : u_GlassSmoothing.z) : u_GlassSmoothing.y);
+			float screenJump = dark ? screen - screenBefore : screenBefore - screen;
+			bool flash = jump > FLASH && screenJump > FLASH_SCREEN;
+			tintY += (y - tintY) * (more > 0.0 ? (flash ? 1.0 : u_GlassSmoothing.z) : u_GlassSmoothing.y);
 
 			// the look, 0 dark to 1 light, turns toward the choice at an
 			// even pace, so a flip cross-fades
@@ -153,12 +182,16 @@ void main()
 			look += clamp(light - look, -u_GlassSmoothing.w, u_GlassSmoothing.w);
 		}
 
-		// which of the glass's two texels this is; the first keeps this
+		// which of the glass's three texels this is; the first keeps this
 		// frame's brightness, for the next frame's flash, from 0.6 up, so it
-		// also says the texel is set
-		bool second = gl_FragCoord.x - floor(gl_FragCoord.x / 2.0) * 2.0 >= 1.0;
-		gl_FragColor = second ? vec4(Pack16(tintY), Pack16(look)) :
-			vec4(Pack16(slow), light, 0.6 + 0.4 * clamp(y, 0.0, 1.0));
+		// also says the texel is set, and the third the screen's
+		float texel = floor(gl_FragCoord.y);
+		if (texel >= 2.0)
+			gl_FragColor = vec4(Pack16(screen), 0.0, 1.0);
+		else if (texel >= 1.0)
+			gl_FragColor = vec4(Pack16(tintY), Pack16(look));
+		else
+			gl_FragColor = vec4(Pack16(slow), light, 0.6 + 0.4 * clamp(y, 0.0, 1.0));
 		return;
 	}
 
