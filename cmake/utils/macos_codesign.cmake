@@ -73,8 +73,11 @@ else()
     message(STATUS "Signing ${DIR} ad hoc: APPLE_CERTIFICATE_ID isn't set")
 endif()
 
-# each app: its libraries, then the app, which seals them in
+# each app: its libraries, then the app, which seals them in (a recursive
+# glob that lists directories lists every one it walks, so only the apps
+# are kept)
 file(GLOB_RECURSE APPS LIST_DIRECTORIES true "${DIR}/*.app")
+list(FILTER APPS INCLUDE REGEX "\\.app$")
 list(FILTER APPS EXCLUDE REGEX "\\.app/")
 foreach(APP IN LISTS APPS)
     file(GLOB_RECURSE LIBRARIES "${APP}/*.dylib" "${APP}/*.so")
