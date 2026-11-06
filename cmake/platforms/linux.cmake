@@ -58,8 +58,23 @@ if(BUILD_CLIENT AND NOT EMSCRIPTEN)
     configure_file(${PNG_ICON_PATH} ${DESKTOP_FILES_DIR}/${APP_ID}.png COPYONLY)
 
     png_size(${PNG_ICON_PATH} ICON_WIDTH ICON_HEIGHT)
-    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.desktop DESTINATION share/applications)
-    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.metainfo.xml DESTINATION share/metainfo)
-    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.png
-        DESTINATION share/icons/hicolor/${ICON_WIDTH}x${ICON_HEIGHT}/apps)
+
+    # In the system's data directory unless the build says otherwise, as a
+    # package that unpacks and runs in place does, with them beside the client
+    include(GNUInstallDirs)
+    set(LINUX_DESKTOP_INSTALL_DIR ${CMAKE_INSTALL_DATADIR}/applications
+        CACHE PATH "Where the desktop entry installs")
+    set(LINUX_METAINFO_INSTALL_DIR ${CMAKE_INSTALL_DATADIR}/metainfo
+        CACHE PATH "Where the AppStream metainfo installs")
+    # empty for the icon theme's folder of its size, which isn't cached, so
+    # a new icon of another size goes in its own
+    set(LINUX_ICON_INSTALL_DIR "" CACHE PATH "Where the icon installs (empty: the hicolor theme's folder of its size)")
+    set(ICON_INSTALL_DIR ${LINUX_ICON_INSTALL_DIR})
+    if(NOT ICON_INSTALL_DIR)
+        set(ICON_INSTALL_DIR ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${ICON_WIDTH}x${ICON_HEIGHT}/apps)
+    endif()
+
+    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.desktop DESTINATION ${LINUX_DESKTOP_INSTALL_DIR})
+    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.metainfo.xml DESTINATION ${LINUX_METAINFO_INSTALL_DIR})
+    install(FILES ${DESKTOP_FILES_DIR}/${APP_ID}.png DESTINATION ${ICON_INSTALL_DIR})
 endif()
