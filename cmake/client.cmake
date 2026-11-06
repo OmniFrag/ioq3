@@ -129,3 +129,29 @@ foreach(LIBRARY IN LISTS CLIENT_DEPLOY_LIBRARIES)
     # installed beside the client (installer.cmake)
     set_property(TARGET ${CLIENT_BINARY} APPEND PROPERTY INSTALL_FILES ${LIBRARY})
 endforeach()
+
+# BUNDLE_SDL: the system SDL3 beside the client, under the soname it asks
+# for, and looked for there first: $ORIGIN alone, as a build RPATH would
+# leave empty entries, which the loader reads as the current directory.
+# sdl.cmake turns BUNDLE_SDL off where it doesn't apply
+if(BUNDLE_SDL)
+    set(BUNDLED_SDL $<TARGET_FILE_DIR:${CLIENT_BINARY}>/$<TARGET_SONAME_FILE_NAME:SDL3::SDL3-shared>)
+    add_custom_command(TARGET ${CLIENT_BINARY} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:SDL3::SDL3-shared> ${BUNDLED_SDL})
+    set_property(TARGET ${CLIENT_BINARY} APPEND PROPERTY INSTALL_FILES ${BUNDLED_SDL})
+
+    foreach(BINARY IN ITEMS ${CLIENT_BINARY} ${RENDERER_GL1_BINARY} ${RENDERER_GL2_BINARY})
+        if(TARGET ${BINARY})
+            # ahead of any install RPATH already set (CMAKE_INSTALL_RPATH)
+            get_target_property(RPATH ${BINARY} INSTALL_RPATH)
+            if(NOT RPATH)
+                set(RPATH)
+            endif()
+            list(PREPEND RPATH "\$ORIGIN")
+            list(REMOVE_DUPLICATES RPATH)
+            set_target_properties(${BINARY} PROPERTIES
+                INSTALL_RPATH "${RPATH}"
+                BUILD_WITH_INSTALL_RPATH ON)
+        endif()
+    endforeach()
+endif()

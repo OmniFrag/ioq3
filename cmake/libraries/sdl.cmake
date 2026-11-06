@@ -7,6 +7,10 @@ if(EMSCRIPTEN AND USE_INTERNAL_SDL)
     # USE_INTERNAL_SDL off, an SDL3 built for Emscripten is found instead
     list(APPEND CLIENT_COMPILE_OPTIONS -sUSE_SDL=3)
     list(APPEND CLIENT_LINK_OPTIONS -sUSE_SDL=3)
+    if(BUNDLE_SDL)
+        message(WARNING "BUNDLE_SDL needs a shared SDL3, not Emscripten's own; ignored")
+        set(BUNDLE_SDL OFF)
+    endif()
     return()
 endif()
 
@@ -52,6 +56,13 @@ if(USE_INTERNAL_SDL AND HAVE_INTERNAL_SDL)
     endif()
 else()
     find_package(SDL3 REQUIRED)
+endif()
+
+if(BUNDLE_SDL AND (WIN32 OR APPLE))
+    message(WARNING "BUNDLE_SDL is for Linux and other Unix-likes; ignored")
+    set(BUNDLE_SDL OFF) # client.cmake bundles only when still on
+elseif(BUNDLE_SDL AND NOT TARGET SDL3::SDL3-shared)
+    message(FATAL_ERROR "BUNDLE_SDL needs a shared SDL3")
 endif()
 
 list(APPEND CLIENT_LIBRARIES ${SDL3_LIBRARIES})
