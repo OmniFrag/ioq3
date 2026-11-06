@@ -80,7 +80,7 @@ static struct {
 // and ui2dglass's
 static struct {
 	GLint	pass, colorScale, box, radii, rim, light, darkColor, lightColor, tint, mode, glow, deform, invTargetRes,
-			stateMap, stateCoord, stateStep, smoothing, fade, start;
+			stateMap, stateCoord, stateStep, smoothing, start;
 } glassUniforms;
 
 // ui2dfilter's u_FilterMode
@@ -256,7 +256,6 @@ void R_InitLayers2D( void ) {
 	glassUniforms.stateCoord = qglGetUniformLocation( program, "u_GlassStateCoord" );
 	glassUniforms.stateStep = qglGetUniformLocation( program, "u_GlassStateStep" );
 	glassUniforms.smoothing = qglGetUniformLocation( program, "u_GlassSmoothing" );
-	glassUniforms.fade = qglGetUniformLocation( program, "u_GlassFade" );
 	glassUniforms.start = qglGetUniformLocation( program, "u_GlassStart" );
 	GLSL_BindProgram( &tr.ui2dGlassShader );
 	qglUniform1i( glassUniforms.stateMap, TB_LIGHTMAP );
@@ -905,6 +904,12 @@ static target2D_t *RB_GlassStates2D( int now ) {
 	return t;
 }
 
+// how far a value easing with time constant tau goes in dt: all the way
+// when tau is 0
+static float RB_Ease2D( float dt, float tau ) {
+	return tau > 0 ? 1 - expf( -dt / tau ) : 1;
+}
+
 /*
 ===============
 RB_GlassState2D
@@ -931,7 +936,9 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 		ui2dLayers.glass[s].frame = 0;
 	}
 	if ( ui2dLayers.glass[s].frame != frame ) {
-		ui2dLayers.glass[s].start = ui2dLayers.glass[s].frame != frame - 1;
+		// frame 0 is none: a glass not drawn since a reset starts afresh even
+		// on the first frame after it
+		ui2dLayers.glass[s].start = !ui2dLayers.glass[s].frame || ui2dLayers.glass[s].frame != frame - 1;
 		ui2dLayers.glass[s].frame = frame;
 	}
 	RB_ShapeRowsUp2D( cmd->state.clipShape, ui2dLayers.height, shape );
@@ -955,11 +962,11 @@ static void RB_GlassState2D( const layer2DCommand_t *cmd, const filter2D_t *glas
 	qglUniform2f( glassUniforms.invTargetRes, 1.0f / ui2dLayers.width, 1.0f / ui2dLayers.height );
 	qglUniform2f( glassUniforms.stateCoord, ( s * 2 + 0.5f ) / width, 0.5f );
 	qglUniform1f( glassUniforms.stateStep, 1.0f / width );
-	// light past 0.62, dark again below 0.45
-	qglUniform4f( glassUniforms.smoothing, 1 - expf( -dt / p[GLASS2D_SMOOTHING] ), 1 - expf( -dt / p[GLASS2D_RELEASE] ),
-		0.62f, 0.45f );
-	// how far the look turns toward dark or light this frame
-	qglUniform1f( glassUniforms.fade, p[GLASS2D_FADE] > 0 ? MIN( dt / p[GLASS2D_FADE], 1 ) : 1 );
+	// this frame's steps: the slow brightness's, the tint's easing back and
+	// thickening toward a gentle brightening, and the look's turn, at an
+	// even pace
+	qglUniform4f( glassUniforms.smoothing, RB_Ease2D( dt, p[GLASS2D_SMOOTHING] ), RB_Ease2D( dt, p[GLASS2D_RELEASE] ),
+		RB_Ease2D( dt, p[GLASS2D_RISE] ), p[GLASS2D_FADE] > 0 ? MIN( dt / p[GLASS2D_FADE], 1 ) : 1 );
 	qglUniform1i( glassUniforms.start, ui2dLayers.glass[s].start );
 
 	// the state's two texels, every channel whatever the color mask

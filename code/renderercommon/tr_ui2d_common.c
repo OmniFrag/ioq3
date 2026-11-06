@@ -1067,7 +1067,8 @@ int R_CreateGlassFilter2D( const glass2D_t *glass ) {
 	if ( !isfinite( glass->rimWidth ) || !isfinite( glass->refraction ) || !isfinite( glass->lightAngle ) ||
 		!isfinite( glass->highlight ) || !isfinite( glass->edge ) || !isfinite( glass->tintMin ) ||
 		!isfinite( glass->tintMax ) || !isfinite( glass->darkGoal ) || !isfinite( glass->lightGoal ) ||
-		!isfinite( glass->smoothing ) || !isfinite( glass->release ) || !isfinite( glass->fade ) ) {
+		!isfinite( glass->smoothing ) || !isfinite( glass->release ) || !isfinite( glass->fade ) ||
+		!isfinite( glass->rise ) ) {
 		ri.Printf( PRINT_WARNING, "CreateGlassFilter2D: a number that isn't one\n" );
 		return 0;
 	}
@@ -1100,6 +1101,7 @@ int R_CreateGlassFilter2D( const glass2D_t *glass ) {
 	p[GLASS2D_SMOOTHING] = Com_Clamp( 0.1f, 5, glass->smoothing );
 	p[GLASS2D_RELEASE] = Com_Clamp( 0.05f, 2, glass->release );
 	p[GLASS2D_FADE] = Com_Clamp( 0, 2, glass->fade );
+	p[GLASS2D_RISE] = Com_Clamp( 0, 1, glass->rise );
 
 	handle = R_AddSlot2D( HANDLE2D_FILTER, slot );
 	if ( handle ) {

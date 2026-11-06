@@ -35,16 +35,21 @@ uniform vec4   u_GlassGlow;
 uniform vec2   u_InvTargetRes;		// 1 / the 2D target's size
 uniform vec2   u_GlassStateCoord;	// the glass's first state texel's center; the second is a texel right
 uniform float  u_GlassStateStep;	// a state texel's width
-// the state pass: the slow brightness's weight this frame, the tint's
-// brightness's weight easing back, and the thresholds up to light and down
-// to dark; and how far the look turns toward the one chosen this frame
+// the state pass's steps this frame: the slow brightness's weight, the
+// tint's brightness's weight easing back and following a gentle
+// brightening, and how far the look turns toward the one chosen
 uniform vec4   u_GlassSmoothing;
-uniform float  u_GlassFade;
 uniform int    u_GlassStart;		// 1 when the glass wasn't drawn the frame before
 
 varying vec2   var_TexCoord;		// the glass pass's quad covers the target: p / its size
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+// a flash: the backdrop this much brighter than the frame before (darker,
+// under a light tint), which the tint meets at once
+const float FLASH = 0.2;
+// the slow brightness's thresholds: up to light past one, down to dark
+// again below the other
+const float LIGHT_ABOVE = 0.62, DARK_BELOW = 0.45;
 
 // a texel's color in display units, as if opaque, which the backdrop is
 vec3 Straight(vec4 texel)
@@ -129,24 +134,31 @@ void main()
 			// thresholds, so a flash never flips it
 			slow = Unpack16(s0.rg);
 			slow += (y - slow) * u_GlassSmoothing.x;
-			light = s0.b > 0.5 ? step(u_GlassSmoothing.w, slow) : step(u_GlassSmoothing.z, slow);
+			light = s0.b > 0.5 ? step(DARK_BELOW, slow) : step(LIGHT_ABOVE, slow);
 
-			// the tint's brightness follows at once where more tint is
-			// needed, brighter under a dark tint and darker under a light
-			// one, and eases back otherwise
+			// the tint's brightness follows where more tint is needed,
+			// brighter under a dark tint and darker under a light one: at
+			// once for a flash, the backdrop's jump since the frame before,
+			// and quickly for a gentler change; and eases back otherwise
 			tintY = Unpack16(s1.rg);
 			bool dark = u_GlassMode == 2 ? light < 0.5 : u_GlassMode == 0;
-			tintY = (dark ? y > tintY : y < tintY) ? y : tintY + (y - tintY) * u_GlassSmoothing.y;
+			float before = (s0.a - 0.6) / 0.4;
+			float more = dark ? y - tintY : tintY - y;
+			float jump = dark ? y - before : before - y;
+			tintY += (y - tintY) * (more > 0.0 ? (jump > FLASH ? 1.0 : u_GlassSmoothing.z) : u_GlassSmoothing.y);
 
 			// the look, 0 dark to 1 light, turns toward the choice at an
 			// even pace, so a flip cross-fades
 			look = Unpack16(s1.ba);
-			look += clamp(light - look, -u_GlassFade, u_GlassFade);
+			look += clamp(light - look, -u_GlassSmoothing.w, u_GlassSmoothing.w);
 		}
 
-		// which of the glass's two texels this is
+		// which of the glass's two texels this is; the first keeps this
+		// frame's brightness, for the next frame's flash, from 0.6 up, so it
+		// also says the texel is set
 		bool second = gl_FragCoord.x - floor(gl_FragCoord.x / 2.0) * 2.0 >= 1.0;
-		gl_FragColor = second ? vec4(Pack16(tintY), Pack16(look)) : vec4(Pack16(slow), light, 1.0);
+		gl_FragColor = second ? vec4(Pack16(tintY), Pack16(look)) :
+			vec4(Pack16(slow), light, 0.6 + 0.4 * clamp(y, 0.0, 1.0));
 		return;
 	}
 

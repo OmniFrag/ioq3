@@ -218,6 +218,10 @@ typedef struct {
 	float			smoothing;		// seconds the choice of dark or light takes to follow the backdrop, 0.1 to 5
 	float			release;		// seconds the tint takes to ease back after a flash, 0.05 to 2
 	float			fade;			// seconds the look takes to turn from dark to light or back, 0 (at once) to 2
+	// seconds the tint takes to thicken as the backdrop brightens gently
+	// (darkens, under a light tint), 0 (at once) to 1; a flash, a fifth
+	// brighter or more in a frame, thickens it at once whatever this is
+	float			rise;
 } glass2D_t;
 
 typedef enum {

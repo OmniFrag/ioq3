@@ -264,7 +264,7 @@ typedef enum {
 	FILTER2D_GLASS			// glass2D_t's, by GLASS2D_* (CreateGlassFilter2D)
 } filter2DKind_t;
 
-#define MAX_FILTER2D_PARAMS	20
+#define MAX_FILTER2D_PARAMS	21
 
 // a glass's numbers in a filter's, checked and clamped; its light as a
 // unit vector toward it, rows up, and its colors from 0 to 1
@@ -273,7 +273,7 @@ enum {
 	GLASS2D_TINT,
 	GLASS2D_DARK_COLOR, GLASS2D_LIGHT_COLOR = GLASS2D_DARK_COLOR + 3,
 	GLASS2D_TINT_MIN = GLASS2D_LIGHT_COLOR + 3, GLASS2D_TINT_MAX, GLASS2D_DARK_GOAL, GLASS2D_LIGHT_GOAL,
-	GLASS2D_SMOOTHING, GLASS2D_RELEASE, GLASS2D_FADE
+	GLASS2D_SMOOTHING, GLASS2D_RELEASE, GLASS2D_FADE, GLASS2D_RISE
 };
 
 // a glass's band: at refraction 1, its outer GLASS2D_MIRROR shows what's
