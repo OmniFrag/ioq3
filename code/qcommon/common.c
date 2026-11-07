@@ -4250,16 +4250,6 @@ static void Com_InitRand(void)
 		srand(time(NULL));
 }
 
-// A touch device's defaults where they differ from the engine's
-// (Cvar_SetProfile): half-size textures without filtering at an angle,
-// until a phone profile is measured, as full-size textures take four times
-// the memory
-static const cvarDefault_t com_touchProfile[] = {
-	{ "r_picmip", "1" },
-	{ "r_ext_texture_filter_anisotropic", "0" },
-	{ NULL, NULL }
-};
-
 /*
 =================
 Com_Init
@@ -4288,9 +4278,6 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	// before any cvar is set or registered
 	Cvar_SetDeclarations( cvar_declarations );
 	Cvar_Init ();
-	if ( Sys_TouchDevice() ) {
-		Cvar_SetProfile( com_touchProfile );
-	}
 
 	// prepare enough of the subsystems to handle
 	// cvar and command buffer management

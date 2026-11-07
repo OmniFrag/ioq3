@@ -1911,8 +1911,6 @@ qboolean Com_IsClient( void );
 // from the command line, before the first config runs
 
 void	Sys_Init (void);
-qboolean Sys_TouchDevice( void );
-// whether the main pointer is a finger, as on a phone or tablet
 
 // general development dll loading for virtual machine testing
 void	* QDECL Sys_LoadGameDll( const char *name, vmMainProc *entryPoint,
