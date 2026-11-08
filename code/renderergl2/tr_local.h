@@ -1922,6 +1922,7 @@ extern	cvar_t	*r_overBrightBits;
 extern	cvar_t	*r_mapOverBrightBits;
 
 extern	cvar_t	*r_debugSurface;
+extern	cvar_t	*r_glassFixedMsec;	// for tests, with developer 1: a fixed time a frame for the glass's fades
 extern	cvar_t	*r_simpleMipMaps;
 
 extern	cvar_t	*r_showImages;

@@ -1284,13 +1284,19 @@ drew into bound
 ===============
 */
 void RB_EndFrame2D( void ) {
-	int		now = ri.Milliseconds();
+	int		now = ri.Milliseconds(), msec;
 
 	ui2dLayers.depth = 0;
 	// the glass filters' states take turns, and smooth over the time the
-	// frame took, as long as 0.1 s at most
+	// frame took, as long as 0.1 s at most; for tests, with developer, a
+	// fixed time a frame (r_glassFixedMsec), so a slow computer's frames
+	// move the fades no further than a fast one's
 	ui2dLayers.glassFrame++;
-	ui2dLayers.glassDt = Com_Clamp( 0, 0.1f, ( now - ui2dLayers.glassTime ) * 0.001f );
+	msec = now - ui2dLayers.glassTime;
+	if ( r_glassFixedMsec->integer > 0 && ri.Cvar_VariableIntegerValue( "developer" ) ) {
+		msec = r_glassFixedMsec->integer;
+	}
+	ui2dLayers.glassDt = Com_Clamp( 0, 0.1f, msec * 0.001f );
 	ui2dLayers.glassTime = now;
 	if ( ui2dLayers.target && ++ui2dLayers.idleFrames > LAYERS2D_IDLE_FRAMES ) {
 		R_ShutdownLayers2D();
