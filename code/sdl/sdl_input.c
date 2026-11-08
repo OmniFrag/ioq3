@@ -72,7 +72,18 @@ static int in_eventTime = 0;
 
 // a composition was queued since text input started, so one ends with it
 static qboolean in_composing = qfalse;
-static int64_t in_newestInput = 0;	// the newest key or mouse event, in Sys_Nanoseconds
+static int64_t in_newestInput = 0;	// the newest key, mouse or touch event, in Sys_Nanoseconds
+
+// the fingers down, by SDL's device and finger ids (a finger's id is its
+// device's alone), with the number the engine gave each (extTouch_t's
+// finger), 0 for a free slot
+#define MAX_FINGERS 16
+static struct {
+	SDL_TouchID	device;
+	SDL_FingerID	id;
+	int		finger;
+} in_fingers[MAX_FINGERS];
+static int in_lastFinger = 0;
 
 static SDL_Window *SDL_window = NULL;
 
@@ -1194,9 +1205,125 @@ static int64_t IN_EventNanoseconds( const SDL_Event *e )
 
 /*
 ===============
+IN_FromTouch
+
+Whether a mouse event is one SDL made from a touch, which the engine makes
+for itself (cl_keys.c's CL_TouchEvent)
+===============
+*/
+static qboolean IN_FromTouch( const SDL_Event *e )
+{
+	switch( e->type )
+	{
+		case SDL_EVENT_MOUSE_MOTION:      return e->motion.which == SDL_TOUCH_MOUSEID;
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:   return e->button.which == SDL_TOUCH_MOUSEID;
+		case SDL_EVENT_MOUSE_WHEEL:       return e->wheel.which == SDL_TOUCH_MOUSEID;
+		default:                          return qfalse;
+	}
+}
+
+/*
+===============
+IN_TouchEvent
+
+A finger's event as an SE_TOUCH, whole, never merged with the next: the
+finger numbered from its down, where it is in the window's pixels, and
+when the platform saw it
+===============
+*/
+static void IN_TouchEvent( const SDL_TouchFingerEvent *e, int64_t happened, int time )
+{
+	extTouch_t *touch;
+	int i, slot = -1, width, height;
+
+	// a touch screen's fingers alone: a trackpad's are the mouse's
+	if( SDL_GetTouchDeviceType( e->touchID ) != SDL_TOUCH_DEVICE_DIRECT )
+		return;
+
+	for( i = 0; i < MAX_FINGERS; i++ )
+	{
+		if( in_fingers[i].finger && in_fingers[i].device == e->touchID && in_fingers[i].id == e->fingerID )
+		{
+			slot = i;
+			break;
+		}
+	}
+
+	if( slot < 0 )
+	{
+		// a finger seen only from its down; past MAX_FINGERS at once,
+		// the rest are left out
+		if( e->type != SDL_EVENT_FINGER_DOWN )
+			return;
+		for( slot = 0; slot < MAX_FINGERS && in_fingers[slot].finger; slot++ )
+			;
+		if( slot == MAX_FINGERS )
+			return;
+		in_lastFinger = in_lastFinger == INT_MAX ? 1 : in_lastFinger + 1;
+		in_fingers[slot].device = e->touchID;
+		in_fingers[slot].id = e->fingerID;
+		in_fingers[slot].finger = in_lastFinger;
+	}
+
+	if( !SDL_GetWindowSizeInPixels( SDL_window, &width, &height ) )
+		width = height = 0;
+
+	touch = Z_Malloc( sizeof( *touch ) );
+	touch->finger = in_fingers[slot].finger;
+	switch( e->type )
+	{
+		case SDL_EVENT_FINGER_DOWN:   touch->phase = EXT_TOUCH_DOWN; break;
+		case SDL_EVENT_FINGER_MOTION: touch->phase = EXT_TOUCH_MOVE; break;
+		case SDL_EVENT_FINGER_UP:     touch->phase = EXT_TOUCH_UP; break;
+		default:                      touch->phase = EXT_TOUCH_CANCEL; break;
+	}
+	touch->x = e->x * width;
+	touch->y = e->y * height;
+	touch->pressure = e->pressure;
+	touch->density = IN_PixelDensity( );
+	touch->time = happened;
+
+	if( touch->phase == EXT_TOUCH_UP || touch->phase == EXT_TOUCH_CANCEL )
+		in_fingers[slot].finger = 0;
+
+	Com_QueueEvent( time, SE_TOUCH, 0, 0, sizeof( *touch ), touch );
+}
+
+/*
+===============
+IN_CancelFingers
+
+Every finger down ends, canceled, as the input restarts (in_restart,
+vid_restart): the rest of its touch never comes, and the engine would keep
+it down, its K_MOUSE1 held if it was the mouse's
+===============
+*/
+static void IN_CancelFingers( void )
+{
+	extTouch_t *touch;
+	int i;
+
+	for( i = 0; i < MAX_FINGERS; i++ )
+	{
+		if( !in_fingers[i].finger )
+			continue;
+		touch = Z_Malloc( sizeof( *touch ) );
+		touch->finger = in_fingers[i].finger;
+		touch->phase = EXT_TOUCH_CANCEL;
+		touch->pressure = 1.0f;
+		touch->density = 1.0f;
+		touch->time = Sys_Nanoseconds( );
+		in_fingers[i].finger = 0;
+		Com_QueueEvent( 0, SE_TOUCH, 0, 0, sizeof( *touch ), touch );
+	}
+}
+
+/*
+===============
 IN_NewestInput
 
-When the newest key or mouse event SDL delivered happened, by
+When the newest key, mouse or touch event SDL delivered happened, by
 Sys_Nanoseconds, for com_speeds' input age
 ===============
 */
@@ -1322,6 +1449,15 @@ void IN_ProcessEvent( const SDL_Event *e )
 	}
 #endif
 
+	// the engine makes a touch's pointer and mouse button itself, so the
+	// mouse events SDL or the system make from it go
+	if( IN_FromTouch( e ) )
+	{
+		if( Cvar_VariableIntegerValue( "in_touchDebug" ) )
+			Com_Printf( "touch: a mouse event made from a touch (%u) left out\n", (unsigned)e->type );
+		return;
+	}
+
 	switch( e->type )
 	{
 		case SDL_EVENT_KEY_DOWN:
@@ -1330,6 +1466,10 @@ void IN_ProcessEvent( const SDL_Event *e )
 		case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		case SDL_EVENT_MOUSE_BUTTON_UP:
 		case SDL_EVENT_MOUSE_WHEEL:
+		case SDL_EVENT_FINGER_DOWN:
+		case SDL_EVENT_FINGER_UP:
+		case SDL_EVENT_FINGER_MOTION:
+		case SDL_EVENT_FINGER_CANCELED:
 			in_newestInput = MAX( in_newestInput, happened );
 			break;
 
@@ -1486,6 +1626,13 @@ void IN_ProcessEvent( const SDL_Event *e )
 				Com_QueueEvent( time, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
 				Com_QueueEvent( time, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
 			}
+			break;
+
+		case SDL_EVENT_FINGER_DOWN:
+		case SDL_EVENT_FINGER_UP:
+		case SDL_EVENT_FINGER_MOTION:
+		case SDL_EVENT_FINGER_CANCELED:
+			IN_TouchEvent( &e->tfinger, happened, time );
 			break;
 
 		case SDL_EVENT_GAMEPAD_ADDED:
@@ -1852,6 +1999,12 @@ void IN_Init( void *windowData )
 
 	in_joystick = Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE|CVAR_LATCH );
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );
+
+	// touches come as fingers alone, the engine making the mouse from one
+	// itself (cl_keys.c's CL_TouchEvent), and a mouse never as touches
+	SDL_SetHint( SDL_HINT_TOUCH_MOUSE_EVENTS, "0" );
+	SDL_SetHint( SDL_HINT_MOUSE_TOUCH_EVENTS, "0" );
+	IN_CancelFingers( );
 
 #if defined(PROTOCOL_HANDLER) && defined(__APPLE__)
 	SDL_SetEventEnabled( SDL_EVENT_DROP_FILE, true );

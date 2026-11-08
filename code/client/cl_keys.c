@@ -33,6 +33,8 @@ int			nextHistoryLine;		// the last line in the history buffer, not masked
 int			historyLine;	// the line being displayed from history buffer
 							// will be <= nextHistoryLine
 
+static cvar_t	*in_touchDebug;
+
 field_t		g_consoleField;
 field_t		chatField;
 qboolean	chat_team;
@@ -1192,6 +1194,9 @@ void CL_InitKeyCommands( void ) {
 	Cmd_SetCommandCompletionFunc( "unbind", Key_CompleteUnbind );
 	Cmd_AddCommand ("unbindall",Key_Unbindall_f);
 	Cmd_AddCommand ("bindlist",Key_Bindlist_f);
+
+	in_touchDebug = Cvar_Get( "in_touchDebug", "0", CVAR_TEMP );
+	Cvar_SetDescription( in_touchDebug, "Print each touch on the screen: the finger, where it is, and what took it" );
 }
 
 /*
@@ -1534,6 +1539,152 @@ qboolean CL_ExtMouseEvent( int dx, int dy ) {
 	return CL_ExtensionsGetInput( ) && Hooks_MouseEvent( dx, dy );
 }
 
+// the fingers down that something has, from their down to their end: an
+// engine extension, by its number from 1 (hooks.h), or the mouse. A finger
+// of 0 is a free slot
+#define MAX_TOUCHES	16
+#define TOUCH_MOUSE	-1
+static struct {
+	int	finger;
+	int	owner;
+} touches[MAX_TOUCHES];
+
+// where the mouse's finger was, in the window's points, and the motion
+// under a whole point not sent yet
+static float	touchMouseX, touchMouseY;
+static float	touchMouseRemainder[2];
+
+static const char *const touchPhases[] = { "down", "move", "up", "cancel" };
+
+/*
+===================
+CL_TouchMouse
+
+A finger that is the mouse: where it is, the pointer's position if an
+engine extension asked for the pointer, or else the mouse's motion from
+where it went down, so a new finger doesn't move the view; and K_MOUSE1
+held from its down to its end
+===================
+*/
+static void CL_TouchMouse( const extTouch_t *touch, int time ) {
+	float	x = touch->x / touch->density, y = touch->y / touch->density;
+
+	if ( cls.extCursor ) {
+		CL_PointerEvent( touch->x, touch->y );
+	} else if ( touch->phase == EXT_TOUCH_DOWN ) {
+		touchMouseRemainder[0] = touchMouseRemainder[1] = 0.0f;
+	} else {
+		float	dx = x - touchMouseX + touchMouseRemainder[0];
+		float	dy = y - touchMouseY + touchMouseRemainder[1];
+		int	mx = (int)dx, my = (int)dy;
+
+		touchMouseRemainder[0] = dx - mx;
+		touchMouseRemainder[1] = dy - my;
+		if ( mx || my ) {
+			CL_MouseEvent( mx, my, time );
+		}
+	}
+	touchMouseX = x;
+	touchMouseY = y;
+
+	if ( touch->phase == EXT_TOUCH_DOWN ) {
+		CL_KeyEvent( K_MOUSE1, qtrue, time );
+	} else if ( touch->phase != EXT_TOUCH_MOVE ) {
+		CL_KeyEvent( K_MOUSE1, qfalse, time );
+	}
+}
+
+// the slot of a finger down, or with finger 0 a free one; -1 for none
+static int CL_TouchSlot( int finger ) {
+	int	i;
+
+	for ( i = 0; i < MAX_TOUCHES; i++ ) {
+		if ( touches[i].finger == finger ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+===================
+CL_TouchEvent
+
+A finger on a touch screen: an engine extension's if it took the finger's
+down, or else the mouse, if no other finger is
+===================
+*/
+void CL_TouchEvent( const extTouch_t *touch, int time ) {
+	int	i, slot, owner = 0;
+
+	if ( (unsigned)touch->phase > EXT_TOUCH_CANCEL || touch->finger <= 0 || touch->density <= 0.0f ) {
+		return;
+	}
+
+	slot = CL_TouchSlot( touch->finger );
+	if ( slot >= 0 ) {
+		owner = touches[slot].owner;
+		if ( owner != TOUCH_MOUSE ) {
+			Hooks_TouchTo( owner, touch );
+		}
+	} else if ( touch->phase == EXT_TOUCH_DOWN && ( slot = CL_TouchSlot( 0 ) ) >= 0 ) {
+		if ( CL_ExtensionsGetInput( ) ) {
+			owner = Hooks_TouchDown( touch );
+		}
+		if ( !owner ) {
+			for ( i = 0; i < MAX_TOUCHES && !( touches[i].finger && touches[i].owner == TOUCH_MOUSE ); i++ ) {
+			}
+			owner = i == MAX_TOUCHES ? TOUCH_MOUSE : 0;
+		}
+		if ( owner ) {
+			touches[slot].finger = touch->finger;
+			touches[slot].owner = owner;
+		}
+	}
+
+	if ( owner == TOUCH_MOUSE ) {
+		CL_TouchMouse( touch, time );
+	}
+	if ( owner && ( touch->phase == EXT_TOUCH_UP || touch->phase == EXT_TOUCH_CANCEL ) ) {
+		touches[slot].finger = 0;
+	}
+
+	if ( in_touchDebug && in_touchDebug->integer ) {
+		Com_Printf( "touch: finger %i %s at %.1f %.1f, pressure %.2f, %.1f ms old: %s\n", touch->finger,
+			touchPhases[touch->phase], touch->x, touch->y, touch->pressure,
+			( Sys_Nanoseconds( ) - touch->time ) / 1000000.0,
+			owner == TOUCH_MOUSE ? "the mouse" : owner ? va( "extension %i", owner ) : "nothing" );
+	}
+}
+
+/*
+===================
+CL_TouchClear
+
+As the keys are cleared (Key_ClearStates): an engine extension's fingers
+get a cancel, and the rest of each of their touches goes nowhere. The
+mouse's finger stays the mouse to its lift, as a mouse would, its
+K_MOUSE1 let go with the keys
+===================
+*/
+static void CL_TouchClear( void ) {
+	int	i;
+
+	for ( i = 0; i < MAX_TOUCHES; i++ ) {
+		if ( touches[i].finger && touches[i].owner != TOUCH_MOUSE ) {
+			extTouch_t	cancel = { 0 };
+
+			cancel.finger = touches[i].finger;
+			cancel.phase = EXT_TOUCH_CANCEL;
+			cancel.pressure = 1.0f;
+			cancel.density = 1.0f;
+			cancel.time = Sys_Nanoseconds( );
+			Hooks_TouchTo( touches[i].owner, &cancel );
+			touches[i].finger = 0;
+		}
+	}
+}
+
 /*
 ===================
 Key_ClearStates
@@ -1546,6 +1697,7 @@ void Key_ClearStates (void)
 
 	anykeydown = 0;
 
+	CL_TouchClear( );
 	for ( i=0 ; i < MAX_KEYS ; i++ ) {
 		if ( keys[i].down ) {
 			CL_KeyEvent( i, qfalse, 0 );

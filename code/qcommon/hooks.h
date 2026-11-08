@@ -60,6 +60,24 @@ typedef enum {
 
 #define EXT_MODULE_BIT( module )	( 1 << ( module ) )
 
+// a finger on a touch screen, from its down to its lift (the touchEvent
+// hook, and the SE_TOUCH event that carries it)
+typedef enum {
+	EXT_TOUCH_DOWN,
+	EXT_TOUCH_MOVE,
+	EXT_TOUCH_UP,
+	EXT_TOUCH_CANCEL	// the touch ended with no lift: the system took it, or the input was cleared
+} extTouchPhase_t;
+
+typedef struct {
+	int		finger;		// from 1, the same from the finger's down to its end, and new for each touch
+	extTouchPhase_t	phase;
+	float		x, y;		// in the window's pixels
+	float		pressure;	// 0 to 1, or 1 where the platform gives none (the web)
+	float		density;	// pixels in each of the window's points, which the mouse moves in
+	int64_t		time;		// when the platform saw it, by Sys_Nanoseconds
+} extTouch_t;
+
 // An extension call for game modules: a key they find with trap_GetValue
 // (qcommon.h's COM_TRAP_GETVALUE), answered with trap, a syscall number
 // from COM_TRAP_EXTENSION_FIRST to COM_TRAP_EXTENSION_LAST, which the
@@ -315,6 +333,13 @@ typedef struct {
 	qboolean	(*pointerEvent)( float x, float y );
 	// the mouse's relative motion, as the ui, cgame or the view would get it
 	qboolean	(*mouseEvent)( int dx, int dy );
+	// a finger on a touch screen. Its down is offered as a key's is, and
+	// the extension that takes it gets the rest of that touch alone, its
+	// moves and its end, wherever the input has gone since. A finger no
+	// extension takes is the mouse while no other finger is: its position
+	// is the pointer's or the mouse's motion, and it holds K_MOUSE1
+	// (cl_keys.c's CL_TouchEvent)
+	qboolean	(*touchEvent)( const extTouch_t *touch );
 
 	// Extension calls for the game modules, the server's game too.
 	// moduleCalls ends with a NULL key; moduleCall answers a module's call
@@ -408,6 +433,10 @@ qboolean	Hooks_CharEvent( int codepoint );
 void	Hooks_TextEditing( const char *utf8, int cursor, int selection );
 void	Hooks_PointerEvent( float x, float y );
 qboolean	Hooks_MouseEvent( int dx, int dy );
+// a finger's down: the number, from 1, of the extension that took it, which
+// the rest of its touch goes to (Hooks_TouchTo); 0 when none did
+int	Hooks_TouchDown( const extTouch_t *touch );
+void	Hooks_TouchTo( int taker, const extTouch_t *touch );
 // a module's trap_GetValue for a key an extension answers: qtrue with its
 // number written to value
 qboolean	Hooks_ModuleValue( extModule_t module, const char *key, char *value, int valueSize );

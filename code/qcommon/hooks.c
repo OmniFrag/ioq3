@@ -546,6 +546,23 @@ qboolean Hooks_MouseEvent( int dx, int dy ) {
 	return taker != 0;
 }
 
+int Hooks_TouchDown( const extTouch_t *touch ) {
+	int	taker;
+
+	HOOKS_OFFER( taker, touchEvent, ( touch ) );
+	return taker;
+}
+
+void Hooks_TouchTo( int taker, const extTouch_t *touch ) {
+	int	i = taker - 1;
+
+	if ( hooks_activeCount && i >= 0 && hooks_active[i] && engineExtensions[i]->touchEvent ) {
+		hooks_depth[i]++;
+		engineExtensions[i]->touchEvent( touch );
+		hooks_depth[i]--;
+	}
+}
+
 /*
 ===============
 Hooks_FindModuleCall

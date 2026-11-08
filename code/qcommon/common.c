@@ -3065,6 +3065,11 @@ int Com_EventLoop( void ) {
 				CL_PointerEvent( x.f, y.f );
 			}
 			break;
+			case SE_TOUCH:
+				if ( ev.evPtr && ev.evPtrLength == sizeof( extTouch_t ) ) {
+					CL_TouchEvent( (const extTouch_t *)ev.evPtr, ev.evTime );
+				}
+			break;
 			default:
 				Com_Error( ERR_FATAL, "Com_EventLoop: bad event type %i", ev.evType );
 			break;

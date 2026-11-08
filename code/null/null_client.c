@@ -42,6 +42,9 @@ void CL_TextEditingEvent( const char *utf8, int cursor, int selection ) {
 void CL_PointerEvent( float x, float y ) {
 }
 
+void CL_TouchEvent( const extTouch_t *touch, int time ) {
+}
+
 void CL_ExtensionsStarted( void ) {
 }
 

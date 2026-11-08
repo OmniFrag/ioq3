@@ -1508,7 +1508,8 @@ typedef enum {
 	SE_JOYSTICK_AXIS,	// evValue is an axis number and evValue2 is the current state (-127 to 127)
 	SE_CONSOLE,		// evPtr is a char*
 	SE_TEXT_EDITING,	// evPtr is an input method's composition in UTF-8, evValue the caret and evValue2 the selection's length, in characters
-	SE_POINTER		// evValue and evValue2 are the pointer's x and y in pixels, as the bits of floats (floatint_t)
+	SE_POINTER,		// evValue and evValue2 are the pointer's x and y in pixels, as the bits of floats (floatint_t)
+	SE_TOUCH		// evPtr is a finger's extTouch_t (hooks.h)
 } sysEventType_t;
 
 typedef struct {
@@ -1802,6 +1803,7 @@ void CL_MouseEvent( int dx, int dy, int time );
 // for engine extensions (hooks.h)
 void CL_TextEditingEvent( const char *utf8, int cursor, int selection );
 void CL_PointerEvent( float x, float y );
+void CL_TouchEvent( const extTouch_t *touch, int time );
 // the engine extensions have started (Com_InitExtensions), after the
 // renderer did
 void CL_ExtensionsStarted( void );
