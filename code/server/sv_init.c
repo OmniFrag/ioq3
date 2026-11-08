@@ -576,7 +576,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	}
 	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homedatapath" ) );
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );
-	Com_Printf( "  own dir:  %s/%s: this server's saved settings, logs and bans\n", FS_GetCurrentGameDir(), FS_ServerDir() );
+	Com_Printf( "  own dir:  %s/%s: this server's saved settings, logs and bans\n", FS_ServerGameDir(), FS_ServerDir() );
 	// what players' clients know it by (identity.h)
 	Com_Printf( "  key:      %s\n", Com_KeyFingerprint( Com_ServerKey() ) );
 	if ( port ) {

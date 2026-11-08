@@ -1442,7 +1442,7 @@ static void Sys_Start( int argc, char **argv )
 	// opens no port, writes neither
 	if( !Com_IsClient( ) && !com_check )
 	{
-		Sys_InitPIDFile( FS_GetCurrentGameDir( ) );
+		Sys_InitPIDFile( FS_ServerGameDir( ) );
 		Com_OpenPipeFile( );
 	}
 

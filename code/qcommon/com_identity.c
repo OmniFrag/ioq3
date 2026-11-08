@@ -130,7 +130,7 @@ const identKey_t *Com_ServerKey( void ) {
 	}
 	if ( com_serverKeyState == KEY_UNREAD ) {
 		com_serverKeyState = Com_LoadKey( FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ),
-			va( "%s/%s", FS_GetCurrentGameDir(), FS_ServerFile( IDENT_SERVER_FILE ) ) ), &com_serverKey, "this server" );
+			FS_ServerQPath( IDENT_SERVER_FILE ) ), &com_serverKey, "this server" );
 	}
 	return com_serverKeyState == KEY_READY ? &com_serverKey : NULL;
 }

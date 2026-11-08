@@ -214,9 +214,18 @@ static const unsigned int missionpak_checksums[] =
 #endif
 
 // a checksum the tests have the server take for one of the game's own
-// paks (FS_RetailPak), from OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM at startup
+// paks (FS_RetailPak), any of pak0 to pak8 (FS_CheckPak0, FS_ChooseDemo),
+// from OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM at startup
 static qboolean		fs_refusedTestPak;
 static unsigned int	fs_refusedTestChecksum;
+
+static qboolean FS_TestPakChecksum( unsigned int checksum ) {
+	return fs_refusedTestPak && checksum == fs_refusedTestChecksum;
+}
+
+// the demo the engine chose, on a dedicated server: baseq3 searched as a
+// directory alone (FS_Startup, FS_ChooseDemo)
+static qboolean		fs_demoServerDir;
 
 /*
 ================
@@ -4534,6 +4543,13 @@ static int QDECL paksort( const void *a, const void *b ) {
 	return FS_PathCmp( aa, bb );
 }
 
+// what FS_AddGameDirectory adds of a directory
+typedef enum {
+	FS_ADD_ALL,		// the directory and its paks
+	FS_ADD_PAKS,	// its paks alone (FS_PathVarPaksOnly)
+	FS_ADD_DIR		// the directory alone: a dedicated server's folder on the demo
+} fsAdd_t;
+
 /*
 ================
 FS_AddGameDirectory
@@ -4542,7 +4558,8 @@ Sets fs_gamedir, adds the directory to the head of the path,
 then loads the zip headers
 ================
 */
-static void FS_AddGameDirectory( const char *path, const char *dir, qboolean paksOnly ) {
+static void FS_AddGameDirectory( const char *path, const char *dir, fsAdd_t what ) {
+	const qboolean	paksOnly = what == FS_ADD_PAKS;
 	searchpath_t	*sp;
 	searchpath_t	*search;
 	pack_t			*pak;
@@ -4578,13 +4595,18 @@ static void FS_AddGameDirectory( const char *path, const char *dir, qboolean pak
 	}
 
 	// Get .pk3 files
-	pakfiles = Sys_ListFiles(curpath, ".pk3", NULL, &numfiles, qfalse);
+	if ( what == FS_ADD_DIR ) {
+		numfiles = 0;
+		pakfiles = NULL;
+	} else {
+		pakfiles = Sys_ListFiles(curpath, ".pk3", NULL, &numfiles, qfalse);
+	}
 
 	if ( pakfiles ) {
 		qsort( pakfiles, numfiles, sizeof(char*), paksort );
 	}
 
-	if ( fs_numServerPaks || paksOnly ) {
+	if ( fs_numServerPaks || what != FS_ADD_ALL ) {
 		numdirs = 0;
 		pakdirs = NULL;
 	} else {
@@ -5670,25 +5692,30 @@ static void FS_NoteMapPackConflicts( void ) {
 FS_AddGameDirectories
 ================
 */
-static void FS_AddGameDirectories(const char *dir)
+static void FS_AddGameDirectories(const char *dir, qboolean dirOnly)
 {
 	const searchpath_t	*below = fs_searchpaths;
 
 	// add search path elements in reverse priority order
 	for(int i = ARRAY_LEN(fs_pathVars) - 1; i >= 0; i--) {
 		const cvar_t *pathVar = fs_pathVars[i];
+		const qboolean paksOnly = pathVar && FS_PathVarPaksOnly( pathVar );
 
-		if (!pathVar || !pathVar->string[0]) {
+		if (!pathVar || !pathVar->string[0] || ( dirOnly && paksOnly )) {
 			continue;
 		}
 
 		searchpath_t *added = fs_searchpaths;
-		FS_AddGameDirectory(pathVar->string, dir, FS_PathVarPaksOnly( pathVar ));
-		FS_SetContentRoot( fs_searchpaths, added, pathVar );
+		FS_AddGameDirectory(pathVar->string, dir, dirOnly ? FS_ADD_DIR : paksOnly ? FS_ADD_PAKS : FS_ADD_ALL);
+		if ( !dirOnly ) {
+			FS_SetContentRoot( fs_searchpaths, added, pathVar );
+		}
 	}
 
-	FS_RefuseHashedPaks( below );
-	FS_AddCachePaks( dir, below );
+	if ( !dirOnly ) {
+		FS_RefuseHashedPaks( below );
+		FS_AddCachePaks( dir, below );
+	}
 }
 
 /*
@@ -6232,23 +6259,35 @@ static void FS_Startup( const char *gameName )
 		FS_CreatePath(fs_homestatepath->string);
 	}
 
-	FS_ImportPredecessorConfig(predConfigPath, gameName);
-
 	// the content cache's paks are mounted again as the directories are added
 	Content_Cache_Unmounted();
 	fs_numCachePaks = fs_numRefusedPaks = 0;
 
-	FS_AddGameDirectories(gameName);
+	FS_AddGameDirectories(gameName, qfalse);
+
+	// a dedicated server on the demo the engine chose: baseq3 searched
+	// above it as a directory alone, its paks not, so the server's own
+	// folder and server.cfg stay where they'll be with the full game's paks,
+	// and the game directory written in (FS_ServerGameDir) is baseq3; not
+	// where the admin's fs_basegame or fs_game names baseq3, paks and all
+	if ( fs_demoServerDir && Q_stricmp( BASEGAME, gameName ) &&
+		Q_stricmp( BASEGAME, fs_basegame->string ) && Q_stricmp( BASEGAME, fs_gamedirvar->string ) ) {
+		FS_AddGameDirectories(BASEGAME, qtrue);
+	}
 
 	// check for additional base game so mods can be based upon other mods
 	if ( fs_basegame->string[0] && Q_stricmp( fs_basegame->string, gameName ) ) {
-		FS_AddGameDirectories(fs_basegame->string);
+		FS_AddGameDirectories(fs_basegame->string, qfalse);
 	}
 
 	// check for additional game folder for mods
 	if ( fs_gamedirvar->string[0] && Q_stricmp( fs_gamedirvar->string, gameName ) ) {
-		FS_AddGameDirectories(fs_gamedirvar->string);
+		FS_AddGameDirectories(fs_gamedirvar->string, qfalse);
 	}
+
+	// a dedicated server's into the directory it writes in, the last one
+	// added (FS_ServerGameDir)
+	FS_ImportPredecessorConfig(predConfigPath, Com_IsClient() ? gameName : fs_gamedir);
 
 #ifndef STANDALONE
 	if (!com_standalone->integer) {
@@ -6459,7 +6498,8 @@ static void FS_CheckPak0( void )
 				&& strlen(pakBasename) == 4 && !Q_stricmpn( pakBasename, "pak", 3 )
 				&& pakBasename[3] >= '0' && pakBasename[3] <= '0' + NUM_ID_PAKS - 1)
 		{
-			if( curpack->checksum != pak_checksums[pakBasename[3]-'0'] )
+			// or the tests' stand-in for it (FS_TestPakChecksum)
+			if( curpack->checksum != pak_checksums[pakBasename[3]-'0'] && !FS_TestPakChecksum( curpack->checksum ) )
 			{
 				if(pakBasename[3] == '0')
 				{
@@ -7013,7 +7053,7 @@ qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char
 		Com_sprintf( retail, size, "%s/pak%d.pk3", game, index );
 		return qtrue;
 	}
-	if( fs_refusedTestPak && checksum == fs_refusedTestChecksum ) {
+	if( FS_TestPakChecksum( checksum ) ) {
 		Q_strncpyz( retail, download, size );
 		return qtrue;
 	}
@@ -7050,7 +7090,8 @@ static qboolean FS_ChooseDemo( void ) {
 	qboolean		inBase;
 
 	if( Cvar_Source( com_basegame ) != CVAR_SOURCE_DEFAULT || Q_stricmp( com_basegame->string, BASEGAME ) ||
-		FS_FindPak0( BASEGAME, pak_checksums[0] ) ) {
+		FS_FindPak0( BASEGAME, pak_checksums[0] ) ||
+		( fs_refusedTestPak && FS_FindPak0( BASEGAME, fs_refusedTestChecksum ) ) ) {
 		return qfalse;
 	}
 	demo = FS_FindPak0( BASEGAME, DEMO_PAK0_CHECKSUM );
@@ -7065,12 +7106,17 @@ static qboolean FS_ChooseDemo( void ) {
 	if( inBase ) {
 		Cvar_Set2( "fs_basegame", BASEGAME, qtrue );
 	}
+	// a dedicated server keeps baseq3 searched as a directory alone
+	// (FS_Startup), where its own folder and server.cfg stay; with the
+	// demo's pak0 there, as fs_basegame does already
+	fs_demoServerDir = !inBase && !Com_IsClient();
 	FS_Startup( com_basegame->string );
 	demo = FS_FindPak0( inBase ? BASEGAME : "demoq3", DEMO_PAK0_CHECKSUM );
 	if( !demo ) {
 		// no demo either: the full game's missing data, as before
 		FS_Shutdown( qfalse );
 		Cvar_Set2( "com_basegame", BASEGAME, qtrue );
+		fs_demoServerDir = qfalse;
 		FS_Startup( com_basegame->string );
 		return qfalse;
 	}
@@ -7187,7 +7233,7 @@ void FS_Restart( int checksumFeed ) {
 
 	if ( Q_stricmp( FS_GetCurrentGameDir(), lastGameDir ) ) {
 		Sys_RemovePIDFile( );
-		Sys_InitPIDFile( FS_GetCurrentGameDir() );
+		Sys_InitPIDFile( FS_ServerGameDir() );
 
 		// the settings are read again as the game directory changes
 		// (Com_GameRestart's Com_ExecuteCfg)
@@ -7523,6 +7569,36 @@ const char *FS_ServerDir( void )
 		}
 	}
 	return dir;
+}
+
+/*
+================
+FS_ServerGameDir
+
+The game directory a dedicated server's own folder (FS_ServerDir) is in:
+the one it writes in, the last one searched (fs_gamedir): a mod's with
+fs_game, or baseq3, which the demo the engine chose for want of the full
+game's paks searches above demoq3 (FS_ChooseDemo), so the server finds its
+settings, bans, keys and logs as it left them once retail paks are added.
+The current game directory on a client
+================
+*/
+const char *FS_ServerGameDir( void )
+{
+	return Com_IsClient() ? FS_GetCurrentGameDir() : FS_LoadedGameDir();
+}
+
+/*
+================
+FS_ServerQPath
+
+A file of the server's own folder, relative to the home: in its game
+directory (FS_ServerGameDir)
+================
+*/
+const char *FS_ServerQPath( const char *filename )
+{
+	return va( "%s/%s", FS_ServerGameDir(), FS_ServerFile( filename ) );
 }
 
 /*

@@ -1447,6 +1447,10 @@ void	FS_FilenameCompletion( const char *dir, const char *ext, char *filter,
 
 const char *FS_GetCurrentGameDir(void);
 const char *FS_ServerDir( void );
+// the game directory FS_ServerDir is in, and a file of it relative to the
+// home: baseq3 on the demo the engine chose for want of the full game's
+const char *FS_ServerGameDir( void );
+const char *FS_ServerQPath( const char *filename );
 // a dedicated server's own directory in the game directory, "servers/<port>",
 // "" on a client
 const char *FS_ServerFile( const char *filename );

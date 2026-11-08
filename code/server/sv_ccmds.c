@@ -703,7 +703,7 @@ static void SV_RehashBans_f(void)
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
 
-	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), FS_ServerFile(sv_banFile->string));
+	Q_strncpyz(filepath, FS_ServerQPath(sv_banFile->string), sizeof(filepath));
 	if((filelen = FS_BaseDir_FOpenFileRead(filepath, &readfrom)) < 0 && *FS_ServerDir())
 	{
 		Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), sv_banFile->string);
@@ -790,7 +790,7 @@ static void SV_WriteBans(void)
 	if(!sv_banFile->string || !*sv_banFile->string)
 		return;
 
-	Com_sprintf(filepath, sizeof(filepath), "%s/%s", FS_GetCurrentGameDir(), FS_ServerFile(sv_banFile->string));
+	Q_strncpyz(filepath, FS_ServerQPath(sv_banFile->string), sizeof(filepath));
 
 	if((writeto = FS_BaseDir_FOpenFileWrite_HomeState(filepath)))
 	{
