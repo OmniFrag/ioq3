@@ -5,7 +5,10 @@
 #
 # The staged files are signed inside out, as Apple asks (codesign's --deep
 # is deprecated): each app's libraries, then the app, then the other
-# executables, which get the hardened runtime and cmake/entitlements.plist.
+# executables, which get the hardened runtime and cmake/entitlements.plist,
+# but those CPACK_MACOS_NO_ENTITLEMENTS names (by file name) get the
+# hardened runtime alone, as a program that needs no exception to it, such
+# as one that faces the network, should. Each is verified once it's signed.
 # Every signature gets a secure timestamp, which notarization requires.
 # With no identity, the files are signed ad hoc, which runs only on the Mac
 # that built them, and without the hardened runtime: its library
@@ -43,10 +46,11 @@ if(IDENTITY)
             "matches APPLE_CERTIFICATE_ID: ${IDENTITY}")
     endif()
     set(SIGN --force --sign "${IDENTITY}" --timestamp)
-    set(EXECUTABLE ${SIGN} --options runtime
-        --entitlements "${CMAKE_CURRENT_LIST_DIR}/../entitlements.plist")
+    set(PLAIN ${SIGN} --options runtime)
+    set(EXECUTABLE ${PLAIN} --entitlements "${CMAKE_CURRENT_LIST_DIR}/../entitlements.plist")
 else()
     set(SIGN --force --sign -)
+    set(PLAIN ${SIGN})
     set(EXECUTABLE ${SIGN})
 endif()
 
@@ -95,6 +99,11 @@ foreach(FILE IN LISTS FILES)
     file(READ "${FILE}" MAGIC LIMIT 4 HEX)
     if(MAGIC MATCHES "^(cafebabe|cffaedfe|cefaedfe)$")
         get_filename_component(NAME "${FILE}" NAME)
-        codesign(${EXECUTABLE} --identifier "${NAME}" "${FILE}")
+        set(OPTIONS ${EXECUTABLE})
+        if(NAME IN_LIST CPACK_MACOS_NO_ENTITLEMENTS)
+            set(OPTIONS ${PLAIN})
+        endif()
+        codesign(${OPTIONS} --identifier "${NAME}" "${FILE}")
+        codesign(--verify --strict "${FILE}")
     endif()
 endforeach()
