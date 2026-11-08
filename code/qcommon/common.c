@@ -1004,9 +1004,68 @@ be after execing the config and default.
 ===============
 */
 #define ENV_PREFIX	"OMNIFRAG_"
+#define ENV_FILE_SUFFIX	"_FILE"
 
 static int QDECL Com_CompareStrings( const void *a, const void *b ) {
 	return strcmp( *(const char * const *)a, *(const char * const *)b );
+}
+
+/*
+===============
+Com_IsEnvironmentFile
+
+Whether a name is an OMNIFRAG_<CVAR>_FILE variable's, which names a file
+holding the cvar's value; as the origin of the set it made, too
+===============
+*/
+qboolean Com_IsEnvironmentFile( const char *name ) {
+	// the suffix after the prefix, not overlapping it: OMNIFRAG_FILE sets file
+	return !strncmp( name, ENV_PREFIX, strlen( ENV_PREFIX ) ) &&
+		strlen( name ) >= strlen( ENV_PREFIX ) + strlen( ENV_FILE_SUFFIX ) &&
+		COM_CompareExtension( name, ENV_FILE_SUFFIX );
+}
+
+/*
+===============
+Com_EnvironmentFile
+
+Reads the value an OMNIFRAG_<CVAR>_FILE variable names into value: its
+file's text, less one line end, so a container can keep a secret in a file
+rather than its environment, which the server's children inherit. The text
+is never printed. NULL when it's read, or why not: a file that can't be
+read, is longer than a cvar's value, or holds a double quote, a line break
+or a NUL, which a cvar's value can't
+===============
+*/
+static const char *Com_EnvironmentFile( const char *path, char *value, int size ) {
+	FILE	*f = Sys_FOpen( path, "rb" );
+	size_t	length;
+	int		error;
+
+	if ( !f ) {
+		return "can't be read";
+	}
+	// a value with its line end, and one more, to tell a longer file
+	length = fread( value, 1, size - 1, f );
+	error = ferror( f );
+	fclose( f );
+	if ( error ) {
+		return "can't be read";
+	}
+	value[length] = '\0';
+	if ( length && value[length - 1] == '\n' ) {
+		value[--length] = '\0';
+	}
+	if ( length && value[length - 1] == '\r' ) {
+		value[--length] = '\0';
+	}
+	if ( length >= MAX_CVAR_VALUE_STRING ) {
+		return va( "is longer than a cvar's value can be, %i characters", MAX_CVAR_VALUE_STRING - 1 );
+	}
+	if ( strlen( value ) != length || strpbrk( value, "\"\r\n" ) ) {
+		return "holds a double quote, a line break or a NUL, which a cvar's value can't";
+	}
+	return NULL;
 }
 
 /*
@@ -1018,16 +1077,22 @@ which win: OMNIFRAG_SV_HOSTNAME="My server" sets sv_hostname, the name
 after OMNIFRAG_ in lower case, in the variables' sorted order, as the
 container image's start did (deploy/entrypoint.sh). Each value is as it
 is, its ; and + its own; one holding a double quote, a newline or a
-carriage return, which a cvar's value can't, is left out. Each set locks
-its cvar with the variable's name (Cvar_Lock). What's left out is said
-once, on the first pass
+carriage return, which a cvar's value can't, is left out.
+OMNIFRAG_<CVAR>_FILE names a file holding the value instead
+(Com_EnvironmentFile), for a secret, and wins over OMNIFRAG_<CVAR>; its
+text is never printed. Each set locks its cvar with the variable's name
+(Cvar_Lock). What's left out is said once, on the first pass
 ===============
 */
 static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 	static qboolean	warned;
 	char	**env = Sys_Environment();
 	const char	*found[512];
-	char	name[MAX_STRING_CHARS];
+	// a value, its line end, one more byte and the NUL (Com_EnvironmentFile)
+	char	name[MAX_STRING_CHARS], contents[MAX_CVAR_VALUE_STRING + 3];
+	const int	suffix = sizeof( ENV_FILE_SUFFIX ) - 1;
+	// what's left out is said on the first pass alone
+	const qboolean	quiet = warned || match != NULL;
 	int		count = 0, i;
 
 	for ( i = 0; env && env[i] && count < ARRAY_LEN( found ); i++ ) {
@@ -1038,16 +1103,23 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 	qsort( found, count, sizeof( found[0] ), Com_CompareStrings );
 
 	for ( i = 0; i < count; i++ ) {
-		const char	*equals = strchr( found[i], '=' ), *value = equals + 1;
+		const char	*equals = strchr( found[i], '=' ), *value = equals + 1, *reason;
 		int		length = equals - found[i];
 		char	variable[MAX_STRING_CHARS];
+		// no cvar's name ends in _file (cvar-inventory.py checks), so the
+		// suffix is always the file's
+		qboolean	fromFile;
 		cvar_t	*var;
 
 		Q_strncpyz( variable, found[i], MIN( length + 1, (int)sizeof( variable ) ) );
+		fromFile = Com_IsEnvironmentFile( variable );
 		Q_strncpyz( name, variable + strlen( ENV_PREFIX ), sizeof( name ) );
+		if ( fromFile ) {
+			name[strlen( name ) - suffix] = '\0';
+		}
 		Q_strlwr( name );
-		if ( !name[0] || strpbrk( value, "\"\r\n" ) ) {
-			if ( !warned && !match ) {
+		if ( !name[0] || ( !fromFile && strpbrk( value, "\"\r\n" ) ) ) {
+			if ( !quiet ) {
 				Com_Printf( "%s %s: left out\n", variable, !name[0] ? "names no cvar" :
 					"holds a double quote, a newline or a carriage return, which a cvar's value can't" );
 			}
@@ -1056,9 +1128,29 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 		if ( ( match && Q_stricmp( name, match ) ) || ( Cvar_Flags( name ) & skipFlags ) ) {
 			continue;
 		}
+		if ( fromFile ) {
+			reason = Com_EnvironmentFile( value, contents, sizeof( contents ) );
+			if ( reason ) {
+				if ( !quiet ) {
+					Com_Printf( "%s: %s %s: left out\n", variable, equals + 1, reason );
+				}
+				Com_Memset( contents, 0, sizeof( contents ) );
+				continue;
+			}
+			value = contents;
+			// the plain variable, sorted before it, is set already
+			if ( !quiet && getenv( va( "%.*s", length - suffix, variable ) ) ) {
+				Com_Printf( "%s and %.*s both set %s: the file's value wins\n", variable, length - suffix,
+					variable, name );
+			}
+		}
 		var = Cvar_SetFromOrigin( name, value, CVAR_SOURCE_SESSION, variable );
 		if ( var ) {
 			Cvar_Lock( var, variable );
+		}
+		if ( fromFile ) {
+			// this copy doesn't linger on the stack; the cvar keeps its own
+			Com_Memset( contents, 0, sizeof( contents ) );
 		}
 	}
 	if ( !match ) {

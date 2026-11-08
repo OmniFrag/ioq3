@@ -954,6 +954,8 @@ const char	*Cvar_SourceName( cvarSource_t source );
 const cvarDeclaration_t	*Cvar_Declaration( const char *var_name );
 // a cvar's declaration (Cvar_SetDeclarations), by its name, or NULL
 qboolean	Cvar_Secret( const cvar_t *var );
+// whether a name is an OMNIFRAG_<CVAR>_FILE variable's, a set's origin too
+qboolean	Com_IsEnvironmentFile( const char *name );
 // whether its value is kept out of what's shown of it: a password's
 const char	*Cvar_ValidValue( cvar_t *var, const char *value );
 // the value as the cvar's range takes it, quietly

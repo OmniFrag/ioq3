@@ -1699,7 +1699,7 @@ qboolean Cvar_AllowedFromText( const char *var_name ) {
 // the sets a config's lines made, in order, which --check reports
 // (Cvar_PrintSetLog)
 typedef struct {
-	char	*origin, *name, *value;
+	char	*origin, *name, *value;	// value NULL for one not shown
 } cvarSet_t;
 
 #define MAX_LOGGED_SETS	1024
@@ -1733,7 +1733,9 @@ Cvar_LogSet
 
 A set by a config's line, for --check. The startup sets the command
 line's settings more than once: a set the log has is moved to the end,
-where it's now the latest
+where it's now the latest. A secret's value (Cvar_Secret), or one an
+OMNIFRAG_<CVAR>_FILE variable read from its file, isn't kept, so it isn't
+shown
 ============
 */
 static void Cvar_LogSet( const cvar_t *var, const char *origin ) {
@@ -1744,9 +1746,13 @@ static void Cvar_LogSet( const cvar_t *var, const char *origin ) {
 	if ( !com_check || !origin || !Q_stricmpn( origin, DEFAULT_CFG_ORIGIN, strlen( DEFAULT_CFG_ORIGIN ) ) ) {
 		return;
 	}
+	if ( Cvar_Secret( var ) || Com_IsEnvironmentFile( origin ) ) {
+		value = NULL;
+	}
 	for ( i = 0; i < cvar_numSets; i++ ) {
 		set = cvar_setLog[i];
-		if ( !Q_stricmp( set.name, var->name ) && !strcmp( set.origin, origin ) && !strcmp( set.value, value ) ) {
+		if ( !Q_stricmp( set.name, var->name ) && !strcmp( set.origin, origin ) &&
+				( set.value && value ? !strcmp( set.value, value ) : set.value == value ) ) {
 			memmove( &cvar_setLog[i], &cvar_setLog[i + 1], ( cvar_numSets - i - 1 ) * sizeof( set ) );
 			cvar_setLog[cvar_numSets - 1] = set;
 			return;
@@ -1758,8 +1764,13 @@ static void Cvar_LogSet( const cvar_t *var, const char *origin ) {
 	}
 	set.origin = Cvar_LogCopy( origin );
 	set.name = Cvar_LogCopy( var->name );	// an unset cvar is freed
-	set.value = Cvar_LogCopy( value );
+	set.value = value ? Cvar_LogCopy( value ) : NULL;
 	cvar_setLog[cvar_numSets++] = set;
+}
+
+// a logged set's value, quoted, or that it isn't shown
+static const char *Cvar_LoggedValue( const cvarSet_t *set ) {
+	return set->value ? va( "\"%s\"", set->value ) : "(its value not shown)";
 }
 
 /*
@@ -1782,10 +1793,10 @@ void Cvar_PrintSetLog( void ) {
 			}
 		}
 		if ( later ) {
-			Com_Printf( "  %-24s %s \"%s\", then %s set \"%s\"\n", set->origin, set->name, set->value,
-				later->origin, later->value );
+			Com_Printf( "  %-24s %s %s, then %s set %s\n", set->origin, set->name, Cvar_LoggedValue( set ),
+				later->origin, Cvar_LoggedValue( later ) );
 		} else {
-			Com_Printf( "  %-24s %s \"%s\"\n", set->origin, set->name, set->value );
+			Com_Printf( "  %-24s %s %s\n", set->origin, set->name, Cvar_LoggedValue( set ) );
 		}
 	}
 	if ( cvar_setsDropped ) {
