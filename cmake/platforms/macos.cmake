@@ -104,7 +104,10 @@ set(CPACK_GENERATOR "DragNDrop")
 # path: a project's README template (MACOS_PACKAGE_README), installed as
 # README.txt with its @VERSION@ the build's, and others as they are
 # (MACOS_PACKAGE_FILES), its license and notices, say. Their names, as an
-# AppleScript list, are MACOS_PACKAGE_FILE_NAMES, for the image's layout
+# AppleScript list, are MACOS_PACKAGE_FILE_NAMES, for the image's layout,
+# which puts them with the app and the server. So do the names in
+# MACOS_PACKAGE_ITEMS: what the project installs there itself, such as a
+# program the server starts and the folders it reads
 function(add_macos_package_files)
     set(NAMES)
     if(MACOS_PACKAGE_README)
@@ -116,6 +119,9 @@ function(add_macos_package_files)
     foreach(FILE IN LISTS MACOS_PACKAGE_FILES)
         install(FILES ${FILE} DESTINATION .)
         get_filename_component(NAME ${FILE} NAME)
+        list(APPEND NAMES "\"${NAME}\"")
+    endforeach()
+    foreach(NAME IN LISTS MACOS_PACKAGE_ITEMS)
         list(APPEND NAMES "\"${NAME}\"")
     endforeach()
     list(JOIN NAMES ", " NAMES)
