@@ -493,7 +493,8 @@ static void R_Caps2D( caps2D_t *caps ) {
 R_CreatePaint2D
 
 Keeps a paint once it's checked; 0 when it's malformed, there's no room,
-or the renderer doesn't draw its kind (caps2D_t's paints and msdf)
+or the renderer doesn't draw its kind (caps2D_t's msdf for a distance
+field, paints for the others)
 ===============
 */
 int R_CreatePaint2D( const paint2D_t *paint ) {
@@ -504,7 +505,7 @@ int R_CreatePaint2D( const paint2D_t *paint ) {
 		return 0;
 	}
 	R_Caps2D( &caps );
-	if ( !paint || !caps.paints || (unsigned)paint->kind > PAINT2D_MSDF || ( paint->kind == PAINT2D_MSDF && !caps.msdf ) ) {
+	if ( !paint || (unsigned)paint->kind > PAINT2D_MSDF || !( paint->kind == PAINT2D_MSDF ? caps.msdf : caps.paints ) ) {
 		ri.Printf( PRINT_DEVELOPER, "CreatePaint2D: kind %i isn't drawn\n", paint ? (int)paint->kind : -1 );
 		return 0;
 	}

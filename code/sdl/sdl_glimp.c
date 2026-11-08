@@ -439,6 +439,13 @@ static qboolean GLimp_GetProcAddresses( qboolean fixedFunction ) {
 #define GLE( ret, name, ... ) qgl##name = (name##proc *) SDL_GL_GetProcAddress( "gl" #name );
 #endif
 
+	// opengl1's fragment program for the UI's distance-field text
+	// (R_InitMsdf2D), where the driver offers OpenGL 2.0; without one of
+	// them it draws the bitmap glyphs
+	if ( fixedFunction && QGL_VERSION_ATLEAST( 2, 0 ) ) {
+		QGL_2_0_PROCS;
+	}
+
 	// without them, GLimp_EndFrame doesn't limit the frames the driver
 	// queues
 	if ( QGL_VERSION_ATLEAST( 3, 2 ) || QGLES_VERSION_ATLEAST( 3, 0 ) || SDL_GL_ExtensionSupported( "GL_ARB_sync" ) ) {

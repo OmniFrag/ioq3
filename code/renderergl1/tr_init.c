@@ -1351,6 +1351,7 @@ void R_Init( void ) {
 	tr.white2DShader = R_GetShaderByHandle( RE_RegisterShaderFromImage( "*white2D", LIGHTMAP_2D, tr.whiteImage, qfalse ) );
 
 	R_InitStore2D();
+	R_InitMsdf2D();
 
 	R_InitSkins();
 
@@ -1413,6 +1414,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	if ( tr.registered ) {
 		R_IssuePendingRenderCommands();
 		R_ShutdownStore2D( !destroyWindow );
+		R_ShutdownMsdf2D();
 		R_DeleteTextures();
 	}
 

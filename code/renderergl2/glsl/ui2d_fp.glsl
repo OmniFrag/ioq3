@@ -100,7 +100,9 @@ float RoundedBox(vec2 p)
 }
 
 // a multi-channel distance field's distance: the median of its channels,
-// 0.5 on the outline, more inside
+// 0.5 on the outline, more inside. renderergl1/tr_ui2d.c's msdf2DSource
+// has its own copy of Median, Msdf and the source texel's band, which a
+// change here must keep in step
 float Median(vec4 texel)
 {
 	return max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));

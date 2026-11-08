@@ -37,6 +37,8 @@ QGL_1_1_PROCS;
 QGL_1_1_FIXED_FUNCTION_PROCS;
 QGL_DESKTOP_1_1_PROCS;
 QGL_DESKTOP_1_1_FIXED_FUNCTION_PROCS;
+// with OpenGL 2.0, for the UI's distance fields (R_InitMsdf2D); NULL without
+QGL_2_0_PROCS;
 QGL_3_0_PROCS;
 #undef GLE
 
@@ -1653,6 +1655,8 @@ void RB_SetGL2D( void );
 void RB_Scissor2D( const int *rect );
 
 // tr_ui2d.c: the retained 2D (renderercommon/tr_ui2d_common.c)
+void R_InitMsdf2D( void );
+void R_ShutdownMsdf2D( void );
 void R_GetCaps2DRetained( caps2D_t *caps );
 const void *RB_Draw2D( const void *data );
 

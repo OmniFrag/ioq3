@@ -206,7 +206,7 @@ typedef struct {
 
 	// A paint (paint2D_t) for TRIS2D_PAINT; 0 when it's malformed, there's
 	// no room for it, or the renderer doesn't draw its kind (caps2D_t's
-	// paints)
+	// msdf for a distance field, paints for the others)
 	int		(*CreatePaint2D)( const paint2D_t *paint );
 	void	(*DeletePaint2D)( int paint );
 

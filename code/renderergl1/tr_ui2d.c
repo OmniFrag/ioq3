@@ -23,7 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // renderercommon/tr_ui2d_common.c does for both renderers: UI textures,
 // geometry drawn from renderer memory with vertex arrays, and clip masks
 // in the window's stencil. Gradients and shapes aren't drawn here
-// (caps2D_t's paints): the UI tessellates them.
+// (caps2D_t's paints): the UI tessellates them. Distance-field text is,
+// with OpenGL 2.0 (caps2D_t's msdf).
 
 #include "tr_local.h"
 
@@ -116,16 +117,139 @@ static void R_FreeGpu2D( handle2DKind_t kind, void *object ) {
 }
 
 /*
+============================================================================
+
+DISTANCE FIELDS
+
+The UI's distance-field text (PAINT2D_MSDF) is the one paint drawn here:
+a fragment program over the fixed-function arrays, bound around its
+batches alone, where the driver offers OpenGL 2.0. Its coverage is
+renderergl2's (glsl/ui2d_fp.glsl): the median of three channels, its range
+scaled by fwidth, times premultiplied vertex colors. Without the program
+the UI draws its bitmap glyphs.
+
+============================================================================
+*/
+
+// renderergl2/glsl/ui2d_fp.glsl's Median, Msdf and source texel, which a
+// change to either must keep in step
+static const char *msdf2DSource =
+	"#version 110\n"
+	"uniform sampler2D u_DiffuseMap;\n"
+	"uniform float u_MsdfRange;\n"
+	"uniform vec2 u_MsdfSourceTexel;\n"
+	"uniform vec2 u_TextureSize;\n"
+	"\n"
+	"void main()\n"
+	"{\n"
+	"	vec2 st = gl_TexCoord[0].st;\n"
+	"	vec4 texel = texture2D(u_DiffuseMap, st);\n"
+	"	vec4 color = gl_Color;\n"
+	"	float d = max(min(texel.r, texel.g), min(max(texel.r, texel.g), texel.b));\n"
+	"	vec2 screenRange = vec2(u_MsdfRange) / u_TextureSize / fwidth(st);\n"
+	"	float pixelRange = max(min(screenRange.x, screenRange.y), 1.0);\n"
+	"\n"
+	"	if (u_MsdfSourceTexel.x > 0.0)\n"
+	"	{\n"
+	"		vec2 one = 1.0 / u_TextureSize;\n"
+	"		vec2 normal = vec2(texture2D(u_DiffuseMap, st + vec2(one.x, 0.0)).a - texel.a,\n"
+	"			texture2D(u_DiffuseMap, st + vec2(0.0, one.y)).a - texel.a);\n"
+	"		float slope = dot(normal, normal);\n"
+	"		float width = slope > 1e-8 ? length(u_MsdfSourceTexel * normal) * inversesqrt(slope)\n"
+	"			: 0.5 * (u_MsdfSourceTexel.x + u_MsdfSourceTexel.y);\n"
+	"\n"
+	"		color.rgb *= smoothstep(-width, width, (texel.a - 0.5) * u_MsdfRange);\n"
+	"	}\n"
+	"	gl_FragColor = color * clamp(pixelRange * (d - 0.5) + 0.5, 0.0, 1.0);\n"
+	"}\n";
+
+static struct {
+	GLuint	program;
+	GLint	range, sourceTexel, textureSize;	// the uniforms' locations
+} msdf2D;
+
+/*
+===============
+R_InitMsdf2D
+
+The distance fields' program, where the driver offers OpenGL 2.0 and each
+function it needs; else a line saying the UI draws bitmap glyphs, and with
+developer 1 the compiler's or linker's log
+===============
+*/
+void R_InitMsdf2D( void ) {
+	GLuint	shader, program = 0;
+	GLint	compiled = GL_FALSE, linked = GL_FALSE;
+	char	log[1024];
+
+	Com_Memset( &msdf2D, 0, sizeof( msdf2D ) );
+	if ( !QGL_VERSION_ATLEAST( 2, 0 ) || !qglCreateShader || !qglShaderSource || !qglCompileShader ||
+		!qglGetShaderiv || !qglGetShaderInfoLog || !qglDeleteShader || !qglCreateProgram || !qglAttachShader ||
+		!qglLinkProgram || !qglGetProgramiv || !qglGetProgramInfoLog || !qglDeleteProgram || !qglUseProgram ||
+		!qglGetUniformLocation || !qglUniform1f || !qglUniform2f ) {
+		ri.Printf( PRINT_ALL, "...the UI's text draws bitmap glyphs: no OpenGL 2.0 for its distance fields\n" );
+		return;
+	}
+
+	// its sampler stays at its first value, 0, the unit the 2D draws with
+	shader = qglCreateShader( GL_FRAGMENT_SHADER );
+	qglShaderSource( shader, 1, &msdf2DSource, NULL );
+	qglCompileShader( shader );
+	qglGetShaderiv( shader, GL_COMPILE_STATUS, &compiled );
+	log[0] = '\0';
+	if ( compiled ) {
+		program = qglCreateProgram();
+		qglAttachShader( program, shader );
+		qglLinkProgram( program );
+		qglGetProgramiv( program, GL_LINK_STATUS, &linked );
+		if ( !linked ) {
+			qglGetProgramInfoLog( program, sizeof( log ), NULL, log );
+			qglDeleteProgram( program );
+		}
+	} else {
+		qglGetShaderInfoLog( shader, sizeof( log ), NULL, log );
+	}
+	// a program keeps it
+	qglDeleteShader( shader );
+	if ( !linked ) {
+		ri.Printf( PRINT_ALL, "...the UI's text draws bitmap glyphs: its distance fields' program didn't build\n" );
+		ri.Printf( PRINT_DEVELOPER, "%s\n", log );
+		return;
+	}
+
+	msdf2D.program = program;
+	msdf2D.range = qglGetUniformLocation( program, "u_MsdfRange" );
+	msdf2D.sourceTexel = qglGetUniformLocation( program, "u_MsdfSourceTexel" );
+	msdf2D.textureSize = qglGetUniformLocation( program, "u_TextureSize" );
+	ri.Printf( PRINT_ALL, "...the UI's text draws distance fields\n" );
+}
+
+/*
+===============
+R_ShutdownMsdf2D
+
+While the context is current
+===============
+*/
+void R_ShutdownMsdf2D( void ) {
+	if ( msdf2D.program ) {
+		qglDeleteProgram( msdf2D.program );
+	}
+	Com_Memset( &msdf2D, 0, sizeof( msdf2D ) );
+}
+
+/*
 ===============
 R_GetCaps2DRetained
 
 What GetCaps2D says of the retained 2D: no paints, as the UI tessellates
-gradients and shapes itself
+gradients and shapes itself, but distance fields where the program built
 ===============
 */
 void R_GetCaps2DRetained( caps2D_t *caps ) {
 	caps->textureA8 = qtrue;
 	caps->clipMask = glConfig.stencilBits >= 8;
+	caps->msdf = msdf2D.program != 0;
 	caps->maxGeometryVerts = MAX_GEOMETRY2D_VERTS;
 }
 
@@ -243,16 +367,20 @@ RB_Draw2DArrays
 
 Draws triangles with the UI's own path: vertex arrays straight from verts,
 moved by the state's matrix in GL, so a perspective's texture coordinates
-interpolate as they should. Clip masks are drawn without color
+interpolate as they should. Clip masks are drawn without color. A
+distance field's batch draws with its program, which takes premultiplied
+colors, unbound again before anything else draws
 ===============
 */
 static void RB_Draw2DArrays( const draw2DState_t *state, const polyVert2D_t *verts, int numVerts, const int *indexes,
 	int numIndexes, qboolean writeColor ) {
-	texture2D_t	*texture = ( state->flags & TRIS2D_TEXTURE2D ) ? R_GetTexture2D( state->texture, qtrue ) : NULL;
-	qboolean	vertexPremul = ( state->flags & TRIS2D_PREMULTIPLIED ) != 0;
-	qboolean	premul = texture ? texture->format != TEX2D_RGBA8 : vertexPremul;
-	const byte	*colors = writeColor ? RB_Colors2D( verts, numVerts, vertexPremul, premul ) : NULL;
-	float		matrix[16];
+	texture2D_t		*texture = ( state->flags & TRIS2D_TEXTURE2D ) ? R_GetTexture2D( state->texture, qtrue ) : NULL;
+	const paint2D_t	*paint = writeColor && ( state->flags & TRIS2D_PAINT ) ? R_GetPaint2D( state->paint, qtrue ) : NULL;
+	qboolean		msdf = paint && paint->kind == PAINT2D_MSDF && texture && msdf2D.program;
+	qboolean		vertexPremul = ( state->flags & TRIS2D_PREMULTIPLIED ) != 0;
+	qboolean		premul = msdf || ( texture ? texture->format != TEX2D_RGBA8 : vertexPremul );
+	const byte		*colors = writeColor ? RB_Colors2D( verts, numVerts, vertexPremul, premul ) : NULL;
+	float			matrix[16];
 
 	GL_SelectTexture( 0 );
 	GL_Bind( texture ? &texture->image : tr.whiteImage );
@@ -285,7 +413,16 @@ static void RB_Draw2DArrays( const draw2DState_t *state, const polyVert2D_t *ver
 		qglColor4f( 1, 1, 1, 1 );
 	}
 
+	if ( msdf ) {
+		qglUseProgram( msdf2D.program );
+		qglUniform1f( msdf2D.range, paint->msdfRange );
+		qglUniform2f( msdf2D.sourceTexel, paint->msdfSourceTexel[0], paint->msdfSourceTexel[1] );
+		qglUniform2f( msdf2D.textureSize, texture->image.width, texture->image.height );
+	}
 	qglDrawElements( GL_TRIANGLES, numIndexes, GL_UNSIGNED_INT, indexes );
+	if ( msdf ) {
+		qglUseProgram( 0 );
+	}
 
 	// nothing else draws from these arrays, which a delete frees
 	qglDisableClientState( GL_COLOR_ARRAY );
