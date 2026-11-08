@@ -499,6 +499,13 @@ typedef struct {
 // gives "a vote". On engines without it, game code sends the text as before
 #define	COM_TRAP_VOTECOMMAND	813
 
+// trap_UsercmdInput( const usercmdInput_t *input ) in cgame (cg_public.h):
+// with NULL, at any time, cgame says it builds input, so the engine calls
+// its CG_USERCMD_INPUT as it builds each usercmd; inside that call, input
+// is added to the usercmd being built. Elsewhere an input is left out.
+// cgame sets buttons 12 to 15 only toward a server that says it takes them
+#define	COM_TRAP_USERCMDINPUT	814
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL

@@ -397,6 +397,10 @@ typedef struct {
 	qboolean	uiResizesInPlace;
 	qboolean	cgameResizesInPlace;
 
+	// cgame called trap_UsercmdInput: it builds input for each usercmd
+	// (CG_USERCMD_INPUT)
+	qboolean	cgameBuildsInput;
+
 	// the modules' text fields: whether one has focus, and whether the ui
 	// says so itself (trap_SetTextFocus) rather than the engine assuming
 	// its menus type whenever they're up
@@ -642,6 +646,7 @@ int CL_GetPingQueueCount( void );
 void CL_ShutdownRef( void );
 qboolean CL_ResizeWindow( void );
 void CL_GetSafeArea( int rect[4] );
+void CL_UsercmdInput( const usercmdInput_t *input );
 qboolean CL_WantsTextInput( void );
 // whether an engine extension takes the mouse's motion (hooks.h)
 qboolean CL_ExtMouseEvent( int dx, int dy );

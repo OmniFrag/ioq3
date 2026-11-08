@@ -238,4 +238,20 @@ typedef enum {
 //	void (*CG_EventHandling)(int type);
 } cgameExport_t;
 
+// Called only in a cgame that said it builds input (trap_UsercmdInput with
+// NULL, qcommon.h's COM_TRAP_USERCMDINPUT), as the engine builds each
+// usercmd, after the keys, the mouse and the joystick: cgame gives its
+// input for that command with trap_UsercmdInput, inside the call. serverTime
+// is the command's, and msec how long since the last command, the time its
+// input covers
+#define	CG_USERCMD_INPUT	100
+//	void (*CG_UsercmdInput)( int serverTime, int msec );
+
+// what cgame adds to the usercmd being built (trap_UsercmdInput)
+typedef struct {
+	float	pitch, yaw;			// degrees added to the view, as the mouse turns it
+	int		forwardmove, rightmove, upmove;	// added to the keys' and the joystick's, each sum held to -127 to 127
+	int		buttons;			// ORed in, the 16 bits the wire carries (BUTTON_*)
+} usercmdInput_t;
+
 //----------------------------------------------

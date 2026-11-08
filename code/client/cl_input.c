@@ -575,6 +575,69 @@ void CL_FinishMove( usercmd_t *cmd ) {
 }
 
 
+// what cgame gives while the engine asks it for a usercmd's input
+// (CG_USERCMD_INPUT), added up, and whether it's asking
+static usercmdInput_t	cl_cgameInput;
+static qboolean			cl_askingInput;
+
+/*
+=================
+CL_UsercmdInput
+
+trap_UsercmdInput: with NULL, cgame says it builds input; inside its
+CG_USERCMD_INPUT, its input for the usercmd being built. An input given
+anywhere else, or with turns that aren't numbers or are over 360 degrees,
+is left out
+=================
+*/
+void CL_UsercmdInput( const usercmdInput_t *input ) {
+	if ( !input ) {
+		cls.cgameBuildsInput = qtrue;
+		return;
+	}
+	if ( !cl_askingInput || Q_isnan( input->pitch ) || Q_isnan( input->yaw ) ||
+		fabs( input->pitch ) > 360.0f || fabs( input->yaw ) > 360.0f ) {
+		return;
+	}
+
+	cl_cgameInput.pitch += input->pitch;
+	cl_cgameInput.yaw += input->yaw;
+	// each sum held to twice a move, past which the command's is held
+	// anyway, so a cgame giving input in a loop can't overflow it
+	cl_cgameInput.forwardmove = (int)Com_Clamp( -254, 254, cl_cgameInput.forwardmove + ClampChar( input->forwardmove ) );
+	cl_cgameInput.rightmove = (int)Com_Clamp( -254, 254, cl_cgameInput.rightmove + ClampChar( input->rightmove ) );
+	cl_cgameInput.upmove = (int)Com_Clamp( -254, 254, cl_cgameInput.upmove + ClampChar( input->upmove ) );
+	cl_cgameInput.buttons |= input->buttons;
+}
+
+/*
+=================
+CL_CgameInput
+
+cgame's input for the usercmd being built, if it builds input: asked for
+as the command is built, as the keys', mouse's and joystick's are read, so
+it reaches the command it came before. It turns the view as the mouse
+does and adds to the moves and buttons, the moves held to -127 to 127 and
+the buttons to the 16 bits the wire carries
+=================
+*/
+static void CL_CgameInput( usercmd_t *cmd ) {
+	if ( !cgvm || !cls.cgameBuildsInput ) {
+		return;
+	}
+	Com_Memset( &cl_cgameInput, 0, sizeof( cl_cgameInput ) );
+	cl_askingInput = qtrue;
+	VM_Call( cgvm, CG_USERCMD_INPUT, cl.serverTime, frame_msec );
+	cl_askingInput = qfalse;
+
+	cl.viewangles[PITCH] += Com_Clamp( -360.0f, 360.0f, cl_cgameInput.pitch );
+	cl.viewangles[YAW] += Com_Clamp( -360.0f, 360.0f, cl_cgameInput.yaw );
+	cmd->forwardmove = ClampChar( cmd->forwardmove + cl_cgameInput.forwardmove );
+	cmd->rightmove = ClampChar( cmd->rightmove + cl_cgameInput.rightmove );
+	cmd->upmove = ClampChar( cmd->upmove + cl_cgameInput.upmove );
+	cmd->buttons |= cl_cgameInput.buttons & 0xffff;
+}
+
 /*
 =================
 CL_CreateCmd
@@ -601,6 +664,9 @@ usercmd_t CL_CreateCmd( void ) {
 
 	// get basic movement from joystick
 	CL_JoystickMove( &cmd );
+
+	// and cgame's, from touch controls, say
+	CL_CgameInput( &cmd );
 
 	// check to make sure the angles haven't wrapped
 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
