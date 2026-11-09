@@ -214,26 +214,21 @@ HTMLCanvasElement.prototype.getContext = function (type, attributes) {
 // click without it.
 // The whole page goes fullscreen, the canvas following its size. The click
 // that asks for fullscreen asks for the lock first, in the click itself, as
-// Chrome refuses a lock asked for once fullscreen is granted (156 does, with
-// NotAllowedError) and Firefox grants either. Safari refused a lock asked
-// for in that click, so there it's asked for once fullscreen is in
-// (lockBeforeFullscreen). In any browser, fullscreen entered without the
-// lock asks for it once more, once the click's request has had its answer
-// (the fullscreenchange listener), and a refusal there leaves it to the
-// player's next click. iOS has none: its fullscreen ends on a downward
-// swipe, which playing by touch does all the time.
+// Chrome and Safari refuse a lock asked for once fullscreen is granted
+// (Chrome 156 and Safari 26.6.2 do, with NotAllowedError) and Firefox grants
+// either (tests/web/lock-order.mjs measures it). In any browser, fullscreen
+// entered without the lock asks for it once more, once the click's request
+// has had its answer (the fullscreenchange listener), and a refusal there
+// leaves it to the player's next click. Older Safari, which refused the lock
+// in that click but granted fullscreen, relies on that retry. iOS has none:
+// its fullscreen ends on a downward swipe, which playing by touch does all
+// the time.
 const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 // for what a browser does with fullscreen's keys, and says of them
 const browser = /Firefox\//.test(navigator.userAgent) ? 'firefox' : /Chrome\//.test(navigator.userAgent) ? 'chromium'
     : /Safari\//.test(navigator.userAgent) ? 'safari' : 'other';
 const mac = /Macintosh/.test(navigator.userAgent);
-// The order the player's input asks for fullscreen and the lock in (above):
-// the lock first, but fullscreen first in Safari, until tests/web/lock-order.mjs
-// is run in Safari and says whether it grants the lock in that click
-// (docs/known-issues.md, "Web: in Safari, the click into fullscreen doesn't
-// lock the pointer")
-const lockBeforeFullscreen = browser !== 'safari';
 const fullscreenAvailable = !iOS && !!document.documentElement.requestFullscreen;
 // The browser's own fullscreen (F11 in Chrome, Edge and Firefox on Windows
 // and Linux) isn't the page's, and only the browser's key leaves it: it's
@@ -272,7 +267,7 @@ const enterFullscreen = () => {
     if (entering) return;
     entering = true;
     fullscreenAnswer = ANSWER_NONE;
-    if (lockBeforeFullscreen && wantPointer && !locked()) lockPointer();
+    if (wantPointer && !locked()) lockPointer();
     requestFullscreen()
         .catch(() => {
             if (document.fullscreenElement) return;
@@ -760,9 +755,8 @@ document.addEventListener('fullscreenchange', () => {
         if (lockOption) lockedKeys(true);
         else if (keyboardLock) keyboardLock.lock(['Escape', 'F11']).then(() => lockedKeys(true), () => lockedKeys(false));
         else lockedKeys(false);
-        // fullscreen without the lock (Safari's, or one refused in the
-        // click): asked for once more, once the click's request has had its
-        // answer (above)
+        // fullscreen without the lock (one refused in the click): asked for
+        // once more, once the click's request has had its answer (above)
         (lockRequest ?? Promise.resolve()).then(() => {
             if (document.fullscreenElement && wantPointer && !locked()) lockPointer();
         });
