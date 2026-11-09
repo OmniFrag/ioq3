@@ -1,4 +1,5 @@
-# Checks a GNU ld link map (-Map) for the layout VM_ResetLinked relies on:
+# Checks a GNU ld or LLVM lld link map (-Map) for the layout VM_ResetLinked
+# relies on:
 # everything the linker placed between a linked module's data markers, and
 # between its bss markers, comes from the module's own objects. Anything
 # else there would be zeroed or overwritten each time the module loads.
@@ -30,7 +31,26 @@ function record(name, addr, size, file) {
 	secout[n] = outsec
 }
 
-# an output section, or another line the map starts at the margin; the
+# lld's map: a header naming its columns, then a line for each output
+# section, input section and symbol, each with its name in its own column:
+# "<vma> <lma> <size> <align> <name>", an input section's name
+# "<file>:(<section>)"
+/^ *VMA +LMA +Size +Align +Out +In +Symbol *$/ {
+	lld = 1
+	outcol = index($0, "Out")
+	incol = index($0, "In ")
+	next
+}
+lld {
+	if (NF == 5 && index($0, $5) == outcol) {
+		outsec = $5
+	} else if (NF == 5 && index($0, $5) == incol && match($5, /:\([^)]*\)$/)) {
+		record(substr($5, RSTART + 2, RLENGTH - 3), $1, $3, substr($5, 1, RSTART - 1))
+	}
+	next
+}
+
+# GNU ld's: an output section, or another line the map starts at the margin; the
 # debug sections, and every other one the program doesn't load, number
 # their input sections from 0, so only the markers' own output section
 # is compared with them

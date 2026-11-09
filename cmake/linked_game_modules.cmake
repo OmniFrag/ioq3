@@ -47,7 +47,7 @@ vmLinkedModule_t vm_linkedModules[] = {
     target_sources(${EXECUTABLE} PRIVATE ${TABLE})
 
     # Check the layout VM_ResetLinked relies on in the link map, where GNU ld
-    # writes one: nothing but the module's own objects between its markers
+    # or lld writes one: nothing but the module's own objects between its markers
     # (check_linked_layout.awk)
     find_program(AWK awk)
     if(ARGN AND AWK AND NOT EMSCRIPTEN AND NOT APPLE AND NOT MSVC)
