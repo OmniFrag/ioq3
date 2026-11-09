@@ -3142,6 +3142,21 @@ void FS_FreeFile( void *buffer ) {
 	}
 }
 
+#ifdef __EMSCRIPTEN__
+/*
+============
+FS_OfferDownload
+
+A file handed to the player as the page's download (its saveFile), named
+for its path
+============
+*/
+void FS_OfferDownload( const char *qpath, const void *buffer, int size ) {
+	MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
+		qpath, buffer, size );
+}
+#endif
+
 /*
 ============
 FS_WriteFile
@@ -3165,8 +3180,7 @@ void FS_WriteFile( const char *qpath, const void *buffer, int size ) {
 	// screenshots as downloads, and write no copy to the page's memory or
 	// the browser's storage, where the home is kept between visits
 	if ( !Q_stricmpn( qpath, "screenshots/", 12 ) ) {
-		MAIN_THREAD_EM_ASM( { Module.saveFile?.( UTF8ToString( $0 ), HEAPU8.slice( $1, $1 + $2 ) ); },
-			qpath, buffer, size );
+		FS_OfferDownload( qpath, buffer, size );
 		return;
 	}
 #endif

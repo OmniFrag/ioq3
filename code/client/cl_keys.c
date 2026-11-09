@@ -34,6 +34,7 @@ int			historyLine;	// the line being displayed from history buffer
 							// will be <= nextHistoryLine
 
 static cvar_t	*in_touchDebug;
+static cvar_t	*in_touchLog;
 
 field_t		g_consoleField;
 field_t		chatField;
@@ -1182,6 +1183,190 @@ static void Key_CompleteBind( char *args, int argNum )
 }
 
 /*
+=============================================================================
+
+THE TOUCH LOG
+
+With in_touchLog 1, a run's lines go to touchlogs/<date>-<time>.log in the
+home: a header, a T line for each touch event and a C line for each
+usercmd, and cgame's lines (trap_TouchLog_OF), each control's state and
+what it became, and the predicted player. Lines gather in a buffer that is
+written to the file about once a second, when it fills and as the run
+ends. The file stays open for the run, as qconsole.log does: opening it
+again for each write would clear the sound buffer (FS_FOpenFileAppend_HomeData)
+every second, and follow a change of game directory.
+
+=============================================================================
+*/
+
+#define TOUCHLOG_BUFFER		( 128 * 1024 )
+#define TOUCHLOG_FLUSH_MSEC	1000
+
+static char			touchLogFile[MAX_QPATH];	// touchlogs/<date>-<time>.log, or "" for none
+static fileHandle_t	touchLogHandle;
+static char			touchLogBuffer[TOUCHLOG_BUFFER];
+static int			touchLogUsed, touchLogFlushed;
+
+static void CL_TouchLogFlush( void ) {
+	touchLogFlushed = Sys_Milliseconds( );
+	if ( touchLogUsed && touchLogHandle ) {
+		FS_Write( touchLogBuffer, touchLogUsed, touchLogHandle );
+		FS_Flush( touchLogHandle );
+	}
+	touchLogUsed = 0;
+}
+
+/*
+===================
+CL_TouchLogging
+===================
+*/
+qboolean CL_TouchLogging( void ) {
+	return touchLogHandle != 0;
+}
+
+/*
+===================
+CL_TouchLogText
+
+A line for the run, if one is on: text up to its first newline, which
+ends it
+===================
+*/
+void CL_TouchLogText( const char *text ) {
+	int	length;
+
+	if ( !touchLogHandle ) {
+		return;
+	}
+	for ( length = 0; text[length] && text[length] != '\n' && length < 1023; length++ ) {
+	}
+	if ( touchLogUsed + length + 1 > TOUCHLOG_BUFFER ) {
+		CL_TouchLogFlush( );
+	}
+	Com_Memcpy( touchLogBuffer + touchLogUsed, text, length );
+	touchLogUsed += length;
+	touchLogBuffer[touchLogUsed++] = '\n';
+}
+
+/*
+===================
+CL_TouchLog
+===================
+*/
+void QDECL CL_TouchLog( const char *fmt, ... ) {
+	va_list	argptr;
+	char	line[1024];
+
+	if ( !touchLogHandle ) {
+		return;
+	}
+	va_start( argptr, fmt );
+	Q_vsnprintf( line, sizeof( line ), fmt, argptr );
+	va_end( argptr );
+	CL_TouchLogText( line );
+}
+
+/*
+===================
+CL_TouchLogStop
+===================
+*/
+void CL_TouchLogStop( void ) {
+	if ( touchLogFile[0] ) {
+		CL_TouchLogFlush( );
+		if ( touchLogHandle ) {
+			FS_FCloseFile( touchLogHandle );
+			touchLogHandle = 0;
+		}
+		touchLogFile[0] = '\0';
+	}
+}
+
+/*
+===================
+CL_TouchLogFrame
+
+A run started as in_touchLog turns on, with its header, and ended as it
+turns off; between, written out once a second
+===================
+*/
+void CL_TouchLogFrame( void ) {
+	qtime_t	now;
+
+	if ( !in_touchLog->integer ) {
+		CL_TouchLogStop( );
+		return;
+	}
+	if ( touchLogFile[0] ) {
+		if ( Sys_Milliseconds( ) - touchLogFlushed >= TOUCHLOG_FLUSH_MSEC ) {
+			CL_TouchLogFlush( );
+		}
+		return;
+	}
+	Com_RealTime( &now );
+	Com_sprintf( touchLogFile, sizeof( touchLogFile ), "touchlogs/%04i%02i%02i-%02i%02i%02i.log", now.tm_year + 1900,
+		now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec );
+	touchLogUsed = 0;
+	touchLogFlushed = Sys_Milliseconds( );
+	// a run whose file won't open keeps its name, so it isn't tried again
+	// each frame, and drops its lines
+	touchLogHandle = FS_FOpenFileAppend_HomeData( touchLogFile );
+	if ( !touchLogHandle ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't open the touch log %s\n", touchLogFile );
+		return;
+	}
+	CL_TouchLog( "# OmniFrag touch log 1, %s, display %ix%i pixels at a scale of %g",
+		Cvar_VariableString( "version" ), cls.glconfig.vidWidth, cls.glconfig.vidHeight,
+		Cvar_VariableValue( "r_displayScale" ) );
+	CL_TouchLog( "# T <platform ns> <received ns> <finger> <phase> <x> <y> <pressure> <taken by>" );
+	CL_TouchLog( "# C <serverTime> <pitch> <yaw> <roll> <forward> <right> <up> <buttons> <weapon> <input age us>" );
+	Com_Printf( "Touch log: %s\n", touchLogFile );
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+===================
+CL_TouchLogDownload_f
+
+touchlog_download [<run>]: the page's files are out of the player's
+reach, so a run's log is handed to the player as a download: the run
+named (<date>-<time>), or the one going on, or the newest
+===================
+*/
+static void CL_TouchLogDownload_f( void ) {
+	char	name[MAX_QPATH] = "";
+	char	**files;
+	void	*bytes;
+	int		count, i, length;
+
+	CL_TouchLogFlush( );
+	if ( Cmd_Argc( ) > 1 ) {
+		Q_strncpyz( name, Cmd_Argv( 1 ), sizeof( name ) );
+		COM_DefaultExtension( name, sizeof( name ), ".log" );
+	} else if ( touchLogFile[0] ) {
+		Q_strncpyz( name, touchLogFile + strlen( "touchlogs/" ), sizeof( name ) );
+	} else {
+		// <date>-<time>.log: the newest sorts last
+		files = FS_ListFiles( "touchlogs", ".log", &count );
+		for ( i = 0; i < count; i++ ) {
+			if ( strcmp( files[i], name ) > 0 ) {
+				Q_strncpyz( name, files[i], sizeof( name ) );
+			}
+		}
+		FS_FreeFileList( files );
+	}
+	if ( !name[0] || ( length = FS_ReadFile( va( "touchlogs/%s", name ), &bytes ) ) < 0 ) {
+		Com_Printf( "touchlog_download: no touch log%s%s\n", name[0] ? " " : "", name );
+		return;
+	}
+	FS_OfferDownload( va( "touchlogs/%s", name ), bytes, length );
+	FS_FreeFile( bytes );
+	Com_Printf( "touchlog_download: %s\n", name );
+}
+#endif
+
+/*
 ===================
 CL_InitKeyCommands
 ===================
@@ -1197,6 +1382,12 @@ void CL_InitKeyCommands( void ) {
 
 	in_touchDebug = Cvar_Get( "in_touchDebug", "0", CVAR_TEMP );
 	Cvar_SetDescription( in_touchDebug, "Print each touch on the screen: the finger, where it is, and what took it" );
+	in_touchLog = Cvar_Get( "in_touchLog", "0", CVAR_TEMP );
+	Cvar_SetDescription( in_touchLog, "Write a touch log, for tuning touch controls: every touch and every command, "
+		"and what the touch controls made of them, in touchlogs/ in the home, a file a run named by its date and time" );
+#ifdef __EMSCRIPTEN__
+	Cmd_AddCommand( "touchlog_download", CL_TouchLogDownload_f );
+#endif
 }
 
 /*
@@ -1707,6 +1898,11 @@ void CL_TouchEvent( const extTouch_t *touch, int time ) {
 		touches[slot].finger = 0;
 	}
 
+	if ( CL_TouchLogging( ) ) {
+		CL_TouchLog( "T %lld %lld %i %s %.1f %.1f %.3f %s", (long long)touch->time, (long long)Sys_Nanoseconds( ),
+			touch->finger, touchPhases[touch->phase], touch->x, touch->y, touch->pressure,
+			owner == TOUCH_MOUSE ? "mouse" : owner ? va( "extension-%i", owner ) : "nothing" );
+	}
 	if ( in_touchDebug && in_touchDebug->integer ) {
 		Com_Printf( "touch: finger %i %s at %.1f %.1f, pressure %.2f, %.1f ms old: %s\n", touch->finger,
 			touchPhases[touch->phase], touch->x, touch->y, touch->pressure,

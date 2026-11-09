@@ -4346,6 +4346,9 @@ void CL_Frame ( int msec ) {
 
 	CL_ReportState();
 
+	// the touch log runs on the menus too, and while paused or disconnected
+	CL_TouchLogFrame( );
+
 #ifdef __EMSCRIPTEN__
 	{
 		// the page asks a player in a match before closing it, and not one
@@ -5400,6 +5403,8 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 
 	if(disconnect)
 		CL_Disconnect(qtrue);
+
+	CL_TouchLogStop( );
 	
 	CL_ClearMemory(qtrue);
 	CL_Snd_Shutdown();

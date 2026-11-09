@@ -819,12 +819,14 @@ const setPlaying = (inMatch) => {
 
 // The engine's files live in the page's memory: a screenshot it writes
 // is handed to the player as a download (FS_WriteFile), named for when it
-// was taken, since the engine keeps no copy and so names every one shot0000
+// was taken, since the engine keeps no copy and so names every one shot0000;
+// a touch log (touchlog_download) keeps its own name, its run's date and time
 const saveFile = (path, bytes) => {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([bytes]));
-    link.download = `@CLIENT_BINARY@-${stamp}.${path.split('.').pop()}`;
+    link.download = path.startsWith('touchlogs/') ? `@CLIENT_BINARY@-touchlog-${path.slice('touchlogs/'.length)}`
+        : `@CLIENT_BINARY@-${stamp}.${path.split('.').pop()}`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 };

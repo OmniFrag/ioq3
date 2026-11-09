@@ -506,6 +506,11 @@ typedef struct {
 // cgame sets buttons 12 to 15 only toward a server that says it takes them
 #define	COM_TRAP_USERCMDINPUT	814
 
+// trap_TouchLog( const char *line ) in cgame: a line for the touch log
+// (in_touchLog), the text up to its first newline, at most 1,023 bytes;
+// dropped while no log runs
+#define	COM_TRAP_TOUCHLOG	815
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL
@@ -1347,6 +1352,11 @@ void	FS_FreeFile( void *buffer );
 
 void	FS_WriteFile( const char *qpath, const void *buffer, int size );
 // writes a complete file, creating any subdirectories needed
+
+#ifdef __EMSCRIPTEN__
+// a file handed to the player as the web page's download, named for its path
+void	FS_OfferDownload( const char *qpath, const void *buffer, int size );
+#endif
 
 long FS_filelength(fileHandle_t f);
 // doesn't work for files that are opened from a pack file

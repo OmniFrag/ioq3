@@ -410,6 +410,7 @@ static const vmExtension_t cl_cgameExtensions[] = {
 	{ "trap_IsRecordingDemo", COM_TRAP_ISRECORDINGDEMO },
 	{ "trap_GetSafeArea_OF", COM_TRAP_GETSAFEAREA },
 	{ "trap_UsercmdInput_OF", COM_TRAP_USERCMDINPUT },
+	{ "trap_TouchLog_OF", COM_TRAP_TOUCHLOG },
 	{ "trap_Cvar_SetHelp", COM_TRAP_CVAR_SETDESCRIPTION },
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ "trap_R_SetClipRegion_OF", COM_TRAP_R_SETCLIPREGION },
@@ -530,6 +531,7 @@ static const char * const cl_cgameSyscallNames[] = {
 	SYSCALL( COM_TRAP_ISRECORDINGDEMO ),
 	SYSCALL( COM_TRAP_GETSAFEAREA ),
 	SYSCALL( COM_TRAP_USERCMDINPUT ),
+	SYSCALL( COM_TRAP_TOUCHLOG ),
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 	SYSCALL( COM_TRAP_R_SETCLIPREGION ),
 	SYSCALL( COM_TRAP_R_CREATEIMAGE2D ),
@@ -890,6 +892,10 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 
 	case COM_TRAP_USERCMDINPUT:
 		CL_UsercmdInput( VMA_IN_OPT( 1, usercmdInput_t ) );
+		return 0;
+
+	case COM_TRAP_TOUCHLOG:
+		CL_TouchLogText( VMA_STR( 1 ) );
 		return 0;
 
 	case COM_TRAP_R_SETCLIPREGION:

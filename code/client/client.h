@@ -647,6 +647,14 @@ void CL_ShutdownRef( void );
 qboolean CL_ResizeWindow( void );
 void CL_GetSafeArea( int rect[4] );
 void CL_UsercmdInput( const usercmdInput_t *input );
+// the touch log (in_touchLog): started, written out and ended as the
+// setting says, a line added while it runs (cgame's through
+// trap_TouchLog_OF), and its end at the shutdown
+void CL_TouchLogFrame( void );
+void QDECL CL_TouchLog( const char *fmt, ... ) Q_PRINTF_FUNC(1, 2);
+void CL_TouchLogText( const char *text );
+qboolean CL_TouchLogging( void );
+void CL_TouchLogStop( void );
 qboolean CL_WantsTextInput( void );
 // whether an engine extension takes the mouse's motion (hooks.h)
 qboolean CL_ExtMouseEvent( int dx, int dy );

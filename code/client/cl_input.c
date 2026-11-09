@@ -702,7 +702,7 @@ Create a new usercmd_t structure for this frame
 void CL_CreateNewCommands( void ) {
 	static int64_t	lastInput;
 	int64_t		newestInput;
-	int			cmdNum;
+	int			cmdNum, age = -1;
 
 	// no need to create usercmds until we have a gamestate
 	if ( clc.state < CA_PRIMED ) {
@@ -737,6 +737,15 @@ void CL_CreateNewCommands( void ) {
 	if ( newestInput > lastInput ) {
 		time_inputAge = (int)( ( Sys_Nanoseconds() - newestInput ) / 1000 );
 		lastInput = newestInput;
+		age = time_inputAge;
+	}
+
+	if ( CL_TouchLogging( ) ) {
+		const usercmd_t	*cmd = &cl.cmds[cmdNum];
+
+		CL_TouchLog( "C %i %.3f %.3f %.3f %i %i %i %i %i %i", cmd->serverTime, SHORT2ANGLE( cmd->angles[PITCH] ),
+			SHORT2ANGLE( cmd->angles[YAW] ), SHORT2ANGLE( cmd->angles[ROLL] ), cmd->forwardmove, cmd->rightmove,
+			cmd->upmove, cmd->buttons, cmd->weapon, age );
 	}
 }
 
