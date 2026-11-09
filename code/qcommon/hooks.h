@@ -637,6 +637,13 @@ void	SV_ExtClientPrint( int clientNum, const char *text );
 // whether the server lists itself now: dedicated 2, a network on, a master
 // set, and no drain, as its heartbeats go
 qboolean	SV_ExtListed( void );
+// holds the masters off, why saying why: no heartbeats and no answers to
+// their polls, though the server stays listed for the rest (SV_ExtListed);
+// NULL or "" lets them go again, a heartbeat at the next frame. Not a
+// drain: players still come in
+void	SV_ExtHoldListing( const char *why );
+// why the masters are held off now, "" when they aren't
+const char	*SV_ExtListingHold( void );
 // its ping in milliseconds, as status and getstatus give it; 999 while it
 // loads the map, 0 for a bot or none
 int		SV_ExtClientPing( int clientNum );

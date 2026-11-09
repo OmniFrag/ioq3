@@ -361,7 +361,8 @@ SV_ExtListed
 Whether the server lists itself on the masters: "dedicated 1" is for LAN
 play, "dedicated 2" for public play, with a network on and a master set. A
 draining server leaves their lists: it doesn't answer their polls
-(SV_IsMasterAddress), nor send them heartbeats
+(SV_IsMasterAddress), nor send them heartbeats, nor does one holding them
+off (SV_ExtHoldListing), though it's listed for the rest
 ================
 */
 qboolean SV_ExtListed( void ) {
@@ -377,6 +378,30 @@ qboolean SV_ExtListed( void ) {
 		}
 	}
 	return qfalse;
+}
+
+// why the masters are held off now (SV_ExtHoldListing), empty for not
+static char	sv_listingHold[MAX_STRING_CHARS];
+
+void SV_ExtHoldListing( const char *why ) {
+	qboolean	held = sv_listingHold[0] != '\0';
+
+	Q_strncpyz( sv_listingHold, why ? why : "", sizeof( sv_listingHold ) );
+	// let go: the next frame's heartbeat tells them at once
+	if ( held && !sv_listingHold[0] ) {
+		SV_Heartbeat_f();
+	}
+}
+
+/*
+================
+SV_ExtListingHold
+
+Why the masters are held off (SV_ExtHoldListing), or "" when they aren't
+================
+*/
+const char *SV_ExtListingHold( void ) {
+	return sv_listingHold;
 }
 
 void SV_MasterHeartbeat(const char *message)
@@ -453,7 +478,9 @@ void SV_MasterHeartbeat(const char *message)
 			}
 		}
 
-		if(adr[i][0].type == NA_BAD && adr[i][1].type == NA_BAD)
+		// held off (SV_ExtHoldListing): resolved as ever, so their polls are
+		// known, but sent nothing, a shutdown's last one included
+		if(sv_listingHold[0] || (adr[i][0].type == NA_BAD && adr[i][1].type == NA_BAD))
 		{
 			continue;
 		}
@@ -1293,8 +1320,9 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	c = Cmd_Argv(0);
 	Com_DPrintf ("SV packet %s : %s\n", NET_AdrToString(from), c);
 
-	// a draining server doesn't answer the masters' polls, so they drop it
-	if ( sv_drainReason[0] && ( !Q_stricmp( c, "getstatus" ) || !Q_stricmp( c, "getinfo" ) ) &&
+	// a draining server doesn't answer the masters' polls, so they drop it,
+	// nor one holding them off (SV_ExtHoldListing), whose entry expires
+	if ( ( sv_drainReason[0] || sv_listingHold[0] ) && ( !Q_stricmp( c, "getstatus" ) || !Q_stricmp( c, "getinfo" ) ) &&
 		SV_IsMasterAddress( from ) ) {
 		return;
 	}
