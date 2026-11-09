@@ -6436,11 +6436,15 @@ static Q_NO_RETURN void FS_MissingDataError( const char *game, const char *gameN
 			"point release, from https://ioquake3.org/extras/patch-data/\n",
 			gamePath, gameName, game));
 
+	// the demo is played without asking (FS_ChooseDemo), and com_basegame
+	// set by hand would keep a server's folder in demoq3, so it isn't
+	// suggested
 	if(!Q_stricmp(game, BASEGAME))
 	{
 		Q_strcat(errorText, sizeof(errorText),
 				va("\nTo run on the free demo's data instead, put its pak0.pk3 in "
-				"\"%s%cdemoq3%c\" and add +set com_basegame demoq3 to the command line.\n",
+				"\"%s%cdemoq3%c\": it's played when the full game's paks aren't found, "
+				"unless com_basegame is set.\n",
 				installPath, PATH_SEP, PATH_SEP));
 	}
 
