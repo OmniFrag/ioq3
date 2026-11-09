@@ -34,6 +34,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server.h"
 #include "../qcommon/content.h"
 
+#include <errno.h>
+
 #define EXPORT_BUFFER_SIZE		( 256 * 1024 )
 #define EXPORT_REPORT_MSEC		10000		// between reports of how far it's got
 #define EXPORT_MAX_LISTED		8			// paks named in a line of the summary
@@ -43,6 +45,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // given another
 #define CONTENT_INCOMING		"incoming"
 #define CONTENT_WWW				"www"
+// in an export's folder: the pak versions its last two exports listed
+#define EXPORT_RECORD			"content-export.txt"
 
 typedef enum {
 	EXPORT_THERE,		// already there, with the pak's hash
@@ -84,6 +88,12 @@ typedef struct {
 	// its folder, links resolved, which all its paths must stay in: the
 	// export's, or content add's incoming
 	char			dir[MAX_OSPATH];
+	// what SV_ExportPrune did, for SV_ExportFinish
+	int				pruned, prunedKept;		// old versions removed, and kept as a file couldn't be
+	int64_t			prunedBytes;
+	char			prunedNames[MAX_STRING_CHARS];
+	const char		*pruneWhy;				// a constant string, when no version could be removed
+	const char		*keepWhy;				// the frame's: why none may be, as a pak listed is gone
 
 	// the frame's
 	int64_t			total;			// the paks' bytes
@@ -367,6 +377,358 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	}
 }
 
+/*
+=================
+SV_ExportList
+
+Adds a pak's name to a line of names, the first few, then a count of the
+rest at the end (SV_ExportListEnd); the thread's too
+=================
+*/
+static void SV_ExportList( char *line, int size, int *count, const char *name ) {
+	if ( (*count)++ < EXPORT_MAX_LISTED ) {
+		if ( line[0] ) {
+			Q_strcat( line, size, ", " );
+		}
+		Q_strcat( line, size, name );
+	}
+}
+
+/*
+=================
+SV_ExportPaths
+
+A pak version's two files in the export's folder, by hash and by name:
+false when one would be too long, with its .part beside it
+=================
+*/
+static qboolean SV_ExportPaths( const char *dir, const byte sha256[SHA256_DIGEST_SIZE], const char *gameDir,
+	const char *base, char *byHash, char *byName ) {
+	char	hex[SHA256_HEX_SIZE];
+
+	// measured first: Com_sprintf says when it cuts, which the thread mustn't
+	if ( strlen( dir ) + 8 + SHA256_HEX_SIZE + 4 >= MAX_OSPATH - 8
+		|| strlen( dir ) + strlen( gameDir ) + strlen( base ) + 6 >= MAX_OSPATH - 8 ) {
+		return qfalse;
+	}
+	Com_SHA256Hex( sha256, hex );
+	Com_sprintf( byHash, MAX_OSPATH, "%s%csha256%c%s.pk3", dir, PATH_SEP, PATH_SEP, hex );
+	Com_sprintf( byName, MAX_OSPATH, "%s%c%s%c%s.pk3", dir, PATH_SEP, gameDir, PATH_SEP, base );
+	return qtrue;
+}
+
+/*
+==============================================================
+
+THE RECORD
+
+An export's folder keeps the pak versions its last export listed and the
+ones the export before it listed that this one doesn't (EXPORT_RECORD), a
+line each: "current" or "previous", the hash, and the pak's name. A
+client that read the content manifest before the paks changed may still
+be fetching an old version, by hash or by name, so both sets' files stay.
+An export that lists something else makes its versions current, the last
+current ones previous, and removes the files of the previous ones before
+those: the file by hash, unless a version kept has its hash, and the file
+by name, unless a version kept has its name, whose file that is. One that
+lists the same versions changes nothing. Only files an export listed go;
+what an operator put in the folder never does. On the thread, once the
+export's files are all there
+
+==============================================================
+*/
+
+typedef struct {
+	byte		sha256[SHA256_DIGEST_SIZE];
+	char		gameDir[OFCM_GAMEDIR_SIZE], base[OFCM_NAME_SIZE];
+	qboolean	previous;
+} exportVersion_t;
+
+static int QDECL SV_ExportHashOrder( const void *a, const void *b ) {
+	return memcmp( ( (const exportVersion_t *)a )->sha256, ( (const exportVersion_t *)b )->sha256, SHA256_DIGEST_SIZE );
+}
+
+static int QDECL SV_ExportNameOrder( const void *a, const void *b ) {
+	const exportVersion_t	*x = *(exportVersion_t * const *)a, *y = *(exportVersion_t * const *)b;
+	int						order = strcmp( x->gameDir, y->gameDir );
+
+	return order ? order : strcmp( x->base, y->base );
+}
+
+// a name's file, which on Windows' and the Mac's disks is any case's
+static int QDECL SV_ExportFileOrder( const void *a, const void *b ) {
+	const exportVersion_t	*x = *(exportVersion_t * const *)a, *y = *(exportVersion_t * const *)b;
+	int						order = Q_stricmp( x->gameDir, y->gameDir );
+
+	return order ? order : Q_stricmp( x->base, y->base );
+}
+
+// by hash, then name: a version, kept current or previous
+static int QDECL SV_ExportPairOrder( const void *a, const void *b ) {
+	const exportVersion_t	*x = a, *y = b;
+	int						order = SV_ExportHashOrder( a, b );
+
+	return order ? order : SV_ExportNameOrder( &x, &y );
+}
+
+// and current before previous, which the pair's searches can use too
+static int QDECL SV_ExportVersionOrder( const void *a, const void *b ) {
+	int		order = SV_ExportPairOrder( a, b );
+
+	return order ? order : ( (const exportVersion_t *)a )->previous - ( (const exportVersion_t *)b )->previous;
+}
+
+/*
+=================
+SV_ExportSplit
+
+A pak's name as the export and the record write it, "<gamedir>/<name>.pk3",
+into its parts, as content add takes a name: false if it isn't one
+=================
+*/
+static qboolean SV_ExportSplit( const char *name, char *gameDir, char *base ) {
+	char	copy[OFCM_GAMEDIR_SIZE + OFCM_NAME_SIZE + 8], *sep;
+
+	if ( strlen( name ) >= sizeof( copy ) || !COM_CompareExtension( name, ".pk3" ) ) {
+		return qfalse;
+	}
+	Q_strncpyz( copy, name, sizeof( copy ) );
+	copy[strlen( copy ) - 4] = '\0';
+	sep = strchr( copy, '/' );
+	if ( !sep || sep - copy >= OFCM_GAMEDIR_SIZE || strlen( sep + 1 ) >= OFCM_NAME_SIZE ) {
+		return qfalse;
+	}
+	*sep = '\0';
+	Q_strncpyz( gameDir, copy, OFCM_GAMEDIR_SIZE );
+	Q_strncpyz( base, sep + 1, OFCM_NAME_SIZE );
+	return OFCM_ValidName( gameDir, base );
+}
+
+/*
+=================
+SV_ExportReadRecord
+
+The record's versions, sorted, each once; NULL with none, or the record
+unreadable, which leaves none to remove
+=================
+*/
+static exportVersion_t *SV_ExportReadRecord( const char *path, int *count ) {
+	exportVersion_t	*versions = NULL, *grown, *v;
+	char			line[512], kind[16], hex[SHA256_HEX_SIZE + 1], name[OFCM_GAMEDIR_SIZE + OFCM_NAME_SIZE + 8];
+	char			format[32];
+	FILE			*f = Sys_FOpen( path, "r" );
+	int				size = 0, i, n = 0;
+
+	*count = 0;
+	if ( !f ) {
+		return NULL;
+	}
+	// the name, which may have spaces, is the rest of the line
+	Com_sprintf( format, sizeof( format ), "%%15s %%65s %%%d[^\r\n]", (int)sizeof( name ) - 1 );
+	while ( fgets( line, sizeof( line ), f ) ) {
+		if ( n == size ) {
+			grown = realloc( versions, ( size * 2 + 64 ) * sizeof( *versions ) );
+			if ( !grown ) {
+				break;
+			}
+			versions = grown;
+			size = size * 2 + 64;
+		}
+		v = &versions[n];
+		if ( line[0] == '#' || sscanf( line, format, kind, hex, name ) != 3 || !Com_SHA256FromHex( hex, v->sha256 )
+			|| !SV_ExportSplit( name, v->gameDir, v->base ) ) {
+			continue;
+		}
+		v->previous = !strcmp( kind, "previous" );
+		if ( v->previous || !strcmp( kind, "current" ) ) {
+			n++;
+		}
+	}
+	fclose( f );
+	if ( !n ) {
+		free( versions );
+		return NULL;
+	}
+	qsort( versions, n, sizeof( *versions ), SV_ExportVersionOrder );
+	*count = 1;
+	for ( i = 1; i < n; i++ ) {
+		// one current and previous both: current, which sorts first
+		if ( SV_ExportPairOrder( &versions[i], &versions[*count - 1] ) ) {
+			versions[( *count )++] = versions[i];
+		}
+	}
+	return versions;
+}
+
+/*
+=================
+SV_ExportRemove
+
+Removes an old version's file, if it's there and in the export's folder:
+true when it's gone, adding its size to the job's
+=================
+*/
+static qboolean SV_ExportRemove( exportJob_t *job, const char *path ) {
+	int64_t		size, mtime;
+
+	// one that can't be looked at stays listed
+	errno = 0;
+	if ( !Content_FileStat( path, &size, &mtime ) ) {
+		return errno == ENOENT;
+	}
+	if ( SV_ContentInside( job->dir, path ) && !remove( path ) ) {
+		job->prunedBytes += size;
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+=================
+SV_ExportFindName
+
+The version kept of a name, in now's versions sorted by name, in any
+case, as the disk may take it
+=================
+*/
+static qboolean SV_ExportFindName( exportVersion_t **byName, int count, const exportVersion_t *v ) {
+	return bsearch( &v, byName, count, sizeof( *byName ), SV_ExportFileOrder ) != NULL;
+}
+
+/*
+=================
+SV_ExportPrune
+
+After an export: the record anew, and the files of the versions only
+older exports listed removed (see THE RECORD). One where a pak failed, or
+whose content manifest lists one that's gone, merges instead: what it
+listed is current beside what was, and nothing goes, so its files are
+removed later and the gone pak's stay while clients may fetch them
+=================
+*/
+static void SV_ExportPrune( exportJob_t *job, qboolean merge ) {
+	exportVersion_t	*old, *now = NULL, **byName = NULL, *v;
+	char			record[MAX_OSPATH], part[MAX_OSPATH + 8], byHash[MAX_OSPATH], byNameFile[MAX_OSPATH];
+	char			hex[SHA256_HEX_SIZE], *text = NULL, name[OFCM_GAMEDIR_SIZE + OFCM_NAME_SIZE + 8];
+	int				numOld, numNow = 0, numCurrent, numKept, i, j, length = 0;
+	qboolean		gone, same, written;
+	FILE			*f;
+
+	job->pruneWhy = NULL;
+	// measured first: Com_sprintf says when it cuts, which the thread mustn't
+	if ( strlen( job->dir ) + sizeof( EXPORT_RECORD ) + 1 > sizeof( record ) ) {
+		job->pruneWhy = "its record, " EXPORT_RECORD ", is too long a path";
+		return;
+	}
+	Com_sprintf( record, sizeof( record ), "%s%c" EXPORT_RECORD, job->dir, PATH_SEP );
+	if ( !SV_ContentInside( job->dir, record ) ) {
+		job->pruneWhy = "its record, " EXPORT_RECORD ", is a link out of the folder";
+		return;
+	}
+	old = SV_ExportReadRecord( record, &numOld );
+	// this export's versions, then the last's this one doesn't list, and
+	// those whose files can't be removed
+	now = malloc( ( job->count + numOld + 1 ) * sizeof( *now ) );
+	byName = malloc( ( job->count + numOld + 1 ) * sizeof( *byName ) );
+	if ( !now || !byName ) {
+		job->pruneWhy = "out of memory";
+		goto done;
+	}
+	for ( i = 0; i < job->count; i++ ) {
+		v = &now[numNow];
+		Com_Memcpy( v->sha256, job->items[i].sha256, SHA256_DIGEST_SIZE );
+		v->previous = qfalse;
+		if ( SV_ExportSplit( job->items[i].name, v->gameDir, v->base ) ) {
+			numNow++;
+		}
+	}
+	numCurrent = numNow;
+	qsort( now, numCurrent, sizeof( *now ), SV_ExportVersionOrder );
+
+	// the same versions as the record's current ones: nothing to do
+	same = !merge;
+	for ( i = j = 0; same && i < numOld; i++ ) {
+		if ( !old[i].previous ) {
+			same = j < numCurrent && !SV_ExportVersionOrder( &old[i], &now[j] );
+			j++;
+		}
+	}
+	if ( same && j == numCurrent ) {
+		goto done;
+	}
+
+	for ( i = 0; i < numOld; i++ ) {
+		if ( ( merge || !old[i].previous ) && !bsearch( &old[i], now, numCurrent, sizeof( *now ), SV_ExportPairOrder ) ) {
+			now[numNow] = old[i];
+			now[numNow++].previous = merge ? old[i].previous : qtrue;
+		}
+	}
+	qsort( now, numNow, sizeof( *now ), SV_ExportVersionOrder );
+	for ( i = 0; i < numNow; i++ ) {
+		byName[i] = &now[i];
+	}
+	qsort( byName, numNow, sizeof( *byName ), SV_ExportFileOrder );
+
+	numKept = numNow;
+	for ( i = 0; !merge && i < numOld; i++ ) {
+		v = &old[i];
+		if ( !v->previous || bsearch( v, now, numNow, sizeof( *now ), SV_ExportPairOrder ) ) {
+			continue;
+		}
+		if ( !SV_ExportPaths( job->dir, v->sha256, v->gameDir, v->base, byHash, byNameFile ) ) {
+			continue;
+		}
+		gone = qtrue;
+		if ( !bsearch( v, now, numNow, sizeof( *now ), SV_ExportHashOrder ) ) {
+			gone = SV_ExportRemove( job, byHash );
+		}
+		if ( !SV_ExportFindName( byName, numNow, v ) ) {
+			gone = SV_ExportRemove( job, byNameFile ) && gone;
+		}
+		if ( gone ) {
+			Com_sprintf( name, sizeof( name ), "%s/%s.pk3", v->gameDir, v->base );
+			SV_ExportList( job->prunedNames, sizeof( job->prunedNames ), &job->pruned, name );
+		} else {
+			// listed again, so the next export tries again
+			now[numKept++] = *v;
+			job->prunedKept++;
+		}
+	}
+
+	// the record anew, written whole
+	text = malloc( 256 + numKept * ( 9 + SHA256_HEX_SIZE + sizeof( name ) ) );
+	if ( !text ) {
+		job->pruneWhy = "out of memory";
+		goto done;
+	}
+	length = Com_sprintf( text, 256, "# content export's record of the pak versions it listed: the last "
+		"export's (current) and those the one before listed (previous), whose files it keeps\n" );
+	for ( i = 0; i < numKept; i++ ) {
+		Com_SHA256Hex( now[i].sha256, hex );
+		length += sprintf( text + length, "%s %s %s/%s.pk3\n", now[i].previous ? "previous" : "current", hex,
+			now[i].gameDir, now[i].base );
+	}
+	// as the paks' files are, with stdio and Sys_ calls alone: a .part of
+	// its own, made new so no link there is followed, renamed into place
+	Com_sprintf( part, sizeof( part ), "%s.part", record );
+	remove( part );
+	f = Sys_FCreateReadable( part );
+	written = f && (int)fwrite( text, 1, length, f ) == length;
+	if ( f && fclose( f ) != 0 ) {
+		written = qfalse;
+	}
+	if ( !written || !Sys_Rename( part, record ) ) {
+		remove( part );
+		job->pruneWhy = "its record, " EXPORT_RECORD ", can't be written";
+	}
+
+done:
+	free( text );
+	free( byName );
+	free( now );
+	free( old );
+}
+
 static void SV_ExportThread( void *arg ) {
 	exportJob_t	*job = arg;
 	int			i;
@@ -376,10 +738,26 @@ static void SV_ExportThread( void *arg ) {
 		job->done = 1;
 		return;
 	}
+	job->pruned = job->prunedKept = 0;
+	job->prunedBytes = 0;
+	job->prunedNames[0] = '\0';
 	for ( i = 0; i < job->count; i++ ) {
 		SV_ExportTarget( job, &job->items[i], EXPORT_BY_HASH );
 		SV_ExportTarget( job, &job->items[i], EXPORT_BY_NAME );
 		job->done = i + 1;
+	}
+	// old versions go only once every pak's files are there, which a
+	// client might otherwise fetch the last version of instead, and every
+	// pak the content manifest lists is exported
+	for ( i = 0; i < job->count; i++ ) {
+		if ( job->items[i].targets[EXPORT_BY_HASH].result == EXPORT_FAILED
+			|| job->items[i].targets[EXPORT_BY_NAME].result == EXPORT_FAILED ) {
+			break;
+		}
+	}
+	SV_ExportPrune( job, i < job->count || job->keepWhy );
+	if ( !job->pruneWhy ) {
+		job->pruneWhy = i < job->count ? "some paks failed" : job->keepWhy;
 	}
 }
 
@@ -390,20 +768,6 @@ THE FRAME
 
 ==============================================================
 */
-
-/*
-=================
-SV_ExportList
-
-Adds a pak's name to a line of names, the first few, then a count of the
-rest at the end (SV_ExportListEnd)
-=================
-*/
-static void SV_ExportList( char *line, int size, int *count, const char *name ) {
-	if ( (*count)++ < EXPORT_MAX_LISTED ) {
-		Q_strcat( line, size, va( "%s%s", line[0] ? ", " : "", name ) );
-	}
-}
 
 static const char *SV_ExportListEnd( const char *line, int count ) {
 	if ( count > EXPORT_MAX_LISTED ) {
@@ -422,7 +786,7 @@ What the job did
 static void SV_ExportFinish( void ) {
 	exportJob_t		*job = &exportJob;
 	const exportItem_t	*item;
-	char			failed[MAX_STRING_CHARS] = "";
+	char			failed[MAX_STRING_CHARS] = "", removed[MAX_STRING_CHARS + 64];
 	int				i, t, there = 0, linked = 0, copied = 0, numFailed = 0;
 	int64_t			copiedBytes = 0;
 
@@ -452,10 +816,26 @@ static void SV_ExportFinish( void ) {
 		}
 	}
 
-	Com_Printf( "Exported %d paks to %s in %d s: %d files copied (%lld MB), %d hard-linked, %d already there%s\n",
+	// what SV_ExportPrune did, on the thread
+	removed[0] = '\0';
+	if ( numFailed ) {
+		Q_strncpyz( removed, "; old versions' files are kept until an export where none fail", sizeof( removed ) );
+	} else if ( job->pruneWhy ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: content export: no old version's files are removed: %s\n", job->pruneWhy );
+	}
+	if ( job->prunedKept ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: content export: %d old versions' files can't be removed; the next "
+			"export that lists other versions tries again\n", job->prunedKept );
+	}
+	if ( job->pruned ) {
+		Com_sprintf( removed, sizeof( removed ), "; removed %d old version%s (%lld MB of files): %s", job->pruned,
+			job->pruned == 1 ? "" : "s", (long long)( job->prunedBytes >> 20 ),
+			SV_ExportListEnd( job->prunedNames, job->pruned ) );
+	}
+	Com_Printf( "Exported %d paks to %s in %d s: %d files copied (%lld MB), %d hard-linked, %d already there%s%s\n",
 		job->count, job->dir, ( Sys_Milliseconds() - job->started ) / 1000, copied,
 		(long long)( copiedBytes >> 20 ), linked, there,
-		numFailed ? va( "; %d paks failed: %s", numFailed, SV_ExportListEnd( failed, numFailed ) ) : "" );
+		numFailed ? va( "; %d paks failed: %s", numFailed, SV_ExportListEnd( failed, numFailed ) ) : "", removed );
 }
 
 /*
@@ -661,7 +1041,7 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 	ofcmHeader_t	header;
 	ofcmEntry_t		entry;
 	exportItem_t	*item;
-	char			hex[SHA256_HEX_SIZE], retail[MAX_QPATH], refused[MAX_STRING_CHARS] = "";
+	char			retail[MAX_QPATH], refused[MAX_STRING_CHARS] = "";
 	const char		*source;
 	int				i, j, length, numRefused = 0, numGone = 0;
 
@@ -731,11 +1111,8 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 				break;
 			}
 		}
-		Com_SHA256Hex( entry.sha256, hex );
-		if ( Com_sprintf( item->targets[EXPORT_BY_HASH].ospath, MAX_OSPATH, "%s%csha256%c%s.pk3",
-				job->dir, PATH_SEP, PATH_SEP, hex ) >= MAX_OSPATH - 8
-			|| Com_sprintf( item->targets[EXPORT_BY_NAME].ospath, MAX_OSPATH, "%s%c%s%c%s.pk3",
-				job->dir, PATH_SEP, entry.gameDir, PATH_SEP, entry.name ) >= MAX_OSPATH - 8 ) {
+		if ( !SV_ExportPaths( job->dir, entry.sha256, entry.gameDir, entry.name, item->targets[EXPORT_BY_HASH].ospath,
+				item->targets[EXPORT_BY_NAME].ospath ) ) {
 			Com_Printf( "content export: %s is too long a path for the files\n", job->dir );
 			return;
 		}
@@ -768,6 +1145,9 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 		return;
 	}
 
+	// one gone is still the content manifest's, which clients may fetch
+	// from the export's last files
+	job->keepWhy = numGone ? "some paks the content manifest lists are gone from the server" : NULL;
 	job->copies = copies;
 	job->add = qfalse;
 	job->done = 0;
@@ -986,7 +1366,8 @@ void SV_Content_f( void ) {
 		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in the folder "
 		"in sv_contentDir, " CONTENT_WWW " if it's not given, by hash (sha256/<hash>.pk3) and by name "
 		"(<game>/<name>.pk3), for a web server that sv_dlURL names; hard-linked where it can be, unless copy "
-		"says to copy\n"
+		"says to copy. It keeps the files of the versions it lists and of those the export before it listed, "
+		"and removes older ones it made (" EXPORT_RECORD ")\n"
 		"content add <file> [game]: checks a pak, a file in sv_contentDir's " CONTENT_INCOMING " folder, and "
 		"installs it in the game's directory (this one's, or game) for the next map\n" );
 }
