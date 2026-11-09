@@ -2986,6 +2986,45 @@ sysEvent_t Com_GetSystemEvent( void )
 
 /*
 =================
+Com_JournalWrite
+
+journal 1's record of an event, every one, packets included, which on a
+busy server passes hundreds of MB a day. It stops at COM_JOURNAL_MAX,
+saying so once, and the game goes on; a replay of it ends there
+=================
+*/
+#define COM_JOURNAL_MAX		( (int64_t)1024 << 20 )	// journal.dat's most, 1 GB
+
+static int64_t	com_journalSize;	// journal.dat's bytes so far, counted rather than asked of the file each event
+
+static void Com_JournalWrite( const sysEvent_t *ev ) {
+	int		r;
+
+	if ( com_journalSize + (int64_t)sizeof( *ev ) + ev->evPtrLength > COM_JOURNAL_MAX ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: journal.dat reached %d MB, its limit, so journaling stops here and "
+			"the game goes on; a replay (journal 2) ends at this point\n", (int)( COM_JOURNAL_MAX >> 20 ) );
+		FS_FCloseFile( com_journalFile );
+		FS_FCloseFile( com_journalDataFile );
+		com_journalFile = 0;
+		com_journalDataFile = 0;
+		Cvar_Set( "journal", "0" );
+		return;
+	}
+	r = FS_Write( ev, sizeof( *ev ), com_journalFile );
+	if ( r != sizeof( *ev ) ) {
+		Com_Error( ERR_FATAL, "Error writing to journal file" );
+	}
+	if ( ev->evPtrLength ) {
+		r = FS_Write( ev->evPtr, ev->evPtrLength, com_journalFile );
+		if ( r != ev->evPtrLength ) {
+			Com_Error( ERR_FATAL, "Error writing to journal file" );
+		}
+	}
+	com_journalSize += (int64_t)sizeof( *ev ) + ev->evPtrLength;
+}
+
+/*
+=================
 Com_GetRealEvent
 =================
 */
@@ -2996,6 +3035,9 @@ sysEvent_t	Com_GetRealEvent( void ) {
 	// either get an event from the system or the journal file
 	if ( com_journal->integer == 2 ) {
 		r = FS_Read( &ev, sizeof(ev), com_journalFile );
+		if ( r == 0 ) {
+			Com_Error( ERR_FATAL, "The journal ends here: journal.dat holds no more events" );
+		}
 		if ( r != sizeof(ev) ) {
 			Com_Error( ERR_FATAL, "Error reading from journal file" );
 		}
@@ -3011,16 +3053,7 @@ sysEvent_t	Com_GetRealEvent( void ) {
 
 		// write the journal value out if needed
 		if ( com_journal->integer == 1 ) {
-			r = FS_Write( &ev, sizeof(ev), com_journalFile );
-			if ( r != sizeof(ev) ) {
-				Com_Error( ERR_FATAL, "Error writing to journal file" );
-			}
-			if ( ev.evPtrLength ) {
-				r = FS_Write( ev.evPtr, ev.evPtrLength, com_journalFile );
-				if ( r != ev.evPtrLength ) {
-					Com_Error( ERR_FATAL, "Error writing to journal file" );
-				}
-			}
+			Com_JournalWrite( &ev );
 		}
 	}
 
