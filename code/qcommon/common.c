@@ -1080,12 +1080,15 @@ is, its ; and + its own; one holding a double quote, a newline or a
 carriage return, which a cvar's value can't, is left out.
 OMNIFRAG_<CVAR>_FILE names a file holding the value instead
 (Com_EnvironmentFile), for a secret, and wins over OMNIFRAG_<CVAR>; its
-text is never printed. Each set locks its cvar with the variable's name
-(Cvar_Lock). What's left out is said once, on the first pass
+text is never printed. An empty variable of either kind is left out, so
+a blank field in a panel, which passes every one, leaves the cvar at its
+default; a cvar that must be empty is set in a config. Each set locks its
+cvar with the variable's name (Cvar_Lock). What's left out is said once,
+on the first pass
 ===============
 */
 static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
-	static qboolean	warned;
+	static qboolean	warned, emptySaid;
 	char	**env = Sys_Environment();
 	const char	*found[512];
 	// a value, its line end, one more byte and the NUL (Com_EnvironmentFile)
@@ -1093,6 +1096,9 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 	const int	suffix = sizeof( ENV_FILE_SUFFIX ) - 1;
 	// what's left out is said on the first pass alone
 	const qboolean	quiet = warned || match != NULL;
+	// and the empty ones, a developer's lines, on the first full pass once
+	// developer is known, after the first's
+	const qboolean	sayEmpty = !emptySaid && !match && com_developer;
 	int		count = 0, i;
 
 	for ( i = 0; env && env[i] && count < ARRAY_LEN( found ); i++ ) {
@@ -1128,7 +1134,17 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 		if ( ( match && Q_stricmp( name, match ) ) || ( Cvar_Flags( name ) & skipFlags ) ) {
 			continue;
 		}
+		// a blank field, as a panel passes every one: the cvar keeps its
+		// default, unlocked, for the server's tools to change
+		if ( !*value ) {
+			if ( sayEmpty ) {
+				Com_DPrintf( "%s is empty: left out, so it neither sets nor locks %s\n", variable, name );
+			}
+			continue;
+		}
 		if ( fromFile ) {
+			const char	*plain;
+
 			reason = Com_EnvironmentFile( value, contents, sizeof( contents ) );
 			if ( reason ) {
 				if ( !quiet ) {
@@ -1138,8 +1154,10 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 				continue;
 			}
 			value = contents;
-			// the plain variable, sorted before it, is set already
-			if ( !quiet && getenv( va( "%.*s", length - suffix, variable ) ) ) {
+			// the plain variable, sorted before it, is set already, unless
+			// it's empty
+			plain = getenv( va( "%.*s", length - suffix, variable ) );
+			if ( !quiet && plain && *plain ) {
 				Com_Printf( "%s and %.*s both set %s: the file's value wins\n", variable, length - suffix,
 					variable, name );
 			}
@@ -1155,6 +1173,9 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 	}
 	if ( !match ) {
 		warned = qtrue;
+	}
+	if ( sayEmpty ) {
+		emptySaid = qtrue;
 	}
 }
 
