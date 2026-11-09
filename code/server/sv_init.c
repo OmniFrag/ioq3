@@ -538,7 +538,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
 	qboolean	local;
-	const char	*data;
+	const char	*data, *leftOut;
 	const char	*ip = Cvar_VariableString( "net_ip" );
 	const char	*ip6 = Cvar_VariableString( "net_ip6" );
 
@@ -573,6 +573,11 @@ static void SV_PrintStartSummary( const char *heading ) {
 		Com_Printf( "  data:     Team Arena's (%s), on %s (%s)\n", BASETA, data, com_basegame->string );
 	} else {
 		Com_Printf( "  data:     %s (%s)\n", data, com_basegame->string );
+	}
+	leftOut = FS_LeftOutPaks();
+	if ( leftOut[0] ) {
+		Com_Printf( "  left out: %s in %s, the full game's point release, which the demo's players can't have\n",
+			leftOut, BASEGAME );
 	}
 	Com_Printf( "  home:     %s\n", Cvar_VariableString( "fs_homedatapath" ) );
 	Com_Printf( "  game dir: %s\n", FS_GetCurrentGameDir() );

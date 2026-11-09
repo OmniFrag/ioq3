@@ -223,9 +223,17 @@ static qboolean FS_TestPakChecksum( unsigned int checksum ) {
 	return fs_refusedTestPak && checksum == fs_refusedTestChecksum;
 }
 
-// the demo the engine chose, on a dedicated server: baseq3 searched as a
-// directory alone (FS_Startup, FS_ChooseDemo)
-static qboolean		fs_demoServerDir;
+// the demo the engine chose (FS_ChooseDemo): from demoq3, where a dedicated
+// server searches baseq3 as a directory alone (FS_Startup); or from
+// baseq3's pak0, where the full game's point release there is left out
+// (FS_AddGameDirectory), each one's bit in fs_leftOutPaks (FS_LeftOutPaks)
+typedef enum {
+	FS_DEMO_NONE,
+	FS_DEMO_SERVER_DIR,
+	FS_DEMO_IN_BASE
+} fsDemo_t;
+static fsDemo_t		fs_demo;
+static unsigned int	fs_leftOutPaks, fs_leftOutSaid;
 
 /*
 ================
@@ -4543,6 +4551,49 @@ static int QDECL paksort( const void *a, const void *b ) {
 	return FS_PathCmp( aa, bb );
 }
 
+#ifndef STANDALONE
+/*
+================
+FS_IdPakIndex
+
+One of id's paks' numbers by its name, pak0 to pak<count - 1>; -1 for
+none
+================
+*/
+static int FS_IdPakIndex( const char *basename, int count ) {
+	if ( strlen( basename ) != 4 || Q_stricmpn( basename, "pak", 3 ) ||
+		basename[3] < '0' || basename[3] > '0' + count - 1 ) {
+		return -1;
+	}
+	return basename[3] - '0';
+}
+#endif
+
+/*
+================
+FS_PointReleasePak
+
+The number of the full game's point release a pak is, pak1 to pak8 by
+checksum, whatever its name, as sv_refuseRetailPaks knows it; or the
+tests' stand-in for one (FS_TestPakChecksum), by its name; 0 for none
+================
+*/
+static int FS_PointReleasePak( const pack_t *pak ) {
+#ifndef STANDALONE
+	const char	*game;
+	int			index;
+
+	if ( FS_TestPakChecksum( pak->checksum ) ) {
+		return MAX( FS_IdPakIndex( pak->pakBasename, NUM_ID_PAKS ), 0 );
+	}
+	game = FS_RetailPakGame( pak->checksum, &index );
+	if ( game && !Q_stricmp( game, BASEGAME ) && index > 0 ) {
+		return index;
+	}
+#endif
+	return 0;
+}
+
 // what FS_AddGameDirectory adds of a directory
 typedef enum {
 	FS_ADD_ALL,		// the directory and its paks
@@ -4575,6 +4626,7 @@ static void FS_AddGameDirectory( const char *path, const char *dir, fsAdd_t what
 
 	int				pakwhich;
 	int				len;
+	int				index;
 
 	// find all pak files in this directory
 	Q_strncpyz(curpath, FS_BaseDir_BuildOSPath(path, dir), sizeof(curpath));
@@ -4646,6 +4698,20 @@ static void FS_AddGameDirectory( const char *path, const char *dir, fsAdd_t what
 			if ((pak = FS_LoadZipFile(pakfile, pakfiles[pakfilesi], curpath, dir)) == 0) {
 				// This isn't a .pk3, or it couldn't be opened! Next!
 				Com_Printf( S_COLOR_YELLOW "WARNING: couldn't open %s as a pak, so it's left out\n", pakfile );
+				pakfilesi++;
+				continue;
+			}
+			// on the demo played from baseq3, the full game's point release
+			// there, which the demo's players don't have and can't download
+			if ( fs_demo == FS_DEMO_IN_BASE && !Q_stricmp( dir, BASEGAME ) && ( index = FS_PointReleasePak( pak ) ) ) {
+				// once a run: the search path is built again at each map
+				if ( !( fs_leftOutSaid & ( 1u << index ) ) ) {
+					Com_Printf( "%s is the full game's point release, which the demo's players can't have, so "
+						"it's left out while the demo plays\n", pakfile );
+					fs_leftOutSaid |= 1u << index;
+				}
+				fs_leftOutPaks |= 1u << index;
+				FS_FreePak( pak );
 				pakfilesi++;
 				continue;
 			}
@@ -6168,6 +6234,9 @@ static void FS_Startup( const char *gameName )
 	const char *statePath = Sys_DefaultHomeStatePath();
 	const char *predConfigPath = "", *predDataPath = "";
 
+	// what this start leaves out, said again by each
+	fs_leftOutPaks = 0;
+
 	if(*(fs_homepath)->string) {
 		// Setting fs_homepath manually overrides everything else
 		configPath = dataPath = statePath = fs_homepath->string;
@@ -6270,7 +6339,7 @@ static void FS_Startup( const char *gameName )
 	// folder and server.cfg stay where they'll be with the full game's paks,
 	// and the game directory written in (FS_ServerGameDir) is baseq3; not
 	// where the admin's fs_basegame or fs_game names baseq3, paks and all
-	if ( fs_demoServerDir && Q_stricmp( BASEGAME, gameName ) &&
+	if ( fs_demo == FS_DEMO_SERVER_DIR && Q_stricmp( BASEGAME, gameName ) &&
 		Q_stricmp( BASEGAME, fs_basegame->string ) && Q_stricmp( BASEGAME, fs_gamedirvar->string ) ) {
 		FS_AddGameDirectories(BASEGAME, qtrue);
 	}
@@ -6469,6 +6538,7 @@ static void FS_CheckPak0( void )
 	searchpath_t	*path;
 	pack_t		*curpack;
 	const char	*pakBasename;
+	int			index;
 	qboolean founddemo = qfalse;
 	unsigned int foundPak = 0, foundTA = 0;
 	const char *installPath;
@@ -6499,13 +6569,12 @@ static void FS_CheckPak0( void )
 		}
 
 		else if(!Q_stricmpn( curpack->pakGamename, BASEGAME, MAX_OSPATH )
-				&& strlen(pakBasename) == 4 && !Q_stricmpn( pakBasename, "pak", 3 )
-				&& pakBasename[3] >= '0' && pakBasename[3] <= '0' + NUM_ID_PAKS - 1)
+				&& ( index = FS_IdPakIndex( pakBasename, NUM_ID_PAKS ) ) >= 0)
 		{
 			// or the tests' stand-in for it (FS_TestPakChecksum)
-			if( curpack->checksum != pak_checksums[pakBasename[3]-'0'] && !FS_TestPakChecksum( curpack->checksum ) )
+			if( curpack->checksum != pak_checksums[index] && !FS_TestPakChecksum( curpack->checksum ) )
 			{
-				if(pakBasename[3] == '0')
+				if(index == 0)
 				{
 					Com_Printf("\n\n"
 							"**************************************************\n"
@@ -6522,32 +6591,30 @@ static void FS_CheckPak0( void )
 							"WARNING: " BASEGAME "/pak%d.pk3 is present but its checksum (%u)\n"
 							"is not correct. Please re-install the point release\n"
 							"**************************************************\n\n\n",
-							pakBasename[3]-'0', curpack->checksum );
+							index, curpack->checksum );
 				}
 			}
 
-			foundPak |= 1<<(pakBasename[3]-'0');
+			foundPak |= 1<<index;
 		}
 		else if(!Q_stricmpn(curpack->pakGamename, BASETA, MAX_OSPATH)
-				&& strlen(pakBasename) == 4 && !Q_stricmpn(pakBasename, "pak", 3)
-				&& pakBasename[3] >= '0' && pakBasename[3] <= '0' + NUM_TA_PAKS - 1)
+				&& ( index = FS_IdPakIndex( pakBasename, NUM_TA_PAKS ) ) >= 0)
 
 		{
-			if(curpack->checksum != missionpak_checksums[pakBasename[3]-'0'])
+			if(curpack->checksum != missionpak_checksums[index])
 			{
 				Com_Printf("\n\n"
 						"**************************************************\n"
 						"WARNING: " BASETA "/pak%d.pk3 is present but its checksum (%u)\n"
 						"is not correct. Please re-install Team Arena\n"
 						"**************************************************\n\n\n",
-						pakBasename[3]-'0', curpack->checksum );				
+						index, curpack->checksum );				
 			}
 
-			foundTA |= 1 << (pakBasename[3]-'0');
+			foundTA |= 1 << index;
 		}
 		else
 		{
-			int index;
 			const char *game;
 
 			// Finally check whether this pak's checksum is listed because the user tried
@@ -6965,6 +7032,7 @@ void FS_PureServerSetReferencedPaks( const char *pakSums, const char *pakNames )
 	FS_NoteServerPaks();
 }
 
+#ifndef STANDALONE
 /*
 ================
 FS_FindPak0
@@ -6983,6 +7051,7 @@ static const pack_t *FS_FindPak0( const char *gameName, unsigned int checksum ) 
 	}
 	return NULL;
 }
+#endif
 
 /*
 ================
@@ -7066,6 +7135,27 @@ qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char
 
 /*
 ================
+FS_LeftOutPaks
+
+The full game's point release left out of baseq3 while the demo plays
+from there (FS_AddGameDirectory), "pak1.pk3, pak2.pk3"; empty for none
+================
+*/
+const char *FS_LeftOutPaks( void ) {
+	static char	names[MAX_QPATH * 2];
+	int			i;
+
+	names[0] = '\0';
+	for ( i = 1; i < NUM_ID_PAKS; i++ ) {
+		if ( fs_leftOutPaks & ( 1u << i ) ) {
+			Q_strcat( names, sizeof( names ), va( "%spak%d.pk3", names[0] ? ", " : "", i ) );
+		}
+	}
+	return names;
+}
+
+/*
+================
 FS_DemoPak0Checksum
 
 Whether a pak's checksum is the demo's pak0's, whatever its name
@@ -7079,6 +7169,7 @@ qboolean FS_DemoPak0Checksum( unsigned int checksum ) {
 #endif
 }
 
+#ifndef STANDALONE
 /*
 ================
 FS_ChooseDemo
@@ -7091,7 +7182,7 @@ no one needs com_basegame demoq3. Returns whether it did
 */
 static qboolean FS_ChooseDemo( void ) {
 	const pack_t	*demo;
-	qboolean		inBase;
+	qboolean		inBase, asked;
 
 	if( Cvar_Source( com_basegame ) != CVAR_SOURCE_DEFAULT || Q_stricmp( com_basegame->string, BASEGAME ) ||
 		FS_FindPak0( BASEGAME, pak_checksums[0] ) ||
@@ -7105,6 +7196,7 @@ static qboolean FS_ChooseDemo( void ) {
 		return qfalse;
 	}
 
+	asked = fs_basegame->string[0] || !Q_stricmp( Cvar_VariableString( "fs_game" ), BASEGAME );
 	FS_Shutdown( qfalse );
 	Cvar_Set2( "com_basegame", "demoq3", qtrue );
 	if( inBase ) {
@@ -7112,15 +7204,17 @@ static qboolean FS_ChooseDemo( void ) {
 	}
 	// a dedicated server keeps baseq3 searched as a directory alone
 	// (FS_Startup), where its own folder and server.cfg stay; with the
-	// demo's pak0 there, as fs_basegame does already
-	fs_demoServerDir = !inBase && !Com_IsClient();
+	// demo's pak0 there, as fs_basegame does already, it leaves out the
+	// point release there, unless an admin asked for baseq3 (fs_basegame,
+	// fs_game) and its paks
+	fs_demo = Com_IsClient() || ( inBase && asked ) ? FS_DEMO_NONE : inBase ? FS_DEMO_IN_BASE : FS_DEMO_SERVER_DIR;
 	FS_Startup( com_basegame->string );
 	demo = FS_FindPak0( inBase ? BASEGAME : "demoq3", DEMO_PAK0_CHECKSUM );
 	if( !demo ) {
 		// no demo either: the full game's missing data, as before
 		FS_Shutdown( qfalse );
 		Cvar_Set2( "com_basegame", BASEGAME, qtrue );
-		fs_demoServerDir = qfalse;
+		fs_demo = FS_DEMO_NONE;
 		FS_Startup( com_basegame->string );
 		return qfalse;
 	}
@@ -7130,6 +7224,7 @@ static qboolean FS_ChooseDemo( void ) {
 		demo->pakFilename, fs_homedatapath->string, PATH_SEP );
 	return qtrue;
 }
+#endif
 
 /*
 ================
