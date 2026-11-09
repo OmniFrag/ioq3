@@ -219,6 +219,7 @@ qboolean	NET_SleepUntil( int64_t ns );
 
 #define	MAX_MSGLEN				16384		// max length of a message, which may
 											// be fragmented into multiple packets
+#define	MAX_PACKETLEN			1400		// max size of a network packet
 
 #define MAX_DOWNLOAD_WINDOW		48	// ACK window of 48 download chunks. Cannot set this higher, or clients
 						// will overflow the reliable commands buffer

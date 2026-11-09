@@ -65,6 +65,7 @@ cvar_t	*sv_maxPing;
 cvar_t	*sv_gametype;
 cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
+cvar_t	*sv_statusOnePacket;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
 #ifndef STANDALONE
 cvar_t	*sv_strictAuth;
@@ -776,6 +777,13 @@ NET_OutOfBandPrint's reply to the connectionless packet being handled,
 back the way it came: one that came directly goes to the address itself,
 even when a trusted proxy that named that address holds a route to it, so
 a master's poll is answered to the master
+
+The server's out-of-band prints each fit one packet (MAX_PACKETLEN) by
+their own bounds: infoResponse by MAX_INFO_STRING, the rcon redirect's by
+SV_OUTPUTBUF_LENGTH, SV_RefuseConnect's by MAX_STRING_CHARS, and the rest
+are short, except the CD key server's reason, which SV_AuthorizeIpPacket
+passes on as it came. statusResponse passes it by default
+(sv_statusOnePacket, SVC_Status)
 ================
 */
 static void QDECL SV_OutOfBandReply( netadr_t to, const char *format, ... ) Q_PRINTF_FUNC(2, 3);
@@ -800,6 +808,11 @@ SVC_Status
 Responds with all the info that qplug or qspy can see about the server
 and all connected players.  Used for getting detailed information after
 the simple info query.
+
+The whole answer is one datagram: with every player it can pass
+MAX_PACKETLEN, and the network splits it into IP fragments, which some
+networks drop. With sv_statusOnePacket it fits one packet, listing the
+players that fit after the serverinfo
 ================
 */
 static void SVC_Status( netadr_t from ) {
@@ -810,6 +823,7 @@ static void SVC_Status( netadr_t from ) {
 	playerState_t	*ps;
 	int		statusLength;
 	int		playerLength;
+	int		room;
 	char	infostring[MAX_INFO_STRING];
 
 	// ignore if we are in single player
@@ -846,6 +860,11 @@ static void SVC_Status( netadr_t from ) {
 
 	status[0] = 0;
 	statusLength = 0;
+	// what the players' lines may take: one packet, or the most
+	// SV_OutOfBandReply's buffer holds with its NUL, less the 0xff prefix,
+	// "statusResponse\n", and the serverinfo and its newline
+	room = ( sv_statusOnePacket->integer ? MAX_PACKETLEN : MAX_MSGLEN - 1 ) - 4
+		- (int)strlen( "statusResponse\n" ) - (int)strlen( infostring ) - 1;
 
 	for (i=0 ; i < sv_maxclients->integer ; i++) {
 		cl = &svs.clients[i];
@@ -854,7 +873,7 @@ static void SVC_Status( netadr_t from ) {
 			Com_sprintf (player, sizeof(player), "%i %i \"%s\"\n", 
 				ps->persistant[PERS_SCORE], cl->ping, cl->name);
 			playerLength = strlen(player);
-			if (statusLength + playerLength >= sizeof(status) ) {
+			if ( statusLength + playerLength > room ) {
 				break;		// can't hold any more
 			}
 			strcpy (status + statusLength, player);

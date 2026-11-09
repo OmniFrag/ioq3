@@ -1311,6 +1311,13 @@ void SV_Init (void)
 		"With 1, a player can send 8 commands in a burst, such as say, team or callvote, then 2 a second; "
 		"the rest are ignored, and the player is told. The listen server's host is exempt. Quake III "
 		"allowed one a second and dropped the rest without a word." );
+	sv_statusOnePacket = Cvar_Get( "sv_statusOnePacket", "0", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_statusOnePacket,
+		"Whether getstatus fits one packet, listing only the players that fit\n"
+		"With 0, server browsers and status tools are sent every player, which past a few dozen players "
+		"takes more than one packet, and some networks drop the extra pieces, so the server looks down. "
+		"With 1, the answer fits one 1,400-byte packet and lists the players that fit after the server's "
+		"settings. Either way getinfo still counts them all." );
 
 	// systeminfo
 	Cvar_SetDescription( Cvar_Get ("sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM ),
