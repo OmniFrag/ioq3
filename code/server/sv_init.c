@@ -533,6 +533,8 @@ What a dedicated server's admin needs once it's up: what it plays, from
 which data and home, and how players and admins reach it, under the heading
 ================
 */
+static const char *SV_PureLine( void );
+
 static void SV_PrintStartSummary( const char *heading ) {
 	int	port = NET_OpenPort( NA_IP );
 	int	port6 = NET_OpenPort( NA_IP6 );
@@ -541,6 +543,10 @@ static void SV_PrintStartSummary( const char *heading ) {
 	const char	*data, *leftOut;
 	const char	*ip = Cvar_VariableString( "net_ip" );
 	const char	*ip6 = Cvar_VariableString( "net_ip6" );
+	char		pure[MAX_STRING_CHARS];
+
+	// before the heading: --check's may warn, which goes above the summary
+	Q_strncpyz( pure, SV_PureLine(), sizeof( pure ) );
 
 	// --check opens no socket: the ports a server would open
 	if ( com_check ) {
@@ -606,6 +612,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 		Com_Printf( "  listed:   no, found on the local network only; dedicated 2 lists it\n" );
 	}
 	Com_Printf( "  password: %s\n", Cvar_VariableString( "g_password" )[0] ? "on (g_password)" : "none" );
+	Com_Printf( "  pure:     %s\n", pure );
 	if ( local ) {
 		Com_Printf( "  firewall: not needed, only this computer can connect\n" );
 	} else {
@@ -780,38 +787,108 @@ qboolean SV_RetryMap( void ) {
 
 /*
 ================
-SV_CheckPureList
+SV_SetPureLists
 
-With sv_pure on, the paks' checksums reach clients only as sv_paks in the
-systeminfo string. Info_SetValueForKey_Big leaves out a value that doesn't
-fit beside the others, saying only "BIG Info string length exceeded", and
-with no list a client isn't held to any pak. Past 8 KB the server's own
-lists are cut too, FS_LoadedPakPureChecksums among them, which
-SV_VerifyPaks_f checks clients against, so it turns away clients that
-have every pak. This says so once a map, and changes nothing that's sent.
+The lists systeminfo carries: with sv_pure on, the loaded paks' checksums
+and names, which clients load only from, and the referenced ones, which
+they download; as each map starts, and under --check, as one would
 ================
 */
-void SV_CheckPureList( void ) {
+static void SV_SetPureLists( void ) {
+	const char	*p;
+
+	if ( sv_pure->integer ) {
+		// the server sends these to the clients so they will only
+		// load pk3s also loaded at the server
+		p = FS_LoadedPakChecksums();
+		Cvar_Set( "sv_paks", p );
+		if (strlen(p) == 0) {
+			Com_Printf( "WARNING: sv_pure set but no PK3 files loaded\n" );
+		}
+		p = FS_LoadedPakNames();
+		Cvar_Set( "sv_pakNames", p );
+
+		// we need to touch the cgame and ui qvm because they could be in
+		// separate pk3 files and the client will need to download the pk3
+		// files with the latest cgame and ui qvm to pass the pure check
+		SV_TouchFile( "vm/cgame.qvm" );
+		SV_TouchFile( "vm/ui.qvm" );
+	}
+	else {
+		Cvar_Set( "sv_paks", "" );
+		Cvar_Set( "sv_pakNames", "" );
+	}
+	// the server sends these to the clients so they can figure
+	// out which pk3s should be auto-downloaded
+	p = FS_ReferencedPakChecksums();
+	Cvar_Set( "sv_referencedPaks", p );
+	p = FS_ReferencedPakNames();
+	Cvar_Set( "sv_referencedPakNames", p );
+}
+
+/*
+================
+SV_SystemInfo
+
+The systeminfo string clients are sent. With sv_pure on, the paks'
+checksums reach clients only as sv_paks in it, and
+Info_SetValueForKey_Big leaves out a value that doesn't fit beside the
+others, saying only "BIG Info string length exceeded": a client sent no
+list isn't held to any pak, and past 8 KB the server's own lists are cut
+too, FS_LoadedPakPureChecksums among them, which SV_VerifyPaks_f would
+check clients against, turning away clients that have every pak. So once
+the list doesn't fit, this map plays as not pure (sv.pureOff,
+SV_PureActive), said once: joinable, its lists left out so the string
+stays quiet, and sv_pure 0 in it, so clients and browsers don't take the
+server for pure
+================
+*/
+const char *SV_SystemInfo( void ) {
+	static char	info[BIG_INFO_STRING];
 	const char	*paks = Cvar_VariableString( "sv_paks" );
 	int			total;
 
-	// sv_paks is set as the map starts: with sv_pure turned on since, it's empty
-	if ( !sv_pure->integer || sv.pureListWarned || !*paks
-		|| *Info_ValueForKey( sv.configstrings[CS_SYSTEMINFO], "sv_paks" ) ) {
-		return;
+	Q_strncpyz( info, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( info ) );
+	if ( sv_pure->integer && !sv.pureOff && paks[0] && !Info_ValueForKey( info, "sv_paks" )[0] ) {
+		sv.pureOff = qtrue;
+		total = FS_ContentPaks( NULL, 0 );
+		// each checksum is followed by a space, one cut short is not
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_pure is on, but the pure list of %d paks %s, so this map plays as "
+			"not pure: players aren't held to the server's paks, and server browsers show it as not pure. Use "
+			"fewer paks: those its maps don't need can go elsewhere\n", total, Q_CountChar( paks, ' ' ) < total ?
+			va( "is longer than the systeminfo string's %d bytes", BIG_INFO_STRING ) :
+			"doesn't fit in the systeminfo string with the server's other settings" );
+		Cvar_Set( "sv_paks", "" );
+		Cvar_Set( "sv_pakNames", "" );
+		Q_strncpyz( info, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( info ) );
 	}
-	sv.pureListWarned = qtrue;
+	if ( sv.pureOff ) {
+		Info_SetValueForKey_Big( info, "sv_pure", "0" );
+	}
+	return info;
+}
+
+/*
+================
+SV_PureLine
+
+The start summary's pure line: as this map plays it, or under --check,
+which loads no map, as the paks loaded would
+================
+*/
+static const char *SV_PureLine( void ) {
+	int		total;
+
+	if ( !sv_pure->integer ) {
+		return "off (sv_pure 0)";
+	}
 	total = FS_ContentPaks( NULL, 0 );
-	// each checksum is followed by a space, one cut short is not
-	if ( Q_CountChar( paks, ' ' ) < total ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: sv_pure is on, but the pure list of %d paks is too long for the "
-			"systeminfo string, so it isn't sent, and the server's own copy is cut short: clients may be "
-			"refused as unpure\n", total );
-	} else {
-		Com_Printf( S_COLOR_YELLOW "WARNING: sv_pure is on, but the pure list of %d paks doesn't fit in the "
-			"systeminfo string with the server's other settings, so it isn't sent: clients aren't held to "
-			"any of them\n", total );
+	if ( com_check ) {
+		SV_SetPureLists();
+		SV_SystemInfo();
 	}
+	return sv.pureOff ? va( "not for this map: the list of %d paks doesn't fit the systeminfo string (the warning "
+		"says what to do)", total ) : va( "on, %d paks", total );
 }
 
 /*
@@ -827,8 +904,6 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	int			i;
 	int			checksum;
 	qboolean	isBot;
-	char		systemInfo[16384];
-	const char	*p;
 
 	// any map started takes the place of one waiting to start again
 	Q_strncpyz( sv_mapStarted, server, sizeof( sv_mapStarted ) );
@@ -1024,44 +1099,18 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	sv.time += 100;
 	svs.time += 100;
 
-	if ( sv_pure->integer ) {
-		// the server sends these to the clients so they will only
-		// load pk3s also loaded at the server
-		p = FS_LoadedPakChecksums();
-		Cvar_Set( "sv_paks", p );
-		if (strlen(p) == 0) {
-			Com_Printf( "WARNING: sv_pure set but no PK3 files loaded\n" );
-		}
-		p = FS_LoadedPakNames();
-		Cvar_Set( "sv_pakNames", p );
-
-		// we need to touch the cgame and ui qvm because they could be in
-		// separate pk3 files and the client will need to download the pk3
-		// files with the latest cgame and ui qvm to pass the pure check
-		SV_TouchFile( "vm/cgame.qvm" );
-		SV_TouchFile( "vm/ui.qvm" );
-	}
-	else {
-		Cvar_Set( "sv_paks", "" );
-		Cvar_Set( "sv_pakNames", "" );
-	}
-	// the server sends these to the clients so they can figure
-	// out which pk3s should be auto-downloaded
-	p = FS_ReferencedPakChecksums();
-	Cvar_Set( "sv_referencedPaks", p );
-	p = FS_ReferencedPakNames();
-	Cvar_Set( "sv_referencedPakNames", p );
+	SV_SetPureLists();
 	// and the pak index hashes those it lacks, on a thread of its own;
 	// the content manifest offers those it has
 	FS_HashPaks();
 	SV_ContentBuildManifest();
 	SV_ExportMapLoaded();
 
-	// save systeminfo and serverinfo strings
-	Q_strncpyz( systemInfo, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( systemInfo ) );
+	// save systeminfo and serverinfo strings; a pure list that the
+	// systeminfo string can't hold beside the other settings plays the map
+	// as not pure (SV_SystemInfo)
+	SV_SetConfigstring( CS_SYSTEMINFO, SV_SystemInfo() );
 	cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
-	SV_SetConfigstring( CS_SYSTEMINFO, systemInfo );
-	SV_CheckPureList();
 
 	SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO ) );
 	cvar_modifiedFlags &= ~CVAR_SERVERINFO;
@@ -1282,8 +1331,9 @@ void SV_Init (void)
 		"Whether players must use the server's pak files and nothing else\n"
 		"When on, a player's game loads only the pak files (.pk3) the server has loaded and ignores loose "
 		"files and other paks, so nobody plays with altered models or textures, such as bright player "
-		"skins. A player missing one of the server's paks must download it (sv_allowDownload, sv_dlURL) "
-		"or can't join. The web version's own server runs with it off.\n"
+		"skins. A player missing one must download it (sv_allowDownload, sv_dlURL) or can't join, and a map "
+		"whose pak list is too long to send plays as not pure, saying so. The web version's own server runs "
+		"with it off.\n"
 		"0 = off: players' own files load too\n"
 		"1 = on: only the server's paks" );
 #ifdef USE_VOIP

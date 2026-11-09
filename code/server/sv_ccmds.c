@@ -1655,7 +1655,8 @@ static void SV_Systeminfo_f( void ) {
 	}
 
 	Com_Printf ("System info settings:\n");
-	Info_Print ( Cvar_InfoString_Big( CVAR_SYSTEMINFO ) );
+	// as clients are sent them, sv_pure 0 where the map plays as not pure
+	Info_Print ( SV_SystemInfo() );
 }
 
 

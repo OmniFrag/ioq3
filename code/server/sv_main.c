@@ -380,6 +380,18 @@ qboolean SV_ExtListed( void ) {
 	return qfalse;
 }
 
+/*
+================
+SV_PureActive
+
+Whether this map plays as pure: sv_pure, but not where the pure list
+doesn't fit the systeminfo string (sv.pureOff, SV_SystemInfo)
+================
+*/
+qboolean SV_PureActive( void ) {
+	return sv_pure->integer && !sv.pureOff;
+}
+
 // why the masters are held off now (SV_ExtHoldListing), empty for not
 static char	sv_listingHold[MAX_STRING_CHARS];
 
@@ -928,7 +940,7 @@ void SVC_Info( netadr_t from ) {
 	Info_SetValueForKey( infostring, "sv_maxclients", 
 		va("%i", sv_maxclients->integer - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring, "gametype", va("%i", sv_gametype->integer ) );
-	Info_SetValueForKey( infostring, "pure", va("%i", sv_pure->integer ) );
+	Info_SetValueForKey( infostring, "pure", va("%i", SV_PureActive() ) );
 	Info_SetValueForKey(infostring, "g_needpass", va("%d", Cvar_VariableIntegerValue("g_needpass")));
 
 #ifdef USE_VOIP
@@ -2009,8 +2021,7 @@ void SV_Frame( int msec ) {
 		cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 	}
 	if ( cvar_modifiedFlags & CVAR_SYSTEMINFO ) {
-		SV_SetConfigstring( CS_SYSTEMINFO, Cvar_InfoString_Big( CVAR_SYSTEMINFO ) );
-		SV_CheckPureList();
+		SV_SetConfigstring( CS_SYSTEMINFO, SV_SystemInfo() );
 		cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 	}
 

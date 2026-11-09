@@ -460,6 +460,11 @@ void CL_SystemInfoChanged( void ) {
 				}
 			}
 
+			// our own server's sv_pure is the admin's: the string's is this
+			// map's, 0 where its pure list doesn't fit (SV_SystemInfo)
+			if ( com_sv_running->integer && clc.serverAddress.type == NA_LOOPBACK && !Q_stricmp( key, "sv_pure" ) )
+				continue;
+
 			// fs_game has a restore of its own (CL_OldGame), with its
 			// filesystem restart. Our own server is the one on loopback:
 			// connecting elsewhere leaves a local server running
@@ -476,7 +481,10 @@ void CL_SystemInfoChanged( void ) {
 	if ( !gameSet && *Cvar_VariableString("fs_game") ) {
 		Cvar_Set( "fs_game", "" );
 	}
-	cl_connectedToPureServer = Cvar_VariableValue( "sv_pure" );
+	// the server's word where it sends one, as our own server's sv_pure
+	// stays the admin's
+	s = Info_ValueForKey( systemInfo, "sv_pure" );
+	cl_connectedToPureServer = *s ? atoi( s ) : Cvar_VariableValue( "sv_pure" );
 }
 
 /*

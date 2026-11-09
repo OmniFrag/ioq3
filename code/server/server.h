@@ -90,7 +90,10 @@ typedef struct {
 	int				restartTime;
 	int				time;
 
-	qboolean		pureListWarned;		// SV_CheckPureList said so this map
+	// sv_pure is on, but the pure list doesn't fit the systeminfo string
+	// beside the other settings: this map plays as not pure, said once
+	// (SV_PureActive, SV_SystemInfo)
+	qboolean		pureOff;
 } server_t;
 
 
@@ -441,6 +444,12 @@ void SV_RemoveOperatorCommands (void);
 
 
 void SV_MasterShutdown (void);
+// sv_pure, as this map plays it: off where its pure list doesn't fit the
+// systeminfo string (sv.pureOff)
+qboolean SV_PureActive( void );
+// the systeminfo string clients are sent, deciding first whether this map
+// plays as not pure, sv_pure 0 in it then (sv.pureOff)
+const char *SV_SystemInfo( void );
 // sv_trustedProxies (P8): parsed when it changes, and forgotten, with
 // every route through a proxy, as the server stops
 void SV_ParseTrustedProxies( void );
@@ -469,7 +478,6 @@ void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 
 void SV_ChangeMaxClients( void );
 void SV_SpawnServer( char *server, qboolean killBots );
-void SV_CheckPureList( void );
 qboolean SV_StartDefaultMap( void );
 qboolean SV_RetryMap( void );
 void SV_NoteStartupMap( const char *map, qboolean found );
