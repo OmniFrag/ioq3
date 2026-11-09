@@ -1335,7 +1335,11 @@ static void SV_AddFinish( void ) {
 		Content_PakIndex_Put( &record );
 	}
 	addPak.added = qtrue;
-	Com_Printf( "%s added; it's served from the next map change\n", addPak.name );
+	// a copy, so the operator's own stays, which may be on purpose
+	Com_Printf( "%s added; it's served from the next map change. The original is still in " CONTENT_INCOMING
+		", taking %s more; delete it there if you don't keep it\n", addPak.name, item->size < ( 1 << 20 )
+		? va( "%lld KB", (long long)( ( item->size + 1023 ) >> 10 ) )
+		: va( "%lld MB", (long long)( ( item->size + ( 1 << 19 ) ) >> 20 ) ) );
 }
 
 /*
