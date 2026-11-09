@@ -1554,6 +1554,9 @@ static struct {
 static float	touchMouseX, touchMouseY;
 static float	touchMouseRemainder[2];
 
+// set while CL_TouchMouse sends the mouse's events, for CL_ExtInputFromTouch
+static qboolean	touchMouseInput;
+
 static const char *const touchPhases[] = { "down", "move", "up", "cancel" };
 
 /*
@@ -1569,6 +1572,7 @@ held from its down to its end
 static void CL_TouchMouse( const extTouch_t *touch, int time ) {
 	float	x = touch->x / touch->density, y = touch->y / touch->density;
 
+	touchMouseInput = qtrue;
 	if ( cls.extCursor ) {
 		CL_PointerEvent( touch->x, touch->y );
 	} else if ( touch->phase == EXT_TOUCH_DOWN ) {
@@ -1592,6 +1596,19 @@ static void CL_TouchMouse( const extTouch_t *touch, int time ) {
 	} else if ( touch->phase != EXT_TOUCH_MOVE ) {
 		CL_KeyEvent( K_MOUSE1, qfalse, time );
 	}
+	touchMouseInput = qfalse;
+}
+
+/*
+===================
+CL_ExtInputFromTouch
+
+Whether the pointer, mouse motion or K_MOUSE1 being sent now is the mouse
+made of a finger, rather than a real mouse
+===================
+*/
+qboolean CL_ExtInputFromTouch( void ) {
+	return touchMouseInput;
 }
 
 // the slot of a finger down, or with finger 0 a free one; -1 for none

@@ -499,6 +499,10 @@ void		CL_ExtSafeArea( int rect[4] );
 // the key catchers up now: KEYCATCH_CONSOLE, _UI, _MESSAGE, _CGAME
 // (keycodes.h)
 int		CL_ExtKeyCatcher( void );
+// whether the input the hooks get now (the pointer, the mouse's motion, or
+// K_MOUSE1, down or up) is the mouse the engine makes of a finger no
+// extension took, rather than a real mouse
+qboolean	CL_ExtInputFromTouch( void );
 // Whether an extension shows a cursor: with qtrue the pointer is no longer
 // held as view motion while the game reads it, and its position comes to
 // the pointerEvent hook; and whether the extension draws that cursor
