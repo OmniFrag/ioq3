@@ -148,6 +148,17 @@ if (pixelRatio?.get)
         configurable: true,
         get: () => Math.min(pixelRatio.get.call(window), maxPixelRatio),
     });
+// SDL3 reads the ratio only as the window resizes (Emscripten_HandleResize),
+// and a browser fires no resize when only the ratio changes, as when the
+// window moves to a display of another density. A resolution query at the
+// browser's own ratio changes then, so its change is passed on as a resize,
+// and the query is made again at the new ratio.
+const watchPixelRatio = () => matchMedia(`(resolution: ${pixelRatio?.get?.call(window) ?? devicePixelRatio}dppx)`)
+    .addEventListener('change', () => {
+        dispatchEvent(new Event('resize'));
+        watchPixelRatio();
+    }, { once: true });
+watchPixelRatio();
 
 // Raw mouse input on Windows, as the native client has there (?rawMouse=0
 // or 1 overrides): without it, Chromium on Windows sometimes reports a huge
