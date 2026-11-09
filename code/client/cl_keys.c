@@ -1459,29 +1459,12 @@ void CL_KeyEvent (int key, qboolean down, unsigned time) {
 
 /*
 ===================
-CL_CharEvent
+CL_ByteCharEvent
 
-Normal keyboard characters, already shifted / capslocked / etc
+A character of one byte to the console, the ui or the chat field
 ===================
 */
-void CL_CharEvent( int key ) {
-	// delete is not a printable character and is
-	// otherwise handled by Field_KeyDownEvent
-	if ( key == 127 ) {
-		return;
-	}
-
-	if ( CL_ExtensionsGetInput( ) && Hooks_CharEvent( key ) ) {
-		return;
-	}
-
-	// past 255 only the extensions take one: the fields below hold bytes,
-	// and the ui reads key | K_CHAR_FLAG, which such a codepoint runs into
-	// (Cyrillic's U+0430 would come as '0')
-	if ( key > 255 ) {
-		return;
-	}
-
+static void CL_ByteCharEvent( int key ) {
 	// distribute the key down event to the appropriate handler
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
 	{
@@ -1499,6 +1482,64 @@ void CL_CharEvent( int key ) {
 	{
 		Field_CharEvent( &g_consoleField, key );
 	}
+}
+
+/*
+===================
+CL_AsciiPunctuation
+
+The ASCII a typographic quote, dash or ellipsis stands for, which keyboard
+layouts and phones type in place of it (macOS's smart quotes), or ""
+===================
+*/
+static const char *CL_AsciiPunctuation( int key ) {
+	if ( key >= 0x2018 && key <= 0x201B ) {
+		return "'";
+	}
+	if ( key >= 0x201C && key <= 0x201F ) {
+		return "\"";
+	}
+	if ( ( key >= 0x2010 && key <= 0x2015 ) || key == 0x2212 ) {
+		return "-";
+	}
+	if ( key == 0x2026 ) {
+		return "...";
+	}
+	return "";
+}
+
+/*
+===================
+CL_CharEvent
+
+Normal keyboard characters, already shifted / capslocked / etc
+===================
+*/
+void CL_CharEvent( int key ) {
+	const char	*ascii;
+
+	// delete is not a printable character and is
+	// otherwise handled by Field_KeyDownEvent
+	if ( key == 127 ) {
+		return;
+	}
+
+	if ( CL_ExtensionsGetInput( ) && Hooks_CharEvent( key ) ) {
+		return;
+	}
+
+	// past 255 only the extensions take one as it is: the fields below hold
+	// bytes, and the ui reads key | K_CHAR_FLAG, which such a codepoint runs
+	// into (Cyrillic's U+0430 would come as '0'). Typographic punctuation
+	// comes as its ASCII, the rest not at all
+	if ( key > 255 ) {
+		for ( ascii = CL_AsciiPunctuation( key ); *ascii; ascii++ ) {
+			CL_ByteCharEvent( *ascii );
+		}
+		return;
+	}
+
+	CL_ByteCharEvent( key );
 }
 
 
