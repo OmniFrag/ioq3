@@ -615,10 +615,11 @@ void CL_UsercmdInput( const usercmdInput_t *input ) {
 CL_CgameInput
 
 cgame's input for the usercmd being built, if it builds input: asked for
-as the command is built, as the keys', mouse's and joystick's are read, so
-it reaches the command it came before. It turns the view as the mouse
-does and adds to the moves and buttons, the moves held to -127 to 127 and
-the buttons to the 16 bits the wire carries
+as the command is built, after the keys', mouse's and joystick's are read,
+so it reaches the command it came before, and given the moves and buttons
+they made. It turns the view as the mouse does and adds to the moves and
+buttons, the moves held to -127 to 127 and the buttons to the 16 bits the
+wire carries
 =================
 */
 static void CL_CgameInput( usercmd_t *cmd ) {
@@ -627,7 +628,8 @@ static void CL_CgameInput( usercmd_t *cmd ) {
 	}
 	Com_Memset( &cl_cgameInput, 0, sizeof( cl_cgameInput ) );
 	cl_askingInput = qtrue;
-	VM_Call( cgvm, CG_USERCMD_INPUT, cl.serverTime, frame_msec );
+	VM_Call( cgvm, CG_USERCMD_INPUT, cl.serverTime, frame_msec, cmd->forwardmove, cmd->rightmove, cmd->upmove,
+		cmd->buttons );
 	cl_askingInput = qfalse;
 
 	cl.viewangles[PITCH] += Com_Clamp( -360.0f, 360.0f, cl_cgameInput.pitch );

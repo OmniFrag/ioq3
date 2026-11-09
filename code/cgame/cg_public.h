@@ -243,9 +243,10 @@ typedef enum {
 // usercmd, after the keys, the mouse and the joystick: cgame gives its
 // input for that command with trap_UsercmdInput, inside the call. serverTime
 // is the command's, and msec how long since the last command, the time its
-// input covers
+// input covers; the moves (-127 to 127) and buttons are the command's so
+// far, from the keys, the mouse and the joystick
 #define	CG_USERCMD_INPUT	100
-//	void (*CG_UsercmdInput)( int serverTime, int msec );
+//	void (*CG_UsercmdInput)( int serverTime, int msec, int forwardmove, int rightmove, int upmove, int buttons );
 
 // what cgame adds to the usercmd being built (trap_UsercmdInput)
 typedef struct {
