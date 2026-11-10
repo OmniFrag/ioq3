@@ -1070,8 +1070,8 @@ const ownOf = (config) => gamedirs().flatMap((gamedir) => Array.isArray(config[g
 // config asks for: before the engine loads when they're stored already, or
 // once the player's chosen paks are (bring). It stays in another page's
 // frame, which can't isolate it, and when another page opened it, which the
-// move would cut off (COOP); and it moves once, never from the isolated
-// form itself, so a host that doesn't isolate that form costs one move.
+// move would cut off (COOP); it moves only to a form that answers,
+// isolated (moveIsolated), and once, never from the isolated form itself.
 // isolation is { form }, the URL, or { why } the page stays, or {} without one.
 const ISOLATING = `${CLIENT_NAME}.isolating`;
 let isolation = {};
@@ -1096,13 +1096,45 @@ const isolationOf = (config) => {
     const form = new URL(config.isolated + page + location.search + location.hash, location.href);
     return form.origin === location.origin ? { form } : { why: 'its isolated form is on another site' };
 };
-// the move, after which nothing on this page goes on; or, when the page
-// can't mark it, none
-const moveIsolated = (form, how) => {
+// Whether the isolated form is one, asked once, as soon as the page may move:
+// the head of its page within MOVE_CHECK_MS, with the headers that make it
+// cross-origin isolated, COOP same-origin and COEP require-corp or
+// credentialless; '' when it has them, or why not. A host that names the
+// form without serving it, or serves it without them, keeps the page here.
+const MOVE_CHECK_MS = 2000;
+let isolatedCheck;
+// (A timer rather than AbortSignal.timeout, which Safari has only from 16.)
+const checkIsolated = (form) => isolatedCheck ??= Promise.race([
+    fetch(form, { method: 'HEAD', cache: 'no-store' }).then((answer) => {
+        const policy = (name) => answer.headers.get(name)?.split(';')[0].trim();
+        if (!answer.ok) return `answered ${answer.status}`;
+        return policy('Cross-Origin-Opener-Policy') === 'same-origin'
+            && ['require-corp', 'credentialless'].includes(policy('Cross-Origin-Embedder-Policy')) ? '' : "isn't cross-origin isolated";
+    }, () => "didn't answer"),
+    new Promise((resolve) => setTimeout(resolve, MOVE_CHECK_MS, `didn't answer within ${MOVE_CHECK_MS / 1000} s`)),
+]);
+// whether the isolated form answered, isolated; isolation says why not
+const formAnswers = async (form) => {
+    const answered = await checkIsolated(form);
+    if (answered) isolation = { why: `its isolated form at ${form.pathname} ${answered}` };
+    return !answered;
+};
+const mark = (how) => {
     try {
         sessionStorage.setItem(ISOLATING, how);
+        return true;
     } catch {
-        return Promise.resolve();
+        return false;
+    }
+};
+// The move, after which nothing on this page goes on; or, when the form
+// isn't isolated or the page can't mark the move, none, isolation then
+// saying why
+const moveIsolated = async (form, how) => {
+    if (!await formAnswers(form)) return;
+    if (!mark(how)) {
+        isolation = { why: "it can't mark its move" };
+        return;
     }
     console.log(`Own files: to the page's isolated form at ${form.pathname}, as the paks are stored`);
     location.replace(form);
@@ -1156,7 +1188,10 @@ const bring = async (own) => {
     // access handle, which is exclusive. They wait for the page to read the
     // player's files in (downloadGame), which the engine waits on, unless
     // the page moves to its isolated form once they're stored, which reads
-    // them there.
+    // them there. A form that didn't answer, isolated, keeps the page here
+    // as a plain one; its check, asked as the page started, has mostly
+    // answered by now.
+    if (isolation.form && store.call) await formAnswers(isolation.form);
     const toIsolate = Boolean(isolation.form && store.call);
     let copies = toIsolate ? Promise.resolve() : ownReadDone;
     const queue = (work) => { copies = copies.then(work).catch((error) => console.error(`Couldn't store files: ${error}`)); };
@@ -1320,9 +1355,8 @@ const bring = async (own) => {
         showStatus('Reading your files…');
         await copies;
         if (storedAll) await moveIsolated(isolation.form, toCopy ? 'stored' : 'kept');
-    } else if (isolation.why && store.call) {
-        console.log(`Own files: the page stays as it is, as ${isolation.why}`);
     }
+    if (isolation.why && store.call) console.log(`Own files: the page stays as it is, as ${isolation.why}`);
     if (moved === 'stored') persistOnInput();
     return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file) }));
 };
@@ -1475,6 +1509,7 @@ isolation = isolationOf(startConfig);
 const startOwn = ownOf(startConfig);
 if (isolation.form && startOwn.length) {
     const asked = new Set(startOwn.map(({ src }) => src.toLowerCase()));
+    checkIsolated(isolation.form);
     if ((await (ownStoreEarly = ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
 }
 const ioquake3 = (await engine).default;
