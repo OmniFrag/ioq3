@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "server.h"
 #include "../qcommon/identity.h"
+#include "../thirdparty/monocypher-4.0.2/monocypher.h"
+#include "../thirdparty/monocypher-4.0.2/monocypher-ed25519.h"
 
 static void SV_CloseDownload( client_t *cl );
 
@@ -67,15 +69,211 @@ static int SV_AskedFragmentSize( int firstArg ) {
 
 /*
 =================
+Stateless challenges (ENG-067)
+
+A challenge is a MAC of the client's address and port, and the fragment
+size it asked for, under a secret the server keeps for one slot of
+SV_CHALLENGE_SLOT ms and the slot after it, so a challenge holds for 16 to
+32 seconds and the server keeps nothing for it: a flood of getchallenges
+from forged addresses fills no table, and the challenge still shows that
+a connect comes from the address it was sent to.
+
+What else the challenge agreed, the extensions (ofx) and with OFX_IDENTITY
+the client's nonce (ofc), the client repeats on its connect, with the off
+it asked for and ofv, a MAC of them on the challenge that challengeResponse
+sent (docs/contracts.md). The server's nonce (ofn) and the connection's
+content key are MACs of the same terms, so every connect on one challenge
+is sent the same key. A connect without ofv, a stock client's or an older
+OmniFrag client's, or one whose terms don't match it, connects plainly.
+=================
+*/
+
+#define SV_CHALLENGE_SLOT	16384	// ms
+#define SV_CHALLENGE_SECRET	32
+#define SV_CHALLENGE_TAG	16		// bytes of ofv, as 32 hex digits
+
+// slots in Sys_Milliseconds' range, which wraps as an unsigned int
+#define SV_CHALLENGE_SLOTS	( 1u << ( 32 - 14 ) )
+
+// the secrets challenges are made with, by their slot's parity: this
+// slot's and the last one's
+static struct {
+	qboolean		ready;
+	unsigned int	slot;
+	byte			secrets[2][SV_CHALLENGE_SECRET];
+} challengeSecrets;
+
+// one challenge and what it agreed
+typedef struct {
+	netadr_t	adr;
+	char		address[NET_ADDRSTRMAXLEN + 8];	// adr as the MACs hash it, with its port
+	int			challenge;
+	int			secret;				// the one it was made with: its slot's parity
+	uint32_t	ofx;				// the extensions agreed (exttokens.h), 0 for none
+	int			fragmentSize;		// the client's off, which challengeResponse repeats, 0 for none
+	// with OFX_IDENTITY, the nonces the proofs sign (identity.h): the
+	// client's ofc, and this server's ofn
+	byte		clientNonce[IDENT_KEY_SIZE];
+	byte		serverNonce[IDENT_KEY_SIZE];
+	// from the terms (SV_ChallengeTerms): ofv, which binds them, and the
+	// content key, so each connect on the challenge is sent the same
+	byte		tag[SV_CHALLENGE_TAG];
+	uint64_t	contentKey;
+} challenge_t;
+
+/*
+=================
+SV_ChallengeSecret
+=================
+*/
+static void SV_ChallengeSecret( byte secret[SV_CHALLENGE_SECRET] ) {
+	static qboolean	warned;
+
+	if ( !Com_RandomSecret( secret, SV_CHALLENGE_SECRET ) ) {
+		if ( !warned ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: no secure randomness for the challenges' secret; "
+				"forged addresses may be able to connect\n" );
+			warned = qtrue;
+		}
+		Com_RandomBytes( secret, SV_CHALLENGE_SECRET );
+	}
+}
+
+/*
+=================
+SV_ChallengeRotate
+
+Makes a new secret each slot, keeping the last slot's, so a challenge made
+just before the change still holds; after a longer gap both are new. The
+slot's parity says which is which, and the challenge carries it. Each
+challenge calls it, which is all it needs; each frame does too, so the
+change is logged on time while nobody asks for one (tests/server/challenge.sh
+waits for that line)
+=================
+*/
+void SV_ChallengeRotate( void ) {
+	unsigned int	slot = (unsigned int)Sys_Milliseconds() / SV_CHALLENGE_SLOT;
+
+	if ( challengeSecrets.ready && slot == challengeSecrets.slot ) {
+		return;
+	}
+	// the next slot, also as the clock wraps, overwrites the one before last
+	if ( !challengeSecrets.ready || ( ( slot - challengeSecrets.slot ) & ( SV_CHALLENGE_SLOTS - 1 ) ) != 1 ) {
+		SV_ChallengeSecret( challengeSecrets.secrets[!( slot & 1 )] );
+	}
+	SV_ChallengeSecret( challengeSecrets.secrets[slot & 1] );
+	challengeSecrets.slot = slot;
+	challengeSecrets.ready = qtrue;
+	Com_DPrintf( "Challenge secret rotated\n" );
+}
+
+/*
+=================
+SV_ChallengeMAC
+
+HMAC-SHA-512 under one of the secrets of what, the address and port (as
+SV_ChallengeAddress gives them) and the fragment size; with terms, the
+challenge, its ofx and with OFX_IDENTITY its ofc too
+=================
+*/
+static void SV_ChallengeMAC( const char *what, int secret, const challenge_t *challenge,
+	qboolean terms, byte mac[64] ) {
+	crypto_sha512_hmac_ctx	ctx;
+	byte					numbers[10], type = (byte)challenge->adr.type;
+	uint32_t				number = (uint32_t)challenge->challenge;
+
+	crypto_sha512_hmac_init( &ctx, challengeSecrets.secrets[secret], SV_CHALLENGE_SECRET );
+	crypto_sha512_hmac_update( &ctx, (const byte *)what, strlen( what ) + 1 );
+	crypto_sha512_hmac_update( &ctx, &type, 1 );
+	crypto_sha512_hmac_update( &ctx, (const byte *)challenge->address, strlen( challenge->address ) + 1 );
+	numbers[0] = (byte)( challenge->fragmentSize >> 8 );
+	numbers[1] = (byte)challenge->fragmentSize;
+	if ( !terms ) {
+		crypto_sha512_hmac_update( &ctx, numbers, 2 );
+	} else {
+		numbers[2] = (byte)( number >> 24 );
+		numbers[3] = (byte)( number >> 16 );
+		numbers[4] = (byte)( number >> 8 );
+		numbers[5] = (byte)number;
+		numbers[6] = (byte)( challenge->ofx >> 24 );
+		numbers[7] = (byte)( challenge->ofx >> 16 );
+		numbers[8] = (byte)( challenge->ofx >> 8 );
+		numbers[9] = (byte)challenge->ofx;
+		crypto_sha512_hmac_update( &ctx, numbers, 10 );
+		if ( challenge->ofx & OFX_IDENTITY ) {
+			crypto_sha512_hmac_update( &ctx, challenge->clientNonce, IDENT_KEY_SIZE );
+		}
+	}
+	crypto_sha512_hmac_final( &ctx, mac );
+}
+
+/*
+=================
+SV_ChallengeAddress
+
+A challenge for adr, its fields cleared and its address as the MACs hash it
+=================
+*/
+static void SV_ChallengeAddress( challenge_t *challenge, netadr_t adr ) {
+	Com_Memset( challenge, 0, sizeof( *challenge ) );
+	challenge->adr = adr;
+	Q_strncpyz( challenge->address, NET_AdrToStringwPort( adr ), sizeof( challenge->address ) );
+}
+
+/*
+=================
+SV_MakeChallenge
+
+The challenge for the address and fragment size under one of the secrets:
+30 bits of MAC, never 0, and above them the secret's parity, so the
+number stays positive
+=================
+*/
+static int SV_MakeChallenge( int secret, const challenge_t *challenge ) {
+	byte			mac[64];
+	unsigned int	number;
+
+	SV_ChallengeMAC( "challenge", secret, challenge, qfalse, mac );
+	number = ( (unsigned int)mac[0] << 24 | mac[1] << 16 | mac[2] << 8 | mac[3] ) & 0x3fffffff;
+	return (int)( ( number ? number : 1 ) | (unsigned int)secret << 30 );
+}
+
+/*
+=================
+SV_ChallengeTerms
+
+ofv, ofn and the content key, from one MAC of the challenge's terms under
+its secret: the same on every connect on it, and the key never 0
+=================
+*/
+static void SV_ChallengeTerms( challenge_t *challenge ) {
+	byte	mac[64];
+	int		i;
+
+	SV_ChallengeMAC( "terms", challenge->secret, challenge, qtrue, mac );
+	Com_Memcpy( challenge->tag, mac, SV_CHALLENGE_TAG );
+	Com_Memcpy( challenge->serverNonce, mac + SV_CHALLENGE_TAG, IDENT_KEY_SIZE );
+	challenge->contentKey = 0;
+	for ( i = 0; i < 8; i++ ) {
+		challenge->contentKey = challenge->contentKey << 8 | mac[SV_CHALLENGE_TAG + IDENT_KEY_SIZE + i];
+	}
+	if ( !challenge->contentKey ) {
+		challenge->contentKey = 1;
+	}
+}
+
+/*
+=================
 SV_SendChallengeResponse
 
 The challenge, echoing the client's, with the extensions agreed after it
-as tokens. A client that asked for none, as every classic client, is sent
-the classic reply
+as tokens, and ofv, which binds them. A client that asked for none, as
+every classic client, is sent the classic reply
 =================
 */
-static void SV_SendChallengeResponse( challenge_t *challenge, int clientChallenge ) {
+static void SV_SendChallengeResponse( const challenge_t *challenge, int clientChallenge ) {
 	char	tokens[EXT_MAX_STRING];
+	char	tag[SV_CHALLENGE_TAG * 2 + 1];
 
 	tokens[0] = '\0';
 	if ( challenge->ofx ) {
@@ -95,7 +293,10 @@ static void SV_SendChallengeResponse( challenge_t *challenge, int clientChalleng
 		Ident_AppendHex( tokens, sizeof( tokens ), "ofp", key->pub );
 		Ident_AppendSig( tokens, sizeof( tokens ), sig );
 	}
-	challenge->pingTime = svs.time;
+	if ( challenge->ofx || challenge->fragmentSize ) {
+		Com_BytesToHex( challenge->tag, SV_CHALLENGE_TAG, tag );
+		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofv", tag );
+	}
 	NET_OutOfBandPrint( NS_SERVER, challenge->adr, "challengeResponse %d %d %d%s",
 		challenge->challenge, clientChallenge, com_protocol->integer, tokens );
 }
@@ -111,31 +312,19 @@ We do this to prevent denial of service attacks that
 flood the server with invalid connection IPs.  With a
 challenge, they must give a valid IP address.
 
-If we are authorizing, a challenge request will cause a packet
-to be sent to the authorize server.
-
-When an authorizeip is returned, a challenge response will be
-sent to that ip.
-
 ioquake3: we added a possibility for clients to add a challenge
 to their packets, to make it more difficult for malicious servers
 to hi-jack client connections.
-Also, the auth stuff is completely disabled for com_standalone games
-as well as IPv6 connections, since there is no way to use the
-v4-only auth server for these new types of connections.
+
+OmniFrag: the challenge is stateless, and id's authorize server, gone for
+years, is no longer asked: while it couldn't be reached, which was always
+since, everyone was let in (ENG-067)
 =================
 */
-void SV_GetChallenge(netadr_t from)
-{
-	int		i;
-	int		oldest;
-	int		oldestTime;
-	int		oldestClientTime;
-	int		clientChallenge;
-	challenge_t	*challenge;
-	qboolean wasfound = qfalse;
-	char *gameName;
-	qboolean gameMismatch;
+void SV_GetChallenge( netadr_t from ) {
+	challenge_t	challenge;
+	char		*gameName;
+	qboolean	gameMismatch;
 
 	// ignore if we are in single player
 	if ( SV_ExtGametype() == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
@@ -169,201 +358,94 @@ void SV_GetChallenge(netadr_t from)
 		return;
 	}
 
-	oldest = 0;
-	oldestClientTime = oldestTime = 0x7fffffff;
-
-	// see if we already have a challenge for this ip
-	challenge = &svs.challenges[0];
-	clientChallenge = atoi(Cmd_Argv(1));
-
-	for(i = 0 ; i < MAX_CHALLENGES ; i++, challenge++)
-	{
-		if(!challenge->connected && NET_CompareAdr(from, challenge->adr))
-		{
-			wasfound = qtrue;
-			
-			if(challenge->time < oldestClientTime)
-				oldestClientTime = challenge->time;
-		}
-		
-		if(wasfound && i >= MAX_CHALLENGES_MULTI)
-		{
-			i = MAX_CHALLENGES;
-			break;
-		}
-		
-		if(challenge->time < oldestTime)
-		{
-			oldestTime = challenge->time;
-			oldest = i;
-		}
-	}
-
-	if (i == MAX_CHALLENGES)
-	{
-		// this is the first time this client has asked for a challenge
-		challenge = &svs.challenges[oldest];
-		challenge->clientChallenge = clientChallenge;
-		challenge->adr = from;
-		challenge->firstTime = svs.time;
-		challenge->connected = qfalse;
-	}
-
-	// always generate a new challenge number, so the client cannot circumvent sv_maxping
-	challenge->challenge = ( ((unsigned int)rand() << 16) ^ (unsigned int)rand() ) ^ svs.time;
-	challenge->wasrefused = qfalse;
-	challenge->time = svs.time;
-	// the extensions its tokens ask for, after the game name; the key is
-	// made at its first connect
-	challenge->ofx = SV_AskedExtensions( 3 );
-	challenge->contentKey = 0;
-	challenge->fragmentSize = SV_AskedFragmentSize( 3 );
+	SV_ChallengeRotate();
+	SV_ChallengeAddress( &challenge, from );
+	// the extensions its tokens ask for, after the game name
+	challenge.ofx = SV_AskedExtensions( 3 );
+	challenge.fragmentSize = SV_AskedFragmentSize( 3 );
+	challenge.secret = (int)( challengeSecrets.slot & 1 );
+	challenge.challenge = SV_MakeChallenge( challenge.secret, &challenge );
 	// a key's proof needs the client's nonce, this server's key and a
 	// nonce of its own: without one of them, the connection proves nothing.
 	// Each is a signature, so all addresses together get 50 a second,
 	// which forged ones can't spend past: the rest are answered unproven
-	if ( challenge->ofx & OFX_IDENTITY ) {
+	if ( challenge.ofx & OFX_IDENTITY ) {
 		static rateLimit_t	signedReplies;
 		extTokens_t			tokens;
 
 		if ( SVC_RateLimit( &signedReplies, 50, 1000 ) || Com_ParseExtensionTokens( Cmd_ArgsFrom( 3 ), &tokens ) ||
-			!Ident_ReadNonce( &tokens, "ofc", challenge->clientNonce ) || !Com_ServerKey() ||
-			!Com_RandomSecret( challenge->serverNonce, sizeof( challenge->serverNonce ) ) ) {
-			challenge->ofx &= ~OFX_IDENTITY;
+			!Ident_ReadNonce( &tokens, "ofc", challenge.clientNonce ) || !Com_ServerKey() ) {
+			challenge.ofx &= ~OFX_IDENTITY;
 		}
 	}
+	SV_ChallengeTerms( &challenge );
 
-#ifndef STANDALONE
-	// Drop the authorize stuff if this client is coming in via v6 as the auth server does not support ipv6.
-	// Drop also for addresses coming in on local LAN and for stand-alone games independent from id's assets.
-	if(challenge->adr.type == NA_IP && !com_standalone->integer && !Sys_IsLANAddress(from))
-	{
-		// look up the authorize server's IP
-		if (svs.authorizeAddress.type == NA_BAD)
-		{
-			Com_Printf( "Resolving %s\n", AUTHORIZE_SERVER_NAME );
-			
-			if (NET_StringToAdr(AUTHORIZE_SERVER_NAME, &svs.authorizeAddress, NA_IP))
-			{
-				svs.authorizeAddress.port = BigShort( PORT_AUTHORIZE );
-				Com_Printf( "%s resolved to %i.%i.%i.%i:%i\n", AUTHORIZE_SERVER_NAME,
-					svs.authorizeAddress.ip[0], svs.authorizeAddress.ip[1],
-					svs.authorizeAddress.ip[2], svs.authorizeAddress.ip[3],
-					BigShort( svs.authorizeAddress.port ) );
-			}
-		}
-
-		// we couldn't contact the auth server, let them in.
-		if(svs.authorizeAddress.type == NA_BAD)
-			Com_Printf("Couldn't resolve auth server address\n");
-
-		// if they have been challenging for a long time and we
-		// haven't heard anything from the authorize server, go ahead and
-		// let them in, assuming the id server is down
-		else if(svs.time - oldestClientTime > AUTHORIZE_TIMEOUT)
-			Com_DPrintf( "authorize server timed out\n" );
-		else
-		{
-			// otherwise send their ip to the authorize server
-			const char *game;
-
-			Com_DPrintf( "sending getIpAuthorize for %s\n", NET_AdrToString( from ));
-		
-			game = Cvar_VariableString( "fs_game" );
-			if (game[0] == 0) {
-				game = BASEGAME;
-			}
-			
-			// the 0 is for backwards compatibility with obsolete sv_allowanonymous flags
-			// getIpAuthorize <challenge> <IP> <game> 0 <auth-flag>
-			NET_OutOfBandPrintDirect( NS_SERVER, svs.authorizeAddress,
-				"getIpAuthorize %i %i.%i.%i.%i %s 0 %s",  challenge->challenge,
-				from.ip[0], from.ip[1], from.ip[2], from.ip[3], game, sv_strictAuth->string );
-			
-			return;
-		}
-	}
-#endif
-
-	SV_SendChallengeResponse( challenge, clientChallenge );
+	SV_SendChallengeResponse( &challenge, atoi( Cmd_Argv( 1 ) ) );
 }
 
-#ifndef STANDALONE
 /*
-====================
-SV_AuthorizeIpPacket
+=================
+SV_CheckChallenge
 
-A packet has been returned from the authorize server.
-If we have a challenge adr for that ip, send the
-challengeResponse to it
-====================
+Whether a connect's challenge is one this server sent to its address, in
+this slot or the last (its parity says which), filling in what it agreed. The connect's own off
+is tried, then none and the web client's, so a connect that doesn't repeat
+it, an older OmniFrag web client's, still splits at the size it asked for.
+Its other terms count only with an ofv that holds for them; without, it
+connects plainly
+=================
 */
-void SV_AuthorizeIpPacket( netadr_t from ) {
-	int		challenge;
-	int		i;
-	char	*s;
-	char	*r;
-	challenge_t *challengeptr;
+static qboolean SV_CheckChallenge( netadr_t from, int number, qboolean extensions, challenge_t *challenge ) {
+	extTokens_t	tokens;
+	qboolean	repeated = qfalse;
+	byte		tag[SV_CHALLENGE_TAG];
+	int			asked = -1, sizes[3], s;
 
-	// a trusted proxy (sv_trustedProxies) can name the authorize server's
-	// address too, so only a packet that came directly counts
-	if ( !NET_CompareBaseAdr( from, svs.authorizeAddress ) || NET_PacketProxied() ) {
-		Com_Printf( "SV_AuthorizeIpPacket: not from authorize server\n" );
-		return;
-	}
+	SV_ChallengeRotate();
+	SV_ChallengeAddress( challenge, from );
+	challenge->challenge = number;
+	challenge->secret = ( number >> 30 ) & 1;
 
-	challenge = atoi( Cmd_Argv( 1 ) );
+	// the terms the connect repeats after its userinfo, with their ofv
+	if ( extensions && !Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) ) {
+		const char	*ofv = Com_ExtensionValue( &tokens, "ofv" );
+		const char	*ofx = Com_ExtensionValue( &tokens, "ofx" );
 
-	for (i = 0 ; i < MAX_CHALLENGES ; i++) {
-		if ( svs.challenges[i].challenge == challenge ) {
-			break;
+		// no ofx is none agreed
+		repeated = ofv && Com_HexToBytes( ofv, tag, SV_CHALLENGE_TAG ) &&
+			( !ofx || Com_ParseExtensionBits( ofx, &challenge->ofx ) );
+		challenge->ofx &= OFX_BUILD;
+		asked = Com_ParseFragmentSize( Com_ExtensionValue( &tokens, "off" ) );
+		if ( ( challenge->ofx & OFX_IDENTITY ) && !Ident_ReadNonce( &tokens, "ofc", challenge->clientNonce ) ) {
+			repeated = qfalse;
 		}
 	}
-	if ( i == MAX_CHALLENGES ) {
-		Com_Printf( "SV_AuthorizeIpPacket: challenge not found\n" );
-		return;
-	}
-	
-	challengeptr = &svs.challenges[i];
+	sizes[0] = asked;
+	sizes[1] = 0;
+	sizes[2] = NET_WEB_FRAGMENT_SIZE;
 
-	// send a packet back to the original client
-	challengeptr->pingTime = svs.time;
-	s = Cmd_Argv( 2 );
-	r = Cmd_Argv( 3 );			// reason
-
-	if ( !Q_stricmp( s, "demo" ) ) {
-		// they are a demo client trying to connect to a real server
-		NET_OutOfBandPrint( NS_SERVER, challengeptr->adr, "print\nServer is not a demo server\n" );
-		// clear the challenge record so it won't timeout and let them through
-		Com_Memset( challengeptr, 0, sizeof( *challengeptr ) );
-		return;
-	}
-	if ( !Q_stricmp( s, "accept" ) ) {
-		SV_SendChallengeResponse( challengeptr, challengeptr->clientChallenge );
-		return;
-	}
-	if ( !Q_stricmp( s, "unknown" ) ) {
-		if (!r) {
-			NET_OutOfBandPrint( NS_SERVER, challengeptr->adr, "print\nAwaiting CD key authorization\n" );
-		} else {
-			NET_OutOfBandPrint( NS_SERVER, challengeptr->adr, "print\n%s\n", r);
+	for ( s = 0; s < 3; s++ ) {
+		if ( sizes[s] < 0 || ( s && sizes[s] == asked ) ) {
+			continue;
 		}
-		// clear the challenge record so it won't timeout and let them through
-		Com_Memset( challengeptr, 0, sizeof( *challengeptr ) );
-		return;
+		challenge->fragmentSize = sizes[s];
+		if ( SV_MakeChallenge( challenge->secret, challenge ) != number ) {
+			continue;
+		}
+		// the size it repeated, with a tag that holds for its terms
+		if ( repeated && s == 0 ) {
+			SV_ChallengeTerms( challenge );
+			if ( !crypto_verify16( tag, challenge->tag ) ) {
+				return qtrue;
+			}
+			Com_Printf( "%s: extension tokens that don't match the challenge's; connecting without them\n",
+				NET_AdrToString( from ) );
+		}
+		challenge->ofx = 0;
+		return qtrue;
 	}
-
-	// authorization failed
-	if (!r) {
-		NET_OutOfBandPrint( NS_SERVER, challengeptr->adr, "print\nSomeone is using this CD Key\n" );
-	} else {
-		NET_OutOfBandPrint( NS_SERVER, challengeptr->adr, "print\n%s\n", r );
-	}
-
-	// clear the challenge record so it won't timeout and let them through
-	Com_Memset( challengeptr, 0, sizeof(*challengeptr) );
+	return qfalse;
 }
-#endif
 
 /*
 ==================
@@ -606,67 +688,28 @@ void SV_DirectConnect( netadr_t from ) {
 	// see if the challenge is valid (LAN clients don't need to challenge)
 	if (!NET_IsLocalAddress(from))
 	{
-		int ping;
-		challenge_t *challengeptr;
+		challenge_t	agreed;
+		qboolean	extensions = qtrue;
 
-		for (i=0; i<MAX_CHALLENGES; i++)
-		{
-			if (NET_CompareAdr(from, svs.challenges[i].adr))
-			{
-				if(challenge == svs.challenges[i].challenge)
-					break;
-			}
-		}
-
-		if (i == MAX_CHALLENGES)
-		{
+#ifdef LEGACY_PROTOCOL
+		// the extensions agreed on its challenge; never with the legacy protocol
+		extensions = !compat;
+#endif
+		if ( !SV_CheckChallenge( from, challenge, extensions, &agreed ) ) {
 			SV_RefuseConnect( from, "No or bad challenge for your address.\n" );
 			return;
 		}
-	
-		challengeptr = &svs.challenges[i];
-		
-		if(challengeptr->wasrefused)
-		{
-			// Return silently, so that error messages written by the server keep being displayed.
-			return;
-		}
+		Com_Printf( "%s connecting\n", NET_AdrToString( from ) );
 
-		ping = svs.time - challengeptr->pingTime;
-
-		// never reject a LAN client based on ping
-		if ( !Sys_IsLANAddress( from ) ) {
-			if ( sv_minPing->value && ping < sv_minPing->value ) {
-				SV_RefuseConnect( from, "Server is for high pings only\n" );
-				Com_DPrintf ("Client %i rejected on a too low ping\n", i);
-				challengeptr->wasrefused = qtrue;
-				return;
+		if ( extensions ) {
+			ofx = agreed.ofx;
+			// made from the challenge's terms, so a connect sent twice on
+			// the challenge is sent the same
+			if ( ofx ) {
+				contentKey = agreed.contentKey;
 			}
-			if ( sv_maxPing->value && ping > sv_maxPing->value ) {
-				SV_RefuseConnect( from, "Server is for low pings only\n" );
-				Com_DPrintf ("Client %i rejected on a too high ping\n", i);
-				challengeptr->wasrefused = qtrue;
-				return;
-			}
-		}
-
-		Com_Printf("Client %i connecting with %i challenge ping\n", i, ping);
-		challengeptr->connected = qtrue;
-
-		// the extensions agreed on its challenge; never with the legacy protocol
-#ifdef LEGACY_PROTOCOL
-		if ( !compat )
-#endif
-		{
-			// the connection's key, made with its first connect, so a
-			// connect sent twice on the challenge is sent the same
-			ofx = challengeptr->ofx;
-			if ( ofx && !challengeptr->contentKey ) {
-				Com_RandomBytes( (byte *)&challengeptr->contentKey, sizeof( challengeptr->contentKey ) );
-			}
-			contentKey = challengeptr->contentKey;
-			fragmentSize = challengeptr->fragmentSize;
-			identityProven = ( ofx & OFX_IDENTITY ) && SV_ClientProof( challengeptr, identity );
+			fragmentSize = agreed.fragmentSize;
+			identityProven = ( ofx & OFX_IDENTITY ) && SV_ClientProof( &agreed, identity );
 		}
 
 		// the challenge shows the address is real, so this connect
@@ -951,7 +994,6 @@ With a NULL reason, no one is told
 */
 void SV_DropClient( client_t *drop, const char *reason ) {
 	int		i;
-	challenge_t	*challenge;
 	const qboolean isBot = drop->netchan.remoteAddress.type == NA_BOT;
 
 	if ( drop->state == CS_ZOMBIE ) {
@@ -959,20 +1001,6 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	}
 
 	Hooks_ClientDropped( drop - svs.clients, reason );
-
-	if ( !isBot ) {
-		// see if we already have a challenge for this ip
-		challenge = &svs.challenges[0];
-
-		for (i = 0 ; i < MAX_CHALLENGES ; i++, challenge++)
-		{
-			if(NET_CompareAdr(drop->netchan.remoteAddress, challenge->adr))
-			{
-				Com_Memset(challenge, 0, sizeof(*challenge));
-				break;
-			}
-		}
-	}
 
 	// Free all allocated data on the client structure
 	SV_FreeClient(drop);

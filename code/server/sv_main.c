@@ -67,9 +67,6 @@ cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
 cvar_t	*sv_statusOnePacket;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
-#ifndef STANDALONE
-cvar_t	*sv_strictAuth;
-#endif
 cvar_t	*sv_banFile;
 cvar_t	*sv_rconAllow;		// the addresses rcon is taken from, empty for any
 cvar_t	*sv_trustedProxies;	// relays players' real addresses are taken from (P8)
@@ -921,8 +918,7 @@ a master's poll is answered to the master
 The server's out-of-band prints each fit one packet (MAX_PACKETLEN) by
 their own bounds: infoResponse by MAX_INFO_STRING, the rcon redirect's by
 SV_OUTPUTBUF_LENGTH, SV_RefuseConnect's by MAX_STRING_CHARS, and the rest
-are short, except the CD key server's reason, which SV_AuthorizeIpPacket
-passes on as it came. statusResponse passes it by default
+are short, except statusResponse, which passes it by default
 (sv_statusOnePacket, SVC_Status)
 ================
 */
@@ -1514,10 +1510,6 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			return;
 		}
 		SV_DirectConnect( from );
-#ifndef STANDALONE
-	} else if (!Q_stricmp(c, "ipAuthorize")) {
-		SV_AuthorizeIpPacket( from );
-#endif
 	} else if (!Q_stricmp(c, "rcon")) {
 		SVC_RemoteCommand( from, msg );
 	} else if (!Q_stricmp(c, "disconnect")) {
@@ -2227,6 +2219,8 @@ void SV_Frame( int msec ) {
 
 	// check timeouts
 	SV_CheckTimeouts();
+	// the challenges' secret, on time for each slot
+	SV_ChallengeRotate();
 
 	// send messages back to the clients, unless the world is frozen: its
 	// bots don't think, and a player who's just connected gets the next

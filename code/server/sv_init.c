@@ -321,7 +321,6 @@ snapshots carry sv.time, which each map starts again
 static void SV_RebaseTime( void ) {
 	int			delta = svs.time - SV_TIME_REBASED, i, j;
 	client_t	*cl;
-	challenge_t	*challenge;
 
 	// within its first hour up the clock is behind where it would be
 	// set: moving it forward would turn the unacknowledged frames' -1
@@ -334,11 +333,6 @@ static void SV_RebaseTime( void ) {
 	svs.nextKeepAwakeTime = SV_RebasedTime( svs.nextKeepAwakeTime, delta );
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
 		svs.masterResolveTime[i] = SV_RebasedTime( svs.masterResolveTime[i], delta );
-	}
-	for ( i = 0, challenge = svs.challenges; i < MAX_CHALLENGES; i++, challenge++ ) {
-		challenge->time = SV_RebasedTime( challenge->time, delta );
-		challenge->pingTime = SV_RebasedTime( challenge->pingTime, delta );
-		challenge->firstTime = SV_RebasedTime( challenge->firstTime, delta );
 	}
 	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		cl->lastPacketTime = SV_RebasedTime( cl->lastPacketTime, delta );
@@ -1527,14 +1521,6 @@ void SV_Init (void)
 		"rate limit, sv_maxRate included, unless dedicated is 2. Players coming through a relay, a "
 		"gateway or a Docker network have local addresses too, so on a dedicated 1 server they count. The "
 		"server's own player is always unlimited." );
-#ifndef STANDALONE
-	sv_strictAuth = Cvar_Get ("sv_strictAuth", "1", CVAR_ARCHIVE );
-	Cvar_SetDescription( sv_strictAuth,
-		"Whether id's CD key server may refuse players it can't check\n"
-		"The server passes it to id's authorize server, which decided what it meant; the server itself "
-		"never reads it. The server asks it about every player from the internet while it runs Quake III "
-		"Arena's own game, and a player waits about 6 seconds when it doesn't answer." );
-#endif
 	// protected: banaddr writes the file it names, in the server's own
 	// directory beside its saved settings, which game code may not write
 	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE | CVAR_PROTECTED);

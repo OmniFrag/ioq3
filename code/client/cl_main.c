@@ -1919,6 +1919,7 @@ static void CL_ConnectSend( void ) {
 	// a new connect, with a nonce of its own for its key's proof
 	clc.clientNonceSet = qfalse;
 	clc.identityProved = qfalse;
+	clc.challengeTag[0] = '\0';
 
 	Key_SetCatcher( 0 );
 	clc.connectTime = -99999;	// CL_CheckForResend() will fire immediately
@@ -3389,8 +3390,22 @@ void CL_CheckForResend( void ) {
 		Info_SetValueForKey( info, "qport", va("%i", port ) );
 		Info_SetValueForKey( info, "challenge", va("%i", clc.challenge ) );
 		
-		// and the device's proof, once the server proved its own key
+		// what challengeResponse agreed, with its ofv: the server keeps
+		// nothing for a challenge, so it knows them only from here
 		tokens[0] = '\0';
+		if ( clc.challengeTag[0] ) {
+			if ( clc.ofx ) {
+				Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", clc.ofx ) );
+			}
+			if ( clc.fragmentSize ) {
+				Com_AppendExtensionToken( tokens, sizeof( tokens ), "off", va( "%d", clc.fragmentSize ) );
+			}
+			if ( ( clc.ofx & OFX_IDENTITY ) && clc.clientNonceSet ) {
+				Ident_AppendHex( tokens, sizeof( tokens ), "ofc", clc.clientNonce );
+			}
+			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofv", clc.challengeTag );
+		}
+		// and the device's proof, once the server proved its own key
 		if ( clc.identityProved && Com_DeviceKey() ) {
 			byte	sig[IDENT_SIG_SIZE];
 
@@ -3624,6 +3639,20 @@ void CL_ServersResponsePacket( const netadr_t* from, msg_t *msg, qboolean extend
 
 /*
 =================
+CL_ChallengeAgain
+
+Back to asking the server for a challenge, with a new client challenge,
+when the one the connect carries has run out
+=================
+*/
+static void CL_ChallengeAgain( void ) {
+	clc.state = CA_CONNECTING;
+	clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
+	clc.connectTime = -99999;
+}
+
+/*
+=================
 CL_RefusalEnds
 
 Whether a print ends the connect: one from the server it's to, while it's
@@ -3703,6 +3732,30 @@ static uint32_t CL_ServerExtensions( int firstArg, uint64_t *key ) {
 		return 0;
 	}
 	return bits;
+}
+
+/*
+=================
+CL_ChallengeTag
+
+challengeResponse's ofv, which the connect repeats with what it agreed;
+none with the legacy protocol, or from a server that sends none
+=================
+*/
+static void CL_ChallengeTag( void ) {
+	extTokens_t	tokens;
+	const char	*tag;
+
+	clc.challengeTag[0] = '\0';
+#ifdef LEGACY_PROTOCOL
+	if ( clc.compat ) {
+		return;
+	}
+#endif
+	if ( !Com_ParseExtensionTokens( Cmd_ArgsFrom( 4 ), &tokens ) &&
+		( tag = Com_ExtensionValue( &tokens, "ofv" ) ) != NULL ) {
+		Q_strncpyz( clc.challengeTag, tag, sizeof( clc.challengeTag ) );
+	}
 }
 
 /*
@@ -3945,6 +3998,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		clc.ofx = ofx;
 		clc.identityProved = proved;
 		clc.fragmentSize = CL_ServerFragmentSize();
+		CL_ChallengeTag();
 
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
@@ -4095,6 +4149,13 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			if ( CL_RefusalEnds( from, clc.serverMessage ) ) {
 				Com_Error( ERR_DROP, "Refused by the server: %s",
 					clc.serverMessage[0] ? clc.serverMessage : "no reason given" );
+			}
+			// a challenge that's run out, as a stateless one does in 16 to
+			// 32 seconds while the connect waits for a slot: ask for another
+			if ( clc.state == CA_CHALLENGING && NET_CompareAdr( from, clc.serverAddress ) &&
+				( !Q_stricmpn( clc.serverMessage, "No or bad challenge", 19 ) ||
+				!Q_stricmpn( clc.serverMessage, "Incorrect challenge", 19 ) ) ) {
+				CL_ChallengeAgain();
 			}
 			Com_Printf( "%s", s );
 		}

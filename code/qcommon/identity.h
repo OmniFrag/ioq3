@@ -25,7 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // OFX_IDENTITY:
 //
 //   getchallenge       client  ofc   its nonce
-//   challengeResponse  server  ofn   its nonce, kept with the challenge
+//   challengeResponse  server  ofn   its nonce, a MAC of the challenge's terms
 //                              ofp   its key
 //                              ofs, oft  its signature of IDENT_SERVER_DOMAIN,
 //                                    ofc and ofn, in two halves
@@ -37,7 +37,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // refuses a signature naming another key, so a server can't pass on
 // another's challenge to take a player's place there; the nonces and the
 // challenge are the connection's own, so a captured connect proves nothing
-// on another. Classic peers never agree on the bit, so they see none of it.
+// on another. The server's nonce is made from the challenge's terms
+// (ENG-067), so it's the same for one address, port and ofc for the
+// challenge's 16 to 32 seconds, which only that client can sign for.
+// Classic peers never agree on the bit, so they see none of it.
 //
 // The functions here use no globals, and call only q_shared.c's,
 // com_sha256.c's, exttokens.c's and Monocypher's, so a fuzz harness or a

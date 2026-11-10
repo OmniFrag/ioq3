@@ -272,35 +272,6 @@ typedef struct client_s {
 //=============================================================================
 
 
-// MAX_CHALLENGES is made large to prevent a denial
-// of service attack that could cycle all of them
-// out before legitimate users connected
-#define	MAX_CHALLENGES	2048
-// Allow a certain amount of challenges to have the same IP address
-// to make it a bit harder to DOS one single IP address from connecting
-// while not allowing a single ip to grab all challenge resources
-#define MAX_CHALLENGES_MULTI (MAX_CHALLENGES / 2)
-
-#define	AUTHORIZE_TIMEOUT	5000
-
-typedef struct {
-	netadr_t	adr;
-	int			challenge;
-	int			clientChallenge;		// challenge number coming from the client
-	int			time;				// time the last packet was sent to the autherize server
-	int			pingTime;			// time the challenge response was sent to client
-	int			firstTime;			// time the adr was first used, for authorize timeout checks
-	qboolean	wasrefused;
-	qboolean	connected;
-	uint32_t	ofx;				// the extensions agreed on challengeResponse (exttokens.h), 0 for none
-	uint64_t	contentKey;			// with them, the key every connect on this challenge is sent, 0 until the first
-	int			fragmentSize;		// the client's off, which challengeResponse repeats, 0 for none
-	// with OFX_IDENTITY, the nonces the proofs sign (identity.h): the
-	// client's ofc, and this server's ofn, made with each challenge
-	byte		clientNonce[32];
-	byte		serverNonce[32];
-} challenge_t;
-
 // what each map change sets svs.time to (SV_RebaseTime): an hour, so that
 // the times kept from it before stay above 0
 #define SV_TIME_REBASED	( 60 * 60 * 1000 )
@@ -332,7 +303,6 @@ typedef struct {
 	int			nextKeepAwakeTime;	// SV_KeepAwake's next check
 	int			hibernateFrom;		// when the last player left, bots aside, or the server last woke
 	hibernation_t	hibernation;
-	challenge_t	challenges[MAX_CHALLENGES];	// to prevent invalid IPs from connecting
 	netadr_t	redirectAddress;			// for rcon return messages
 #ifndef STANDALONE
 	netadr_t	authorizeAddress;			// authorize server address
@@ -398,9 +368,6 @@ extern	cvar_t	*sv_pure;
 extern	cvar_t	*sv_floodProtect;
 extern	cvar_t	*sv_statusOnePacket;
 extern	cvar_t	*sv_lanForceRate;
-#ifndef STANDALONE
-extern	cvar_t	*sv_strictAuth;
-#endif
 extern	cvar_t	*sv_banFile;
 extern	cvar_t	*sv_rconAllow;
 extern	cvar_t	*sv_trustedProxies;
@@ -539,14 +506,12 @@ qboolean SV_DownloadsFull( const client_t *cl );
 // sv_client.c
 //
 void SV_GetChallenge(netadr_t from);
+void SV_ChallengeRotate( void );
 uint32_t SV_AskedExtensions( int firstArg );
 
 client_t *SV_OldestFreeClient( int startIndex, int endIndex );
 void SV_DirectConnect( netadr_t from );
 
-#ifndef STANDALONE
-void SV_AuthorizeIpPacket( netadr_t from );
-#endif
 
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg );
 void SV_UserinfoChanged( client_t *cl );

@@ -197,6 +197,10 @@ typedef struct {
 	qboolean	identityProved;
 	byte		serverKey[32];
 	byte		serverNonce[32];
+	// challengeResponse's ofv, which binds what it agreed: the connect
+	// repeats those terms with it, as a stateless challenge needs (ENG-067);
+	// empty from a server that sends none
+	char		challengeTag[EXT_MAX_VALUE + 1];
 	// a connect to several addresses (CL_ExtConnect): each is sent the
 	// challenge request from its own time on, every FAST_RETRANSMIT until
 	// fastUntil, and the first to answer, as the server with the expected
