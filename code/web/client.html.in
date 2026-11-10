@@ -243,6 +243,12 @@ const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8
     FACT_ANSWER_SHIFT = 6;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
+// an input that takes the page into fullscreen: the click the
+// presentation's pointerdown below claims while the game wants it, or
+// Alt+Enter (Option+Return), which the keydown below asks it for
+const entersFullscreen = (event) => event.target === canvas && !isFullscreen() && (event.type === 'pointerdown'
+    ? event.pointerType === 'mouse' && wantFullscreen
+    : event.type === 'keydown' && event.code === 'Enter' && event.altKey && !event.repeat && fullscreenAvailable);
 // a request out, which a second one would only get in the way of; and who
 // asked to leave fullscreen, 'game' or 'page', until it's done, while "Click
 // to play" waits (the browser frees the pointer a frame or two before
@@ -427,6 +433,14 @@ const sound = (() => {
     const begin = (event) => {
         // with no userActivation, any trusted input is let try
         if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
+        // not an input that takes the page into fullscreen, whose
+        // activation Safari spends on the lock and fullscreen: sound started
+        // in it hid the page on the way in (Safari 26.6), freeing the lock.
+        // It starts at the next input, or in this one where fullscreen can't
+        // come (a frame without it, or a request refused)
+        if (entersFullscreen(event) && document.fullscreenEnabled && fullscreenAnswer !== ANSWER_REFUSED) return;
+        // nor a modifier pressed alone, as Alt is on the way to Alt+Enter
+        if (event.type === 'keydown' && ['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'].includes(event.key)) return;
         // a hidden page's sound is held, whatever reaches it; a browser
         // without Web Audio (Windows' WebKit) plays none
         if (document.hidden || !window.AudioContext) return;
@@ -583,7 +597,7 @@ addEventListener('pointerdown', (event) => {
     if (event.pointerType !== 'mouse') return;
     claimedPointer = undefined;
     if (event.target !== canvas) return;
-    const goFullscreen = wantFullscreen && !isFullscreen();
+    const goFullscreen = entersFullscreen(event);
     const takeLock = wantPointer && !locked();
     if (!goFullscreen && !takeLock) return;
     event.stopImmediatePropagation();
