@@ -1009,7 +1009,10 @@ const bring = async (own) => {
                 const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
                 rounds = rounds.then(async () => {
                     if (!missing().length) return;
-                    take(await Promise.all(chosenFiles.map((chosen) => checked(chosen, chosen.name, folderOf(chosen)))));
+                    // four at a time: each check reads only a pak's end and
+                    // directory, so a few in flight keep the disk busy, and
+                    // a whole install's folder never opens hundreds at once
+                    take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))));
                     if (missing().length) show();
                     else done();
                 // a round that fails, unexpectedly, leaves the next to run

@@ -78,10 +78,15 @@ const read = async (blob, start, end) => new DataView(await blob.slice(start, en
 // A pak's checksum, { checksum }, or why it can't be read, { damaged }:
 // "no end record", "zip64", "spanned" (across disks), "empty", "directory
 // past the end", "directory too large", "unreadable entry" or "unreadable"
-// (the browser couldn't read the file). It reads the directory where unzip
-// does, and as strictly: every entry it claims must be there, where the
-// engine would take the ones before the first that isn't. Zip64, which
-// unzip doesn't read, is refused, as is a zip with no files.
+// (the browser couldn't read the file). It reads the records unzip reads,
+// where it reads them: the end record, never zip64's, and each directory
+// entry's fixed fields and name. Every entry the end record claims must be
+// there, where the engine would take the ones before the first that isn't;
+// a zip with no files is refused. So is zip64, which the engine doesn't
+// read either: an end record that leaves the sizes to zip64's records
+// (0xffffffff) can't be opened, and one that holds them still has zip64's
+// records between it and the directory, which unzip takes for bytes before
+// the zip (byte_before_the_zipfile), so it reads none of the entries.
 export const checkPak = (blob) => checksumOfPak(blob).catch(() => ({ damaged: 'unreadable' }));
 
 // The last end record's signature in a file's last back bytes, the one
@@ -102,9 +107,7 @@ async function checksumOfPak(blob) {
     const field16 = (offset) => tail.getUint16(at + offset, true), field32 = (offset) => tail.getUint32(at + offset, true);
     const [disk, directoryDisk, entries, allEntries] = [field16(4), field16(6), field16(8), field16(10)];
     const [size, offset] = [field32(12), field32(16)];
-    if (entries === 0xffff || allEntries === 0xffff || size === 0xffffffff || offset === 0xffffffff
-        || (at >= ZIP64_LOCATOR_SIZE && tail.getUint32(at - ZIP64_LOCATOR_SIZE, true) === ZIP64_LOCATOR))
-        return { damaged: 'zip64' };
+    if (size === 0xffffffff || offset === 0xffffffff) return { damaged: 'zip64' };
     if (disk !== 0 || directoryDisk !== 0 || entries !== allEntries) return { damaged: 'spanned' };
     if (entries === 0) return { damaged: 'empty' };
     const end = from + at;
@@ -115,19 +118,33 @@ async function checksumOfPak(blob) {
     // skipped. An entry's name may run past the directory, as unzip reads it,
     // but not past the file.
     const directory = await read(blob, end - size, blob.size);
+    const unreadable = { damaged: at >= ZIP64_LOCATOR_SIZE && tail.getUint32(at - ZIP64_LOCATOR_SIZE, true) === ZIP64_LOCATOR
+        ? 'zip64' : 'unreadable entry' };
     const crcs = [];
     for (let i = 0, p = 0; i < entries; i++) {
-        if (p + ENTRY_SIZE > directory.byteLength || directory.getUint32(p, true) !== ENTRY) return { damaged: 'unreadable entry' };
+        if (p + ENTRY_SIZE > directory.byteLength || directory.getUint32(p, true) !== ENTRY) return unreadable;
         const name = directory.getUint16(p + 28, true);
-        if (p + ENTRY_SIZE + name > directory.byteLength) return { damaged: 'unreadable entry' };
-        const uncompressed = directory.getUint32(p + 24, true);
-        if (directory.getUint32(p + 20, true) === 0xffffffff || uncompressed === 0xffffffff
-            || directory.getUint32(p + 42, true) === 0xffffffff)
-            return { damaged: 'zip64' };
-        if (uncompressed > 0) crcs.push(directory.getUint32(p + 16, true));
+        if (p + ENTRY_SIZE + name > directory.byteLength) return unreadable;
+        if (directory.getUint32(p + 24, true) > 0) crcs.push(directory.getUint32(p + 16, true));
         p += ENTRY_SIZE + name + directory.getUint16(p + 30, true) + directory.getUint16(p + 32, true);
     }
     return { checksum: checksumOf(crcs) };
+}
+
+// fn of each of items, at most limit at once, in items' order: a whole
+// install's folder is checked a few files at a time, not with hundreds of
+// reads under way together
+export async function mapLimited(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    const run = async () => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+    return results;
 }
 
 const parts = (entry) => entry.src.toLowerCase().split('/');
