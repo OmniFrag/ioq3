@@ -821,11 +821,20 @@ const confirmLeave = (event) => {
     event.preventDefault();
     event.returnValue = '';
 };
+// the pak reader, when it reads the player's stored paks (downloadGame),
+// until its results are said, as the player first enters a match
+let paksToSay = null;
 const setPlaying = (inMatch) => {
     playing = inMatch;
     if (playing) addEventListener('beforeunload', confirmLeave);
     else removeEventListener('beforeunload', confirmLeave);
     showPlay();
+    if (playing && paksToSay) {
+        const { reads, roundTrips, hits, misses, direct, spinMs } = paksToSay.stats();
+        console.log(`Pak reader: in the match, ${reads} reads, ${roundTrips} round trips (${hits} block hits, ${misses} misses, `
+            + `${direct} straight through), ${spinMs} ms waiting, ${paksToSay.held()} bytes of the paks held`);
+        paksToSay = null;
+    }
 };
 
 // The engine's files live in the page's memory: a screenshot it writes
@@ -1064,6 +1073,8 @@ const bring = async (own) => {
     // says: an entry's, its file's verdict and name; a chosen file's that
     // is none of them, the same
     const have = new Map(), said = new Map(), others = [];
+    // where OPFS has each it has, which the pak reader reads from
+    const storedAt = new Map();
     // a chosen file, or a kept one, checked: { name, folder, blob }, and a
     // pak's checksum or damage
     const checked = async (blob, name, folder) =>
@@ -1099,7 +1110,10 @@ const bring = async (own) => {
             const changed = record.file.size !== record.size;
             const keptFile = changed ? await checked(record.file, record.name)
                 : { name: record.name, blob: record.file, checksum: record.checksum };
-            if (reuse(file, keptFile, !changed)) break;
+            if (reuse(file, keptFile, !changed)) {
+                storedAt.set(file, record.path);
+                break;
+            }
             if (changed) store.call('drop', { path: record.path }).catch(() => {});
         }
     }
@@ -1237,7 +1251,7 @@ const bring = async (own) => {
         chooser('Choose a folder', true);
         show();
     });
-    return own.map((file) => ({ ...file, blob: have.get(file) }));
+    return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file) }));
 };
 
 // Download the files the config lists for the game, all at once, showing
@@ -1255,9 +1269,62 @@ const downloadGame = async (FS) => {
     });
     const own = gamedirs.flatMap((gamedir) => Array.isArray(config[gamedir]?.own) ? config[gamedir].own : []);
     if (files.some((file) => file.agreement) && config.agreement?.src) await agree(config.agreement);
-    // the player's own files read as the rest download
+    // the player's own files read as the rest download: the stored ones
+    // through the pak reader where it runs, the rest into memory
     const brought = own.length ? await bring(own) : [];
-    const read = Promise.all(brought.map(async (file) => ({ ...file, data: new Uint8Array(await file.blob.arrayBuffer()) })));
+    const stored = brought.filter((file) => file.stored);
+    const reading = (async () => {
+        if (!stored.length) {
+            if (brought.length) console.log('Pak reader: off, as none of the paks is stored yet: the paks are read into memory');
+            return { on: false };
+        }
+        const paks = await import(`${enginePath}pak_reader.js`).catch(() => failDownload('pak_reader.js'));
+        const reader = await paks.openReader(FS, stored, `${enginePath}pak_reader_worker.js`, (why) => { askBox.dataset.reader = why; });
+        askBox.dataset.reader = reader.on ? 'on' : reader.other ? 'other-tab' : 'off';
+        if (reader.on) {
+            paksToSay = reader;
+            addEventListener('pagehide', reader.close);
+            // a page back from the back-forward cache has let go of the paks,
+            // and so loads again, rather than stop at the engine's next read
+            addEventListener('pageshow', (event) => {
+                if (!event.persisted) return;
+                removeEventListener('beforeunload', confirmLeave);
+                location.reload();
+            });
+            console.log(`Pak reader: on, from OPFS through a worker (${reader.modes}): ${stored.map(({ src }) => src).join(', ')}`);
+        } else {
+            console.log(`Pak reader: off, as ${reader.why}: the paks are read into memory`);
+        }
+        return { ...reader, limit: paks.READ_LIMIT_MS };
+    })();
+    // A stored pak the reader couldn't prove, as when another tab holds it,
+    // may not read into memory either: its end is read first, and one whose
+    // end isn't read within the reader's limit is said and marked, and the
+    // page goes no further, rather than hand the engine a pak it can't read.
+    // The whole pak then reads in as long as it takes.
+    const inMemory = async (file, limit) => {
+        if (file.stored) {
+            let timer;
+            const end = file.blob.slice(Math.max(0, file.blob.size - 0x10015)).arrayBuffer();
+            const proved = await Promise.race([end.then(() => true, () => true), new Promise((resolve) => {
+                timer = setTimeout(() => resolve(false), limit);
+            })]);
+            clearTimeout(timer);
+            if (!proved) {
+                const other = askBox.dataset.reader === 'other-tab';
+                if (!other) askBox.dataset.reader = 'unreadable';
+                console.error(`Pak reader: ${file.src} wasn't read within ${limit / 1000} s${other ? ': it may be open in another tab' : ''}`);
+                return new Promise(() => {});
+            }
+        }
+        return file.blob.arrayBuffer();
+    };
+    // the files that aren't stored at once, the stored ones once the reader
+    // has said it won't read them
+    const read = Promise.all(brought.map(async (file) => {
+        const { on, limit } = file.stored ? await reading : {};
+        return on ? null : { ...file, data: new Uint8Array(await inMemory(file, limit)) };
+    })).then((files) => files.filter(Boolean));
     const downloading = new AbortController();
     const stop = (name, response) => {
         downloading.abort();

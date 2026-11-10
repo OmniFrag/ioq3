@@ -107,7 +107,9 @@ function(deploy_shell_files)
     endif()
     configure_file(${SOURCE_DIR}/web/pak_check.js
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_check.js @ONLY)
-    # and the worker that keeps them in the browser's private files
-    configure_file(${SOURCE_DIR}/web/pak_store.js
-        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_store.js COPYONLY)
+    # and the worker that keeps them in the browser's private files, and the
+    # reader that reads them from there, with its worker
+    foreach(FILE pak_store.js pak_reader.js pak_reader_worker.js)
+        configure_file(${SOURCE_DIR}/web/${FILE} ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${FILE} COPYONLY)
+    endforeach()
 endfunction()

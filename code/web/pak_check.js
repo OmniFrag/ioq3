@@ -95,15 +95,21 @@ export const checkPak = (blob) => checksumOfPak(blob).catch(() => ({ damaged: 'u
 async function findEnd(blob, back) {
     const from = Math.max(0, blob.size - back);
     const tail = await read(blob, from, blob.size);
-    let at = tail.byteLength - 4;
-    while (at >= 0 && tail.getUint32(at, true) !== END_RECORD) at--;
-    return { from, tail, at };
+    return { from, tail, at: lastEndRecord(tail) };
+}
+
+// Where in view, a DataView of a zip's last bytes, its last end record
+// begins, as unzip finds it, if all of the record is there; -1 if not
+export function lastEndRecord(view) {
+    let at = view.byteLength - 4;
+    while (at >= 0 && view.getUint32(at, true) !== END_RECORD) at--;
+    return at >= 0 && at + END_SIZE <= view.byteLength ? at : -1;
 }
 
 async function checksumOfPak(blob) {
     let { from, tail, at } = await findEnd(blob, FIRST_LOOK);
     if (at < 0 && from > 0) ({ from, tail, at } = await findEnd(blob, COMMENT_MAX));
-    if (at < 0 || at + END_SIZE > tail.byteLength) return { damaged: 'no end record' };
+    if (at < 0) return { damaged: 'no end record' };
     const field16 = (offset) => tail.getUint16(at + offset, true), field32 = (offset) => tail.getUint32(at + offset, true);
     const [disk, directoryDisk, entries, allEntries] = [field16(4), field16(6), field16(8), field16(10)];
     const [size, offset] = [field32(12), field32(16)];
