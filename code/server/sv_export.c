@@ -22,8 +22,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // sv_export.c -- the content command. content export writes the paks the
 // server would send, its content manifest's, to a directory for a static
 // host or CDN that sv_dlURL then names, by hash and by name
-// (downloads.md section 6). The files are copied, or hard-linked where
-// they can be, on a thread of their own, so a big set never holds up a
+// (downloads.md section 6). The files are cloned (reflinks), or
+// hard-linked, where they can be, else copied, on a thread of their own, so a big set never holds up a
 // frame; it reads the disk beside the pak index's hash job (content.h).
 // content add checks a pak an operator installs, and copies it into a
 // game directory on the same thread, for the next map (section 11).
@@ -51,6 +51,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 typedef enum {
 	EXPORT_THERE,		// already there, with the pak's hash
 	EXPORT_LINKED,
+	EXPORT_CLONED,		// a reflink of the pak: its own file, sharing its blocks
 	EXPORT_COPIED,
 	EXPORT_FAILED,
 	EXPORT_DIFFERENT	// content add's: a pak of its name with other contents is there
@@ -82,7 +83,8 @@ typedef struct {
 	exportItem_t	*items;
 	int				count;
 	byte			*buffer;
-	qboolean		copies;			// never hard links
+	qboolean		copies;			// never clones or hard links
+	qboolean		noClones;		// the folder's disk can't clone, found by the first try
 	qboolean		add;			// content add's: its one pak by name alone
 	volatile int	done;			// items finished
 	volatile int64_t	bytes;		// bytes copied
@@ -279,8 +281,10 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 =================
 SV_ExportTarget
 
-Puts the item's pak at one of its targets, as a .part first: a hard link
-to the pak, or to the copy by hash, costs no space, and a copy is checked
+Puts the item's pak at one of its targets, as a .part first: a clone of
+the pak (a reflink), its own file sharing the pak's blocks, which writing
+over the pak leaves as it was; where the disk can't, a hard link to the
+pak, or to the copy by hash; both cost no space; and a copy, checked
 against the hash as it's made
 =================
 */
@@ -290,7 +294,7 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 	char					part[MAX_OSPATH + 8];
 	const char				*why;
 	int64_t					size, mtime = item->mtime;
-	qboolean				linked;
+	qboolean				cloned, linked;
 
 	// the file by hash an earlier item put there, or the one by name a
 	// link to it, as on another disk than the pak's
@@ -317,9 +321,21 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 
 	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
 	remove( part );
-	linked = !job->copies && ( Sys_HardLink( item->source, part ) || ( t == EXPORT_BY_NAME
+	cloned = qfalse;
+	if ( !job->copies && !job->noClones ) {
+		cloned = Sys_CloneFile( item->source, part ) || ( t == EXPORT_BY_NAME
+			&& byHash->result != EXPORT_FAILED && Sys_CloneFile( byHash->ospath, part ) );
+		// a folder whose disk can't clone: the rest of the job hard-links
+		// without trying; not for a pak on another disk (EXDEV) or one
+		// that failed on its own (unreadable, the disk full)
+		if ( !cloned && ( errno == EOPNOTSUPP || errno == ENOTSUP || errno == ENOTTY
+			|| errno == EINVAL || errno == ENOSYS ) ) {
+			job->noClones = qtrue;
+		}
+	}
+	linked = !job->copies && !cloned && ( Sys_HardLink( item->source, part ) || ( t == EXPORT_BY_NAME
 		&& byHash->result != EXPORT_FAILED && Sys_HardLink( byHash->ospath, part ) ) );
-	if ( linked ) {
+	if ( cloned || linked ) {
 		why = SV_ExportUnchanged( item ) ? NULL : "the pak changed since it was hashed";
 	} else {
 		why = SV_ExportCopy( job, item, part );
@@ -332,7 +348,7 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 		target->result = EXPORT_FAILED;
 		target->why = why;
 	} else {
-		target->result = linked ? EXPORT_LINKED : EXPORT_COPIED;
+		target->result = cloned ? EXPORT_CLONED : linked ? EXPORT_LINKED : EXPORT_COPIED;
 	}
 }
 
@@ -451,8 +467,8 @@ what an operator put in the folder never does. On the thread, once the
 export's files are all there.
 
 Each line has the file by hash's size and time too. A hard link shares a
-pak's bytes, so a pak written over in place changes the old version's
-exported file with it, which would then serve bytes that aren't its
+pak's bytes (a clone has its own), so a pak written over in place changes
+the old version's exported file with it, which would then serve bytes that aren't its
 hash's. A version this export doesn't list whose file by hash has
 another size or time is removed and dropped from the record, said in a
 warning. One whose hash this export lists has its file by hash checked
@@ -928,7 +944,7 @@ static void SV_ExportFinish( void ) {
 	exportJob_t		*job = &exportJob;
 	const exportItem_t	*item;
 	char			failed[MAX_STRING_CHARS] = "", removed[MAX_STRING_CHARS + 64];
-	int				i, t, there = 0, linked = 0, copied = 0, numFailed = 0;
+	int				i, t, there = 0, cloned = 0, linked = 0, copied = 0, numFailed = 0;
 	int64_t			copiedBytes = 0;
 
 	for ( i = 0; i < job->count; i++ ) {
@@ -937,6 +953,9 @@ static void SV_ExportFinish( void ) {
 			switch ( item->targets[t].result ) {
 			case EXPORT_THERE:
 				there++;
+				break;
+			case EXPORT_CLONED:
+				cloned++;
 				break;
 			case EXPORT_LINKED:
 				linked++;
@@ -980,9 +999,9 @@ static void SV_ExportFinish( void ) {
 			job->pruned == 1 ? "" : "s", (long long)( job->prunedBytes >> 20 ),
 			SV_ExportListEnd( job->prunedNames, job->pruned ) );
 	}
-	Com_Printf( "Exported %d paks to %s in %d s: %d files copied (%lld MB), %d hard-linked, %d already there%s%s\n",
+	Com_Printf( "Exported %d paks to %s in %d s: %d files copied (%lld MB), %d cloned, %d hard-linked, %d already there%s%s\n",
 		job->count, job->dir, ( Sys_Milliseconds() - job->started ) / 1000, copied,
-		(long long)( copiedBytes >> 20 ), linked, there,
+		(long long)( copiedBytes >> 20 ), cloned, linked, there,
 		numFailed ? va( "; %d paks failed: %s", numFailed, SV_ExportListEnd( failed, numFailed ) ) : "", removed );
 }
 
@@ -1332,6 +1351,7 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 	// from the export's last files
 	job->keepWhy = numGone ? "some paks the content manifest lists are gone from the server" : NULL;
 	job->copies = copies;
+	job->noClones = qfalse;
 	job->add = qfalse;
 	job->done = 0;
 	job->bytes = 0;
@@ -1552,8 +1572,8 @@ void SV_Content_f( void ) {
 	Com_Printf( "usage:\n"
 		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in the folder "
 		"in sv_contentDir, " CONTENT_WWW " if it's not given, by hash (sha256/<hash>.pk3) and by name "
-		"(<game>/<name>.pk3), for a web server that sv_dlURL names; hard-linked where it can be, unless copy "
-		"says to copy. It keeps the files of the versions it lists and of those the export before it listed, "
+		"(<game>/<name>.pk3), for a web server that sv_dlURL names; cloned or hard-linked where it can be, "
+		"unless copy says to copy. It keeps the files of the versions it lists and of those the export before it listed, "
 		"and removes older ones it made (" EXPORT_RECORD ")\n"
 		"content add <file> [game]: checks a pak, a file in sv_contentDir's " CONTENT_INCOMING " folder, and "
 		"installs it in the game's directory (this one's, or game) for the next map\n" );

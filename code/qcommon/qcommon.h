@@ -2209,6 +2209,11 @@ FILE	*Sys_FOpenPrivate( const char *ospath, const char *mode );
 // to, a hard link to the file from on the same volume; qfalse where there
 // can't be one, and the caller copies instead
 qboolean Sys_HardLink( const char *from, const char *to );
+// a new file at to sharing from's blocks until either is written (a
+// reflink), with from's modification time; false where the filesystem
+// can't, leaving nothing at to, with errno saying why (EXDEV for two disks,
+// ENOTSUP or the like where the disk or platform can't clone)
+qboolean Sys_CloneFile( const char *from, const char *to );
 // the path of the file or directory there, with every link on the way
 // resolved; qfalse if there's nothing there
 qboolean Sys_RealPath( const char *path, char *resolved, int size );

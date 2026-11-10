@@ -766,6 +766,22 @@ qboolean Sys_HardLink( const char *from, const char *to )
 
 /*
 ==================
+Sys_CloneFile
+
+Not yet: ReFS's block cloning (FSCTL_DUPLICATE_EXTENTS_TO_FILE) would
+do it, and NTFS can't, so callers fall back to a hard link or a copy
+==================
+*/
+qboolean Sys_CloneFile( const char *from, const char *to )
+{
+	(void)from;
+	(void)to;
+	errno = ENOTSUP;
+	return qfalse;
+}
+
+/*
+==================
 Sys_RealPath
 
 The path GetFinalPathNameByHandle gives the file or folder, past links

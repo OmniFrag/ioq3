@@ -37,6 +37,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <pwd.h>
 #include <libgen.h>
 #include <fcntl.h>
+#if defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
+#include <sys/ioctl.h>
+#include <linux/fs.h>	// FICLONE
+#elif defined( __APPLE__ )
+#include <sys/clonefile.h>
+#endif
 #include <fenv.h>
 #include <limits.h>
 #include <sys/wait.h>
@@ -907,6 +913,75 @@ Sys_HardLink
 qboolean Sys_HardLink( const char *from, const char *to )
 {
 	return link( from, to ) == 0;
+}
+
+/*
+==================
+Sys_CloneFile
+
+FICLONE on Linux (XFS, btrfs and others that share blocks), clonefile on
+macOS (APFS)
+==================
+*/
+qboolean Sys_CloneFile( const char *from, const char *to )
+{
+#if defined( __APPLE__ )
+	int		error;
+
+	// clonefile keeps the file's times; following a link to the pak, as
+	// the Linux open does, never cloning the link itself. Readable as a
+	// copy is (Sys_FCreateReadable), whatever the pak's mode
+	if ( clonefile( from, to, 0 ) != 0 ) {
+		return qfalse;
+	}
+	if ( chmod( to, 0644 ) != 0 ) {
+		error = errno;
+		unlink( to );
+		errno = error;
+		return qfalse;
+	}
+	return qtrue;
+#elif defined( __linux__ ) && defined( FICLONE )
+	struct stat		st;
+	struct timespec	times[2];
+	int				in, out, error;
+	qboolean		ok;
+
+	in = open( from, O_RDONLY );
+	if ( in < 0 ) {
+		return qfalse;
+	}
+	if ( fstat( in, &st ) != 0 ) {
+		close( in );
+		return qfalse;
+	}
+	out = open( to, O_WRONLY | O_CREAT | O_EXCL, 0644 );
+	if ( out < 0 ) {
+		close( in );
+		return qfalse;
+	}
+	// readable whatever the umask, as a copy is (Sys_FCreateReadable)
+	ok = fchmod( out, 0644 ) == 0 && ioctl( out, FICLONE, in ) == 0;
+	if ( ok ) {
+		// the modification time, which the export compares, not the access time
+		times[0].tv_sec = 0;
+		times[0].tv_nsec = UTIME_OMIT;
+		times[1] = st.st_mtim;
+		ok = futimens( out, times ) == 0;
+	}
+	// errno says why it failed, which the closes and unlink keep
+	error = errno;
+	ok = close( out ) == 0 && ok;
+	close( in );
+	if ( !ok ) {
+		unlink( to );
+		errno = error;
+	}
+	return ok;
+#else
+	errno = ENOTSUP;
+	return qfalse;
+#endif
 }
 
 /*
