@@ -1057,12 +1057,67 @@ const ownAll = (db) => new Promise((resolve) => {
     }
 });
 const fileName = (src) => src.match(/[^/]+$/)[0];
+// the game directories this visit plays, and the files it asks the player
+// for in them
+const gamedirs = () => [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir);
+const ownOf = (config) => gamedirs().flatMap((gamedir) => Array.isArray(config[gamedir]?.own) ? config[gamedir].own : []);
+
+// The page's isolated form (PLAN D17's opt-in): the same page, cross-origin
+// isolated (COOP and COEP), where the pak reader reads the player's stored
+// paks rather than hold them (downloadGame). A config with one names it,
+// isolated, a folder relative to the page's ("own/", the gateway's). The page
+// moves there, its query and fragment kept, once it has paks stored that the
+// config asks for: before the engine loads when they're stored already, or
+// once the player's chosen paks are (bring). It stays in another page's
+// frame, which can't isolate it, and when another page opened it, which the
+// move would cut off (COOP); and it moves once, never from the isolated
+// form itself, so a host that doesn't isolate that form costs one move.
+// isolation is { form }, the URL, or { why } the page stays, or {} without one.
+const ISOLATING = `${CLIENT_NAME}.isolating`;
+let isolation = {};
+// how the page that moved here had the paks, 'kept' or 'stored' (then), or
+// '' when none moved here; null when the page can't tell
+const moved = (() => {
+    try {
+        const how = sessionStorage.getItem(ISOLATING) ?? '';
+        sessionStorage.removeItem(ISOLATING);
+        return how;
+    } catch {
+        return null;
+    }
+})();
+const isolationOf = (config) => {
+    if (crossOriginIsolated || typeof config.isolated != 'string') return {};
+    const page = location.pathname.match(/[^/]*$/)[0];
+    if (moved !== '' || location.pathname.endsWith(`/${config.isolated}${page}`))
+        return { why: moved === null ? "it can't tell it moved once" : "its isolated form isn't cross-origin isolated" };
+    if (window.top !== window) return { why: "another page's frame can't isolate it" };
+    if (window.opener) return { why: 'the page that opened it would lose it' };
+    const form = new URL(config.isolated + page + location.search + location.hash, location.href);
+    return form.origin === location.origin ? { form } : { why: 'its isolated form is on another site' };
+};
+// the move, after which nothing on this page goes on; or, when the page
+// can't mark it, none
+const moveIsolated = (form, how) => {
+    try {
+        sessionStorage.setItem(ISOLATING, how);
+    } catch {
+        return Promise.resolve();
+    }
+    console.log(`Own files: to the page's isolated form at ${form.pathname}, as the paks are stored`);
+    location.replace(form);
+    return new Promise(() => {});
+};
+// ownStore's answer, asked for before the engine loads on a page that may
+// move, which bring takes rather than ask again
+let ownStoreEarly;
+
 // set once the page has read the player's files in (downloadGame)
 let ownRead;
 const ownReadDone = new Promise((resolve) => { ownRead = resolve; });
 const bring = async (own) => {
     const [paks, store, databases] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')),
-        ownStore(), indexedDB.databases?.().catch(() => undefined)]);
+        ownStoreEarly ?? ownStore(), indexedDB.databases?.().catch(() => undefined)]);
     // with OPFS, IndexedDB's database only to move its files from, if it's
     // there, rather than made anew each visit
     const db = store.call && databases && !databases.some(({ name }) => name === OWN_DATABASE) ? null : await ownDatabase();
@@ -1099,8 +1154,11 @@ const bring = async (own) => {
     // The stored files' copies, one at a time: each pak is large, one disk
     // writes it no faster for a second beside it, and each copy holds a sync
     // access handle, which is exclusive. They wait for the page to read the
-    // player's files in (downloadGame), which the engine waits on.
-    let copies = ownReadDone;
+    // player's files in (downloadGame), which the engine waits on, unless
+    // the page moves to its isolated form once they're stored, which reads
+    // them there.
+    const toIsolate = Boolean(isolation.form && store.call);
+    let copies = toIsolate ? Promise.resolve() : ownReadDone;
     const queue = (work) => { copies = copies.then(work).catch((error) => console.error(`Couldn't store files: ${error}`)); };
     // OPFS's files: each as the index has it while its size is the index's,
     // or else checked again, and removed if it no longer checks; another
@@ -1151,7 +1209,10 @@ const bring = async (own) => {
             const from = copied, name = blob.name ?? entry.src;
             try {
                 const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum },
-                    (bytes) => { askBox.dataset.copied = from + bytes; });
+                    (bytes) => {
+                        askBox.dataset.copied = from + bytes;
+                        if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100);
+                    });
                 if (busy) {
                     storedAll = false;
                     console.log(`Didn't store ${name} for ${entry.src}: another tab is storing it`);
@@ -1251,6 +1312,18 @@ const bring = async (own) => {
         chooser('Choose a folder', true);
         show();
     });
+    // to the isolated form once every pak is stored; a pak that wasn't, for
+    // want of room or as another tab stored it, keeps the page here, which
+    // reads them into memory. The page moved to asks the browser to keep
+    // them, as this one would have.
+    if (toIsolate) {
+        showStatus('Reading your files…');
+        await copies;
+        if (storedAll) await moveIsolated(isolation.form, toCopy ? 'stored' : 'kept');
+    } else if (isolation.why && store.call) {
+        console.log(`Own files: the page stays as it is, as ${isolation.why}`);
+    }
+    if (moved === 'stored') persistOnInput();
     return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file) }));
 };
 
@@ -1261,13 +1334,12 @@ const bring = async (own) => {
 const megabytes = (bytes) => Math.round(bytes / 1e6);
 const downloadGame = async (FS) => {
     const config = await configPromise;
-    const gamedirs = [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir);
-    const files = gamedirs.flatMap((gamedir) => {
+    const files = gamedirs().flatMap((gamedir) => {
         if (config[gamedir]?.files) return config[gamedir].files;
         console.warn(`Game directory '${gamedir}' cannot be used. It must have files listed in ${configFilename}.`);
         return [];
     });
-    const own = gamedirs.flatMap((gamedir) => Array.isArray(config[gamedir]?.own) ? config[gamedir].own : []);
+    const own = ownOf(config);
     if (files.some((file) => file.agreement) && config.agreement?.src) await agree(config.agreement);
     // the player's own files read as the rest download: the stored ones
     // through the pak reader where it runs, the rest into memory
@@ -1393,10 +1465,19 @@ const downloadGame = async (FS) => {
     }
 };
 
-const ioquake3 = (await import(enginePath + `@CLIENT_BINARY@.js`)).default;
+const engine = import(enginePath + `@CLIENT_BINARY@.js`);
 const startConfig = await configPromise;
 if (!urlBasegame && typeof startConfig.basegame == 'string' && /^[\w.-]+$/.test(startConfig.basegame))
     com_basegame = startConfig.basegame;
+// paks stored already, as the store lists them: to the isolated form before
+// the engine loads here
+isolation = isolationOf(startConfig);
+const startOwn = ownOf(startConfig);
+if (isolation.form && startOwn.length) {
+    const asked = new Set(startOwn.map(({ src }) => src.toLowerCase()));
+    if ((await (ownStoreEarly = ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
+}
+const ioquake3 = (await engine).default;
 generatedArguments = ` +set com_basegame "${com_basegame}" ${generatedArguments}`;
 ioquake3({
     canvas: canvas,
