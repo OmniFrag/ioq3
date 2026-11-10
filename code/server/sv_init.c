@@ -337,6 +337,7 @@ static void SV_RebaseTime( void ) {
 	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		cl->lastPacketTime = SV_RebasedTime( cl->lastPacketTime, delta );
 		cl->lastConnectTime = SV_RebasedTime( cl->lastConnectTime, delta );
+		cl->pingCheckTime = SV_RebasedTime( cl->pingCheckTime, delta );
 		cl->lastDisconnectTime = SV_RebasedTime( cl->lastDisconnectTime, delta );
 		cl->lastSnapshotTime = SV_RebasedTime( cl->lastSnapshotTime, delta );
 		cl->downloadSendTime = SV_RebasedTime( cl->downloadSendTime, delta );
@@ -1298,15 +1299,16 @@ void SV_Init (void)
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_minPing,
 		"Lowest ping a player may join with, in ms; 0 for no limit\n"
-		"Players nearer than this are refused with \"Server is for high pings only\", so a server can be "
-		"kept for players far away. The ping is measured once, as the player connects, in whole server "
-		"frames (25 ms at sv_fps 40). Players on the local network are never refused." );
+		"Players nearer than this are dropped with \"Server is for high pings only\", so a server can be "
+		"kept for players far away. The ping is checked once, 5 seconds into the player's first time in "
+		"the game, over the whole path, a relay's or the gateway's included. Players on the local network "
+		"are never dropped." );
 	sv_maxPing = Cvar_Get ("sv_maxPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_maxPing,
 		"Highest ping a player may join with, in ms; 0 for no limit\n"
-		"The ping is measured once, as the player connects, in whole server frames (25 ms at sv_fps 40), "
-		"and never again during play. Players on the local network, or coming through a relay with a "
-		"local address, are never refused. A refused player's game tries again every 3 seconds." );
+		"Players farther than this are dropped with \"Server is for low pings only\". The ping is checked "
+		"once, 5 seconds into the player's first time in the game, over the whole path, a relay's or the "
+		"gateway's included, and never again. Players on the local network are never dropped." );
 	sv_floodProtect = Cvar_Get ("sv_floodProtect", "1", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_floodProtect,
 		"Whether players' chat and game commands are limited, against spam\n"

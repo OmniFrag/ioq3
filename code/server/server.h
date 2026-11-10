@@ -221,6 +221,11 @@ typedef struct client_s {
 	int				muteEndTime;		// Sys_Milliseconds when the mute ends; 0 for when the client leaves
 	int				lastPacketTime;		// svs.time when packet was last received
 	int				lastConnectTime;	// svs.time when connection started
+	// sv_minPing and sv_maxPing are checked once, SV_PING_CHECK_TIME into
+	// the connection's time in the game, after its last map change
+	// (SV_CheckPingLimits)
+	int				pingCheckTime;		// svs.time it's due, 0 until the player enters
+	qboolean		pingChecked;
 	int				lastDisconnectTime;	// svs.time it was last let go (SV_OldestFreeClient)
 	qboolean		loadingSaySkipped;	// said in the log that its load is skipping what's said (SV_AddServerCommand)
 	// after a server command overflow (SV_AddServerCommand), until the client
@@ -275,6 +280,10 @@ typedef struct client_s {
 // what each map change sets svs.time to (SV_RebaseTime): an hour, so that
 // the times kept from it before stay above 0
 #define SV_TIME_REBASED	( 60 * 60 * 1000 )
+
+// how long into a player's first time in the game its ping is held to
+// sv_minPing and sv_maxPing (SV_CheckPingLimits)
+#define SV_PING_CHECK_TIME	5000
 
 // a dedicated server's hibernation (SV_Hibernate)
 typedef enum {

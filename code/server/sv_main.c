@@ -1676,6 +1676,30 @@ static void SV_CalcPings( void ) {
 
 /*
 ==================
+SV_CheckPingLimits
+
+sv_minPing and sv_maxPing, on a player's ping a few seconds into its first
+time in the game: the whole path, a relay's or the gateway's included,
+which a stateless challenge can't time as the player connects (ENG-067).
+Players on the local network are never dropped for it, nor bots
+==================
+*/
+static void SV_CheckPingLimits( client_t *cl ) {
+	cl->pingChecked = qtrue;
+	if ( cl->netchan.remoteAddress.type == NA_BOT || Sys_IsLANAddress( cl->netchan.remoteAddress ) ) {
+		return;
+	}
+	if ( sv_minPing->integer > 0 && cl->ping < sv_minPing->integer ) {
+		Com_DPrintf( "Client %d dropped on a ping of %d, below sv_minPing\n", (int)( cl - svs.clients ), cl->ping );
+		SV_DropClient( cl, "Server is for high pings only" );
+	} else if ( sv_maxPing->integer > 0 && cl->ping > sv_maxPing->integer ) {
+		Com_DPrintf( "Client %d dropped on a ping of %d, above sv_maxPing\n", (int)( cl - svs.clients ), cl->ping );
+		SV_DropClient( cl, "Server is for low pings only" );
+	}
+}
+
+/*
+==================
 SV_CheckTimeouts
 
 If a packet has not been received from a client for timeout->integer 
@@ -1708,6 +1732,13 @@ static void SV_CheckTimeouts( void ) {
 			Com_DPrintf( "Going from CS_ZOMBIE to CS_FREE for client %d\n", i );
 			cl->state = CS_FREE;	// can now be reused
 			continue;
+		}
+		if ( cl->state == CS_ACTIVE && !cl->pingChecked && cl->pingCheckTime &&
+			svs.time - cl->pingCheckTime >= 0 ) {
+			SV_CheckPingLimits( cl );
+			if ( cl->state != CS_ACTIVE ) {
+				continue;
+			}
 		}
 		// a mute whose time has run out ends, and the client is told
 		if ( cl->muted && cl->state >= CS_CONNECTED && !SV_ClientMuted( cl ) ) {

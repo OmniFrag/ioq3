@@ -1276,6 +1276,12 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 
 	Com_DPrintf( "Going from CS_PRIMED to CS_ACTIVE for %s\n", client->name );
 	client->state = CS_ACTIVE;
+	// its ping is checked a few seconds into its time in the game, until
+	// it has been: a map change before then starts the wait again, so the
+	// frames sent across the load don't count
+	if ( !client->pingChecked ) {
+		client->pingCheckTime = svs.time + SV_PING_CHECK_TIME;
+	}
 	SV_ContentEnterWorld( client );
 
 	// resend all configstrings using the cs commands since these are
