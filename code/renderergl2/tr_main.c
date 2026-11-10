@@ -192,6 +192,21 @@ qboolean R_CalcTangentVectors(srfVert_t * dv[3])
 
 /*
 =================
+R_WeaponFovUnculled
+
+Whether the current entity is a view weapon drawn with a field of view of
+its own (RE_SetWeaponFov; RF_DEPTHHACK, but not the 3D crosshair, which
+keeps the view's), which the view's frustum doesn't bound: a
+narrower view, zoomed, would cull a gun its own projection shows
+=================
+*/
+static qboolean R_WeaponFovUnculled( void ) {
+	return tr.viewParms.weaponFovX && tr.currentEntityNum != REFENTITYNUM_WORLD &&
+		( tr.currentEntity->e.renderfx & ( RF_DEPTHHACK | RF_CROSSHAIR ) ) == RF_DEPTHHACK;
+}
+
+/*
+=================
 R_CullLocalBox
 
 Returns CULL_IN, CULL_CLIP, or CULL_OUT
@@ -257,6 +272,10 @@ int R_CullLocalBox(vec3_t localBounds[2]) {
 	vec3_t          transformed;
 	vec3_t          v;
 	vec3_t          worldBounds[2];
+
+	if ( R_WeaponFovUnculled() ) {
+		return CULL_CLIP;
+	}
 
 	if(r_nocull->integer)
 	{
@@ -331,6 +350,10 @@ int R_CullBox(vec3_t worldBounds[2]) {
 int R_CullLocalPointAndRadius( const vec3_t pt, float radius )
 {
 	vec3_t transformed;
+
+	if ( R_WeaponFovUnculled() ) {
+		return CULL_CLIP;
+	}
 
 	R_LocalPointToWorld( pt, transformed );
 

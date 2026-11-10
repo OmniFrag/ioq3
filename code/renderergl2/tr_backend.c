@@ -431,6 +431,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	int				pshadowed, oldPshadowed;
 	int             cubemapIndex, oldCubemapIndex;
 	qboolean		depthRange, oldDepthRange, isCrosshair, wasCrosshair;
+	// the view weapon's own projection: in stereo, or with its own field of
+	// view (RE_SetWeaponFov)
+	qboolean		ownProjection = backEnd.viewParms.stereoFrame != STEREO_CENTER || backEnd.viewParms.weaponFovX;
 	int				i;
 	drawSurf_t		*drawSurf;
 	int				oldSort;
@@ -536,13 +539,13 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 			//
 			// change depthrange. Also change projection matrix so first person weapon does not look like coming
-			// out of the screen.
+			// out of the screen, and draw it with its own field of view (RE_SetWeaponFov).
 			//
 			if (oldDepthRange != depthRange || wasCrosshair != isCrosshair)
 			{
 				if (depthRange)
 				{
-					if(backEnd.viewParms.stereoFrame != STEREO_CENTER)
+					if( ownProjection )
 					{
 						if(isCrosshair)
 						{
@@ -556,6 +559,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 						{
 							viewParms_t temp = backEnd.viewParms;
 
+							if ( temp.weaponFovX ) {
+								temp.fovX = temp.weaponFovX;
+								temp.fovY = temp.weaponFovY;
+							}
 							R_SetupProjection(&temp, r_znear->value, 0, qfalse);
 
 							GL_SetProjectionMatrix( temp.projectionMatrix );
@@ -567,7 +574,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 				}
 				else
 				{
-					if(!wasCrosshair && backEnd.viewParms.stereoFrame != STEREO_CENTER)
+					if(!wasCrosshair && ownProjection)
 					{
 						GL_SetProjectionMatrix( backEnd.viewParms.projectionMatrix );
 					}
@@ -599,6 +606,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	// go back to the world modelview matrix
 
 	GL_SetModelviewMatrix( backEnd.viewParms.world.modelMatrix );
+
+	// and the view's own projection, after the view weapon's
+	if ( oldDepthRange && !wasCrosshair && ownProjection ) {
+		GL_SetProjectionMatrix( backEnd.viewParms.projectionMatrix );
+	}
 
 	qglDepthRange (0, 1);
 }

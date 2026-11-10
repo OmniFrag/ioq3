@@ -506,6 +506,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	int				entityNum, oldEntityNum;
 	int				dlighted, oldDlighted;
 	qboolean		depthRange, oldDepthRange, isCrosshair, wasCrosshair;
+	// the view weapon's own projection: in stereo, or with its own field of
+	// view (RE_SetWeaponFov)
+	qboolean		ownProjection = backEnd.viewParms.stereoFrame != STEREO_CENTER || backEnd.viewParms.weaponFovX;
 	int				i;
 	drawSurf_t		*drawSurf;
 	int				oldSort;
@@ -600,13 +603,13 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 			//
 			// change depthrange. Also change projection matrix so first person weapon does not look like coming
-			// out of the screen.
+			// out of the screen, and draw it with its own field of view (RE_SetWeaponFov).
 			//
 			if (oldDepthRange != depthRange || wasCrosshair != isCrosshair)
 			{
 				if (depthRange)
 				{
-					if(backEnd.viewParms.stereoFrame != STEREO_CENTER)
+					if( ownProjection )
 					{
 						if(isCrosshair)
 						{
@@ -622,6 +625,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 						{
 							viewParms_t temp = backEnd.viewParms;
 
+							if ( temp.weaponFovX ) {
+								temp.fovX = temp.weaponFovX;
+								temp.fovY = temp.weaponFovY;
+							}
 							R_SetupProjection(&temp, r_znear->value, qfalse);
 
 							qglMatrixMode(GL_PROJECTION);
@@ -635,7 +642,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 				}
 				else
 				{
-					if(!wasCrosshair && backEnd.viewParms.stereoFrame != STEREO_CENTER)
+					if(!wasCrosshair && ownProjection)
 					{
 						qglMatrixMode(GL_PROJECTION);
 						qglLoadMatrixf(backEnd.viewParms.projectionMatrix);
@@ -665,8 +672,14 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	// go back to the world modelview matrix
 	qglLoadMatrixf( backEnd.viewParms.world.modelMatrix );
-	if ( depthRange ) {
+	if ( oldDepthRange ) {
 		qglDepthRange (0, 1);
+		// and the view's own projection, after the view weapon's
+		if ( !wasCrosshair && ownProjection ) {
+			qglMatrixMode(GL_PROJECTION);
+			qglLoadMatrixf(backEnd.viewParms.projectionMatrix);
+			qglMatrixMode(GL_MODELVIEW);
+		}
 	}
 
 	if (r_drawSun->integer) {

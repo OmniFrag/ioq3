@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_types.h"
 
-#define	REF_API_VERSION		23
+#define	REF_API_VERSION		24
 
 // ui_speeds: the back end's 2D commands (each renderer's RC_IS_2D) since
 // they were last asked for, timed in runs, each from its first
@@ -261,6 +261,11 @@ typedef struct {
 	// pixels, y down, as a wobble bends it; NULL for none. Only the glass's
 	// own shape changes, not what's drawn over it
 	void	(*SetGlassDeform2D)( const float *deform );
+
+	// The field of view, across and up and down, to draw the next scene's
+	// view weapon with (its RF_DEPTHHACK entities, but the 3D crosshair),
+	// so it keeps its size whatever the view's; out of range for none
+	void	(*SetWeaponFov)( float fovX, float fovY );
 } refexport_t;
 
 //

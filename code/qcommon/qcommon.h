@@ -512,6 +512,13 @@ typedef struct {
 // dropped while no log runs
 #define	COM_TRAP_TOUCHLOG	815
 
+// trap_R_SetWeaponFov( float fovX, float fovY ) in cgame: the field of view,
+// across and up and down, the next scene's view weapon is drawn with (its
+// RF_DEPTHHACK entities but the 3D crosshair), so it keeps its size whatever
+// the view's field of view and the window's shape. Out of range (0 or less,
+// 180 or more) is none, the view's own; it holds for one scene
+#define	COM_TRAP_R_SETWEAPONFOV	816
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL

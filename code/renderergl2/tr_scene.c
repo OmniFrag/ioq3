@@ -454,6 +454,25 @@ void RE_EndScene(void)
 
 /*
 @@@@@@@@@@@@@@@@@@@@@
+RE_SetWeaponFov
+
+The field of view to draw the next scene's view weapon with (the entities
+with RF_DEPTHHACK, but the 3D crosshair), across and up and down, as a game
+keeps its gun the same size whatever the view's field of view and the
+window's shape. Out of range (0 or less, or 180 or more) is none: the view's
+@@@@@@@@@@@@@@@@@@@@@
+*/
+void RE_SetWeaponFov( float fovX, float fovY ) {
+	if ( fovX > 0 && fovX < 180 && fovY > 0 && fovY < 180 ) {
+		tr.weaponFovX = fovX;
+		tr.weaponFovY = fovY;
+	} else {
+		tr.weaponFovX = tr.weaponFovY = 0;
+	}
+}
+
+/*
+@@@@@@@@@@@@@@@@@@@@@
 RE_RenderScene
 
 Draw a 3D view into a part of the window, then return
@@ -466,6 +485,11 @@ to handle mirrors,
 void RE_RenderScene( const refdef_t *fd ) {
 	viewParms_t		parms;
 	int				startTime;
+	// the view weapon's own field of view (RE_SetWeaponFov), for this scene
+	// alone, even one that draws nothing
+	float			weaponFovX = tr.weaponFovX, weaponFovY = tr.weaponFovY;
+
+	tr.weaponFovX = tr.weaponFovY = 0;
 
 	if ( !tr.registered ) {
 		return;
@@ -569,6 +593,13 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	parms.fovX = tr.refdef.fov_x;
 	parms.fovY = tr.refdef.fov_y;
+
+	// the view weapon's own field of view, only where it differs from the
+	// view's, which draws it as before
+	if ( weaponFovX != parms.fovX || weaponFovY != parms.fovY ) {
+		parms.weaponFovX = weaponFovX;
+		parms.weaponFovY = weaponFovY;
+	}
 	
 	parms.stereoFrame = tr.refdef.stereoFrame;
 

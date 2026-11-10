@@ -880,6 +880,8 @@ typedef struct {
 	int         targetFboLayer;
 	int         targetFboCubemapIndex;
 	float		fovX, fovY;
+	// the view weapon's own field of view (RE_SetWeaponFov), 0 for the view's
+	float		weaponFovX, weaponFovY;
 	float		projectionMatrix[16];
 	cplane_t	frustum[5];
 	vec3_t		visBounds[2];
@@ -1757,6 +1759,9 @@ typedef struct {
 	float					sawToothTable[FUNCTABLE_SIZE];
 	float					inverseSawToothTable[FUNCTABLE_SIZE];
 	float					fogTable[FOG_TABLE_SIZE];
+
+	// the field of view RE_SetWeaponFov asked for the next scene, 0 for none
+	float					weaponFovX, weaponFovY;
 } trGlobals_t;
 
 extern backEndState_t	backEnd;
@@ -2382,6 +2387,7 @@ void RE_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *vert
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_BeginScene( const refdef_t *fd );
+void RE_SetWeaponFov( float fovX, float fovY );
 void RE_RenderScene( const refdef_t *fd );
 void RE_EndScene( void );
 

@@ -45,6 +45,21 @@ surfaceType_t	entitySurface = SF_ENTITY;
 
 /*
 =================
+R_WeaponFovUnculled
+
+Whether the current entity is a view weapon drawn with a field of view of
+its own (RE_SetWeaponFov; RF_DEPTHHACK, but not the 3D crosshair, which
+keeps the view's), which the view's frustum doesn't bound: a
+narrower view, zoomed, would cull a gun its own projection shows
+=================
+*/
+static qboolean R_WeaponFovUnculled( void ) {
+	return tr.viewParms.weaponFovX && tr.currentEntityNum != REFENTITYNUM_WORLD &&
+		( tr.currentEntity->e.renderfx & ( RF_DEPTHHACK | RF_CROSSHAIR ) ) == RF_DEPTHHACK;
+}
+
+/*
+=================
 R_CullLocalBox
 
 Returns CULL_IN, CULL_CLIP, or CULL_OUT
@@ -58,6 +73,10 @@ int R_CullLocalBox (vec3_t bounds[2]) {
 	cplane_t	*frust;
 	int			anyBack;
 	int			front, back;
+
+	if ( R_WeaponFovUnculled() ) {
+		return CULL_CLIP;
+	}
 
 	if ( r_nocull->integer ) {
 		return CULL_CLIP;
@@ -112,6 +131,10 @@ int R_CullLocalBox (vec3_t bounds[2]) {
 int R_CullLocalPointAndRadius( vec3_t pt, float radius )
 {
 	vec3_t transformed;
+
+	if ( R_WeaponFovUnculled() ) {
+		return CULL_CLIP;
+	}
 
 	R_LocalPointToWorld( pt, transformed );
 

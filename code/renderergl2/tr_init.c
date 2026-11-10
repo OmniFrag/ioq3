@@ -1947,6 +1947,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.CreateGlassFilter2D = R_CreateGlassFilter2D;
 	re.SetGlassGlow2D = R_SetGlassGlow2D;
 	re.SetGlassDeform2D = R_SetGlassDeform2D;
+	re.SetWeaponFov = RE_SetWeaponFov;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
 
