@@ -435,6 +435,9 @@ struct leakyBucket_s {
 	int				refused;
 
 	long					hash;
+	// how often the address has connected and then gone silent: each time
+	// fills its bucket for that many times its burst (SVC_RateDropAddress)
+	int						toxic;
 
 	leakyBucket_t *prev, *next;
 };
@@ -444,6 +447,8 @@ extern rateLimit_t outboundLeakyBucket;
 qboolean SVC_RateLimit( rateLimit_t *bucket, int burst, int period );
 qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period );
 void SVC_RateRestoreBurstAddress( netadr_t from, int burst, int period );
+void SVC_RateDropAddress( netadr_t from, int burst, int period );
+void SVC_RateRestoreToxicAddress( netadr_t from, int burst, int period );
 
 void SV_FinalMessage (char *message);
 void QDECL SV_SendServerCommand( client_t *cl, const char *fmt, ...) Q_PRINTF_FUNC(2, 3);

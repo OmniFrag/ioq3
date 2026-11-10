@@ -657,6 +657,7 @@ CONNECTIONLESS COMMANDS
 typedef struct {
 	leakyBucket_t	buckets[ MAX_BUCKETS ];
 	leakyBucket_t	*hashes[ MAX_HASHES ];
+	int				start;		// where the next search for a free bucket starts
 } bucketTable_t;
 
 // the queries' and connects' buckets, and rcon's own, so a flood of
@@ -694,55 +695,97 @@ static long SVC_HashForAddress( netadr_t address ) {
 
 /*
 ================
-SVC_BucketForAddress
+SVC_Unlink, SVC_LinkHead
 
-Find or allocate a bucket for an address
+A bucket out of its hash chain, and into its chain's front
 ================
 */
+static void SVC_Unlink( bucketTable_t *table, leakyBucket_t *bucket ) {
+	if ( bucket->prev != NULL ) {
+		bucket->prev->next = bucket->next;
+	} else {
+		table->hashes[ bucket->hash ] = bucket->next;
+	}
+	if ( bucket->next != NULL ) {
+		bucket->next->prev = bucket->prev;
+	}
+}
+
+static void SVC_LinkHead( bucketTable_t *table, leakyBucket_t *bucket ) {
+	bucket->next = table->hashes[ bucket->hash ];
+	if ( bucket->next != NULL ) {
+		bucket->next->prev = bucket;
+	}
+	bucket->prev = NULL;
+	table->hashes[ bucket->hash ] = bucket;
+}
+
+/*
+================
+SVC_FindBucket, SVC_BucketForAddress
+
+Find a bucket for an IP address; find or allocate one for any address
+================
+*/
+static leakyBucket_t *SVC_FindBucket( bucketTable_t *table, netadr_t address, long hash ) {
+	leakyBucket_t	*bucket;
+	int				n;
+
+	for ( bucket = table->hashes[ hash ], n = 0; bucket; bucket = bucket->next, n++ ) {
+		if ( bucket->type == address.type && !memcmp( bucket->ipv._6, address.type == NA_IP ? address.ip : address.ip6,
+				address.type == NA_IP ? 4 : 16 ) ) {
+			// one found deep in its chain moves to the front, as a busy
+			// address is found again soon
+			if ( n > 8 ) {
+				SVC_Unlink( table, bucket );
+				SVC_LinkHead( table, bucket );
+			}
+			return bucket;
+		}
+	}
+	return NULL;
+}
+
 static leakyBucket_t *SVC_BucketForAddress( bucketTable_t *table, netadr_t address, int burst, int period ) {
+	// an address that isn't an IP one, the loopback's, can't be spoofed
+	// from outside, and had a new bucket each time, as none is found by its
+	// address: it gets an empty one each time still, so it stays unlimited
+	// without using up the table, and its rcon shares no count with its
+	// queries
+	static leakyBucket_t	dummy;
 	leakyBucket_t	*bucket = NULL;
 	int						i;
-	long					hash = SVC_HashForAddress( address );
+	long					hash;
 	int						now = Sys_Milliseconds();
 
-	for ( bucket = table->hashes[ hash ]; bucket; bucket = bucket->next ) {
-		switch ( bucket->type ) {
-			case NA_IP:
-				if ( memcmp( bucket->ipv._4, address.ip, 4 ) == 0 ) {
-					return bucket;
-				}
-				break;
-
-			case NA_IP6:
-				if ( memcmp( bucket->ipv._6, address.ip6, 16 ) == 0 ) {
-					return bucket;
-				}
-				break;
-
-			default:
-				break;
-		}
+	if ( address.type != NA_IP && address.type != NA_IP6 ) {
+		Com_Memset( &dummy, 0, sizeof( dummy ) );
+		return &dummy;
+	}
+	hash = SVC_HashForAddress( address );
+	bucket = SVC_FindBucket( table, address, hash );
+	if ( bucket != NULL ) {
+		return bucket;
 	}
 
 	for ( i = 0; i < MAX_BUCKETS; i++ ) {
 		int interval;
 
-		bucket = &table->buckets[ i ];
+		// round the table from where the last search stopped, so each
+		// isn't a walk from the start past every bucket in use
+		bucket = &table->buckets[ table->start ];
+		table->start = ( table->start + 1 ) & ( MAX_BUCKETS - 1 );
 		interval = now - bucket->rate.lastTime;
 
-		// Reclaim expired buckets
-		if ( bucket->rate.lastTime > 0 && ( interval > ( burst * period ) ||
-					interval < 0 ) ) {
-			if ( bucket->prev != NULL ) {
-				bucket->prev->next = bucket->next;
-			} else {
-				table->hashes[ bucket->hash ] = bucket->next;
-			}
-			
-			if ( bucket->next != NULL ) {
-				bucket->next->prev = bucket->prev;
-			}
-
+		// Reclaim expired buckets: once its own count has leaked away, so
+		// an address that sent one packet holds its bucket a period, not
+		// the whole burst's (ENG-069): spoofed addresses at 1.7k packets a
+		// second filled every bucket for 10 s. One made toxic holds it for
+		// its fill. And the old limit's, at most
+		// (divided, as SVC_RateLimit does, so a toxic burst times a long
+		// period can't overflow)
+		if ( bucket->type != NA_BAD && ( interval < 0 || interval / period >= MAX( bucket->rate.burst, 1 ) ) ) {
+			SVC_Unlink( table, bucket );
 			Com_Memset( bucket, 0, sizeof( leakyBucket_t ) );
 		}
 
@@ -754,19 +797,10 @@ static leakyBucket_t *SVC_BucketForAddress( bucketTable_t *table, netadr_t addre
 				default: break;
 			}
 
+			// the rest is zero, as a bucket never used or reclaimed is
 			bucket->rate.lastTime = now;
-			bucket->rate.burst = 0;
 			bucket->hash = hash;
-
-			// Add to the head of the relevant hash chain
-			bucket->next = table->hashes[ hash ];
-			if ( table->hashes[ hash ] != NULL ) {
-				table->hashes[ hash ]->prev = bucket;
-			}
-
-			bucket->prev = NULL;
-			table->hashes[ hash ] = bucket;
-
+			SVC_LinkHead( table, bucket );
 			return bucket;
 		}
 	}
@@ -830,6 +864,48 @@ void SVC_RateRestoreBurstAddress( netadr_t from, int burst, int period ) {
 
 	if ( bucket != NULL && bucket->rate.burst > 0 ) {
 		bucket->rate.burst--;
+	}
+}
+
+/*
+================
+SVC_RateDropAddress
+
+An address that connected and then sent nothing (SV_CheckTimeouts): each
+time, its bucket is filled for one more burst, so it waits that many
+periods more before the server answers it again (ENG-069, after
+Quake3e's progressive multiplier)
+================
+*/
+void SVC_RateDropAddress( netadr_t from, int burst, int period ) {
+	leakyBucket_t *bucket = SVC_BucketForAddress( &queryBuckets, from, burst, period );
+
+	if ( bucket != NULL && bucket->type != NA_BAD ) {
+		// at most 30 bursts, 5 minutes: Quake3e's 10,000 would shut out
+		// everyone behind a shared address (a carrier's NAT, a LAN party)
+		// for a day for one broken client
+		if ( bucket->toxic < 30 ) {
+			bucket->toxic++;
+		}
+		bucket->rate.burst = burst * bucket->toxic;
+		bucket->rate.lastTime = Sys_Milliseconds();
+	}
+}
+
+/*
+================
+SVC_RateRestoreToxicAddress
+
+A connect that came through: the address is one step less toxic
+================
+*/
+void SVC_RateRestoreToxicAddress( netadr_t from, int burst, int period ) {
+	// only an address that has a bucket can be toxic: none is made for it
+	leakyBucket_t *bucket = ( from.type == NA_IP || from.type == NA_IP6 ) ?
+		SVC_FindBucket( &queryBuckets, from, SVC_HashForAddress( from ) ) : NULL;
+
+	if ( bucket != NULL && bucket->toxic > 0 ) {
+		bucket->toxic--;
 	}
 }
 
@@ -1653,6 +1729,8 @@ static void SV_CheckTimeouts( void ) {
 			cl->netchan.remoteAddress.type != NA_LOOPBACK &&
 			svs.time - cl->lastConnectTime > SV_SILENT_CONNECT_TIME ) {
 			Com_DPrintf( "Freeing client %d, which sent nothing after connecting\n", i );
+			// and its address waits longer each time it does so
+			SVC_RateDropAddress( cl->netchan.remoteAddress, 10, 1000 );
 			SV_DropClient( cl, NULL );
 			cl->state = CS_FREE;	// don't bother with zombie state
 			continue;

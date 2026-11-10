@@ -1272,6 +1272,12 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 		return;
 	}
 
+	// in the game, its address is a real player's: one step less toxic
+	// than its silent connects made it (ENG-069)
+	if ( client->netchan.remoteAddress.type != NA_BOT ) {
+		SVC_RateRestoreToxicAddress( client->netchan.remoteAddress, 10, 1000 );
+	}
+
 	// call the game begin function
 	VM_Call( gvm, GAME_CLIENT_BEGIN, client - svs.clients );
 	Hooks_ClientBegin( clientNum );
