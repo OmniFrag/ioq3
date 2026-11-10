@@ -906,10 +906,18 @@ const agree = async (agreement) => {
 };
 
 // Files the player brings from their own copy of the game, from its CD or
-// the folder it's installed in, chosen as files or as that whole folder and
-// matched by name, one in a folder of the file's game directory first (a
-// whole install has a pak0.pk3 in each). They're kept in the browser (IndexedDB) for the next
-// visit; one it won't keep is asked for again then.
+// the folder it's installed in, chosen as files or as that whole folder, in
+// as many rounds as they like. Each is checked as it's chosen, before it's
+// taken (pak_check.js, loaded only then): a pak by the checksum it must
+// have, the config's for it or the game's own, whatever the chosen file's
+// name, and one with no checksum known by its name, one in a folder of the
+// file's game directory first (a whole install has a pak0.pk3 in each).
+// What each is goes on #ask's rows as data (data-verdict, data-pak,
+// data-file), one for each file asked for and one for each chosen file
+// that's none of them, and in a console line. They're kept in the browser
+// (IndexedDB) under the names asked for, for the next visit, and checked
+// again then; one it won't keep, or that no longer checks, is asked for
+// again.
 const ownDatabase = () => new Promise((resolve) => {
     try {
         const request = indexedDB.open(`${CLIENT_NAME}-own`, 1);
@@ -932,16 +940,61 @@ const ownRequest = (db, mode, use) => new Promise((resolve) => {
 });
 const fileName = (src) => src.match(/[^/]+$/)[0];
 const bring = async (own) => {
-    const db = await ownDatabase();
-    const have = new Map();
-    const kept = await Promise.all(own.map((file) => ownRequest(db, 'readonly', (files) => files.get(file.src.toLowerCase()))));
-    own.forEach((file, i) => { if (kept[i] instanceof Blob) have.set(file.src, kept[i]); });
-    const missing = () => own.filter((file) => !have.has(file.src));
+    const [paks, db] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')), ownDatabase()]);
+    // the files asked for that the page has, by entry, and what each row
+    // says: an entry's, its file's verdict and name; a chosen file's that
+    // is none of them, the same
+    const have = new Map(), said = new Map(), others = [];
+    // a chosen file, or a kept one, checked: { name, folder, blob }, and a
+    // pak's checksum or damage
+    const checked = async (blob, name, folder) =>
+        ({ name, folder, blob, ...(/\.pk3$/i.test(name) ? await paks.checkPak(blob) : {}) });
+    const fills = (verdict) => verdict === 'good' || verdict === 'unchecked';
+    // a file's verdict, in a console line and on its entry's row, or a row
+    // of its own
+    const say = (how, { name, checksum, damaged }, verdict, entry) => {
+        console.log(`${how} ${name}: ${verdict}${entry ? ` for ${entry.src}` : ''}`
+            + `${checksum !== undefined ? `, checksum ${checksum}` : ''}${damaged ? `, ${damaged}` : ''}`);
+        if (entry) said.set(entry, { verdict, name });
+        else others.push({ verdict, name });
+    };
+    // what was kept checks again, each against its own entry alone
+    const kept = await Promise.all(own.map((file) => ownRequest(db, 'readonly', (store) => store.get(file.src.toLowerCase()))));
+    await Promise.all(own.map(async (file, i) => {
+        if (!(kept[i] instanceof Blob)) return;
+        const keptFile = await checked(kept[i], kept[i].name ?? fileName(file.src));
+        const [{ verdict }] = paks.judge([file], new Set(), [keptFile]);
+        if (fills(verdict)) have.set(file, kept[i]);
+        say('Kept', keptFile, verdict, file);
+    }));
+    // a round's chosen files, kept under the names they fill
+    const take = (files) => paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
+        if (fills(verdict)) {
+            have.set(entry, files[i].blob);
+            ownRequest(db, 'readwrite', (store) => store.put(files[i].blob, entry.src.toLowerCase()));
+        }
+        say('Chose', files[i], verdict, entry);
+    });
+    const missing = () => own.filter((file) => !have.has(file));
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
         paragraph(box, `This server's game data comes from your own copy of the game: from its CD, or the ${folders} folder where it's installed. Choose the files, or that folder.`);
         const left = paragraph(box, '');
-        const show = () => { left.textContent = `Still needed: ${missing().map((file) => fileName(file.src)).join(', ')}.`; };
+        const rows = box.appendChild(Object.assign(document.createElement('ul'), { hidden: true }));
+        const row = ({ verdict, name }, pak) => {
+            const item = document.createElement('li');
+            item.dataset.verdict = verdict;
+            if (pak) item.dataset.pak = pak;
+            if (name) item.dataset.file = name;
+            return item;
+        };
+        const show = () => {
+            left.textContent = `Still needed: ${missing().map((file) => fileName(file.src)).join(', ')}.`;
+            rows.replaceChildren(...own.map((file) => row(said.get(file) ?? { verdict: 'missing' }, file.src)),
+                ...others.map((other) => row(other)));
+        };
+        // one round at a time, in the order chosen; none once all are in
+        let rounds = Promise.resolve();
         const chooser = (label, folder) => {
             const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true });
             if (folder) input.webkitdirectory = true;
@@ -949,31 +1002,25 @@ const bring = async (own) => {
             const button = box.appendChild(Object.assign(document.createElement('label'), { textContent: label }));
             button.appendChild(input);
             input.addEventListener('change', () => {
-                const named = (f, chosen) => fileName(f.src).toLowerCase() === chosen.name.toLowerCase();
+                const chosenFiles = [...input.files];
+                // so the same files can be chosen again
+                input.value = '';
                 // the folder a chosen file is in, when a folder was chosen
                 const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
-                const take = (file, chosen) => {
-                    have.set(file.src, chosen);
-                    ownRequest(db, 'readwrite', (files) => files.put(chosen, file.src.toLowerCase()));
-                };
-                const chosenFiles = [...input.files];
-                for (const chosen of chosenFiles) {
-                    const file = missing().find((f) => named(f, chosen) && folderOf(chosen) === f.src.split('/')[0].toLowerCase());
-                    if (file) take(file, chosen);
-                }
-                for (const chosen of chosenFiles) {
-                    const file = missing().find((f) => named(f, chosen));
-                    if (file && ![...have.values()].includes(chosen)) take(file, chosen);
-                }
-                if (missing().length) show();
-                else done();
+                rounds = rounds.then(async () => {
+                    if (!missing().length) return;
+                    take(await Promise.all(chosenFiles.map((chosen) => checked(chosen, chosen.name, folderOf(chosen)))));
+                    if (missing().length) show();
+                    else done();
+                // a round that fails, unexpectedly, leaves the next to run
+                }).catch((error) => console.error(`Couldn't check the chosen files: ${error}`));
             });
         };
         chooser('Choose files', false);
         chooser('Choose a folder', true);
         show();
     });
-    return own.map((file) => ({ ...file, blob: have.get(file.src) }));
+    return own.map((file) => ({ ...file, blob: have.get(file) }));
 };
 
 // Download the files the config lists for the game, all at once, showing
