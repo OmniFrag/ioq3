@@ -528,7 +528,7 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 
 		offset = ( ( svs.nextSnapshotEntities / svs.numSnapshotEntities ) - 2 ) * svs.numSnapshotEntities;
 
-		for ( i = 0; i < sv_maxclients->integer; i++ ) {
+		for ( i = 0; i < svs.maxclients; i++ ) {
 			oldframe = svs.clients[i].frames;
 
 			for ( j = 0; j < PACKET_BACKUP; j++, oldframe++ ) {
@@ -698,7 +698,7 @@ void SV_SendClientMessages(void)
 	client_t	*c;
 
 	// send a message to each connected client
-	for(i=0; i < sv_maxclients->integer; i++)
+	for(i=0; i < svs.maxclients; i++)
 	{
 		c = &svs.clients[i];
 		

@@ -328,7 +328,7 @@ void QDECL SV_SendServerCommand(client_t *cl, const char *fmt, ...) {
 	}
 
 	// send the data to all relevant clients
-	for (j = 0, client = svs.clients; j < sv_maxclients->integer ; j++, client++) {
+	for (j = 0, client = svs.clients; j < svs.maxclients ; j++, client++) {
 		SV_AddServerCommand( client, (char *)message );
 	}
 }
@@ -379,6 +379,33 @@ qboolean SV_ExtListed( void ) {
 		}
 	}
 	return qfalse;
+}
+
+/*
+================
+SV_ServerInfo
+
+The serverinfo string clients and browsers are sent, with the slots the
+server has as sv_maxclients
+================
+*/
+const char *SV_ServerInfo( void ) {
+	static char	info[MAX_INFO_STRING];
+	const char	*cvars = Cvar_InfoString( CVAR_SERVERINFO );
+
+	// the slots there are, not a latched change a module's register made
+	// count early (ENG-083)
+	if ( svs.maxclients <= 0 || svs.maxclients == sv_maxclients->integer ) {
+		return cvars;
+	}
+	Q_strncpyz( info, cvars, sizeof( info ) );
+	Info_SetValueForKey( info, "sv_maxclients", va( "%i", svs.maxclients ) );
+	// a full string drops the key rather than take a longer value: the
+	// cvar's then, as clients need one
+	if ( !Info_ValueForKey( info, "sv_maxclients" )[0] ) {
+		return cvars;
+	}
+	return info;
 }
 
 /*
@@ -849,7 +876,7 @@ static void SVC_Status( netadr_t from ) {
 	if(strlen(Cmd_Argv(1)) > 128)
 		return;
 
-	strcpy( infostring, Cvar_InfoString( CVAR_SERVERINFO ) );
+	strcpy( infostring, SV_ServerInfo() );
 
 	// echo back the parameter to status. so master servers can use it as a challenge
 	// to prevent timed spoofed reply packets that add ghost servers
@@ -866,7 +893,7 @@ static void SVC_Status( netadr_t from ) {
 	room = ( sv_statusOnePacket->integer ? MAX_PACKETLEN : MAX_MSGLEN - 1 ) - 4
 		- (int)strlen( "statusResponse\n" ) - (int)strlen( infostring ) - 1;
 
-	for (i=0 ; i < sv_maxclients->integer ; i++) {
+	for (i=0 ; i < svs.maxclients ; i++) {
 		cl = &svs.clients[i];
 		if ( cl->state >= CS_CONNECTED ) {
 			ps = SV_GameClientNum( i );
@@ -928,7 +955,7 @@ void SVC_Info( netadr_t from ) {
 
 	// don't count privateclients
 	count = humans = 0;
-	for ( i = sv_privateClients->integer ; i < sv_maxclients->integer ; i++ ) {
+	for ( i = sv_privateClients->integer ; i < svs.maxclients ; i++ ) {
 		if ( svs.clients[i].state >= CS_CONNECTED ) {
 			count++;
 			if (svs.clients[i].netchan.remoteAddress.type != NA_BOT) {
@@ -957,7 +984,7 @@ void SVC_Info( netadr_t from ) {
 	Info_SetValueForKey( infostring, "clients", va("%i", count) );
 	Info_SetValueForKey(infostring, "g_humanplayers", va("%i", humans));
 	Info_SetValueForKey( infostring, "sv_maxclients", 
-		va("%i", sv_maxclients->integer - sv_privateClients->integer ) );
+		va("%i", svs.maxclients - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring, "gametype", va("%i", sv_gametype->integer ) );
 	Info_SetValueForKey( infostring, "pure", va("%i", SV_PureActive() ) );
 	Info_SetValueForKey(infostring, "g_needpass", va("%d", Cvar_VariableIntegerValue("g_needpass")));
@@ -1445,7 +1472,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 	// address, so they are differentiated by the qport variable.
 	// A client whose address, port and qport all match gets the
 	// packet
-	for (i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
+	for (i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
 		if ( cl->state != CS_FREE && cl->netchan.qport == qport &&
 			NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
 			// make sure it is a valid, in sequence packet
@@ -1462,7 +1489,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 	// qport, and move the one whose packet checks out to the new
 	// port, so a packet that doesn't can't redirect a client's
 	// messages
-	for (i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
+	for (i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
 		if ( cl->state == CS_FREE || cl->netchan.qport != qport ||
 			!NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
 			continue;
@@ -1500,7 +1527,7 @@ static void SV_CalcPings( void ) {
 	int			delta;
 	playerState_t	*ps;
 
-	for (i=0 ; i < sv_maxclients->integer ; i++) {
+	for (i=0 ; i < svs.maxclients ; i++) {
 		cl = &svs.clients[i];
 		if ( cl->state != CS_ACTIVE ) {
 			cl->ping = 999;
@@ -1564,7 +1591,7 @@ static void SV_CheckTimeouts( void ) {
 	droppoint = svs.time - 1000 * sv_timeout->integer;
 	zombiepoint = svs.time - 1000 * sv_zombietime->integer;
 
-	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
+	for (i=0,cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
 		// message times may be wrong across a changelevel
 		if (cl->lastPacketTime > svs.time) {
 			cl->lastPacketTime = svs.time;
@@ -1673,7 +1700,7 @@ int SV_HumanCount( void ) {
 	if ( !svs.clients ) {
 		return 0;	// no map yet: --check's
 	}
-	for ( i = 0; i < sv_maxclients->integer; i++ ) {
+	for ( i = 0; i < svs.maxclients; i++ ) {
 		count += svs.clients[i].state >= CS_CONNECTED && svs.clients[i].netchan.remoteAddress.type != NA_BOT;
 	}
 	return count;
@@ -1689,7 +1716,7 @@ and while no map runs
 ==================
 */
 static client_t *SV_ExtClient( int clientNum ) {
-	if ( !svs.clients || clientNum < 0 || clientNum >= sv_maxclients->integer ||
+	if ( !svs.clients || clientNum < 0 || clientNum >= svs.maxclients ||
 		svs.clients[clientNum].state < CS_CONNECTED ) {
 		return NULL;
 	}
@@ -1857,7 +1884,7 @@ static void SV_FrameRateChanged( void ) {
 			fps, frameMsec, floor( 10000.0 / frameMsec ) / 10, below, above );
 	}
 
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if ( cl->state >= CS_CONNECTED ) {
 			SV_UpdateSnapshotRate( cl );
 		}
@@ -2036,7 +2063,7 @@ void SV_Frame( int msec ) {
 
 	// update infostrings if anything has been changed
 	if ( cvar_modifiedFlags & CVAR_SERVERINFO ) {
-		SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO ) );
+		SV_SetConfigstring( CS_SERVERINFO, SV_ServerInfo() );
 		cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 	}
 	if ( cvar_modifiedFlags & CVAR_SYSTEMINFO ) {

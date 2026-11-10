@@ -318,8 +318,12 @@ typedef struct {
 
 	int			snapFlagServerBit;			// ^= SNAPFLAG_SERVERCOUNT every SV_SpawnServer()
 
-	client_t	*clients;					// [sv_maxclients->integer];
-	int			numSnapshotEntities;		// sv_maxclients->integer*PACKET_BACKUP*MAX_SNAPSHOT_ENTITIES
+	client_t	*clients;					// [maxclients]
+	// clients' slots, sv_maxclients as they were made: the server reads this,
+	// never the cvar, which a module's register can change mid-map by
+	// applying a latched value (ENG-083)
+	int			maxclients;
+	int			numSnapshotEntities;		// maxclients*PACKET_BACKUP*MAX_SNAPSHOT_ENTITIES
 	int			nextSnapshotEntities;		// next snapshotEntities to use
 	entityState_t	*snapshotEntities;		// [numSnapshotEntities]
 	int			nextHeartbeatTime;
@@ -367,7 +371,7 @@ extern	cvar_t	*sv_maxclients;
 #define MAX_DEBUGPOLYGON_POINTS		128
 
 // a client slot, for syscall handlers (qcommon.h)
-#define VMV_CLIENT( n )				VM_ArgInt( args, n, 0, sv_maxclients->integer - 1 )
+#define VMV_CLIENT( n )				VM_ArgInt( args, n, 0, svs.maxclients - 1 )
 
 extern	cvar_t	*sv_privateClients;
 extern	cvar_t	*sv_hostname;
@@ -451,6 +455,7 @@ void SV_MasterShutdown (void);
 // sv_pure, as this map plays it: off where its pure list doesn't fit the
 // systeminfo string (sv.pureOff)
 qboolean SV_PureActive( void );
+const char *SV_ServerInfo( void );
 // the systeminfo string clients are sent, deciding first whether this map
 // plays as not pure, sv_pure 0 in it then (sv.pureOff)
 const char *SV_SystemInfo( void );

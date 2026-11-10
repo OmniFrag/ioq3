@@ -130,7 +130,7 @@ void SV_SetConfigstring (int index, const char *val) {
 	if ( sv.state == SS_GAME || sv.restarting ) {
 
 		// send the data to all relevant clients
-		for (i = 0, client = svs.clients; i < sv_maxclients->integer ; i++, client++) {
+		for (i = 0, client = svs.clients; i < svs.maxclients ; i++, client++) {
 			if ( client->state < CS_ACTIVE ) {
 				if ( client->state == CS_PRIMED )
 					client->csUpdated[ index ] = qtrue;
@@ -175,7 +175,7 @@ SV_SetUserinfo
 ===============
 */
 void SV_SetUserinfo( int index, const char *val ) {
-	if ( index < 0 || index >= sv_maxclients->integer ) {
+	if ( index < 0 || index >= svs.maxclients ) {
 		Com_Error (ERR_DROP, "SV_SetUserinfo: bad index %i", index);
 	}
 
@@ -200,7 +200,7 @@ void SV_GetUserinfo( int index, char *buffer, int bufferSize ) {
 	if ( bufferSize < 1 ) {
 		Com_Error( ERR_DROP, "SV_GetUserinfo: bufferSize == %i", bufferSize );
 	}
-	if ( index < 0 || index >= sv_maxclients->integer ) {
+	if ( index < 0 || index >= svs.maxclients ) {
 		Com_Error (ERR_DROP, "SV_GetUserinfo: bad index %i", index);
 	}
 	Q_strncpyz( buffer, svs.clients[ index ].userinfo, bufferSize );
@@ -274,12 +274,13 @@ static void SV_Startup( void ) {
 	// it starts at 0
 	svs.time = MAX( 0, Cvar_Get( "sv_timeStart", "0", CVAR_INIT )->integer );
 
-	svs.clients = Z_Malloc (sizeof(client_t) * sv_maxclients->integer );
+	svs.maxclients = sv_maxclients->integer;
+	svs.clients = Z_Malloc (sizeof(client_t) * svs.maxclients );
 	if ( com_dedicated->integer ) {
-		svs.numSnapshotEntities = sv_maxclients->integer * PACKET_BACKUP * MAX_SNAPSHOT_ENTITIES;
+		svs.numSnapshotEntities = svs.maxclients * PACKET_BACKUP * MAX_SNAPSHOT_ENTITIES;
 	} else {
 		// we don't need nearly as many when playing locally
-		svs.numSnapshotEntities = sv_maxclients->integer * 4 * MAX_SNAPSHOT_ENTITIES;
+		svs.numSnapshotEntities = svs.maxclients * 4 * MAX_SNAPSHOT_ENTITIES;
 	}
 	svs.initialized = qtrue;
 
@@ -339,7 +340,7 @@ static void SV_RebaseTime( void ) {
 		challenge->pingTime = SV_RebasedTime( challenge->pingTime, delta );
 		challenge->firstTime = SV_RebasedTime( challenge->firstTime, delta );
 	}
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		cl->lastPacketTime = SV_RebasedTime( cl->lastPacketTime, delta );
 		cl->lastConnectTime = SV_RebasedTime( cl->lastConnectTime, delta );
 		cl->lastDisconnectTime = SV_RebasedTime( cl->lastDisconnectTime, delta );
@@ -368,7 +369,7 @@ void SV_ChangeMaxClients( void ) {
 
 	// get the highest client number in use
 	count = 0;
-	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
+	for ( i = 0 ; i < svs.maxclients ; i++ ) {
 		if ( svs.clients[i].state >= CS_CONNECTED ) {
 			if (i > count)
 				count = i;
@@ -376,7 +377,7 @@ void SV_ChangeMaxClients( void ) {
 	}
 	count++;
 
-	oldMaxClients = sv_maxclients->integer;
+	oldMaxClients = svs.maxclients;
 	// never go below the highest client number in use
 	SV_BoundMaxClients( count );
 	// if still the same
@@ -405,8 +406,9 @@ void SV_ChangeMaxClients( void ) {
 	Z_Free( svs.clients );
 
 	// allocate new clients
-	svs.clients = Z_Malloc ( sv_maxclients->integer * sizeof(client_t) );
-	Com_Memset( svs.clients, 0, sv_maxclients->integer * sizeof(client_t) );
+	svs.maxclients = sv_maxclients->integer;
+	svs.clients = Z_Malloc ( svs.maxclients * sizeof(client_t) );
+	Com_Memset( svs.clients, 0, svs.maxclients * sizeof(client_t) );
 
 	// copy the clients over
 	for ( i = 0 ; i < count ; i++ ) {
@@ -426,10 +428,10 @@ void SV_ChangeMaxClients( void ) {
 	
 	// allocate new snapshot entities
 	if ( com_dedicated->integer ) {
-		svs.numSnapshotEntities = sv_maxclients->integer * PACKET_BACKUP * MAX_SNAPSHOT_ENTITIES;
+		svs.numSnapshotEntities = svs.maxclients * PACKET_BACKUP * MAX_SNAPSHOT_ENTITIES;
 	} else {
 		// we don't need nearly as many when playing locally
-		svs.numSnapshotEntities = sv_maxclients->integer * 4 * MAX_SNAPSHOT_ENTITIES;
+		svs.numSnapshotEntities = svs.maxclients * 4 * MAX_SNAPSHOT_ENTITIES;
 	}
 }
 
@@ -981,7 +983,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	Cvar_Set( "nextmap", "map_restart 0");
 //	Cvar_Set( "nextmap", va("map %s", server) );
 
-	for (i=0 ; i<sv_maxclients->integer ; i++) {
+	for (i=0 ; i<svs.maxclients ; i++) {
 		// save when the server started for each client already connected
 		if (svs.clients[i].state >= CS_CONNECTED) {
 			svs.clients[i].oldServerTime = sv.time;
@@ -1044,7 +1046,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// create a baseline for more efficient communications
 	SV_CreateBaseline ();
 
-	for (i=0 ; i<sv_maxclients->integer ; i++) {
+	for (i=0 ; i<svs.maxclients ; i++) {
 		// send the new gamestate to all connected clients
 		if (svs.clients[i].state >= CS_CONNECTED) {
 			const char	*denied;
@@ -1117,7 +1119,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	SV_SetConfigstring( CS_SYSTEMINFO, SV_SystemInfo() );
 	cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 
-	SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO ) );
+	SV_SetConfigstring( CS_SERVERINFO, SV_ServerInfo() );
 	cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 
 	// any media configstring setting now should issue a warning
@@ -1583,7 +1585,7 @@ void SV_FinalMessage( char *message ) {
 	
 	// send it twice, ignoring rate
 	for ( j = 0 ; j < 2 ; j++ ) {
-		for (i=0, cl = svs.clients ; i < sv_maxclients->integer ; i++, cl++) {
+		for (i=0, cl = svs.clients ; i < svs.maxclients ; i++, cl++) {
 			if (cl->state >= CS_CONNECTED) {
 				// don't send a disconnect to a local client
 				if ( cl->netchan.remoteAddress.type != NA_LOOPBACK ) {
@@ -1640,7 +1642,7 @@ void SV_Shutdown( char *finalmsg ) {
 	{
 		int index;
 		
-		for(index = 0; index < sv_maxclients->integer; index++)
+		for(index = 0; index < svs.maxclients; index++)
 			SV_FreeClient(&svs.clients[index]);
 		
 		Z_Free(svs.clients);

@@ -65,7 +65,7 @@ static client_t *SV_GetPlayerByHandle( void ) {
 		int plid = atoi(s);
 
 		// Check for numeric playerid match
-		if(plid >= 0 && plid < sv_maxclients->integer)
+		if(plid >= 0 && plid < svs.maxclients)
 		{
 			cl = &svs.clients[plid];
 			
@@ -75,7 +75,7 @@ static client_t *SV_GetPlayerByHandle( void ) {
 	}
 
 	// check for a name match
-	for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
+	for ( i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++ ) {
 		if ( !cl->state ) {
 			continue;
 		}
@@ -127,7 +127,7 @@ static client_t *SV_GetPlayerByNum( void ) {
 		}
 	}
 	idnum = atoi( s );
-	if ( idnum < 0 || idnum >= sv_maxclients->integer ) {
+	if ( idnum < 0 || idnum >= svs.maxclients ) {
 		Com_Printf( "Bad client slot: %i\n", idnum );
 		return NULL;
 	}
@@ -305,7 +305,7 @@ static void SV_MapRestart_f( void ) {
 	// if a map_restart occurs while a client is changing maps, we need
 	// to give them the correct time so that when they finish loading
 	// they don't violate the backwards time check in cl_cgame.c
-	for (i=0 ; i<sv_maxclients->integer ; i++) {
+	for (i=0 ; i<svs.maxclients ; i++) {
 		if (svs.clients[i].state == CS_PRIMED) {
 			svs.clients[i].oldServerTime = sv.restartTime;
 		}
@@ -331,7 +331,7 @@ static void SV_MapRestart_f( void ) {
 	sv.restarting = qfalse;
 
 	// connect and begin all the clients
-	for (i=0 ; i<sv_maxclients->integer ; i++) {
+	for (i=0 ; i<svs.maxclients ; i++) {
 		client = &svs.clients[i];
 
 		// send the new gamestate to all connected clients
@@ -404,7 +404,7 @@ static void SV_Kick_f( void ) {
 	cl = SV_GetPlayerByHandle();
 	if ( !cl ) {
 		if ( !Q_stricmp(Cmd_Argv(1), "all") ) {
-			for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
+			for ( i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++ ) {
 				if ( !cl->state ) {
 					continue;
 				}
@@ -416,7 +416,7 @@ static void SV_Kick_f( void ) {
 			}
 		}
 		else if ( !Q_stricmp(Cmd_Argv(1), "allbots") ) {
-			for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
+			for ( i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++ ) {
 				if ( !cl->state ) {
 					continue;
 				}
@@ -455,7 +455,7 @@ static void SV_KickBots_f( void ) {
 		return;
 	}
 
-	for( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if( !cl->state ) {
 			continue;
 		}
@@ -485,7 +485,7 @@ static void SV_KickAll_f( void ) {
 		return;
 	}
 
-	for( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if( !cl->state ) {
 			continue;
 		}
@@ -1370,7 +1370,7 @@ static void SV_Status_f( void ) {
 
 	Com_Printf ("cl score ping name            address                                 rate \n");
 	Com_Printf ("-- ----- ---- --------------- --------------------------------------- -----\n");
-	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++)
+	for (i=0,cl=svs.clients ; i < svs.maxclients ; i++,cl++)
 	{
 		if (!cl->state)
 			continue;
@@ -1527,7 +1527,7 @@ static void SV_ConSayto_f(void) {
 	Com_FieldStringToPlayerName( name, MAX_NAME_LENGTH, rawname );
 
 	saytocl = NULL;
-	for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
+	for ( i=0, cl=svs.clients ; i < svs.maxclients ; i++,cl++ ) {
 		if ( !cl->state ) {
 			continue;
 		}
@@ -1637,7 +1637,7 @@ static void SV_Serverinfo_f( void ) {
 	}
 
 	Com_Printf ("Server info settings:\n");
-	Info_Print ( Cvar_InfoString( CVAR_SERVERINFO ) );
+	Info_Print ( SV_ServerInfo() );
 }
 
 
@@ -1730,7 +1730,7 @@ static void SV_CompletePlayerName( char *args, int argNum ) {
 		int			clientCount;
 
 		nameCount = 0;
-		clientCount = sv_maxclients->integer;
+		clientCount = svs.maxclients;
 
 		for ( i=0, cl=svs.clients ; i < clientCount; i++,cl++ ) {
 			if ( !cl->state ) {

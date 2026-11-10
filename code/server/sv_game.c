@@ -116,7 +116,7 @@ void SV_GameSendServerCommand( int clientNum, const char *text ) {
 	if ( clientNum == -1 ) {
 		SV_SendServerCommand( NULL, "%s", text );
 	} else {
-		if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+		if ( clientNum < 0 || clientNum >= svs.maxclients ) {
 			return;
 		}
 		SV_SendServerCommand( svs.clients + clientNum, "%s", text );	
@@ -133,7 +133,7 @@ Disconnects the client with a message
 ===============
 */
 void SV_GameDropClient( int clientNum, const char *reason ) {
-	if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+	if ( clientNum < 0 || clientNum >= svs.maxclients ) {
 		return;
 	}
 	SV_DropClient( svs.clients + clientNum, reason );	
@@ -290,7 +290,7 @@ void SV_GetServerinfo( char *buffer, int bufferSize ) {
 	if ( bufferSize < 1 ) {
 		Com_Error( ERR_DROP, "SV_GetServerinfo: bufferSize == %i", bufferSize );
 	}
-	Q_strncpyz( buffer, Cvar_InfoString( CVAR_SERVERINFO ), bufferSize );
+	Q_strncpyz( buffer, SV_ServerInfo(), bufferSize );
 }
 
 /*
@@ -321,7 +321,7 @@ SV_GetUsercmd
 ===============
 */
 void SV_GetUsercmd( int clientNum, usercmd_t *cmd ) {
-	if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+	if ( clientNum < 0 || clientNum >= svs.maxclients ) {
 		Com_Error( ERR_DROP, "SV_GetUsercmd: bad clientNum:%i", clientNum );
 	}
 	*cmd = svs.clients[clientNum].lastUsercmd;
@@ -656,7 +656,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		// strides must cover what the module really has
 		int		numEntities = VMV_COUNT( 2, MAX_GENTITIES );
 		int		entitySize = VMV_RANGE( 3, (int)sizeof( sharedEntity_t ), INT_MAX );
-		int		numClients = sv_maxclients->integer;
+		int		numClients = svs.maxclients;
 		int		clientSize = VMV_RANGE( 5, (int)sizeof( playerState_t ), INT_MAX );
 
 		SV_LocateGameData( VM_ArgArray( args, 1, entitySize, numEntities, 1 ), numEntities, entitySize,
@@ -1187,8 +1187,8 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		// and svs.clients, the entity is a trace's pass entity
 		bot_initmove_t	*initmove = (bot_initmove_t *)VMA_IN( 2, bot_initmove_t );
 
-		if ( initmove->client < 0 || initmove->client >= sv_maxclients->integer ) {
-			VM_ArgError( args, 2, "client %i is outside 0 to %i", initmove->client, sv_maxclients->integer - 1 );
+		if ( initmove->client < 0 || initmove->client >= svs.maxclients ) {
+			VM_ArgError( args, 2, "client %i is outside 0 to %i", initmove->client, svs.maxclients - 1 );
 		}
 		if ( initmove->entitynum < 0 || initmove->entitynum >= MAX_GENTITIES ) {
 			VM_ArgError( args, 2, "entity %i is outside 0 to %i", initmove->entitynum, MAX_GENTITIES - 1 );
@@ -1288,7 +1288,7 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		int			clientNum = args[1];
 		client_t	*cl;
 
-		if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+		if ( clientNum < 0 || clientNum >= svs.maxclients ) {
 			return ROLE_NONE;
 		}
 		cl = &svs.clients[clientNum];
@@ -1370,7 +1370,7 @@ static void SV_InitGameVM( qboolean restart ) {
 	// a previous level
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=522
 	//   now done before GAME_INIT call
-	for ( i = 0 ; i < sv_maxclients->integer ; i++ ) {
+	for ( i = 0 ; i < svs.maxclients ; i++ ) {
 		svs.clients[i].gentity = NULL;
 	}
 	

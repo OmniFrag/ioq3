@@ -589,7 +589,7 @@ static void SV_ContentFlushAll( void ) {
 	int			i;
 
 	svContentSocketFull = qfalse;
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if ( cl->content ) {
 			SV_ContentFlush( cl );
 		}
@@ -695,7 +695,7 @@ static qboolean SV_ContentBusy( const client_t *cl ) {
 	if ( SV_DownloadsFull( cl ) ) {
 		return qtrue;
 	}
-	for ( i = 0, other = svs.clients; i < sv_maxclients->integer; i++, other++ ) {
+	for ( i = 0, other = svs.clients; i < svs.maxclients; i++, other++ ) {
 		qboolean	open = SV_ContentPaks( other ) > 0;
 
 		if ( other == cl || ( !open && !other->download ) ) {
@@ -808,7 +808,7 @@ static void SV_ContentCloseGone( void ) {
 	if ( !svs.clients ) {
 		return;
 	}
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if ( !cl->content ) {
 			continue;
 		}
@@ -837,7 +837,7 @@ static void SV_ContentBad( netadr_t from, const msg_t *msg ) {
 	uint64_t	key = OFD_ReadKey( msg->data );
 	int			i;
 
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if ( cl->state >= CS_CONNECTED && ( cl->ofx & OFX_CONTENT ) && cl->contentKey == key
 			&& NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
 			if ( ++cl->contentBadDatagrams >= CONTENT_BAD_DATAGRAMS ) {
@@ -868,7 +868,7 @@ void SV_ContentPacket( netadr_t from, msg_t *msg ) {
 		SV_ContentBad( from, msg );
 		return;
 	}
-	if ( m.u.control.slot >= sv_maxclients->integer ) {
+	if ( m.u.control.slot >= svs.maxclients ) {
 		svContentIgnored++;
 		return;
 	}
@@ -932,7 +932,7 @@ static void SV_ContentReport( int64_t now ) {
 		return;
 	}
 	svContentNextReport = now + 1000000;
-	for ( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		const svTransfers_t	*t;
 
 		if ( !SV_ContentTransfers( cl ) ) {
@@ -995,8 +995,8 @@ int SV_ContentSend( void ) {
 	// the clients with a transfer open, from another one first each call,
 	// after their probe timeouts and stalls; then the loading clients'
 	// floor, shared
-	for ( i = 0; i < sv_maxclients->integer; i++ ) {
-		cl = &svs.clients[( svContentNextClient + i ) % sv_maxclients->integer];
+	for ( i = 0; i < svs.maxclients; i++ ) {
+		cl = &svs.clients[( svContentNextClient + i ) % svs.maxclients];
 		if ( !SV_ContentTransfers( cl ) ) {
 			continue;
 		}
@@ -1009,7 +1009,7 @@ int SV_ContentSend( void ) {
 			loading += SV_ContentLoadingClass( cl );
 		}
 	}
-	svContentNextClient = ( svContentNextClient + 1 ) % sv_maxclients->integer;
+	svContentNextClient = ( svContentNextClient + 1 ) % svs.maxclients;
 	svContentIdle = !count;
 	// the socket refused what went before, or a timer's CLOSE
 	if ( svContentSocketFull ) {

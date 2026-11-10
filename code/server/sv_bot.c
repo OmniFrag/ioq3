@@ -46,7 +46,7 @@ SV_BotAllocateClient
 */
 int SV_BotAllocateClient(void) {
 	int			i;
-	client_t	*cl = SV_OldestFreeClient( 0, sv_maxclients->integer );
+	client_t	*cl = SV_OldestFreeClient( 0, svs.maxclients );
 
 	if ( !cl ) {
 		return -1;
@@ -77,7 +77,7 @@ SV_BotFreeClient
 void SV_BotFreeClient( int clientNum ) {
 	client_t	*cl;
 
-	if ( clientNum < 0 || clientNum >= sv_maxclients->integer ) {
+	if ( clientNum < 0 || clientNum >= svs.maxclients ) {
 		Com_Error( ERR_DROP, "SV_BotFreeClient: bad clientNum: %i", clientNum );
 	}
 	cl = &svs.clients[clientNum];
