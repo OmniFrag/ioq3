@@ -556,6 +556,23 @@ const sound = (() => {
     };
 })();
 
+// The browser is asked to keep the player's stored files, once the page
+// wants it (persistOnInput, as bring stores them), in the player's next
+// input, where a browser that asks the player wants one
+// (navigator.storage.persist); its listeners come before the
+// presentation's below, which keep the clicks they claim from the rest.
+// null once asked.
+let persistWanted = false;
+const persistInput = (event) => {
+    if (!persistWanted || !event.isTrusted) return;
+    persistWanted = null;
+    navigator.storage.persist().then((granted) => {
+        askBox.dataset.persist = granted ? 'granted' : 'refused';
+        console.log(`Asked the browser to keep the stored files: ${granted ? 'granted' : 'refused'}`);
+    }, () => {});
+};
+for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, persistInput, { capture: true });
+
 // A click that goes fullscreen or takes the lock is the page's, never the
 // game's: SDL sees neither its press nor its release, which Safari's change
 // to fullscreen could lose, leaving the gun firing. A touch is the game's.
@@ -915,12 +932,16 @@ const agree = async (agreement) => {
 // What each is goes on #ask's rows as data (data-verdict, data-pak,
 // data-file), one for each file asked for and one for each chosen file
 // that's none of them, and in a console line. They're kept in the browser
-// (IndexedDB) under the names asked for, for the next visit, and checked
-// again then; one it won't keep, or that no longer checks, is asked for
-// again.
+// under the names asked for, for the next visit: in its private files
+// (OPFS) where it has them, through a worker of the page's (ownStore
+// below), or else in IndexedDB. A kept file is checked again on the next
+// visit, IndexedDB's by its checksum, and OPFS's by its size against the
+// index's, its checksum only when that changed; one the browser won't
+// keep, or that no longer checks, is asked for again.
+const OWN_DATABASE = `${CLIENT_NAME}-own`;
 const ownDatabase = () => new Promise((resolve) => {
     try {
-        const request = indexedDB.open(`${CLIENT_NAME}-own`, 1);
+        const request = indexedDB.open(OWN_DATABASE, 1);
         request.onupgradeneeded = () => request.result.createObjectStore('files');
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => resolve(null);
@@ -938,9 +959,107 @@ const ownRequest = (db, mode, use) => new Promise((resolve) => {
         resolve(undefined);
     }
 });
+// The player's paks in the browser's private files (OPFS), kept by a
+// dedicated worker (pak_store.js), which alone can write them with a sync
+// access handle: { call(op, args, copied), files }, the files its index
+// lists, or { why } not. Not where the page isn't a secure context, as on a
+// plain-HTTP LAN server, nor in a private window, which has no OPFS, nor
+// when the worker doesn't answer within STORE_ANSWER_MS, as a second tab's
+// in WebKit never did while another held a sync access handle; IndexedDB
+// keeps them then. That time starts once the worker runs, which it says
+// first, so a slow link's download of its script, within STORE_START_MS,
+// isn't counted. The worker stops its copy, and lets go of its handle, as
+// the page goes, and goes on if the page comes back.
+const STORE_START_MS = 15000, STORE_ANSWER_MS = 2000;
+const ownStore = async () => {
+    if (!isSecureContext || !navigator.storage?.getDirectory || !navigator.locks || typeof Worker != 'function')
+        return { why: 'the page has no private files here' };
+    let worker;
+    try {
+        worker = new Worker(`${enginePath}pak_store.js`);
+    } catch (error) {
+        return { why: `its worker didn't start (${error})` };
+    }
+    const waiting = new Map();
+    let next = 1, timer, running;
+    worker.onmessage = ({ data: { id, ok, copied, error, ...answer } }) => {
+        if (answer.running) return running?.();
+        const call = waiting.get(id);
+        if (!call) return;
+        if (ok === undefined) return call.copied?.(copied);
+        waiting.delete(id);
+        if (ok) call.resolve(answer);
+        else call.reject(new Error(error));
+    };
+    worker.onerror = (event) => {
+        event.preventDefault();
+        waiting.forEach((call) => call.reject(new Error(event.message || 'the worker failed')));
+        waiting.clear();
+    };
+    const call = (op, args = {}, copied) => new Promise((resolve, reject) => {
+        const id = next++;
+        waiting.set(id, { resolve, reject, copied });
+        worker.postMessage({ id, op, ...args });
+    });
+    const late = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`didn't start within ${STORE_START_MS / 1000} s`)), STORE_START_MS);
+        running = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => reject(new Error(`didn't answer within ${STORE_ANSWER_MS / 1000} s`)), STORE_ANSWER_MS);
+        };
+    });
+    try {
+        const { sync, files } = await Promise.race([call('list'), late]);
+        addEventListener('pagehide', () => worker.postMessage({ op: 'stop' }));
+        addEventListener('pageshow', (event) => { if (event.persisted) worker.postMessage({ op: 'resume' }); });
+        return { call, files, how: sync ? 'sync access handles' : 'createWritable' };
+    } catch (error) {
+        worker.terminate();
+        return { why: `its worker ${error.message}` };
+    } finally {
+        clearTimeout(timer);
+    }
+};
+// Once the player's files are all stored, the page wants the browser not to
+// clear them when it's short of room (persistOnInput, and persistInput
+// above), unless it already won't
+const persistOnInput = () => {
+    if (!navigator.storage?.persist) return;
+    (navigator.storage.persisted?.() ?? Promise.resolve(false)).then((already) => {
+        if (already) askBox.dataset.persist = 'granted';
+        else if (persistWanted === false) persistWanted = true;
+    }, () => {});
+};
+// every [key, file] the database keeps, read in one transaction
+const ownAll = (db) => new Promise((resolve) => {
+    if (!db) return resolve([]);
+    const all = [];
+    try {
+        const request = db.transaction('files', 'readonly').objectStore('files').openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return resolve(all);
+            all.push([cursor.key, cursor.value]);
+            cursor.continue();
+        };
+        request.onerror = () => resolve(all);
+    } catch {
+        resolve([]);
+    }
+});
 const fileName = (src) => src.match(/[^/]+$/)[0];
+// set once the page has read the player's files in (downloadGame)
+let ownRead;
+const ownReadDone = new Promise((resolve) => { ownRead = resolve; });
 const bring = async (own) => {
-    const [paks, db] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')), ownDatabase()]);
+    const [paks, store, databases] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')),
+        ownStore(), indexedDB.databases?.().catch(() => undefined)]);
+    // with OPFS, IndexedDB's database only to move its files from, if it's
+    // there, rather than made anew each visit
+    const db = store.call && databases && !databases.some(({ name }) => name === OWN_DATABASE) ? null : await ownDatabase();
+    askBox.dataset.store = store.call ? 'opfs' : 'indexeddb';
+    console.log(store.call ? `Own files: in the browser's private files (OPFS), written with ${store.how}`
+        : `Own files: in IndexedDB, as ${store.why}`);
     // the files asked for that the page has, by entry, and what each row
     // says: an entry's, its file's verdict and name; a chosen file's that
     // is none of them, the same
@@ -958,23 +1077,118 @@ const bring = async (own) => {
         if (entry) said.set(entry, { verdict, name });
         else others.push({ verdict, name });
     };
-    // what was kept checks again, each against its own entry alone
-    const kept = await Promise.all(own.map((file) => ownRequest(db, 'readonly', (store) => store.get(file.src.toLowerCase()))));
-    await Promise.all(own.map(async (file, i) => {
-        if (!(kept[i] instanceof Blob)) return;
-        const keptFile = await checked(kept[i], kept[i].name ?? fileName(file.src));
+    // A kept file, checked against its own entry alone: the page has it if
+    // it fills the entry, and says so, and what it is otherwise, unless quiet
+    const reuse = (file, keptFile, quiet = false) => {
         const [{ verdict }] = paks.judge([file], new Set(), [keptFile]);
-        if (fills(verdict)) have.set(file, kept[i]);
-        say('Kept', keptFile, verdict, file);
-    }));
-    // a round's chosen files, kept under the names they fill
-    const take = (files) => paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
-        if (fills(verdict)) {
-            have.set(entry, files[i].blob);
-            ownRequest(db, 'readwrite', (store) => store.put(files[i].blob, entry.src.toLowerCase()));
+        if (fills(verdict)) have.set(file, keptFile.blob);
+        if (fills(verdict) || !quiet) say('Kept', keptFile, verdict, file);
+        return fills(verdict);
+    };
+    // The stored files' copies, one at a time: each pak is large, one disk
+    // writes it no faster for a second beside it, and each copy holds a sync
+    // access handle, which is exclusive. They wait for the page to read the
+    // player's files in (downloadGame), which the engine waits on.
+    let copies = ownReadDone;
+    const queue = (work) => { copies = copies.then(work).catch((error) => console.error(`Couldn't store files: ${error}`)); };
+    // OPFS's files: each as the index has it while its size is the index's,
+    // or else checked again, and removed if it no longer checks; another
+    // version of the same pak is passed by quietly
+    if (store.call) for (const file of own) {
+        for (const record of store.files.filter(({ src }) => src === file.src.toLowerCase())) {
+            const changed = record.file.size !== record.size;
+            const keptFile = changed ? await checked(record.file, record.name)
+                : { name: record.name, blob: record.file, checksum: record.checksum };
+            if (reuse(file, keptFile, !changed)) break;
+            if (changed) store.call('drop', { path: record.path }).catch(() => {});
         }
-        say('Chose', files[i], verdict, entry);
+    }
+    const fromStore = have.size;
+    // IndexedDB's, as the page kept them before OPFS, or keeps them without:
+    // each checked once, for this visit and for its move into OPFS below,
+    // and without OPFS only the ones asked for
+    const asked = new Set(own.map((file) => file.src.toLowerCase()));
+    const kept = (await paks.mapLimited((await ownAll(db)).filter(([key]) => store.call || asked.has(key)), 4,
+        async ([key, blob]) => typeof key == 'string' && blob instanceof Blob
+            ? { key, ...await checked(blob, blob.name ?? fileName(key)) } : null)).filter(Boolean);
+    for (const file of own) {
+        const keptFile = kept.find(({ key }) => key === file.src.toLowerCase());
+        if (keptFile && !have.has(file)) reuse(file, keptFile);
+    }
+    console.log(`Own files: ${fromStore} kept in OPFS, ${have.size - fromStore} in IndexedDB`);
+    // Stores files, each { entry, blob, checksum }, under the names they
+    // fill, if the browser has room for them all; nothing is written
+    // otherwise. The worker leaves a copy cut short out of its index. A file
+    // moved from IndexedDB has done, which takes it out of IndexedDB.
+    let toCopy = 0, copied = 0, storedAll = true;
+    const keep = (files) => queue(async () => {
+        const size = files.reduce((sum, { blob }) => sum + blob.size, 0);
+        const { quota, usage = 0 } = await navigator.storage.estimate().catch(() => ({}));
+        if (quota !== undefined && quota - usage < size) {
+            storedAll = false;
+            askBox.dataset.keeping = 'no-room';
+            console.log(`Not storing ${files.length} file${files.length === 1 ? '' : 's'}: `
+                + `${size} bytes, and the browser has ${Math.max(quota - usage, 0)} free`);
+            return;
+        }
+        askBox.dataset.keeping = 'copying';
+        askBox.dataset.toCopy = toCopy += size;
+        for (const { entry, blob, checksum, done } of files) {
+            const from = copied, name = blob.name ?? entry.src;
+            try {
+                const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum },
+                    (bytes) => { askBox.dataset.copied = from + bytes; });
+                if (busy) {
+                    storedAll = false;
+                    console.log(`Didn't store ${name} for ${entry.src}: another tab is storing it`);
+                } else {
+                    console.log(`${done ? 'Moved' : 'Stored'} ${name} for ${entry.src} in OPFS as ${path}${already ? ', there already' : ''}`);
+                    done?.();
+                }
+            } catch (error) {
+                storedAll = false;
+                console.log(`Couldn't store ${name} for ${entry.src}: ${error.message}`);
+            }
+            askBox.dataset.copied = copied = from + blob.size;
+        }
+        askBox.dataset.keeping = storedAll ? 'stored' : 'failed';
+        if (storedAll) persistOnInput();
     });
+    if (store.call) {
+        // what a copy cut short left behind
+        queue(async () => {
+            const { removed } = await store.call('tidy');
+            if (removed.length) console.log(`Removed what was left of ${removed.join(', ')}`);
+        });
+        // IndexedDB's files go into OPFS, once: each leaves IndexedDB once
+        // it's stored, a damaged one at once, and the database goes with the
+        // last
+        const forget = (key) => () => ownRequest(db, 'readwrite', (records) => records.delete(key));
+        kept.filter(({ damaged }) => damaged).forEach(({ key }) => forget(key)());
+        const moving = kept.filter(({ damaged }) => !damaged)
+            .map(({ key, blob, checksum }) => ({ entry: { src: key }, blob, checksum, done: forget(key) }));
+        if (moving.length) keep(moving);
+        queue(async () => {
+            if (!db || (await ownRequest(db, 'readonly', (records) => records.count())) !== 0) return;
+            db.close();
+            indexedDB.deleteDatabase(OWN_DATABASE);
+            console.log("Own files: IndexedDB's database removed");
+        });
+    }
+    // a round's chosen files, kept under the names they fill
+    const take = (files) => {
+        const storing = [];
+        paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
+            const { blob, checksum } = files[i];
+            if (fills(verdict)) {
+                have.set(entry, blob);
+                if (store.call) storing.push({ entry, blob, checksum });
+                else ownRequest(db, 'readwrite', (records) => records.put(blob, entry.src.toLowerCase()));
+            }
+            say('Chose', files[i], verdict, entry);
+        });
+        if (storing.length) keep(storing);
+    };
     const missing = () => own.filter((file) => !have.has(file));
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
@@ -1104,7 +1318,9 @@ const downloadGame = async (FS) => {
         FS.writeFile(`${dst}/${src.match(/[^/]+$/)[0]}`, size < data.length ? data.slice(0, size) : data, { canOwn: true });
     }));
     if (brought.length) showStatus('Reading your files…');
-    for (const { src, dst, data } of await read) {
+    const readIn = await read;
+    ownRead();
+    for (const { src, dst, data } of readIn) {
         FS.mkdirTree(dst);
         FS.writeFile(`${dst}/${fileName(src)}`, data, { canOwn: true });
     }
@@ -1136,7 +1352,9 @@ ioquake3({
     }, async (module) => {
         // a download that fails leaves the engine waiting, under its error
         module.addRunDependency('setup-ioq3-filesystem');
-        await downloadGame(module.FS);
+        // the stored files' copies go on even when the game can't start, so
+        // a failed download doesn't cost the player their choice
+        await downloadGame(module.FS).finally(ownRead);
         showStatus('Starting…');
         module.removeRunDependency('setup-ioq3-filesystem');
     }],

@@ -107,4 +107,7 @@ function(deploy_shell_files)
     endif()
     configure_file(${SOURCE_DIR}/web/pak_check.js
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_check.js @ONLY)
+    # and the worker that keeps them in the browser's private files
+    configure_file(${SOURCE_DIR}/web/pak_store.js
+        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_store.js COPYONLY)
 endfunction()
