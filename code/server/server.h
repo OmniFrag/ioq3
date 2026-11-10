@@ -94,6 +94,9 @@ typedef struct {
 	// beside the other settings: this map plays as not pure, said once
 	// (SV_PureActive, SV_SystemInfo)
 	qboolean		pureOff;
+	// sv_pure as this map started, which SV_PureActive and the pure lists
+	// read: a change mid-map waits for the next map (ENG-083)
+	qboolean		pure;
 } server_t;
 
 

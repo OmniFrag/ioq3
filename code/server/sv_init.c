@@ -797,7 +797,7 @@ they download; as each map starts, and under --check, as one would
 static void SV_SetPureLists( void ) {
 	const char	*p;
 
-	if ( sv_pure->integer ) {
+	if ( sv.pure ) {
 		// the server sends these to the clients so they will only
 		// load pk3s also loaded at the server
 		p = FS_LoadedPakChecksums();
@@ -849,7 +849,7 @@ const char *SV_SystemInfo( void ) {
 	int			total;
 
 	Q_strncpyz( info, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( info ) );
-	if ( sv_pure->integer && !sv.pureOff && paks[0] && !Info_ValueForKey( info, "sv_paks" )[0] ) {
+	if ( SV_PureActive() && paks[0] && !Info_ValueForKey( info, "sv_paks" )[0] ) {
 		sv.pureOff = qtrue;
 		total = FS_ContentPaks( NULL, 0 );
 		// each checksum is followed by a space, one cut short is not
@@ -862,9 +862,8 @@ const char *SV_SystemInfo( void ) {
 		Cvar_Set( "sv_pakNames", "" );
 		Q_strncpyz( info, Cvar_InfoString_Big( CVAR_SYSTEMINFO ), sizeof( info ) );
 	}
-	if ( sv.pureOff ) {
-		Info_SetValueForKey_Big( info, "sv_pure", "0" );
-	}
+	// as this map plays, not a change waiting for the next
+	Info_SetValueForKey_Big( info, "sv_pure", SV_PureActive() ? "1" : "0" );
 	return info;
 }
 
@@ -879,7 +878,11 @@ which loads no map, as the paks loaded would
 static const char *SV_PureLine( void ) {
 	int		total;
 
-	if ( !sv_pure->integer ) {
+	// --check loads no map: the setting as one would start
+	if ( com_check ) {
+		sv.pure = !!sv_pure->integer;
+	}
+	if ( !sv.pure ) {
 		return "off (sv_pure 0)";
 	}
 	total = FS_ContentPaks( NULL, 0 );
@@ -987,6 +990,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// wipe the entire per-level structure
 	SV_ClearServer();
+	sv.pure = !!sv_pure->integer;
+	sv_pure->modified = qfalse;
 	for ( i = 0 ; i < MAX_CONFIGSTRINGS ; i++ ) {
 		sv.configstrings[i] = CopyString("");
 	}

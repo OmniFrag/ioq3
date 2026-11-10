@@ -390,7 +390,7 @@ doesn't fit the systeminfo string (sv.pureOff, SV_SystemInfo)
 ================
 */
 qboolean SV_PureActive( void ) {
-	return sv_pure->integer && !sv.pureOff;
+	return sv.pure && !sv.pureOff;
 }
 
 // why the masters are held off now (SV_ExtHoldListing), empty for not
@@ -2040,6 +2040,16 @@ void SV_Frame( int msec ) {
 		cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 	}
 	if ( cvar_modifiedFlags & CVAR_SYSTEMINFO ) {
+		// a pure setting changed mid-map waits for the next map, whose pure
+		// lists are made with it; sending it now would send every player
+		// the gamestate again
+		if ( sv_pure->modified ) {
+			sv_pure->modified = qfalse;
+			if ( !!sv_pure->integer != sv.pure ) {
+				Com_Printf( "sv_pure %d takes effect at the next map; this one plays as %s\n", sv_pure->integer,
+					SV_PureActive() ? "pure" : "not pure" );
+			}
+		}
 		SV_SetConfigstring( CS_SYSTEMINFO, SV_SystemInfo() );
 		cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 	}
