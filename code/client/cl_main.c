@@ -268,7 +268,11 @@ void CL_Voip_f( void )
 		reason = "Voip codec not initialized";
 	else if (!clc.voipEnabled)
 		reason = "Server doesn't support VoIP";
-	else if (!clc.demoplaying && (Cvar_VariableValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")))
+	// the server's game type, as its serverinfo gives the map's: not this
+	// client's own g_gametype, nor a change waiting for the next map
+	else if (!clc.demoplaying && (atoi( Info_ValueForKey( cl.gameState.stringData
+		+ cl.gameState.stringOffsets[CS_SERVERINFO], "g_gametype" ) ) == GT_SINGLE_PLAYER
+		|| Cvar_VariableValue("ui_singlePlayerActive")))
 		reason = "running in single-player mode";
 
 	if (reason != NULL) {
