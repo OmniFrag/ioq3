@@ -97,6 +97,8 @@ typedef struct {
 	// sv_pure as this map started, which SV_PureActive and the pure lists
 	// read: a change mid-map waits for the next map (ENG-083)
 	qboolean		pure;
+	// g_gametype as this map started, which getinfo and serverinfo give
+	int				gametype;
 } server_t;
 
 
@@ -455,7 +457,7 @@ void SV_MasterShutdown (void);
 // sv_pure, as this map plays it: off where its pure list doesn't fit the
 // systeminfo string (sv.pureOff)
 qboolean SV_PureActive( void );
-const char *SV_ServerInfo( void );
+const char *SV_ServerInfo( void );	// SV_FixServerInfo's of the serverinfo cvars
 // the systeminfo string clients are sent, deciding first whether this map
 // plays as not pure, sv_pure 0 in it then (sv.pureOff)
 const char *SV_SystemInfo( void );

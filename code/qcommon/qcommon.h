@@ -1892,6 +1892,10 @@ void SCR_DebugGraph (float value);	// FIXME: move logging to common?
 //
 void SV_Init( void );
 void SV_Shutdown( char *finalmsg );
+// serverinfo's keys as the running map holds them (sv_maxclients,
+// g_gametype), which a module's register of a latched cvar can change
+// early (ENG-083)
+void SV_FixServerInfo( char *info, int size );
 // after an ERR_DROP, a dedicated server starts its map again; qfalse, with
 // the reason, when it should exit instead
 qboolean SV_RestartAfterError( char *why, int size );

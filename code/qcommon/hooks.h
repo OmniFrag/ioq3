@@ -637,6 +637,10 @@ void	SV_ExtClientPrint( int clientNum, const char *text );
 // whether the server lists itself now: dedicated 2, a network on, a master
 // set, and no drain, as its heartbeats go
 qboolean	SV_ExtListed( void );
+// the slots the server has and the game type its map plays, as it started
+// (ENG-083): the cvars can hold a latched change a module applied early
+int		SV_ExtMaxClients( void );
+int		SV_ExtGametype( void );
 // holds the masters off, why saying why: no heartbeats and no answers to
 // their polls, though the server stays listed for the rest (SV_ExtListed);
 // NULL or "" lets them go again, a heartbeat at the next frame. Not a

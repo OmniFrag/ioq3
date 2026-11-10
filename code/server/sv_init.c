@@ -993,6 +993,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// wipe the entire per-level structure
 	SV_ClearServer();
 	sv.pure = !!sv_pure->integer;
+	sv.gametype = sv_gametype->integer;
 	sv_pure->modified = qfalse;
 	for ( i = 0 ; i < MAX_CONFIGSTRINGS ; i++ ) {
 		sv.configstrings[i] = CopyString("");

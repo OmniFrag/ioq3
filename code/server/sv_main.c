@@ -383,28 +383,65 @@ qboolean SV_ExtListed( void ) {
 
 /*
 ================
+SV_ExtMaxClients, SV_ExtGametype
+================
+*/
+int SV_ExtMaxClients( void ) {
+	return svs.maxclients;
+}
+
+int SV_ExtGametype( void ) {
+	// before a map, the cvar's
+	return sv.state == SS_DEAD ? sv_gametype->integer : sv.gametype;
+}
+
+/*
+================
+SV_FixServerInfo
+
+A serverinfo string with the keys the running map holds as it started,
+the slots the server has and the game type, not a latched change a
+module's register made count early (ENG-083); left as it was when no
+map runs, or when a key wouldn't fit
+================
+*/
+void SV_FixServerInfo( char *info, int size ) {
+	char	fixed[MAX_INFO_STRING];
+
+	if ( sv.state == SS_DEAD || !svs.maxclients ) {
+		return;
+	}
+	// the cvars are the map's, as they are but for a module's early latch
+	if ( sv_maxclients->integer == svs.maxclients && sv_gametype->integer == sv.gametype ) {
+		return;
+	}
+	if ( atoi( Info_ValueForKey( info, "sv_maxclients" ) ) == svs.maxclients
+		&& atoi( Info_ValueForKey( info, "g_gametype" ) ) == sv.gametype ) {
+		return;
+	}
+	Q_strncpyz( fixed, info, sizeof( fixed ) );
+	Info_SetValueForKey( fixed, "sv_maxclients", va( "%i", svs.maxclients ) );
+	Info_SetValueForKey( fixed, "g_gametype", va( "%i", sv.gametype ) );
+	// a key the string had no room for is left out (Info_SetValueForKey)
+	if ( Info_ValueForKey( fixed, "sv_maxclients" )[0] && Info_ValueForKey( fixed, "g_gametype" )[0]
+		&& (int)strlen( fixed ) < size ) {
+		Q_strncpyz( info, fixed, size );
+	}
+}
+
+/*
+================
 SV_ServerInfo
 
-The serverinfo string clients and browsers are sent, with the slots the
-server has as sv_maxclients
+The serverinfo string clients and browsers are sent, fixed by
+SV_FixServerInfo
 ================
 */
 const char *SV_ServerInfo( void ) {
 	static char	info[MAX_INFO_STRING];
-	const char	*cvars = Cvar_InfoString( CVAR_SERVERINFO );
 
-	// the slots there are, not a latched change a module's register made
-	// count early (ENG-083)
-	if ( svs.maxclients <= 0 || svs.maxclients == sv_maxclients->integer ) {
-		return cvars;
-	}
-	Q_strncpyz( info, cvars, sizeof( info ) );
-	Info_SetValueForKey( info, "sv_maxclients", va( "%i", svs.maxclients ) );
-	// a full string drops the key rather than take a longer value: the
-	// cvar's then, as clients need one
-	if ( !Info_ValueForKey( info, "sv_maxclients" )[0] ) {
-		return cvars;
-	}
+	Q_strncpyz( info, Cvar_InfoString( CVAR_SERVERINFO ), sizeof( info ) );
+	SV_FixServerInfo( info, sizeof( info ) );
 	return info;
 }
 
@@ -854,7 +891,7 @@ static void SVC_Status( netadr_t from ) {
 	char	infostring[MAX_INFO_STRING];
 
 	// ignore if we are in single player
-	if ( Cvar_VariableValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
+	if ( SV_ExtGametype() == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
 		return;
 	}
 
@@ -926,7 +963,7 @@ void SVC_Info( netadr_t from ) {
 	uint32_t	asked;
 
 	// ignore if we are in single player
-	if ( Cvar_VariableValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
+	if ( SV_ExtGametype() == GT_SINGLE_PLAYER || Cvar_VariableValue("ui_singlePlayerActive")) {
 		return;
 	}
 
@@ -985,7 +1022,7 @@ void SVC_Info( netadr_t from ) {
 	Info_SetValueForKey(infostring, "g_humanplayers", va("%i", humans));
 	Info_SetValueForKey( infostring, "sv_maxclients", 
 		va("%i", svs.maxclients - sv_privateClients->integer ) );
-	Info_SetValueForKey( infostring, "gametype", va("%i", sv_gametype->integer ) );
+	Info_SetValueForKey( infostring, "gametype", va("%i", sv.gametype ) );
 	Info_SetValueForKey( infostring, "pure", va("%i", SV_PureActive() ) );
 	Info_SetValueForKey(infostring, "g_needpass", va("%d", Cvar_VariableIntegerValue("g_needpass")));
 

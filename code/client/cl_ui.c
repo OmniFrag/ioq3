@@ -877,6 +877,10 @@ intptr_t CL_UISystemCalls( intptr_t *args ) {
 
 	case UI_CVAR_INFOSTRINGBUFFER:
 		Cvar_InfoStringBufferSafe( args[1], VMA_STRBUF( 2, args[3] ), args[3] );
+		// a listen server's serverinfo as its map plays it (ENG-083)
+		if ( args[1] & CVAR_SERVERINFO ) {
+			SV_FixServerInfo( VMA_STRBUF( 2, args[3] ), args[3] );
+		}
 		return 0;
 
 	case UI_ARGC:
