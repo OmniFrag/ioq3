@@ -1040,6 +1040,9 @@ qboolean Cvar_SetByPak( const char *var_name );
 // whether a cvar's value, run as commands, runs restricted: with the
 // rights of whoever set it
 qboolean Cvar_AllowedFromText( const char *var_name );
+// whether a cvar's name or an info key is a password's, whose value the
+// console, its log and Info_Print leave out
+qboolean Cvar_IsSecretName( const char *name );
 // false, with a message, if the running command is restricted and the
 // cvar private or protected
 void	Cvar_SetFromVM( const char *var_name, const char *value, const char * const *allowed, cvarSource_t source );
@@ -1572,6 +1575,8 @@ typedef struct {
 void	FileList_Add( fileList_t *list, const char *name, qboolean unique );
 char	**FileList_Done( fileList_t *list, int *count );
 void		Info_Print( const char *s );
+// s into out, with the values of keys named as passwords as "(hidden)"
+void		Info_HideSecrets( const char *s, char *out, int size );
 
 void		Com_BeginRedirect (char *buffer, int buffersize, void (*flush)(char *));
 void		Com_EndRedirect( void );

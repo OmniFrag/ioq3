@@ -359,7 +359,7 @@ static qboolean Com_HideSecret( const char *line, char *text, int size ) {
 				quoted = !quoted;
 			}
 		}
-		if ( !Q_stristr( name, "password" ) ) {
+		if ( !Cvar_IsSecretName( name ) ) {
 			end = next;
 		}
 		// the command up to its value, never past the end of text
@@ -1268,11 +1268,72 @@ qboolean Com_AddStartupCommands( void ) {
 
 //============================================================================
 
+/*
+============
+Info_HideSecrets
+
+An info string copied into out, as much as fits, with the value of each
+key named as a password (Cvar_IsSecretName) as "(hidden)", for a print
+of a client's userinfo
+============
+*/
+static void Info_Append( char *out, int size, const char *text, int length ) {
+	int		used = strlen( out );
+
+	length = MIN( length, size - 1 - used );
+	if ( length > 0 ) {
+		Com_Memcpy( out + used, text, length );
+		out[used + length] = '\0';
+	}
+}
+
+void Info_HideSecrets( const char *s, char *out, int size ) {
+	char		key[BIG_INFO_KEY];
+	const char	*start;
+	int			length;
+
+	out[0] = '\0';
+	while ( *s ) {
+		// the key, and its backslash before it
+		start = s;
+		if ( *s == '\\' ) {
+			s++;
+		}
+		length = strcspn( s, "\\" );
+		Q_strncpyz( key, s, MIN( (int)sizeof( key ), length + 1 ) );
+		s += length;
+		Info_Append( out, size, start, (int)( s - start ) );
+		if ( !*s ) {
+			return;
+		}
+		// its value, or what's shown for it
+		start = s++;
+		length = strcspn( s, "\\" );
+		if ( Cvar_IsSecretName( key ) ) {
+			Info_Append( out, size, "\\(hidden)", 9 );
+		} else {
+			Info_Append( out, size, start, length + 1 );
+		}
+		s += length;
+	}
+}
+
+/*
+============
+Info_Print
+
+An info string's keys and values, a line each. The value of a key named
+as a password, such as a client's "password" in its userinfo, is shown
+as "(hidden)", as the console's log hides a command line's password, so
+dumpuser's output in qconsole.log or an rcon reply carries none
+============
+*/
 void Info_Print( const char *s ) {
 	char	key[BIG_INFO_KEY];
 	char	value[BIG_INFO_VALUE];
 	char	*o;
 	int		l;
+	qboolean	hidden;
 
 	if (*s == '\\')
 		s++;
@@ -1281,6 +1342,8 @@ void Info_Print( const char *s ) {
 		o = key;
 		while (*s && *s != '\\')
 			*o++ = *s++;
+		*o = 0;
+		hidden = Cvar_IsSecretName( key );
 
 		l = o - key;
 		if (l < 20)
@@ -1288,8 +1351,6 @@ void Info_Print( const char *s ) {
 			Com_Memset (o, ' ', 20-l);
 			key[20] = 0;
 		}
-		else
-			*o = 0;
 		Com_Printf ("%s ", key);
 
 		if (!*s)
@@ -1306,7 +1367,7 @@ void Info_Print( const char *s ) {
 
 		if (*s)
 			s++;
-		Com_Printf ("%s\n", value);
+		Com_Printf ("%s\n", hidden ? "(hidden)" : value);
 	}
 }
 

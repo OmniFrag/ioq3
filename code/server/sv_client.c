@@ -2341,6 +2341,12 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 		// nothing's printed
 	} else if ( Com_IsSecretWord( Cmd_Argv( 0 ) ) || Com_IsSecretCommand( Cmd_ArgsFrom( 1 ), NULL, 0 ) ) {
 		Com_DPrintf( "clientCommand: %s : %i : %s (hidden)\n", cl->name, seq, Cmd_Argv( 0 ) );
+	} else if ( !Q_stricmp( Cmd_Argv( 0 ), "userinfo" ) ) {
+		// and a userinfo's password (ENG-098)
+		char	shown[MAX_INFO_STRING];
+
+		Info_HideSecrets( Cmd_Argv( 1 ), shown, sizeof( shown ) );
+		Com_DPrintf( "clientCommand: %s : %i : userinfo \"%s\"\n", cl->name, seq, shown );
 	} else {
 		Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );
 	}

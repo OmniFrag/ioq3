@@ -3089,6 +3089,19 @@ static void Cvar_DumpText( const cvar_t *var ) {
 
 /*
 ============
+Cvar_IsSecretName
+
+Whether a name, a cvar's or an info string's key, is one whose value is
+kept out of the console and its log: any with "password" in it, so a
+mod's referee password counts too
+============
+*/
+qboolean Cvar_IsSecretName( const char *name ) {
+	return Q_stristr( name, "password" ) != NULL;
+}
+
+/*
+============
 Cvar_IsSecret
 
 Whether a cvar's value is one cvar_dump leaves out: a private one's (a
@@ -3097,7 +3110,7 @@ mod's referee password
 ============
 */
 static qboolean Cvar_IsSecret( const cvar_t *var, const cvarDeclaration_t *declaration ) {
-	return ( var->flags & CVAR_PRIVATE ) || Q_stristr( var->name, "password" ) ||
+	return ( var->flags & CVAR_PRIVATE ) || Cvar_IsSecretName( var->name ) ||
 		( declaration && declaration->type && !strcmp( declaration->type, "password" ) );
 }
 
