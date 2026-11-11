@@ -289,6 +289,7 @@ typedef struct {
 	qboolean		cached;						// a download, from the content cache
 	qboolean		defaultCfgNoted;			// its default.cfg read, and said so
 	qboolean		holdsMap, holdsCode;		// a maps/*.bsp; a vm/*.qvm (FS_MapPack)
+	qboolean		excluded;					// the server's own: fs_excludeReference names it (FS_ExcludePaks)
 } pack_t;
 
 typedef struct {
@@ -2911,8 +2912,9 @@ int	FS_FileIsInPAK(const char *filename, int *pChecksum ) {
 		}
 		// is the element a pak file?
 		if ( search->pack && search->pack->hashTable[hash] ) {
-			// disregard if it doesn't match one of the allowed pure pak files
-			if ( !FS_PakIsPure(search->pack) ) {
+			// disregard if it doesn't match one of the allowed pure pak
+			// files, or is the server's own, which clients don't have
+			if ( !FS_PakIsPure(search->pack) || search->pack->excluded ) {
 				continue;
 			}
 
@@ -5366,6 +5368,35 @@ static qboolean FS_IdPak( const pack_t *pak ) {
 
 /*
 ================
+FS_NextListedName
+
+The next name in a list of paks separated by spaces, fs_globalPaks' or
+fs_excludeReference's, into token without its .pk3 or .pk3dir, moving
+list past it; qfalse at the list's end
+================
+*/
+static qboolean FS_NextListedName( const char **list, char *token, int size ) {
+	char	*end;
+	int		length;
+
+	while ( **list == ' ' ) {
+		( *list )++;
+	}
+	if ( !**list ) {
+		return qfalse;
+	}
+	for ( length = 0; ( *list )[length] && ( *list )[length] != ' '; length++ ) {
+	}
+	Q_strncpyz( token, *list, MIN( length + 1, size ) );
+	*list += length;
+	if ( ( end = strrchr( token, '.' ) ) && ( !Q_stricmp( end, ".pk3" ) || !Q_stricmp( end, ".pk3dir" ) ) ) {
+		*end = '\0';
+	}
+	return qtrue;
+}
+
+/*
+================
 FS_GlobalPak
 
 Whether fs_globalPaks names a pak or pk3dir: a name, with or without its
@@ -5375,8 +5406,7 @@ directory, in any case
 */
 static qboolean FS_GlobalPak( const searchpath_t *search ) {
 	const char	*list = fs_globalPaks->string, *game;
-	char		name[MAX_OSPATH], full[MAX_OSPATH], token[MAX_OSPATH], *end;
-	int			length;
+	char		name[MAX_OSPATH], full[MAX_OSPATH], token[MAX_OSPATH];
 
 	game = FS_EntryGame( search );
 	if ( search->pack ) {
@@ -5386,15 +5416,7 @@ static qboolean FS_GlobalPak( const searchpath_t *search ) {
 	}
 	Com_sprintf( full, sizeof( full ), "%s/%s", game, name );
 
-	while ( *list ) {
-		for ( length = 0; list[length] && list[length] != ' '; length++ ) {
-		}
-		Q_strncpyz( token, list, MIN( length + 1, (int)sizeof( token ) ) );
-		for ( list += length; *list == ' '; list++ ) {
-		}
-		if ( ( end = strrchr( token, '.' ) ) && ( !Q_stricmp( end, ".pk3" ) || !Q_stricmp( end, ".pk3dir" ) ) ) {
-			*end = '\0';
-		}
+	while ( FS_NextListedName( &list, token, sizeof( token ) ) ) {
 		if ( token[0] && !FS_FilenameCompare( strchr( token, '/' ) ? full : name, token ) ) {
 			return qtrue;
 		}
@@ -6721,8 +6743,8 @@ const char *FS_LoadedPakChecksums( void ) {
 	info[0] = 0;
 
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
-		// is the element a pak file? 
-		if ( !search->pack ) {
+		// is the element a pak file, and one clients have?
+		if ( !search->pack || search->pack->excluded ) {
 			continue;
 		}
 
@@ -6747,8 +6769,8 @@ const char *FS_LoadedPakNames( void ) {
 	info[0] = 0;
 
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
-		// is the element a pak file?
-		if ( !search->pack ) {
+		// is the element a pak file, and one clients have?
+		if ( !search->pack || search->pack->excluded ) {
 			continue;
 		}
 
@@ -6777,8 +6799,8 @@ const char *FS_LoadedPakPureChecksums( void ) {
 	info[0] = 0;
 
 	for ( search = fs_searchpaths ; search ; search = search->next ) {
-		// is the element a pak file? 
-		if ( !search->pack ) {
+		// is the element a pak file, and one clients have?
+		if ( !search->pack || search->pack->excluded ) {
 			continue;
 		}
 
@@ -6793,11 +6815,102 @@ const char *FS_LoadedPakPureChecksums( void ) {
 FS_PakIsReferenced
 
 Whether the server lists a pak among those clients must have: every pak
-outside the base game, and the base game's referenced ones
+outside the base game, and the base game's referenced ones, but for the
+server's own (fs_excludeReference)
 =====================
 */
 static qboolean FS_PakIsReferenced( const pack_t *pak ) {
-	return pak->referenced || Q_stricmpn( pak->pakGamename, com_basegame->string, strlen( com_basegame->string ) );
+	return !pak->excluded &&
+		( pak->referenced || Q_stricmpn( pak->pakGamename, com_basegame->string, strlen( com_basegame->string ) ) );
+}
+
+/*
+=====================
+FS_ExcludePaks
+
+Marks the paks a list names, "game/name" or "game/name.pk3" separated by
+spaces in any case (fs_excludeReference, after Quake3e's), as the
+server's own: the server reads them as ever, but no list it gives clients
+names them, nor the content manifest, so clients neither need nor fetch
+them. Every pak is matched by name, those outside the base game too,
+which the referenced list names all of. A name no pak has is said, once
+for each list. Returns how many paks are marked
+=====================
+*/
+int FS_ExcludePaks( const char *list ) {
+	static char		said[MAX_STRING_CHARS];
+	const char		*p = list;
+	searchpath_t	*search;
+	char			word[MAX_OSPATH], unmatched[MAX_STRING_CHARS];
+	qboolean		matched;
+	int				count = 0;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack ) {
+			search->pack->excluded = qfalse;
+		}
+	}
+	unmatched[0] = '\0';
+	while ( FS_NextListedName( &p, word, sizeof( word ) ) ) {
+		matched = qfalse;
+		for ( search = fs_searchpaths; search; search = search->next ) {
+			pack_t	*pak = search->pack;
+
+			if ( pak && !FS_FilenameCompare( va( "%s/%s", pak->pakGamename, pak->pakBasename ), word ) ) {
+				count += !pak->excluded;
+				pak->excluded = qtrue;
+				matched = qtrue;
+			}
+		}
+		if ( !matched ) {
+			Q_strcat( unmatched, sizeof( unmatched ), va( " %s", word ) );
+		}
+	}
+	if ( unmatched[0] && strcmp( said, list ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: fs_excludeReference names paks the server doesn't have, which it "
+			"leaves out:%s\n", unmatched );
+	}
+	Q_strncpyz( said, unmatched[0] ? list : "", sizeof( said ) );
+	return count;
+}
+
+/*
+=====================
+FS_ExcludedPakWith
+
+The pak, as "game/name", a file is read from when that's one of the
+server's own (FS_ExcludePaks), which clients don't have; NULL otherwise
+=====================
+*/
+const char *FS_ExcludedPakWith( const char *filename ) {
+	static char			name[MAX_OSPATH];
+	const searchpath_t	*search = FS_FileSearch( filename );
+
+	if ( !search || !search->pack || !search->pack->excluded ) {
+		return NULL;
+	}
+	Com_sprintf( name, sizeof( name ), "%s/%s", search->pack->pakGamename, search->pack->pakBasename );
+	return name;
+}
+
+/*
+=====================
+FS_TouchFileInPak
+
+Marks as referenced, with the flags, the first pak holding a file that
+clients have, passing over the server's own (FS_ExcludePaks): for the
+pure check's cgame and ui, when one of those holds them
+=====================
+*/
+void FS_TouchFileInPak( const char *filename, int flags ) {
+	searchpath_t	*search;
+
+	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		if ( search->pack && !search->pack->excluded && FS_PakHasFile( search->pack, filename ) ) {
+			search->pack->referenced |= flags;
+			return;
+		}
+	}
 }
 
 /*
@@ -7803,8 +7916,9 @@ void FS_HashPaks( void ) {
 				continue;
 			}
 			// the referenced ones in the first pass, the rest in the second;
-			// the game's own paks only where the server sends them
-			if ( FS_PakIsReferenced( pak ) == pass || FS_PakRefused( pak ) ||
+			// the game's own paks only where the server sends them, and
+			// none of the server's own, which nothing sends
+			if ( FS_PakIsReferenced( pak ) == pass || FS_PakRefused( pak ) || pak->excluded ||
 				!FS_ContentRelativePath( pak, relative, sizeof( relative ) ) ) {
 				continue;
 			}
@@ -7846,7 +7960,8 @@ int FS_ContentPaks( contentPak_t *paks, int max ) {
 	int					count = 0;
 
 	for ( search = fs_searchpaths; search; search = search->next ) {
-		if ( !( pak = search->pack ) ) {
+		// the server's own paks are no client's content (fs_excludeReference)
+		if ( !( pak = search->pack ) || pak->excluded ) {
 			continue;
 		}
 		if ( paks && count < max ) {

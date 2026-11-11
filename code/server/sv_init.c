@@ -793,6 +793,17 @@ they download; as each map starts, and under --check, as one would
 */
 static void SV_SetPureLists( void ) {
 	const char	*p;
+	int			excluded;
+
+	// the server's own paks, which no list names (ENG-120); and a map
+	// whose BSP is in one, which players can't load
+	excluded = FS_ExcludePaks( fs_excludeReference->string );
+	if ( excluded && !com_check && ( p = FS_ExcludedPakWith( va( "maps/%s.bsp", sv_mapname->string ) ) ) != NULL ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the map %s is in %s, which fs_excludeReference names, so players "
+			"aren't told to have it, %s\n", sv_mapname->string, p, sv.pure ?
+			"and with sv_pure on none can load the map, even with a copy of their own" :
+			"and only those with a copy of their own can load the map" );
+	}
 
 	if ( sv.pure ) {
 		// the server sends these to the clients so they will only
@@ -810,6 +821,12 @@ static void SV_SetPureLists( void ) {
 		// files with the latest cgame and ui qvm to pass the pure check
 		SV_TouchFile( "vm/cgame.qvm" );
 		SV_TouchFile( "vm/ui.qvm" );
+		// and when the server's own pak holds them, the next one, as the
+		// pure check then expects a client's from it (FS_FileIsInPAK)
+		if ( excluded ) {
+			FS_TouchFileInPak( "vm/cgame.qvm", FS_CGAME_REF );
+			FS_TouchFileInPak( "vm/ui.qvm", FS_UI_REF );
+		}
 	}
 	else {
 		Cvar_Set( "sv_paks", "" );
@@ -882,11 +899,12 @@ static const char *SV_PureLine( void ) {
 	if ( !sv.pure ) {
 		return "off (sv_pure 0)";
 	}
-	total = FS_ContentPaks( NULL, 0 );
+	// counted once the server's own paks are marked (fs_excludeReference)
 	if ( com_check ) {
 		SV_SetPureLists();
 		SV_SystemInfo();
 	}
+	total = FS_ContentPaks( NULL, 0 );
 	return sv.pureOff ? va( "not for this map: the list of %d paks doesn't fit the systeminfo string (the warning "
 		"says what to do)", total ) : va( "on, %d paks", total );
 }
@@ -1347,6 +1365,14 @@ void SV_Init (void)
 		"with it off.\n"
 		"0 = off: players' own files load too\n"
 		"1 = on: only the server's paks" );
+	// Quake3e's name, so its servers' configs work as they are
+	fs_excludeReference = Cvar_Get( "fs_excludeReference", "", CVAR_ARCHIVE );
+	Cvar_SetDescription( fs_excludeReference,
+		"Paks the server uses that players don't need, such as server scripts\n"
+		"Each as game/name or game/name.pk3, separated by spaces, as in \"mymod/server.pk3 mymod/bots\". The "
+		"server reads them as ever, but from the next map players aren't told to have them or sent them, and "
+		"they're left out of the pure list, the content manifest and content export. A name the server has no "
+		"pak for is warned of, as is a map whose BSP is in one." );
 #ifdef USE_VOIP
 	sv_voip = Cvar_Get("sv_voip", "1", CVAR_LATCH);
 	Cvar_CheckRange(sv_voip, 0, 1, qtrue);
@@ -1625,6 +1651,9 @@ void SV_Shutdown( char *finalmsg ) {
 	// free current level
 	SV_ClearServer();
 	SV_ContentShutdown();
+	// and the paks it kept from clients, as a listen server's player
+	// shares its files and plays on after it
+	FS_ExcludePaks( "" );
 
 	// free server static data
 	if(svs.clients)

@@ -356,7 +356,7 @@ void CL_SystemInfoChanged( void ) {
 	const char		*s, *t;
 	char			key[BIG_INFO_KEY];
 	char			value[BIG_INFO_VALUE];
-	qboolean		gameSet;
+	qboolean		gameSet, local;
 	int			created, createdBytes;
 
 	systemInfo = cl.gameState.stringData + cl.gameState.stringOffsets[ CS_SYSTEMINFO ];
@@ -397,13 +397,17 @@ void CL_SystemInfoChanged( void ) {
 		Cvar_SetCheatState();
 	}
 
-	// check pure server string
-	s = Info_ValueForKey( systemInfo, "sv_paks" );
-	t = Info_ValueForKey( systemInfo, "sv_pakNames" );
+	// check pure server string. A listen server's own client shares its
+	// files, which the lists would hold to them both: a pak the server
+	// keeps from clients (fs_excludeReference) would be gone for the
+	// server too, and it has all the others loaded already (Quake3e's)
+	local = clc.serverAddress.type == NA_LOOPBACK;
+	s = local ? "" : Info_ValueForKey( systemInfo, "sv_paks" );
+	t = local ? "" : Info_ValueForKey( systemInfo, "sv_pakNames" );
 	FS_PureServerSetLoadedPaks( s, t );
 
-	s = Info_ValueForKey( systemInfo, "sv_referencedPaks" );
-	t = Info_ValueForKey( systemInfo, "sv_referencedPakNames" );
+	s = local ? "" : Info_ValueForKey( systemInfo, "sv_referencedPaks" );
+	t = local ? "" : Info_ValueForKey( systemInfo, "sv_referencedPakNames" );
 	FS_PureServerSetReferencedPaks( s, t );
 
 	gameSet = qfalse;

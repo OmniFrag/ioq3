@@ -64,6 +64,7 @@ cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;
 cvar_t	*sv_gametype;
 cvar_t	*sv_pure;
+cvar_t	*fs_excludeReference;		// the server's own paks, which clients aren't sent (ENG-120)
 cvar_t	*sv_floodProtect;
 cvar_t	*sv_statusOnePacket;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)

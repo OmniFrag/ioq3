@@ -1778,7 +1778,12 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 	// certain pk3 files, namely we want the client to have loaded the
 	// ui and cgame that we think should be loaded based on the pure setting
 	//
-	if ( SV_PureActive() ) {
+	// A listen server's own player shares the server's files, so it reads
+	// what the server does and is held to no pure list (CL_SystemInfoChanged)
+	if ( SV_PureActive() && cl->netchan.remoteAddress.type == NA_LOOPBACK ) {
+		cl->gotCP = qtrue;
+		cl->pureAuthentic = 1;
+	} else if ( SV_PureActive() ) {
 
 		nChkSum1 = nChkSum2 = 0;
 		// we run the game, so determine which cgame and ui the client "should" be running

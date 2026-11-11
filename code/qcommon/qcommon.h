@@ -1412,6 +1412,12 @@ const char *FS_LoadedPakPureChecksums( void );
 // Servers with sv_pure set will get this string and pass it to clients.
 
 const char *FS_ReferencedPakNames( void );
+// the server's own paks, which no client list names (fs_excludeReference):
+// marks those the list names, returning how many; the excluded pak a file
+// is read from, or NULL; and the touch of a file in a pak clients have
+int FS_ExcludePaks( const char *list );
+const char *FS_ExcludedPakWith( const char *filename );
+void FS_TouchFileInPak( const char *filename, int flags );
 void FS_HashPaks( void );
 // at a map load, queues the paks the pak index lacks to be hashed (content.h)
 const char *FS_ContentRootPath( int root );
