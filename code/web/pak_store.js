@@ -2,15 +2,18 @@
 // (OPFS) for the next visit, by this dedicated worker of the page's (bring,
 // in client.html.in): each at own/<gamedir>/<name>, the name asked for, with
 // own/index.json listing each one kept, { src, path, name, checksum, size,
-// mtime }: src the file it fills, as asked for (<gamedir>/<name>,
-// lowercased), path where it is under own/, and name and mtime the chosen
-// file's. A second version of a pak under the same name is kept beside the
-// first, at own/<gamedir>/<checksum>/<name>, rather than over it.
+// mtime, stamp }: src the file it fills, as asked for (<gamedir>/<name>,
+// lowercased), path where it is under own/, name and mtime the chosen
+// file's, and stamp the page's of its bytes (stampOf, in pak_check.js),
+// which the page checks on later visits. A second version of a pak under
+// the same name is kept beside the first, at own/<gamedir>/<checksum>/<name>,
+// rather than over it.
 //
 // A pak is copied in slices and written with a sync access handle, or with
-// createWritable where the browser has none. Its record is taken out of the
-// index before the copy and put back only once the whole file is written, so
-// a copy cut short, by a failure or by the page going, leaves a file the
+// createWritable where the browser has none, or where sync access handles'
+// writes can be lost (SYNC_WRITES_LOST). Its record is taken out of the
+// index before the copy and put back only once the whole file is written,
+// so a copy cut short, by a failure or by the page going, leaves a file the
 // index doesn't list, which is removed. A sync access handle is exclusive:
 // each is closed as soon as its file is written, and a copy stops, and lets
 // go of its handle, when the page goes. Another page's copy of the same file
@@ -18,10 +21,11 @@
 //
 // The worker posts { running } as it starts. The page posts { id, op, ... }
 // and gets { id, ok, ... } back, and { id, copied } as a copy goes:
-//   list   { sync, files }: whether the browser has sync access handles, and
-//          the index's records, each with file, its File
-//   store  { file, src, checksum } -> { path }, with already if it was
-//          there, or { busy } when another page holds src
+//   list   { sync, files }: whether paks are written with sync access
+//          handles, and the index's records, each with file, its File
+//   store  { file, src, checksum, stamp } -> { path }, with already if it
+//          was there, the same stamp, or { busy } when another page holds src
+//   stamp  { path, stamp }: a record kept from before stamps given its own
 //   drop   { path }: its record and file removed
 //   tidy   files the index doesn't list removed
 // and { op: 'stop' } as it goes: the copy stops, its handle closed, and
@@ -36,6 +40,15 @@ const SLICE = 4 << 20;
 // and how long apart a handle another page's worker holds, as on a reload,
 // is asked for again
 const LOCK_WAIT = 1500, HANDLE_TRIES = 5, HANDLE_WAIT = 200;
+// WebKit (Safari, and every browser on iOS) can lose a file written through
+// a sync access handle: one written so, flushed and closed, came back at its
+// full size but zero-filled after the browser was killed, where one written
+// through createWritable didn't. No probe can see that, as a file reads back
+// whole until the kill, so it goes by the engine's name in the user agent:
+// AppleWebKit without Chrome's or Chromium's, which Blink's carries too.
+// There paks are written through createWritable, where it's there; the
+// page's stamp catches a loss wherever else one comes.
+const SYNC_WRITES_LOST = /AppleWebKit\//.test(navigator.userAgent) && !/Chrome\/|Chromium\//.test(navigator.userAgent);
 let stopping = false;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,10 +85,11 @@ async function access(handle) {
 // Writes slices, an iterable of bytes, sync or async, as the whole of
 // handle's file, calling copied with the bytes written so far; the bytes
 // written. With whole, it's written whole or not at all (createWritable
-// writes beside the file and swaps it in), where the browser can.
+// writes beside the file and swaps it in), where the browser can, as it
+// is where sync access handles' writes can be lost (SYNC_WRITES_LOST).
 async function write(handle, slices, copied = () => {}, whole = false) {
     let at = 0, put, finish, abandon;
-    if (handle.createSyncAccessHandle && !(whole && handle.createWritable)) {
+    if (handle.createSyncAccessHandle && !(handle.createWritable && (whole || SYNC_WRITES_LOST))) {
         const file = await access(handle);
         try {
             await file.truncate(0);
@@ -154,10 +168,12 @@ const ops = {
         const records = (await readIndex()).files;
         // a file another page is writing, or that's gone, isn't listed
         const files = await Promise.all(records.map(async (record) => ({ ...record, file: await fileAt(record.path) })));
-        return { sync: typeof FileSystemSyncAccessHandle == 'function', files: files.filter(({ file }) => file) };
+        const sync = typeof FileSystemSyncAccessHandle == 'function'
+            && !(SYNC_WRITES_LOST && 'createWritable' in FileSystemFileHandle.prototype);
+        return { sync, files: files.filter(({ file }) => file) };
     }),
 
-    store: ({ file, src, checksum }, id) => navigator.locks.request(fileLock(src),
+    store: ({ file, src, checksum, stamp }, id) => navigator.locks.request(fileLock(src),
         { signal: AbortSignal.timeout(LOCK_WAIT) }, async () => {
             const [gamedir, name] = src.split('/');
             // Kept already, as by another page that held src a moment ago;
@@ -168,7 +184,7 @@ const ops = {
                 const index = await readIndex();
                 const versions = index.files.filter((record) => record.src === src);
                 const same = versions.find((record) => record.checksum === checksum);
-                if (same?.size === file.size && (await fileAt(same.path))?.size === same.size) return { kept: same };
+                if (same?.size === file.size && same.stamp === stamp && (await fileAt(same.path))?.size === same.size) return { kept: same };
                 const path = same?.path ?? (versions.length ? `${gamedir}/${checksum ?? 'unchecked'}/${name}` : src);
                 index.files = index.files.filter((record) => record.path !== path);
                 await writeIndex(index);
@@ -188,13 +204,23 @@ const ops = {
                 throw error;
             }
             await changeIndex((index) => {
-                index.files.push({ src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified });
+                index.files.push({ src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified, stamp });
             });
             return { path };
         }).catch((error) => {
         if (error?.name === 'AbortError' || error?.name === 'TimeoutError') return { busy: true };
         throw error;
     }),
+
+    // only a record that has none, so a stamp taken before another page
+    // stored the pak again isn't put on the new one's
+    stamp: async ({ path, stamp }) => {
+        await changeIndex((index) => {
+            const record = index.files.find((each) => each.path === path);
+            if (record && record.stamp === undefined) record.stamp = stamp;
+        });
+        return {};
+    },
 
     drop: async ({ path }) => {
         await changeIndex((index) => {

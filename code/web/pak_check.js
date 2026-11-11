@@ -137,6 +137,35 @@ async function checksumOfPak(blob) {
     return { checksum: checksumOf(crcs) };
 }
 
+// A stamp of a file's bytes, cheap enough to take on every visit: the
+// SHA-256, in hex, of its size (8 bytes, little-endian) and five samples of
+// STAMP_SAMPLE bytes, at its start, a third and two thirds of the way in, at
+// its directory's start (where its last end record, in the last sample,
+// says; the middle without one) and at its end; of the whole file when it's
+// no larger than the samples. The page takes one as it stores a pak and
+// again on each later visit (bring, in client.html.in), so a stored pak
+// whose bytes changed, as one WebKit wrote can come back zero-filled at its
+// full size, isn't taken for the pak stored. The directory alone, which
+// checkPak reads, would miss that.
+export const STAMP_SAMPLE = 64 << 10;
+export async function stampOf(blob) {
+    const size = blob.size, n = STAMP_SAMPLE;
+    const head = new DataView(new ArrayBuffer(8));
+    head.setBigUint64(0, BigInt(size), true);
+    let parts = [blob];
+    if (size > 5 * n) {
+        const { from, tail, at } = await findEnd(blob, n);
+        const directory = at < 0 ? size / 2 : from + at - tail.getUint32(at + 12, true);
+        const sample = (start) => {
+            const begin = Math.min(Math.max(0, Math.floor(start)), size - n);
+            return blob.slice(begin, begin + n);
+        };
+        parts = [sample(0), sample(size / 3), sample(directory), sample(2 * size / 3), tail];
+    }
+    const digest = await crypto.subtle.digest('SHA-256', await new Blob([head, ...parts]).arrayBuffer());
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 // fn of each of items, at most limit at once, in items' order: a whole
 // install's folder is checked a few files at a time, not with hundreds of
 // reads under way together

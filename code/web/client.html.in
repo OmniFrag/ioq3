@@ -958,9 +958,9 @@ const agree = async (agreement) => {
 // under the names asked for, for the next visit: in its private files
 // (OPFS) where it has them, through a worker of the page's (ownStore
 // below), or else in IndexedDB. A kept file is checked again on the next
-// visit, IndexedDB's by its checksum, and OPFS's by its size against the
-// index's, its checksum only when that changed; one the browser won't
-// keep, or that no longer checks, is asked for again.
+// visit, IndexedDB's by its checksum, and OPFS's by its size and a stamp of
+// samples of its bytes against the index's; one the browser won't keep, or
+// that no longer checks, is asked for again.
 const OWN_DATABASE = `${CLIENT_NAME}-own`;
 const ownDatabase = () => new Promise((resolve) => {
     try {
@@ -1161,6 +1161,9 @@ let ownStoreEarly;
 // set once the page has read the player's files in (downloadGame)
 let ownRead;
 const ownReadDone = new Promise((resolve) => { ownRead = resolve; });
+// how long a stored file's stamp may take to read before bring takes it by
+// its size
+const STAMP_READ_MS = 2000;
 const bring = async (own) => {
     const [paks, store, databases] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')),
         ownStoreEarly ?? ownStore(), indexedDB.databases?.().catch(() => undefined)]);
@@ -1209,26 +1212,47 @@ const bring = async (own) => {
     const toIsolate = Boolean(isolation.form && store.call);
     let copies = toIsolate ? Promise.resolve() : ownReadDone;
     const queue = (work) => { copies = copies.then(work).catch((error) => console.error(`Couldn't store files: ${error}`)); };
-    // OPFS's files: each as the index has it while its size is the index's,
-    // or else checked again, and removed if it no longer checks; another
-    // version of the same pak is passed by quietly
+    // OPFS's files: each as the index has it while its size and stamp
+    // (paks.stampOf) are the index's, or while it can't be read for its
+    // stamp, as while another tab holds it, which the engine's reads then
+    // meet as before. One stored before stamps is checked again and, if it
+    // still is what its record says, stamped. Any other is no longer the
+    // file stored, as WebKit can leave one zero-filled at its full size: it's
+    // damaged, removed, and asked for again, never handed to the engine.
+    // Another version of the same pak is passed by quietly.
+    // The stamps of the records of files asked for, four at a time:
+    // undefined for another size, null for a file that can't be read, or
+    // isn't within STAMP_READ_MS, as WebKit's read of a pak another tab
+    // holds can wait rather than fail (inMemory, in downloadGame)
+    const asked = new Set(own.map((file) => file.src.toLowerCase()));
+    const stamps = new Map(store.call ? await paks.mapLimited(store.files.filter(({ src }) => asked.has(src)), 4, async (record) => {
+        if (record.file.size !== record.size) return [record, undefined];
+        const stamp = await Promise.race([paks.stampOf(record.file).catch(() => null),
+            new Promise((resolve) => setTimeout(resolve, STAMP_READ_MS, null))]);
+        if (stamp === null) console.log(`Own files: couldn't read ${record.path} for its stamp, so it's taken by its size`);
+        return [record, stamp];
+    }) : []);
     if (store.call) for (const file of own) {
         for (const record of store.files.filter(({ src }) => src === file.src.toLowerCase())) {
-            const changed = record.file.size !== record.size;
-            const keptFile = changed ? await checked(record.file, record.name)
-                : { name: record.name, blob: record.file, checksum: record.checksum };
-            if (reuse(file, keptFile, !changed)) {
+            const stamp = stamps.get(record);
+            const unstamped = stamp && record.stamp === undefined;
+            const keptFile = stamp === null || (stamp && stamp === record.stamp)
+                ? { name: record.name, blob: record.file, checksum: record.checksum }
+                : unstamped ? await checked(record.file, record.name)
+                : { name: record.name, blob: record.file, damaged: 'not as it was stored' };
+            const { damaged } = keptFile;
+            if (reuse(file, keptFile, !damaged)) {
                 storedAt.set(file, record.path);
+                if (unstamped && keptFile.checksum === record.checksum) store.call('stamp', { path: record.path, stamp }).catch(() => {});
                 break;
             }
-            if (changed) store.call('drop', { path: record.path }).catch(() => {});
+            if (damaged && damaged !== 'unreadable') store.call('drop', { path: record.path }).catch(() => {});
         }
     }
     const fromStore = have.size;
     // IndexedDB's, as the page kept them before OPFS, or keeps them without:
     // each checked once, for this visit and for its move into OPFS below,
     // and without OPFS only the ones asked for
-    const asked = new Set(own.map((file) => file.src.toLowerCase()));
     const kept = (await paks.mapLimited((await ownAll(db)).filter(([key]) => store.call || asked.has(key)), 4,
         async ([key, blob]) => typeof key == 'string' && blob instanceof Blob
             ? { key, ...await checked(blob, blob.name ?? fileName(key)) } : null)).filter(Boolean);
@@ -1257,7 +1281,8 @@ const bring = async (own) => {
         for (const { entry, blob, checksum, done } of files) {
             const from = copied, name = blob.name ?? entry.src;
             try {
-                const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum },
+                const stamp = await paks.stampOf(blob);
+                const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum, stamp },
                     (bytes) => {
                         askBox.dataset.copied = from + bytes;
                         if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100);
