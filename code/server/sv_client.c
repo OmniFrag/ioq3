@@ -598,6 +598,40 @@ static qboolean SV_ClientProof( const challenge_t *challenge, byte identity[IDEN
 	return qtrue;
 }
 
+/*
+==================
+SV_ReleaseClient
+
+What an old connection holds, before its slot goes to a new one: the game
+told it left, so any flags the player had are dropped and the game
+doesn't keep the player if it refuses the connect, and what it holds,
+such as a download's file handle or a zombie's queued fragments, freed.
+Nobody is told over its netchan
+==================
+*/
+static void SV_ReleaseClient( client_t *cl, const char *why ) {
+	if ( cl->state >= CS_CONNECTED ) {
+		Hooks_ClientDropped( cl - svs.clients, why );
+		VM_Call( gvm, GAME_CLIENT_DISCONNECT, cl - svs.clients );
+	}
+	SV_FreeClient( cl );
+}
+
+/*
+==================
+SV_FreeStaleClient
+
+A slot whose address and port a new connection, with another qport, has
+taken (SV_DirectConnect): released and freed at once
+==================
+*/
+static void SV_FreeStaleClient( client_t *cl ) {
+	Com_Printf( "%s: started again on this port, so client %d, %s, is freed\n",
+		NET_AdrToString( cl->netchan.remoteAddress ), (int)( cl - svs.clients ), cl->name );
+	SV_ReleaseClient( cl, "started again" );
+	cl->state = CS_FREE;
+}
+
 void SV_DirectConnect( netadr_t from ) {
 	char		userinfo[MAX_INFO_STRING];
 	int			i;
@@ -720,6 +754,22 @@ void SV_DirectConnect( netadr_t from ) {
 	newcl = &temp;
 	Com_Memset (newcl, 0, sizeof(client_t));
 
+	// a slot at this address and port with another qport is a connection
+	// that's gone: a game started again on the same port, as a player
+	// behind no NAT keeps it at 27960, or another program the NAT has
+	// given it, as two can't hold one address and port at once. Left to
+	// time out, it would go on sending there, and the new connection's
+	// stateless challenge, the same by address and port, would make its
+	// netchan take those packets for its own and drop its own gamestate as
+	// out of order. It's freed, telling nobody over its netchan, and the
+	// connect goes on as a new player's, through the checks below
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
+		if ( cl->state != CS_FREE && cl->netchan.qport != qport &&
+			NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
+			SV_FreeStaleClient( cl );
+		}
+	}
+
 	// if there is already a slot for this address, port and qport, reuse it
 	for (i=0,cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
 		if ( cl->state == CS_FREE ) {
@@ -730,19 +780,7 @@ void SV_DirectConnect( netadr_t from ) {
 			Com_Printf ("%s:reconnect\n", NET_AdrToString (from));
 			newcl = cl;
 
-			if ( newcl->state >= CS_CONNECTED ) {
-				// the old connection leaves, though nobody is told
-				Hooks_ClientDropped( newcl - svs.clients, "reconnected" );
-
-				// disconnect the client from the game first so any flags the
-				// player might have are dropped, and the game doesn't keep
-				// the player if it refuses the connect
-				VM_Call( gvm, GAME_CLIENT_DISCONNECT, newcl - svs.clients );
-
-				// free what the old connection holds, such as a download's
-				// file handle, before the slot is cleared
-				SV_FreeClient( newcl );
-			}
+			SV_ReleaseClient( newcl, "reconnected" );
 			goto gotnewcl;
 		}
 	}
