@@ -677,6 +677,46 @@ qboolean	SV_ExtClientMuted( int clientNum );
 // its players have left or its map ends, or with undrain
 const char	*SV_ExtDrainReason( void );
 
+// content add, for extensions (server/sv_export.c): a pak in sv_contentDir's
+// incoming checked and installed, as the console's content add <file>
+// [game] does it, with a verdict besides its lines. The verdict's code is
+// added, installed_already, or why it was refused: other_contents,
+// retail, damaged, zip64, native_code, encrypted, method, escapes,
+// long_name, too_big, unpacks_too_big, bad_name, bad_game, no_room or
+// failed; and ok, from SV_ExtContentCheck, for a pak it can't refuse yet.
+// Its warnings' codes: overrides_game_code, overrides_many, drops_shaders
+// and map_pack_scope.
+#define EXT_CONTENT_MAX_WARNINGS	16
+typedef struct {
+	const char	*code;
+	char		message[MAX_STRING_CHARS];	// the console's line for it, with no line end
+	int		numWarnings;
+	struct {
+		const char	*code;
+		char		message[MAX_STRING_CHARS];
+	}		warnings[EXT_CONTENT_MAX_WARNINGS];
+	char		sha256[65];		// the pak's, in lowercase hex; "" where it wasn't read
+	long long	size;			// its bytes, -1 where unknown
+} extContentVerdict_t;
+typedef void	( *extContentDone_t )( void *user, const extContentVerdict_t *verdict );
+// Starts content add of file, a pak's name in incoming, for gameDir, this
+// server's for NULL. done gets the verdict with user, at once for a pak
+// refused before its copy starts, else as the add ends, a frame or more
+// later. With removeSource, the file is removed from incoming as the add
+// ends, whatever the verdict, unless its name can't be a pak's. qfalse,
+// doing nothing, while an add or an export runs
+qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, extContentDone_t done,
+	void *user );
+// What content add would say of a pak before it's in incoming, from file,
+// gameDir (NULL for this server's), its size and its pak checksum, which a
+// page computes from the zip's directory (code/web/pak_check.js): the
+// names, the size, one of the game's own by its checksum, and an installed
+// pak of its name, the same file if it's the same size and checksum. With
+// hasChecksum qfalse, an installed pak of another size is another one, and
+// the rest is left to the add. The console says nothing
+void	SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
+	unsigned int checksum, extContentVerdict_t *verdict );
+
 // The server's address bans and their exceptions (banaddr, exceptaddr),
 // which sv_banFile keeps. Indexes run from 0 to SV_ExtBanCount() - 1, and
 // move as entries come and go.

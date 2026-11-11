@@ -3325,18 +3325,21 @@ static int FS_DroppedShaders( const searchpath_t *search, const searchpath_t *ot
 =================
 FS_AddPakEntryRefused
 
-Why content add refuses a pak's entry by its name, or NULL: a name that
-could reach outside the game's directories, or native code
+Why content add refuses a pak's entry by its name, with the verdict's
+code, or NULL: a name that could reach outside the game's directories, or
+native code
 =================
 */
-static const char *FS_AddPakEntryRefused( const char *name ) {
+static const char *FS_AddPakEntryRefused( const char *name, const char **code ) {
 	size_t	length = strlen( name );
 
 	if ( name[0] == '/' || strchr( name, '\\' ) || strchr( name, ':' ) || !strcmp( name, ".." )
 		|| !Q_strncmp( name, "../", 3 ) || strstr( name, "/../" ) || ( length >= 3 && !strcmp( name + length - 3, "/.." ) ) ) {
+		*code = "escapes";
 		return "a name that leaves the game's directories";
 	}
 	if ( FS_IsNativeFile( name ) ) {
+		*code = "native_code";
 		return "native code";
 	}
 	return NULL;
@@ -3367,65 +3370,178 @@ static qboolean FS_NativeMagic( const byte *b, int length ) {
 
 /*
 =================
+FS_Zip64Records
+
+Whether a zip has zip64's records, which unzip doesn't read: an end record
+that leaves its directory's size or place to them (0xffffffff), or zip64's
+locator just before it, whose records unzip then takes for bytes before
+the zip (byte_before_the_zipfile), so it finds no entry where the
+directory says. The last end record, as unzip finds it
+(unzlocal_SearchCentralDir) and the web's pak check reads it
+(code/web/pak_check.js)
+=================
+*/
+#define ZIP_END_RECORD			0x06054b50
+#define ZIP_END_SIZE			22
+#define ZIP64_LOCATOR			0x07064b50
+#define ZIP64_LOCATOR_SIZE		20
+#define ZIP64_VERSION			45		// the version an entry needs that has zip64's sizes
+
+static unsigned int FS_ZipLong( const byte *b ) {
+	return b[0] | ( b[1] << 8 ) | ( b[2] << 16 ) | ( (unsigned int)b[3] << 24 );
+}
+
+static qboolean FS_Zip64Records( const char *ospath ) {
+	FILE		*f = Sys_FOpen( ospath, "rb" );
+	byte		*tail;
+	long		size, back, at;
+	qboolean	zip64 = qfalse;
+
+	if ( !f ) {
+		return qfalse;
+	}
+	if ( fseek( f, 0, SEEK_END ) || ( size = ftell( f ) ) < ZIP_END_SIZE ) {
+		fclose( f );
+		return qfalse;
+	}
+	// the end record and the longest comment after it
+	back = MIN( size, 0xffff + ZIP_END_SIZE );
+	tail = Z_Malloc( back );
+	if ( !fseek( f, size - back, SEEK_SET ) && fread( tail, 1, back, f ) == (size_t)back ) {
+		for ( at = back - ZIP_END_SIZE; at >= 0; at-- ) {
+			if ( FS_ZipLong( tail + at ) == ZIP_END_RECORD ) {
+				zip64 = FS_ZipLong( tail + at + 12 ) == 0xffffffff || FS_ZipLong( tail + at + 16 ) == 0xffffffff
+					|| ( at >= ZIP64_LOCATOR_SIZE && FS_ZipLong( tail + at - ZIP64_LOCATOR_SIZE ) == ZIP64_LOCATOR );
+				break;
+			}
+		}
+	}
+	Z_Free( tail );
+	fclose( f );
+	return zip64;
+}
+
+#define ADD_PAK_ZIP64	"it's saved as zip64, which the game can't read; zip it again without zip64"
+
+// a warning content add's check found, in its words, while there's room
+static void FS_AddPakWarning( extContentVerdict_t *verdict, const char *code, const char *text ) {
+	if ( verdict && verdict->numWarnings < EXT_CONTENT_MAX_WARNINGS ) {
+		verdict->warnings[verdict->numWarnings].code = code;
+		Q_strncpyz( verdict->warnings[verdict->numWarnings].message, text, sizeof( verdict->warnings[0].message ) );
+		verdict->numWarnings++;
+	}
+}
+
+/*
+=================
+FS_AddPakInstalled
+
+The file of a pak of the search path named gameDir/name.pk3, in any of the
+game's directories (the base path's too), one whose checksum isn't
+checksum first, with its checksum in installed; NULL for none. Players
+know a pak by its name, so content add takes no other contents under it
+=================
+*/
+const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned int checksum,
+	unsigned int *installed ) {
+	const searchpath_t	*search;
+	const pack_t		*found = NULL;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		const pack_t	*other = search->pack;
+
+		if ( other && !Q_stricmp( other->pakGamename, gameDir ) && !Q_stricmp( other->pakBasename, name )
+			&& ( !found || found->checksum == checksum ) ) {
+			found = other;
+		}
+	}
+	if ( !found ) {
+		return NULL;
+	}
+	*installed = found->checksum;
+	return found->pakFilename;
+}
+
+/*
+=================
 FS_CheckAddPak
 
 What content add checks of a pak an operator installs as gameDir/name.pk3:
-a zip that loads as a pak, none of whose entries could reach outside the
-game's directories, is encrypted or is native code, by its name or its
-first bytes, within CONTENT_MAX_PAK_SIZE unpacked; and not one of the
-game's own. NULL, with the pak's checksum, or why it's refused. In
+a zip that loads as a pak, not zip64, none of whose entries could reach
+outside the game's directories, is encrypted or is native code, by its
+name or its first bytes, within CONTENT_MAX_PAK_SIZE unpacked; and not one
+of the game's own. NULL, with the pak's checksum, or why it's refused. In
 overrides, the paks of the search path it would take code (a QVM in vm/),
 more than PAK_ADD_OVERRIDES files or a shader from, where its copy of a
 shader file leaves some out, and of a map pack where its files count, said
-as a warning, or ""; with overrides NULL, none of that is looked at
+as a warning, or ""; with overrides NULL, none of that is looked at. In
+verdict, when it's given, the refusal's code, and with overrides each of
+those warnings with its code
 =================
 */
 const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
-	unsigned int *checksum, char *overrides, int overridesSize ) {
+	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict ) {
 	pack_t			*pak;
 	const searchpath_t	*search;
 	searchpath_t	added;
 	unz_global_info	gi;
 	unz_file_info	info;
-	char			entry[MAX_ZPATH], retail[MAX_QPATH];
-	const char		*why = NULL, *code;
+	char			entry[MAX_ZPATH], retail[MAX_QPATH], clause[MAX_STRING_CHARS];
+	const char		*why = NULL, *refused = NULL, *code, *named;
 	byte			first[4];
 	uint64_t		unpacked = 0;
+	unsigned int	installed;
 	int				i, got, count, dropped;
+	qboolean		zip64;
 
 	if ( overrides ) {
 		overrides[0] = '\0';
+		if ( verdict ) {
+			verdict->numWarnings = 0;
+		}
 	}
+	// zip64's records, which unzip can't read, keep a pak from loading or
+	// hide its directory
 	pak = FS_LoadZipFile( ospath, name, "", gameDir );
 	if ( !pak ) {
-		return "it isn't a zip that loads as a pak";
+		zip64 = FS_Zip64Records( ospath );
+		if ( verdict ) {
+			verdict->code = zip64 ? "zip64" : "damaged";
+		}
+		return zip64 ? ADD_PAK_ZIP64 : "it isn't a zip that loads as a pak";
 	}
 	// FS_LoadZipFile keeps the entries before a record it can't read
 	if ( unzGetGlobalInfo( pak->handle, &gi ) != UNZ_OK || pak->numfiles < gi.number_entry ) {
-		why = "its directory can't be read";
+		zip64 = FS_Zip64Records( ospath );
+		refused = zip64 ? "zip64" : "damaged";
+		why = zip64 ? ADD_PAK_ZIP64 : "its directory can't be read";
 	}
 	unzGoToFirstFile( pak->handle );
 	for ( i = 0; !why && i < pak->numfiles; i++, unzGoToNextFile( pak->handle ) ) {
 		if ( unzGetCurrentFileInfo( pak->handle, &info, entry, sizeof( entry ), NULL, 0, NULL, 0 ) != UNZ_OK ) {
+			refused = "damaged";
 			why = "its directory can't be read";
 			break;
 		}
 		// a name the buffer cuts short, whose end could be anything
 		if ( info.size_filename >= sizeof( entry ) ) {
 			entry[sizeof( entry ) - 1] = '\0';
+			refused = "long_name";
 			why = va( "%s... has a name longer than %d characters", entry, MAX_ZPATH - 1 );
 			break;
 		}
-		if ( ( why = FS_AddPakEntryRefused( entry ) ) != NULL ) {
+		if ( ( why = FS_AddPakEntryRefused( entry, &refused ) ) != NULL ) {
 			why = va( "%s holds %s", entry, why );
 			break;
 		}
 		if ( info.flag & 1 ) {
+			refused = "encrypted";
 			why = va( "%s is encrypted", entry );
 			break;
 		}
 		unpacked += info.uncompressed_size;
 		if ( unpacked > CONTENT_MAX_PAK_SIZE ) {
+			refused = "unpacks_too_big";
 			why = va( "it unpacks to more than %d MB", CONTENT_MAX_PAK_SIZE >> 20 );
 			break;
 		}
@@ -3433,36 +3549,45 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 			continue;
 		}
 		// what the engine can't read, another unzip may: compressed some
-		// other way, or damaged
-		if ( unzOpenCurrentFile( pak->handle ) != UNZ_OK ) {
-			why = va( "%s can't be read", entry );
-			break;
+		// other way, with zip64's sizes in its local header (which unzip
+		// takes for other sizes than the directory's), or damaged
+		if ( unzOpenCurrentFile( pak->handle ) == UNZ_OK ) {
+			got = unzReadCurrentFile( pak->handle, first, sizeof( first ) );
+			unzCloseCurrentFile( pak->handle );
+		} else {
+			got = -1;
 		}
-		got = unzReadCurrentFile( pak->handle, first, sizeof( first ) );
-		unzCloseCurrentFile( pak->handle );
 		if ( got < (int)MIN( info.uncompressed_size, sizeof( first ) ) ) {
-			why = va( "%s can't be read", entry );
+			zip64 = info.version_needed == ZIP64_VERSION;
+			if ( info.compression_method != 0 && info.compression_method != Z_DEFLATED ) {
+				refused = "method";
+				zip64 = qfalse;
+			} else {
+				refused = zip64 ? "zip64" : "damaged";
+			}
+			why = zip64 ? ADD_PAK_ZIP64 : va( "%s can't be read", entry );
 			break;
 		}
 		if ( FS_NativeMagic( first, got ) ) {
+			refused = "native_code";
 			why = va( "%s is native code", entry );
 			break;
 		}
 	}
 	*checksum = pak->checksum;
 	if ( !why && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), pak->checksum, retail, sizeof( retail ) ) ) {
-		why = va( "it's one of the game's own paks, %s, which players add from their own copies", retail );
+		refused = "retail";
+		why = va( ADD_PAK_RETAIL, retail );
 	}
 	// a pak of its name in another of the game's directories, as the base
 	// path's, with other contents: players know a pak by its name
-	for ( search = fs_searchpaths; search && !why; search = search->next ) {
-		const pack_t	*other = search->pack;
-
-		if ( other && !Q_stricmp( other->pakGamename, gameDir ) && !Q_stricmp( other->pakBasename, name )
-			&& other->checksum != pak->checksum ) {
-			why = va( "a pak named %s/%s.pk3 is already installed with different contents (%s); give the new "
-				"version its own name", gameDir, name, other->pakFilename );
-		}
+	if ( !why && ( named = FS_AddPakInstalled( gameDir, name, pak->checksum, &installed ) ) != NULL
+		&& installed != pak->checksum ) {
+		refused = "other_contents";
+		why = va( ADD_PAK_OTHER_CONTENTS, gameDir, name, named );
+	}
+	if ( verdict && why ) {
+		verdict->code = refused;
 	}
 
 	// the paks it would override: the game's paks before it by name, and
@@ -3506,18 +3631,30 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 			}
 		}
 		if ( code || dropped || count > PAK_ADD_OVERRIDES ) {
-			Q_strcat( overrides, overridesSize, va( "%s%s.pk3 overrides %d file%s of %s/%s.pk3%s%s", overrides[0] ? "; " : "",
-				name, count, count == 1 ? "" : "s", other->pakGamename, other->pakBasename, code ? ", including " : "",
-				code ? code : "" ) );
+			Com_sprintf( clause, sizeof( clause ), "%s.pk3 overrides %d file%s of %s/%s.pk3%s%s", name, count,
+				count == 1 ? "" : "s", other->pakGamename, other->pakBasename, code ? ", including " : "", code ? code : "" );
 			if ( dropped ) {
-				Q_strcat( overrides, overridesSize, va( ", and its shader files leave out %d of that pak's shaders",
+				Q_strcat( clause, sizeof( clause ), va( ", and its shader files leave out %d of that pak's shaders",
 					dropped ) );
+			}
+			Q_strcat( overrides, overridesSize, va( "%s%s", overrides[0] ? "; " : "", clause ) );
+			// each thing the clause warns of, in its words
+			if ( code ) {
+				FS_AddPakWarning( verdict, "overrides_game_code", clause );
+			}
+			if ( count > PAK_ADD_OVERRIDES ) {
+				FS_AddPakWarning( verdict, "overrides_many", clause );
+			}
+			if ( dropped ) {
+				FS_AddPakWarning( verdict, "drops_shaders", clause );
 			}
 		}
 	}
 	// a map pack's count only on its own maps, from the next map
 	if ( overrides && overrides[0] && FS_HoldsMapOnly( &added ) ) {
-		Q_strcat( overrides, overridesSize, va( "; as a map pack, its files count %s", FS_PakConflictsWhere( &added ) ) );
+		Com_sprintf( clause, sizeof( clause ), "as a map pack, its files count %s", FS_PakConflictsWhere( &added ) );
+		Q_strcat( overrides, overridesSize, va( "; %s", clause ) );
+		FS_AddPakWarning( verdict, "map_pack_scope", clause );
 	}
 	FS_FreePak( pak );
 	return why;

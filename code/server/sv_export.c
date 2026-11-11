@@ -25,8 +25,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // (downloads.md section 6). The files are cloned (reflinks), or
 // hard-linked, where they can be, else copied, on a thread of their own, so a big set never holds up a
 // frame; it reads the disk beside the pak index's hash job (content.h).
-// content add checks a pak an operator installs, and copies it into a
-// game directory on the same thread, for the next map (section 11).
+// content add checks a pak an operator installs, and clones it into a
+// game directory where the disk can, else copies it, on the same thread,
+// for the next map (section 11); with a verdict an extension can read
+// (hooks.h's SV_ExtContentAdd), as the admin page's uploads do.
 // What either is told to read or write is in sv_contentDir, which only
 // the command line sets, so rcon may run them; content add then installs
 // the pak in the home's game directory, as its name says.
@@ -112,8 +114,11 @@ static sysThread_t	*exportThread;
 static char			exportMadeDir[MAX_OSPATH];	// the last directory SV_ExportMakeDirs made
 // sv_contentDir and its incoming folder, links resolved (SV_ContentRoot)
 static char			contentRoot[MAX_OSPATH], contentIncoming[MAX_OSPATH];
+// why a copy failed for want of room, which content add's verdict names
+static const char	exportDiskFull[] = "the disk is nearly full";
 
 static void SV_AddFinish( void );
+static void SV_AddEnd( void );
 
 /*
 ==============================================================
@@ -234,7 +239,7 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 	Q_strncpyz( dir, part, sizeof( dir ) );
 	*strrchr( dir, PATH_SEP ) = '\0';
 	if ( Sys_DiskSpace( dir, &available, &total ) && (unsigned long long)item->size + CACHE_DISK_RESERVE > available ) {
-		return "the disk is nearly full";
+		return exportDiskFull;
 	}
 	in = Sys_FOpen( item->source, "rb" );
 	if ( !in ) {
@@ -366,10 +371,12 @@ static void SV_ExportTargetStat( exportJob_t *job, exportItem_t *item, int t ) {
 =================
 SV_AddTarget
 
-content add's pak, beside its place in its game directory as a .part, a
-copy hashed as it's made, which the frame checks again and renames into
-place (SV_AddFinish); unless a pak of its name is there already, which is
-the same file (its size, then its hash) or refused
+content add's pak, beside its place in its game directory as a .part: a
+clone of it (a reflink) where the disk can, which takes no space until
+either is written, hashed by reading it, else a copy hashed as it's made;
+which the frame checks again and renames into place (SV_AddFinish).
+Unless a pak of its name is there already, which is the same file (its
+size, then its hash) or refused
 =================
 */
 static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
@@ -378,6 +385,7 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	byte			digest[SHA256_DIGEST_SIZE];
 	const char		*why;
 	int64_t			size, mtime;
+	qboolean		cloned;
 
 	if ( !SV_ContentInside( job->dir, item->source ) ) {
 		target->result = EXPORT_FAILED;
@@ -398,13 +406,19 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	}
 	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
 	remove( part );
-	why = SV_ExportCopy( job, item, part );
+	cloned = Sys_CloneFile( item->source, part );
+	if ( cloned ) {
+		why = !Content_HashFile( part, item->sha256, &size ) ? "the pak can't be read"
+			: size != item->size ? "the pak changed since it was hashed" : NULL;
+	} else {
+		why = SV_ExportCopy( job, item, part );
+	}
 	if ( why ) {
 		remove( part );
 		target->result = EXPORT_FAILED;
 		target->why = why;
 	} else {
-		target->result = EXPORT_COPIED;
+		target->result = cloned ? EXPORT_CLONED : EXPORT_COPIED;
 	}
 }
 
@@ -1035,6 +1049,7 @@ void SV_ExportFrame( void ) {
 	exportThread = NULL;
 	if ( job->add ) {
 		SV_AddFinish();
+		SV_AddEnd();
 	} else {
 		SV_ExportFinish();
 	}
@@ -1161,7 +1176,60 @@ static struct {
 	char			gameDir[OFCM_GAMEDIR_SIZE], base[OFCM_NAME_SIZE];	// its parts, for the check again
 	unsigned int	checksum;
 	qboolean		added;			// one was added since the map loaded (SV_ExportMapLoaded)
+	// its verdict, for the extension that started it (SV_ExtContentAdd),
+	// and the file in incoming removed as it ends, or ""
+	extContentVerdict_t	verdict;
+	extContentDone_t	done;
+	void			*user;
+	char			removing[MAX_OSPATH];
 } addPak;
+
+#define ADD_NO_CONTENT_DIR	"content add: sv_contentDir can't be used; the console says why"
+
+/*
+=================
+SV_AddSay
+
+A line of a verdict, as its code: into it, and at the console for content
+add's own, not content.check's (SV_ExtContentCheck)
+=================
+*/
+static Q_PRINTF_FUNC( 3, 4 ) void QDECL SV_AddSay( extContentVerdict_t *verdict, const char *code, const char *fmt,
+		... ) {
+	va_list	argptr;
+	char	line[MAXPRINTMSG];
+
+	va_start( argptr, fmt );
+	Q_vsnprintf( line, sizeof( line ), fmt, argptr );
+	va_end( argptr );
+	verdict->code = code;
+	Q_strncpyz( verdict->message, line, sizeof( verdict->message ) );
+	if ( verdict == &addPak.verdict ) {
+		Com_Printf( "%s\n", line );
+	}
+}
+
+/*
+=================
+SV_AddEnd
+
+content add has its verdict: the file it was given goes from incoming,
+when it was asked to, and the extension that started it is told
+=================
+*/
+static void SV_AddEnd( void ) {
+	extContentDone_t	done = addPak.done;
+
+	if ( addPak.removing[0] && remove( addPak.removing ) && errno != ENOENT ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: content add: %s can't be removed from " CONTENT_INCOMING ": %s\n",
+			addPak.removing, strerror( errno ) );
+	}
+	addPak.removing[0] = '\0';
+	addPak.done = NULL;
+	if ( done ) {
+		done( addPak.user, &addPak.verdict );
+	}
+}
 
 /*
 =================
@@ -1376,62 +1444,119 @@ CONTENT ADD
 
 /*
 =================
-SV_AddStart
+SV_AddName
 
-content add <file> [gamedir]: checks the pak, a file in sv_contentDir's
-incoming folder (FS_CheckAddPak), then copies it on the thread, hashing
-it as it goes
+content add's pak by its name in incoming, without .pk3 in base, and its
+game directory: a name, not a path, a pak's that downloads may have;
+qfalse, saying why in the verdict
 =================
 */
-static void SV_AddStart( const char *file, const char *gameDir ) {
-	exportJob_t		*job = &exportJob;
-	exportItem_t	*item;
-	char			name[MAX_OSPATH], source[MAX_OSPATH], overrides[MAX_STRING_CHARS];
-	const char		*refused;
-	int64_t			size, mtime;
+static qboolean SV_AddName( extContentVerdict_t *verdict, const char *file, const char *gameDir, char *base, int size ) {
+	// to say so: OFCM_ValidName below refuses these too
+	if ( strpbrk( file, "/\\:" ) ) {
+		SV_AddSay( verdict, "bad_name", "content add: give the name of a pak in %s, not a path", contentIncoming );
+		return qfalse;
+	}
+	Q_strncpyz( base, file, size );
+	if ( !COM_CompareExtension( base, ".pk3" ) ) {
+		SV_AddSay( verdict, "bad_name", "content add: %s isn't a pak (.pk3)", file );
+		return qfalse;
+	}
+	base[strlen( base ) - 4] = '\0';
+	if ( !FS_ValidDownloadPak( gameDir, base ) || !OFCM_ValidName( gameDir, base ) ) {
+		// the game directory's fault, if a plain pak's name passes with it:
+		// both rules check each part alone
+		SV_AddSay( verdict, FS_ValidDownloadPak( gameDir, "x" ) && OFCM_ValidName( gameDir, "x" ) ? "bad_name" : "bad_game",
+			"content add: %s/%s.pk3 isn't a name a pak can have for downloads", gameDir, base );
+		return qfalse;
+	}
+	return qtrue;
+}
 
-	if ( SV_AddRunning() || !SV_ContentRoot() ) {
-		return;
+/*
+=================
+SV_AddPlace
+
+Where content add puts a pak, in the home's game directory, into ospath;
+qfalse, saying so, for a game directory that's sv_contentDir
+=================
+*/
+static qboolean SV_AddPlace( extContentVerdict_t *verdict, const char *gameDir, const char *base, char *ospath,
+		int size ) {
+	Q_strncpyz( ospath, FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", base ) ), size );
+	// nor into sv_contentDir, by a game directory of its name
+	if ( SV_ContentInside( contentRoot, ospath ) ) {
+		SV_AddSay( verdict, "bad_game", "content add: %s is sv_contentDir, %s, not a game directory", gameDir, contentRoot );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+=================
+SV_AddBegin
+
+content add <file> [gamedir]: checks the pak, a file in sv_contentDir's
+incoming folder (FS_CheckAddPak), then clones or copies it on the thread
+(SV_AddTarget). qtrue when the thread has started, whose end ends the add
+(SV_ExportFrame); else its verdict is said. With removeSource, the file
+goes from incoming as the add ends
+=================
+*/
+static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean removeSource ) {
+	exportJob_t			*job = &exportJob;
+	exportItem_t		*item;
+	extContentVerdict_t	*verdict = &addPak.verdict;
+	char				name[MAX_OSPATH], source[MAX_OSPATH], overrides[MAX_STRING_CHARS];
+	const char			*refused;
+	int64_t				size, mtime;
+	FILE				*f;
+
+	Com_Memset( verdict, 0, sizeof( *verdict ) );
+	verdict->size = -1;
+	addPak.removing[0] = '\0';
+	if ( !SV_ContentRoot() ) {
+		// its lines said why
+		verdict->code = "failed";
+		Q_strncpyz( verdict->message, ADD_NO_CONTENT_DIR, sizeof( verdict->message ) );
+		return qfalse;
 	}
 	if ( !gameDir ) {
 		gameDir = FS_GetCurrentGameDir();
 	}
-	// to say so: OFCM_ValidName below refuses these too
-	if ( strpbrk( file, "/\\:" ) ) {
-		Com_Printf( "content add: give the name of a pak in %s, not a path\n", contentIncoming );
-		return;
+	if ( !SV_AddName( verdict, file, gameDir, name, sizeof( name ) ) ) {
+		return qfalse;
 	}
-	Q_strncpyz( name, file, sizeof( name ) );
-	if ( !COM_CompareExtension( name, ".pk3" ) ) {
-		Com_Printf( "content add: %s isn't a pak (.pk3)\n", file );
-		return;
-	}
-	name[strlen( name ) - 4] = '\0';
-	if ( !FS_ValidDownloadPak( gameDir, name ) || !OFCM_ValidName( gameDir, name ) ) {
-		Com_Printf( "content add: %s/%s.pk3 isn't a name a pak can have for downloads\n", gameDir, name );
-		return;
+	if ( removeSource ) {
+		Com_sprintf( addPak.removing, sizeof( addPak.removing ), "%s%c%s", contentIncoming, PATH_SEP, file );
 	}
 	if ( !Sys_RealPath( va( "%s%c%s", contentIncoming, PATH_SEP, file ), source, sizeof( source ) ) ) {
-		Com_Printf( "content add: there's no %s in %s\n", file, contentIncoming );
-		return;
+		SV_AddSay( verdict, "failed", "content add: there's no %s in %s", file, contentIncoming );
+		return qfalse;
 	}
 	if ( !SV_ContentUnder( contentIncoming, source ) ) {
-		Com_Printf( "content add: %s is a link out of %s, which content add doesn't follow\n", file, contentIncoming );
-		return;
+		SV_AddSay( verdict, "failed", "content add: %s is a link out of %s, which content add doesn't follow", file,
+			contentIncoming );
+		return qfalse;
 	}
-	// Content_FileStat refuses what's too large for a pak too
+	// Content_FileStat refuses what's too large for a pak too, which opens
 	if ( !Content_FileStat( source, &size, &mtime ) ) {
-		Com_Printf( "content add: %s can't be read, or is %d MB or larger, which no pak may be\n", file,
-			( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
-		return;
+		f = Sys_FOpen( source, "rb" );
+		if ( f ) {
+			fclose( f );
+		}
+		SV_AddSay( verdict, f ? "too_big" : "failed", "content add: %s can't be read, or is %d MB or larger, which no pak "
+			"may be", file, ( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
+		return qfalse;
 	}
+	verdict->size = size;
 	Com_sprintf( addPak.name, sizeof( addPak.name ), "%s/%s.pk3", gameDir, name );
 	Q_strncpyz( addPak.gameDir, gameDir, sizeof( addPak.gameDir ) );
 	Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
-	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ) );
+	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ), verdict );
 	if ( refused ) {
-		Com_Printf( "content add: %s is refused: %s\n", addPak.name, refused );
-		return;
+		SV_AddSay( verdict, verdict->code, "content add: %s is refused: %s", addPak.name, refused );
+		return qfalse;
 	}
 	if ( overrides[0] ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: %s\n", overrides );
@@ -1443,20 +1568,16 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 		job->buffer = malloc( EXPORT_BUFFER_SIZE );
 	}
 	if ( !job->items || !job->buffer ) {
-		Com_Printf( "content add: out of memory\n" );
-		return;
+		SV_AddSay( verdict, "failed", "content add: out of memory" );
+		return qfalse;
 	}
 	item = &job->items[0];
 	Q_strncpyz( item->source, source, sizeof( item->source ) );
 	Q_strncpyz( item->name, addPak.name, sizeof( item->name ) );
 	item->size = size;
 	item->mtime = mtime;
-	Q_strncpyz( item->targets[EXPORT_BY_NAME].ospath,
-		FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", name ) ), MAX_OSPATH );
-	// nor into sv_contentDir, by a game directory of its name
-	if ( SV_ContentInside( contentRoot, item->targets[EXPORT_BY_NAME].ospath ) ) {
-		Com_Printf( "content add: %s is sv_contentDir, %s, not a game directory\n", gameDir, contentRoot );
-		return;
+	if ( !SV_AddPlace( verdict, gameDir, name, item->targets[EXPORT_BY_NAME].ospath, MAX_OSPATH ) ) {
+		return qfalse;
 	}
 	FS_CreatePath( item->targets[EXPORT_BY_NAME].ospath );
 	// all the thread reads, which it checks again
@@ -1469,47 +1590,76 @@ static void SV_AddStart( const char *file, const char *gameDir ) {
 	job->bytes = 0;
 	exportThread = Sys_StartThread( SV_ExportThread, job );
 	if ( !exportThread ) {
-		Com_Printf( "content add: this build has no threads to copy with\n" );
-		return;
+		SV_AddSay( verdict, "failed", "content add: this build has no threads to copy with" );
+		return qfalse;
 	}
 	job->started = Sys_Milliseconds();
 	job->nextReport = job->started + EXPORT_REPORT_MSEC;
+	return qtrue;
+}
+
+// content add, ended at once with its verdict unless its thread started
+static void SV_AddStart( const char *file, const char *gameDir, qboolean removeSource ) {
+	if ( !SV_AddBegin( file, gameDir, removeSource ) ) {
+		SV_AddEnd();
+	}
+}
+
+// the home's root number, as the search path gives it its paks
+// (download-protocol.md section 4.2), where content add installs; 0 for none
+static int SV_AddHomeRoot( void ) {
+	const char	*home = Cvar_VariableString( "fs_homedatapath" ), *root;
+	int			i;
+
+	for ( i = 1; i <= 255; i++ ) {
+		root = FS_ContentRootPath( i );
+		if ( root && !Q_stricmp( root, home ) ) {
+			return i;
+		}
+	}
+	return 0;
 }
 
 /*
 =================
 SV_AddFinish
 
-The copy's done: checked again, as the source could have changed since
-its check, it's renamed into place, and goes into the pak index with the
-hash it was copied with, for the next map's content manifest
+The clone or copy is done: checked again, as the source could have
+changed since its check, it's renamed into place, and goes into the pak
+index with the hash it was read with, for the next map's content manifest
 =================
 */
 static void SV_AddFinish( void ) {
 	const exportItem_t		*item = &exportJob.items[0];
 	const exportTarget_t	*target = &item->targets[EXPORT_BY_NAME];
-	const char				*home = Cvar_VariableString( "fs_homedatapath" ), *root, *refused;
+	extContentVerdict_t		*verdict = &addPak.verdict;
+	const char				*refused;
 	char					part[MAX_OSPATH + 8];
 	unsigned int			checksum;
 	pakRecord_t				record;
 
 	switch ( target->result ) {
 	case EXPORT_THERE:
-		Com_Printf( "%s is installed already, the same file\n", addPak.name );
+		Com_SHA256Hex( item->sha256, verdict->sha256 );
+		SV_AddSay( verdict, "installed_already", "%s is installed already, the same file", addPak.name );
 		return;
 	case EXPORT_DIFFERENT:
-		Com_Printf( "content add: a pak named %s is already installed with different contents; give the new "
-			"version its own name so players who have the old one aren't confused\n", addPak.name );
+		SV_AddSay( verdict, "other_contents", "content add: a pak named %s is already installed with different contents; give "
+			"the new version its own name so players who have the old one aren't confused", addPak.name );
 		return;
 	case EXPORT_COPIED:
+	case EXPORT_CLONED:
 		break;
 	default:
-		Com_Printf( "content add: %s: %s\n", addPak.name, target->why );
+		// SV_ExportCopy's, as the disk keeps CACHE_DISK_RESERVE free
+		SV_AddSay( verdict, target->why == exportDiskFull ? "no_room" : "failed", "content add: %s: %s", addPak.name,
+			target->why );
 		return;
 	}
 
 	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
-	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, NULL, 0 );
+	verdict->code = NULL;
+	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, NULL, 0, verdict );
 	if ( !refused && checksum != addPak.checksum ) {
 		refused = "it changed while it was copied";
 	}
@@ -1518,31 +1668,119 @@ static void SV_AddFinish( void ) {
 	}
 	if ( refused ) {
 		remove( part );
-		Com_Printf( "content add: %s is refused: %s\n", addPak.name, refused );
+		SV_AddSay( verdict, verdict->code ? verdict->code : "failed", "content add: %s is refused: %s", addPak.name,
+			refused );
 		return;
 	}
 
-	// the home's root number, as the search path gives it its paks
-	// (download-protocol.md section 4.2)
 	Com_Memset( &record, 0, sizeof( record ) );
-	for ( record.root = 1; record.root <= 255; record.root++ ) {
-		root = FS_ContentRootPath( record.root );
-		if ( root && !Q_stricmp( root, home ) ) {
-			break;
-		}
-	}
-	if ( record.root <= 255 && Content_FileStat( target->ospath, &record.size, &record.mtime ) ) {
+	record.root = SV_AddHomeRoot();
+	if ( record.root && Content_FileStat( target->ospath, &record.size, &record.mtime ) ) {
 		Com_Memcpy( record.sha256, item->sha256, SHA256_DIGEST_SIZE );
 		record.pakChecksum = addPak.checksum;
 		Q_strncpyz( record.path, addPak.name, sizeof( record.path ) );
 		Content_PakIndex_Put( &record );
 	}
 	addPak.added = qtrue;
-	// a copy, so the operator's own stays, which may be on purpose
-	Com_Printf( "%s added; it's served from the next map change. The original is still in " CONTENT_INCOMING
-		", taking %s more; delete it there if you don't keep it\n", addPak.name, item->size < ( 1 << 20 )
-		? va( "%lld KB", (long long)( ( item->size + 1023 ) >> 10 ) )
-		: va( "%lld MB", (long long)( ( item->size + ( 1 << 19 ) ) >> 20 ) ) );
+	Com_SHA256Hex( item->sha256, verdict->sha256 );
+	// the extension's file goes as the add ends (SV_AddEnd); else a copy
+	// or a clone, so the operator's own stays, which may be on purpose. A
+	// clone takes no more space until either file changes
+	if ( addPak.removing[0] ) {
+		SV_AddSay( verdict, "added", "%s added; it's served from the next map change. Its file in " CONTENT_INCOMING
+			" is removed", addPak.name );
+	} else if ( target->result == EXPORT_CLONED ) {
+		SV_AddSay( verdict, "added", "%s added; it's served from the next map change. The original is still in " CONTENT_INCOMING
+			", a clone taking no more space until either file changes; delete it there if you don't keep it",
+			addPak.name );
+	} else {
+		SV_AddSay( verdict, "added", "%s added; it's served from the next map change. The original is still in " CONTENT_INCOMING
+			", taking %s more; delete it there if you don't keep it", addPak.name, item->size < ( 1 << 20 )
+			? va( "%lld KB", (long long)( ( item->size + 1023 ) >> 10 ) )
+			: va( "%lld MB", (long long)( ( item->size + ( 1 << 19 ) ) >> 20 ) ) );
+	}
+}
+
+/*
+=================
+SV_ExtContentAdd, SV_ExtContentCheck
+
+content add for an extension (hooks.h): the same add, its verdict to the
+extension as it ends; and content.check's, before the pak is in incoming,
+which says nothing at the console
+=================
+*/
+qboolean SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, extContentDone_t done,
+		void *user ) {
+	if ( exportThread ) {
+		return qfalse;
+	}
+	addPak.done = done;
+	addPak.user = user;
+	SV_AddStart( file, gameDir, removeSource );
+	return qtrue;
+}
+
+void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
+		unsigned int checksum, extContentVerdict_t *verdict ) {
+	char			name[MAX_OSPATH], place[MAX_OSPATH], retail[MAX_QPATH];
+	const char		*other;
+	const pakRecord_t	*record;
+	unsigned int	installed = 0;
+	int64_t			installedSize = -1, mtime;
+
+	Com_Memset( verdict, 0, sizeof( *verdict ) );
+	verdict->code = "ok";
+	verdict->size = size;
+	if ( !SV_ContentRoot() ) {
+		verdict->code = "failed";
+		Q_strncpyz( verdict->message, ADD_NO_CONTENT_DIR, sizeof( verdict->message ) );
+		return;
+	}
+	if ( !gameDir ) {
+		gameDir = FS_GetCurrentGameDir();
+	}
+	if ( !SV_AddName( verdict, file, gameDir, name, sizeof( name ) ) || !SV_AddPlace( verdict, gameDir, name, place,
+			sizeof( place ) ) ) {
+		return;
+	}
+	if ( size < 0 || size > CONTENT_MAX_PAK_SIZE ) {
+		SV_AddSay( verdict, "too_big", "content add: %s is %d MB or larger, which no pak may be", file,
+			( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
+		return;
+	}
+	if ( hasChecksum && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), checksum, retail, sizeof( retail ) ) ) {
+		SV_AddSay( verdict, "retail", "content add: %s/%s.pk3 is refused: " ADD_PAK_RETAIL, gameDir, name, retail );
+		return;
+	}
+	other = FS_AddPakInstalled( gameDir, name, checksum, &installed );
+	if ( !other ) {
+		// the search path has none, but the add's place may: a pak added
+		// since the map loaded, or one of a game directory not loaded. Its
+		// size, then the checksum the pak index has for it, as the add put it
+		// there; else the rest is left to the add, which hashes it
+		if ( !Content_FileStat( place, &installedSize, &mtime ) ) {
+			return;
+		}
+		record = hasChecksum && installedSize == size ? Content_PakIndex_Find( SV_AddHomeRoot(),
+			va( "%s/%s.pk3", gameDir, name ), installedSize, mtime ) : NULL;
+		if ( installedSize != size || ( record && record->pakChecksum != checksum ) ) {
+			SV_AddSay( verdict, "other_contents", "content add: a pak named %s/%s.pk3 is already installed with different "
+				"contents; give the new version its own name so players who have the old one aren't confused", gameDir, name );
+		} else if ( record ) {
+			SV_AddSay( verdict, "installed_already", "%s/%s.pk3 is installed already, the same file", gameDir, name );
+		}
+		return;
+	}
+	// the same file, as far as its size and checksum tell, which the add
+	// tells by its hash
+	Content_FileStat( other, &installedSize, &mtime );
+	if ( installedSize != size || ( hasChecksum && installed != checksum ) ) {
+		SV_AddSay( verdict, "other_contents", "content add: %s/%s.pk3 is refused: " ADD_PAK_OTHER_CONTENTS, gameDir, name,
+			gameDir, name, other );
+	} else if ( hasChecksum ) {
+		SV_AddSay( verdict, "installed_already", "%s/%s.pk3 is installed already, the same file", gameDir, name );
+	}
 }
 
 /*
@@ -1566,7 +1804,9 @@ void SV_Content_f( void ) {
 			return;
 		}
 	} else if ( !Q_stricmp( sub, "add" ) && ( argc == 3 || argc == 4 ) ) {
-		SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL );
+		if ( !SV_AddRunning() ) {
+			SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL, qfalse );
+		}
 		return;
 	}
 	Com_Printf( "usage:\n"

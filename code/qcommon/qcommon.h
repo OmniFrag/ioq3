@@ -1402,8 +1402,18 @@ const char *FS_LeftOutPaks( void );
 qboolean FS_InstalledPakNamed( const char *download );
 // whether an installed pak has a download's name ("<game>/<name>.pk3")
 const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
-	unsigned int *checksum, char *overrides, int overridesSize );
-// content add's checks of a pak (files.c)
+	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict );
+// content add's checks of a pak (files.c), with its verdict's code and
+// warnings (hooks.h's extContentVerdict_t) where verdict is given; and its
+// words for a pak of the game's own (its own name) and for other contents
+// under an installed pak's name (the game, the name, the installed file)
+#define ADD_PAK_RETAIL			"it's one of the game's own paks, %s, which players add from their own copies"
+#define ADD_PAK_OTHER_CONTENTS	"a pak named %s/%s.pk3 is already installed with different contents (%s); give the " \
+	"new version its own name"
+const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned int checksum,
+	unsigned int *installed );
+// the file of an installed pak named gameDir/name.pk3, one whose checksum
+// isn't checksum first, with its own in installed; NULL for none
 
 const char *FS_LoadedPakNames( void );
 const char *FS_LoadedPakChecksums( void );
