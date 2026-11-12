@@ -594,6 +594,29 @@ static void SV_PrintStartSummary( const char *heading ) {
 	if ( port6 && port6 != port ) {
 		Com_Printf( "  port:     UDP %d (IPv6)%s\n", port6, local ? va( ", on %s only", ip6 ) : "" );
 	}
+	// what a player on the same network types to connect: the LAN's IPv4
+	// addresses (RFC 1918's), where the start's list has every
+	// interface's, VPNs' and carriers' shared space among them. --check
+	// opens no socket, so knows none
+	if ( port && !local ) {
+		netadr_t	addresses[8];
+		char		joined[MAX_STRING_CHARS] = "";
+		int			count = NET_LocalAddresses( addresses, ARRAY_LEN( addresses ) ), shown = 0;
+
+		for ( i = 0; i < count; i++ ) {
+			const byte	*ip = addresses[i].ip;
+
+			if ( addresses[i].type != NA_IP || !( ip[0] == 10 || ( ip[0] == 172 && ( ip[1] & 0xf0 ) == 16 ) ||
+					( ip[0] == 192 && ip[1] == 168 ) ) ) {
+				continue;
+			}
+			addresses[i].port = BigShort( port );
+			Q_strcat( joined, sizeof( joined ), va( "%s%s", shown++ ? ", " : "", NET_AdrToStringwPort( addresses[i] ) ) );
+		}
+		if ( shown ) {
+			Com_Printf( "  local:    %s, for players on this network\n", joined );
+		}
+	}
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
 		if ( sv_master[i]->string[0] ) {
 			break;
