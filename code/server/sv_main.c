@@ -59,6 +59,7 @@ cvar_t	*sv_minRate;
 cvar_t	*sv_maxRate;
 cvar_t	*sv_dlRate;
 cvar_t	*sv_dlMaxRate;		// fast downloads' upload together, KB/s, 0 for no limit
+cvar_t	*sv_dlBrowserDelay;	// ms of a browser's frames the fast download allows for
 cvar_t	*sv_showContent;
 cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;
@@ -1609,6 +1610,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 			// it may have come another way: through a proxy, or directly
 			// where a proxy's route was left
 			cl->proxied = NET_PacketProxied();
+			cl->browser = NET_PacketFromGateway();
 			if ( !cl->proxied ) {
 				NET_ProxyForget( &from );
 			}

@@ -2150,6 +2150,8 @@ void		NET_CloseProxySocket( void );
 void		NET_ProxyForget( const netadr_t *player );
 // whether a trusted proxy named the address of the packet being handled
 qboolean	NET_PacketProxied( void );
+// whether that proxy was the gateway, on its own socket: a browser's packet
+qboolean	NET_PacketFromGateway( void );
 
 // The fragment size a web client asks for (off, exttokens.h): a classic
 // fragment is longer than the gateway's largest SCTP chunk, so SCTP would

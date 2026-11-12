@@ -268,6 +268,7 @@ typedef struct client_s {
 	int				oldServerTime;
 	qboolean		csUpdated[MAX_CONFIGSTRINGS];
 	qboolean		proxied;		// it connected through a trusted proxy, which names its address
+	qboolean		browser;		// through the gateway's own socket: a browser's, by browser play
 	
 #ifdef LEGACY_PROTOCOL
 	qboolean		compat;
@@ -369,6 +370,7 @@ extern	cvar_t	*sv_minRate;
 extern	cvar_t	*sv_maxRate;
 extern	cvar_t	*sv_dlRate;
 extern	cvar_t	*sv_dlMaxRate;
+extern	cvar_t	*sv_dlBrowserDelay;
 extern	cvar_t	*sv_showContent;
 extern	cvar_t	*sv_minPing;
 extern	cvar_t	*sv_maxPing;

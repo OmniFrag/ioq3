@@ -883,6 +883,7 @@ gotnewcl:
 	Netchan_Setup(NS_SERVER, &newcl->netchan, from, qport, challenge, qfalse);
 #endif
 	newcl->proxied = NET_PacketProxied();
+	newcl->browser = NET_PacketFromGateway();
 	if ( !newcl->proxied ) {
 		NET_ProxyForget( &from );
 	}

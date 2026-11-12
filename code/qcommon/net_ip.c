@@ -1323,6 +1323,18 @@ qboolean NET_PacketProxied( void ) {
 
 /*
 ==================
+NET_PacketFromGateway
+
+Whether the packet being handled came on the gateway's own socket, with its
+secret: a browser's, through browser play
+==================
+*/
+qboolean NET_PacketFromGateway( void ) {
+	return netPacketProxied && netFromProxySocket;
+}
+
+/*
+==================
 Sys_SendPacket
 
 qfalse when the socket can't take the datagram now. A player behind a

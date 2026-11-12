@@ -1492,6 +1492,14 @@ void SV_Init (void)
 		"connection allows, yielding to the game's own traffic, so this is a ceiling, not a speed; 10000 "
 		"is about 80 Mbit/s. sv_allowDownload's 1 and 4 apply to it as to the classic download, whose "
 		"budget is sv_dlRate; to cap all of a server's downloads, set both." );
+	sv_dlBrowserDelay = Cvar_Get( "sv_dlBrowserDelay", "20", CVAR_ARCHIVE );
+	Cvar_CheckRange( sv_dlBrowserDelay, 0, 100, qtrue );
+	Cvar_SetDescription( sv_dlBrowserDelay,
+		"Browser players' frame delay the fast download allows, in ms\n"
+		"A browser hands the game its data and sends its replies once a frame, which the fast download "
+		"would otherwise take for a queue on the network and slow down for, while the player loads. More "
+		"lets a browser's download queue more at the server's uplink, which other players' pings feel on a "
+		"thin uplink; 0 allows none." );
 	sv_showContent = Cvar_Get( "sv_showContent", "0", 0 );
 	Cvar_SetDescription( sv_showContent,
 		"Whether to print each fast download's progress once a second, for debugging\n"

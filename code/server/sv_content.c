@@ -1017,9 +1017,14 @@ int SV_ContentSend( void ) {
 		return 1;
 	}
 	for ( i = 0; i < count; i++ ) {
+		// a loading browser's page hands it datagrams and sends its acks
+		// once a frame (section 7.9); prefetch keeps its own target, which
+		// yields to the game
 		if ( SV_ContentLoadingClass( downloading[i] ) ) {
 			DLCC_SetFloorRate( &downloading[i]->content->t.cc, CONTENT_FLOOR / loading );
 		}
+		DLCC_SetReceiverDelay( &downloading[i]->content->t.cc, downloading[i]->browser &&
+			SV_ContentLoadingClass( downloading[i] ) ? (int64_t)sv_dlBrowserDelay->integer * 1000 : 0 );
 	}
 
 	do {

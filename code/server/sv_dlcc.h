@@ -75,6 +75,7 @@ typedef struct {
 	int64_t		stuckSince;			// at the floor past 4 targets since, or 0
 	int64_t		receiveWindow;		// the client's, 0 for none
 	int64_t		floorRate;			// loading's least, bytes a second
+	int64_t		receiverDelay;		// what the client's own frames add to its RTT samples, µs
 	dlccBucket_t	pacer;
 } dlcc_t;
 
@@ -82,6 +83,7 @@ void	DLCC_Init( dlcc_t *cc, dlccClass_t dlClass, int mss, int64_t now );
 void	DLCC_SetClass( dlcc_t *cc, dlccClass_t dlClass );
 void	DLCC_SetReceiveWindow( dlcc_t *cc, int64_t bytes );
 void	DLCC_SetFloorRate( dlcc_t *cc, int64_t rate );
+void	DLCC_SetReceiverDelay( dlcc_t *cc, int64_t delay );
 void	DLCC_OnRttSample( dlcc_t *cc, int64_t now, int64_t rtt );
 void	DLCC_OnAck( dlcc_t *cc, int64_t now, int ackedBytes, int lostBytes, int64_t newestLostSent );
 void	DLCC_OnPto( dlcc_t *cc );

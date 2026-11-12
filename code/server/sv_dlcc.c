@@ -53,7 +53,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define DLCC_STUCK				DLCC_SECOND		// at the floor past 4 targets this long, or 8 RTTs
 
 static int64_t DLCC_Target( const dlcc_t *cc ) {
-	return cc->dlClass == DLCC_LOADING ? DLCC_TARGET_LOADING : DLCC_TARGET_PREFETCH;
+	return ( cc->dlClass == DLCC_LOADING ? DLCC_TARGET_LOADING : DLCC_TARGET_PREFETCH ) + cc->receiverDelay;
 }
 
 static int64_t DLCC_MinCwnd( const dlcc_t *cc ) {
@@ -172,6 +172,20 @@ shared by everyone downloading, so the server may share this one too
 */
 void DLCC_SetFloorRate( dlcc_t *cc, int64_t rate ) {
 	cc->floorRate = rate;
+}
+
+/*
+=================
+DLCC_SetReceiverDelay
+
+A client whose own frames hold its datagrams and acks, as a browser's page
+does (section 7.9): its RTT samples carry up to a frame of that, which the
+target allows for, so the window isn't held to its floor by a queue that
+isn't the path's
+=================
+*/
+void DLCC_SetReceiverDelay( dlcc_t *cc, int64_t delay ) {
+	cc->receiverDelay = delay;
 }
 
 /*
