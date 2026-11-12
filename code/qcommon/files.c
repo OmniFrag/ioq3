@@ -4575,7 +4575,10 @@ static const char *FS_EntryKind( const searchpath_t *search ) {
 	}
 	switch ( FS_MapPackPlace( search ) ) {
 	case MAPPACK_OWN: return "a map pack, this map's own";
-	case MAPPACK_SET_ASIDE: return "set aside: a map pack this map doesn't use";
+	// with no map yet, as at the first start, every map pack waits, as
+	// FS_LostReason says
+	case MAPPACK_SET_ASIDE: return fs_currentMap[0] ? "set aside: a map pack this map doesn't use" :
+		"set aside: a map pack, and there's no map";
 	case MAPPACK_GLOBAL: return "a map pack fs_globalPaks counts on every map";
 	case MAPPACK_UNSCOPED: return "a map pack, counted on every map with fs_mapPakScope 0";
 	default: break;
@@ -5779,10 +5782,23 @@ mounts nothing, so the pure lists and checksums stay as they are
 ================
 */
 void FS_SetCurrentMap( const char *map ) {
-	Q_strncpyz( fs_currentMap, map ? map : "", sizeof( fs_currentMap ) );
+	FS_NameCurrentMap( map );
 	if ( fs_searchpaths ) {
 		FS_RankPaks();
 	}
+}
+
+/*
+================
+FS_NameCurrentMap
+
+The map, as FS_SetCurrentMap, before a restart of the file system, which
+ranks the paks by it and so prints their list by it, without ranking the
+path the restart then frees
+================
+*/
+void FS_NameCurrentMap( const char *map ) {
+	Q_strncpyz( fs_currentMap, map ? map : "", sizeof( fs_currentMap ) );
 }
 
 

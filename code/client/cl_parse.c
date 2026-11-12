@@ -530,6 +530,7 @@ void CL_ParseGamestate( msg_t *msg ) {
 	int				cmd;
 	char			*s;
 	char oldGame[MAX_QPATH];
+	char			map[MAX_QPATH];
 	qboolean		ofOps = qfalse;		// it carried OmniFrag's (svc_ofManifest)
 
 	Con_Close();
@@ -619,10 +620,14 @@ void CL_ParseGamestate( msg_t *msg ) {
 	// the hashes of the server's paks, when the client keeps its content
 	// manifest, which the restart mounts them by
 	CL_ContentSetPakHashes();
-	FS_ConditionalRestart(clc.checksumFeed, qfalse);
 	// the gamestate's map, a demo's too: its own pak leads, and the other
-	// map packs are set aside
-	FS_SetCurrentMap( Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO], "mapname" ) );
+	// map packs are set aside; named first, so a restart's list of paks
+	// ranks by it, and ranked again for none
+	Q_strncpyz( map, Info_ValueForKey( cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO], "mapname" ),
+		sizeof( map ) );
+	FS_NameCurrentMap( map );
+	FS_ConditionalRestart(clc.checksumFeed, qfalse);
+	FS_SetCurrentMap( map );
 
 	// This used to call CL_StartHunkUsers, but now we enter the download state before loading the
 	// cgame
