@@ -22,7 +22,9 @@ set_identity(PACKAGE_NAME ${PROJECT_NAME})
 # A product that succeeds another may set HOMEPATH_NAME_PREDECESSOR, the
 # other's HOMEPATH_NAME (Quake3), and HOMEPATH_NAME_PREDECESSOR_UNIX, its
 # HOMEPATH_NAME_UNIX_LEGACY (.q3a) on Linux: its players' paks there are read,
-# and its config copied on the first run (files.c).
+# and its config copied on the first run (files.c). One that ships a helper
+# fetching the Quake III demo beside its client may set DEMO_HELPER_NAME, the
+# helper's file name, which the missing-data error then names.
 if(DEFINED CLIENT_WINDOW_TITLE)
     set_identity(WEB_PAGE_TITLE ${CLIENT_WINDOW_TITLE})
 else()

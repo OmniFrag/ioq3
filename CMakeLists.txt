@@ -137,6 +137,12 @@ if(DEFINED PROTOCOL_HANDLER_SCHEMES)
 endif()
 set_property(SOURCE code/sys/sys_main.c code/sys/sys_unix.c
     APPEND PROPERTY COMPILE_DEFINITIONS APP_ID="${APP_ID}")
+# The product's own helper that fetches the demo, which the missing-data
+# error names (files.c); a name may have spaces, which windres can't take
+if(DEFINED DEMO_HELPER_NAME)
+    set_property(SOURCE code/qcommon/files.c
+        APPEND PROPERTY COMPILE_DEFINITIONS DEMO_HELPER_NAME="${DEMO_HELPER_NAME}")
+endif()
 
 # For CI to read from
 file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/version.txt CONTENT ${PRODUCT_VERSION})

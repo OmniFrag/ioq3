@@ -6782,11 +6782,29 @@ static Q_NO_RETURN void FS_MissingDataError( const char *game, const char *gameN
 	// suggested
 	if(!Q_stricmp(game, BASEGAME))
 	{
+		char demoPath[MAX_OSPATH];
+
+		Com_sprintf(demoPath, sizeof(demoPath), "%s%cdemoq3%c", installPath, PATH_SEP, PATH_SEP);
 		Q_strcat(errorText, sizeof(errorText),
 				va("\nTo run on the free demo's data instead, put its pak0.pk3 in "
-				"\"%s%cdemoq3%c\": it's played when the full game's paks aren't found, "
-				"unless com_basegame is set.\n",
-				installPath, PATH_SEP, PATH_SEP));
+				"\"%s\": it's played when the full game's paks aren't found, "
+				"unless com_basegame is set. The pak is inside id's demo installer "
+				"for Linux, linuxq3ademo-1.11-6.x86.gz.sh, which mirrors of id's "
+				"FTP site keep.\n", demoPath));
+		if(Com_IsClient())
+		{
+#ifdef DEMO_HELPER_NAME
+			// the product's helper that fetches it, in the client's package
+			Q_strcat(errorText, sizeof(errorText),
+					"\"" DEMO_HELPER_NAME "\", in " PRODUCT_NAME "'s folder, downloads it, "
+					"asks you to accept id's agreement and puts the pak there.\n");
+#endif
+			// both folders the text names, and the home that shows them
+			// opened; a server writes nothing, as before
+			FS_CreatePath(demoPath);
+			FS_CreatePath(gamePath);
+			Com_sprintf(gamePath, sizeof(gamePath), "%s%c", installPath, PATH_SEP);
+		}
 	}
 
 	Sys_OpenFolderInFileManager(gamePath, qtrue);
