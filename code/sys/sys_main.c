@@ -1316,6 +1316,28 @@ static void Sys_AppendCommandLine( char *commandLine, char *lost, int *lostBytes
 
 /*
 =================
+Sys_ArgumentNeedsQuotes
+
+Whether an argument, joined into the command line, needs quotes to stay
+one token whole, as the shell or Windows gave it with its quotes taken
+off: one that is empty, as +set x "" gives, or holds what the command
+line or the console would read otherwise: a space, a + that would start
+a command, a ; between commands, or the start of a comment, // or a
+block comment's, as in +set sv_acmeDirectory https://... A command
+(+...) never does: quotes around it would hide its + from
+Com_ParseCommandLine. Nor does one with quotes of its own, as in
++set sv_dlURL "\"http://...\"", which runs as given
+=================
+*/
+static qboolean Sys_ArgumentNeedsQuotes( const char *arg )
+{
+	if( arg[ 0 ] == '+' || strchr( arg, '"' ) )
+		return qfalse;
+	return !arg[ 0 ] || strpbrk( arg, " \t+;" ) || strstr( arg, "//" ) || strstr( arg, "/*" );
+}
+
+/*
+=================
 Sys_Start
 =================
 */
@@ -1395,7 +1417,7 @@ static void Sys_Start( int argc, char **argv )
 	// Concatenate the command line for passing to Com_Init
 	for( i = 1; i < argc; i++ )
 	{
-		qboolean containsSpaces;
+		qboolean quoted;
 
 		// For security reasons we always detect --uri, even when PROTOCOL_HANDLER is undefined
 		// Any arguments after "--uri quake3://..." is ignored
@@ -1414,9 +1436,9 @@ static void Sys_Start( int argc, char **argv )
 		if ( !strcmp( argv[i], "--check" ) )
 			continue;
 
-		containsSpaces = strchr(argv[i], ' ') != NULL;
-		Sys_AppendCommandLine( commandLine, lost, &lostBytes, va( containsSpaces ? "\"%s\" " : "%s ", argv[ i ] ),
-			(int)strlen( argv[ i ] ) + ( containsSpaces ? 3 : 1 ) );
+		quoted = Sys_ArgumentNeedsQuotes( argv[ i ] );
+		Sys_AppendCommandLine( commandLine, lost, &lostBytes, va( quoted ? "\"%s\" " : "%s ", argv[ i ] ),
+			(int)strlen( argv[ i ] ) + ( quoted ? 3 : 1 ) );
 	}
 
 #ifdef PROTOCOL_HANDLER
