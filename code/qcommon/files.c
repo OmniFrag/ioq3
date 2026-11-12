@@ -3660,6 +3660,89 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	return why;
 }
 
+#define PAK_ARENA_TEXT	8192	// the size of an .arena the game skips (bg_public.h's MAX_ARENAS_TEXT)
+
+// an arena of a pak outside the search path: its map and longname
+typedef struct {
+	char	map[MAX_QPATH], longname[256];
+} pakArena_t;
+
+/*
+=================
+FS_PakMaps
+
+Each map of a pak at ospath, outside the search path, to fn: maps/<name>.bsp
+by its name, with the longname of the first arena of the pak's own
+scripts/<name>.arena files that names it, or "". The game reads an .arena
+that way (G_LoadArenas): one of PAK_ARENA_TEXT bytes or more not at all,
+and none past a token outside a block. A file that doesn't load as a pak
+has none
+=================
+*/
+void FS_PakMaps( const char *ospath, void ( *fn )( void *context, const char *map, const char *title ),
+	void *context ) {
+	searchpath_t		search;
+	const fileInPack_t	*entry;
+	pakArena_t			*arenas = NULL, *arena, *grown;
+	char				*text, *p, *token, key[MAX_TOKEN_CHARS], map[MAX_QPATH];
+	const char			*title;
+	int					i, a, numArenas = 0, room = 0;
+
+	Com_Memset( &search, 0, sizeof( search ) );
+	if ( !( search.pack = FS_LoadZipFile( ospath, "", "", "" ) ) ) {
+		return;
+	}
+	for ( i = 0; i < search.pack->numfiles; i++ ) {
+		entry = &search.pack->buildBuffer[i];
+		if ( Q_stricmpn( entry->name, "scripts/", 8 ) || strchr( entry->name + 8, '/' )
+			|| !COM_CompareExtension( entry->name, ".arena" ) || entry->len >= PAK_ARENA_TEXT
+			|| FS_ReadFileDir( entry->name, &search, qtrue, (void **)&text ) < 0 ) {
+			continue;
+		}
+		for ( p = text; ( token = COM_ParseExt( &p, qtrue ) )[0] && !strcmp( token, "{" ); ) {
+			if ( numArenas == room ) {
+				if ( !( grown = realloc( arenas, ( room + 64 ) * sizeof( *arenas ) ) ) ) {
+					break;
+				}
+				arenas = grown;
+				room += 64;
+			}
+			arena = &arenas[numArenas];
+			arena->map[0] = arena->longname[0] = '\0';
+			while ( ( token = COM_ParseExt( &p, qtrue ) )[0] && strcmp( token, "}" ) ) {
+				Q_strncpyz( key, token, sizeof( key ) );
+				token = COM_ParseExt( &p, qfalse );
+				if ( !Q_stricmp( key, "map" ) ) {
+					Q_strncpyz( arena->map, token, sizeof( arena->map ) );
+				} else if ( !Q_stricmp( key, "longname" ) ) {
+					Q_strncpyz( arena->longname, token, sizeof( arena->longname ) );
+				}
+			}
+			numArenas += arena->map[0] != '\0';
+		}
+		FS_FreeFile( text );
+	}
+
+	for ( i = 0; i < search.pack->numfiles; i++ ) {
+		// a name the map command can't take whole isn't one it loads, nor
+		// an empty one (maps/.bsp)
+		if ( !FS_IsMapFile( search.pack->buildBuffer[i].name )
+			|| strlen( search.pack->buildBuffer[i].name + 5 ) - 5 >= sizeof( map ) - 1 ) {
+			continue;
+		}
+		COM_StripExtension( search.pack->buildBuffer[i].name + 5, map, sizeof( map ) );
+		for ( a = 0, title = ""; a < numArenas; a++ ) {
+			if ( !Q_stricmp( arenas[a].map, map ) ) {
+				title = arenas[a].longname;
+				break;
+			}
+		}
+		fn( context, map, title );
+	}
+	free( arenas );
+	FS_FreePak( search.pack );
+}
+
 /*
 =================
 FS_CompareZipChecksum

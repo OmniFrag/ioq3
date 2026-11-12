@@ -1415,6 +1415,11 @@ const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned 
 // the file of an installed pak named gameDir/name.pk3, one whose checksum
 // isn't checksum first, with its own in installed; NULL for none
 
+// each map of a pak outside the search path, by its name, and its own
+// .arena's longname or ""; none for a file that isn't a pak
+void FS_PakMaps( const char *ospath, void ( *fn )( void *context, const char *map, const char *title ),
+	void *context );
+
 const char *FS_LoadedPakNames( void );
 const char *FS_LoadedPakChecksums( void );
 const char *FS_LoadedPakPureChecksums( void );

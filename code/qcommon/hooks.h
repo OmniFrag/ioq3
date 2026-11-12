@@ -717,6 +717,28 @@ qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean remov
 void	SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
 	unsigned int checksum, extContentVerdict_t *verdict );
 
+// The maps the server can load (server/sv_export.c): those the search
+// path has, and the pending ones, in the paks content add installed since
+// the map loaded for a game directory the search path reads. It reads
+// them at the next map load, so until then the file system doesn't find
+// them, though the map command loads one, the load being what reads its
+// pak. A pak removed since loses its maps, and one changed since is read
+// again, as they're asked for. Indexes run from 0 to
+// SV_ExtPendingMapCount() - 1, and may name a map the search path has
+// already, in another pak.
+typedef struct {
+	char	map[MAX_QPATH];		// its name, without maps/ or .bsp
+	char	title[256];		// its pak's own .arena's longname, as written, cut to fit; "" for none
+} extPendingMap_t;
+
+// whether the server has maps/<map>.bsp, or can load it as a pending map
+qboolean	SV_ExtHasMap( const char *map );
+int		SV_ExtPendingMapCount( void );
+qboolean	SV_ExtGetPendingMap( int index, extPendingMap_t *map );
+// changes whenever the pending maps do: a pak added, removed or changed, or
+// the search path read again
+int		SV_ExtPendingMapChanges( void );
+
 // The server's address bans and their exceptions (banaddr, exceptaddr),
 // which sv_banFile keeps. Indexes run from 0 to SV_ExtBanCount() - 1, and
 // move as entries come and go.

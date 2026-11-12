@@ -118,6 +118,7 @@ static char			contentRoot[MAX_OSPATH], contentIncoming[MAX_OSPATH];
 static const char	exportDiskFull[] = "the disk is nearly full";
 
 static void SV_AddFinish( void );
+static void SV_AddPending( const char *ospath, const char *gameDir );
 static void SV_AddEnd( void );
 
 /*
@@ -1682,6 +1683,7 @@ static void SV_AddFinish( void ) {
 		Content_PakIndex_Put( &record );
 	}
 	addPak.added = qtrue;
+	SV_AddPending( target->ospath, addPak.gameDir );
 	Com_SHA256Hex( item->sha256, verdict->sha256 );
 	// the extension's file goes as the add ends (SV_AddEnd); else a copy
 	// or a clone, so the operator's own stays, which may be on purpose. A
@@ -1781,6 +1783,209 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 	} else if ( hasChecksum ) {
 		SV_AddSay( verdict, "installed_already", "%s/%s.pk3 is installed already, the same file", gameDir, name );
 	}
+}
+
+/*
+==============================================================
+
+PENDING MAPS
+
+The maps of paks content add installed since the map loaded, which the
+next map load's FS_Restart reads (hooks.h's SV_ExtHasMap): each pak by
+its file and game directory, with its size and time as it was read, so
+one changed since is read again, and one gone, or of a game directory
+the search path no longer reads, loses its maps
+
+==============================================================
+*/
+
+typedef struct {
+	char		ospath[MAX_OSPATH];
+	char		gameDir[OFCM_GAMEDIR_SIZE];
+	int64_t		size, mtime;
+} pendingPak_t;
+
+static struct {
+	pendingPak_t	*paks;
+	extPendingMap_t	*maps;
+	int				numPaks, numMaps, mapRoom;
+	int				checked;	// the frame its paks were last looked at (com_frameTime)
+} pending;
+static int	pendingChanges;		// SV_ExtPendingMapChanges
+
+// whether the search path reads a game directory: com_basegame,
+// fs_basegame or fs_game, as FS_Startup adds them
+static qboolean SV_PendingSearched( const char *gameDir ) {
+	return !Q_stricmp( gameDir, com_basegame->string ) || !Q_stricmp( gameDir, FS_GetCurrentGameDir() )
+		|| !Q_stricmp( gameDir, Cvar_VariableString( "fs_basegame" ) );
+}
+
+static void SV_PendingKeep( void *context, const char *map, const char *title ) {
+	extPendingMap_t	*grown;
+	int				i;
+
+	// the first pak's, as the search path's lookups take one of them
+	for ( i = 0; i < pending.numMaps; i++ ) {
+		if ( !Q_stricmp( pending.maps[i].map, map ) ) {
+			return;
+		}
+	}
+	if ( pending.numMaps == pending.mapRoom ) {
+		if ( !( grown = realloc( pending.maps, ( pending.mapRoom + 64 ) * sizeof( *grown ) ) ) ) {
+			return;
+		}
+		pending.maps = grown;
+		pending.mapRoom += 64;
+	}
+	Q_strncpyz( pending.maps[pending.numMaps].map, map, sizeof( pending.maps[0].map ) );
+	Q_strncpyz( pending.maps[pending.numMaps].title, title, sizeof( pending.maps[0].title ) );
+	pending.numMaps++;
+}
+
+// every pak's maps read again, as they are now, so a map two of them have
+// stays while either does
+static void SV_PendingRead( void ) {
+	int	i;
+
+	pending.numMaps = 0;
+	for ( i = 0; i < pending.numPaks; i++ ) {
+		FS_PakMaps( pending.paks[i].ospath, SV_PendingKeep, NULL );
+	}
+	pendingChanges++;
+}
+
+/*
+=================
+SV_PendingCheck
+
+Each pak as it is now, once a frame: one gone, or of a game directory the
+search path no longer reads, loses its maps, and one changed since it was
+read is read again, as someone may have replaced it by hand
+=================
+*/
+static void SV_PendingCheck( void ) {
+	pendingPak_t	*pak;
+	int64_t			size, mtime;
+	qboolean		changed = qfalse;
+	int				i;
+
+	if ( !pending.numPaks || pending.checked == com_frameTime ) {
+		return;
+	}
+	pending.checked = com_frameTime;
+	for ( i = pending.numPaks - 1; i >= 0; i-- ) {
+		pak = &pending.paks[i];
+		if ( !SV_PendingSearched( pak->gameDir ) || !Content_FileStat( pak->ospath, &size, &mtime ) ) {
+			pending.numPaks--;
+			memmove( pak, pak + 1, ( pending.numPaks - i ) * sizeof( *pak ) );
+			changed = qtrue;
+		} else if ( size != pak->size || mtime != pak->mtime ) {
+			pak->size = size;
+			pak->mtime = mtime;
+			changed = qtrue;
+		}
+	}
+	if ( changed ) {
+		SV_PendingRead();
+	}
+}
+
+/*
+=================
+SV_AddPending
+
+A pak content add installed, at ospath, for gameDir: its maps pending
+where the search path reads the game directory, as the next map load then
+reads the pak. One pending already, deleted by hand and added again before
+it was looked at, keeps its place
+=================
+*/
+static void SV_AddPending( const char *ospath, const char *gameDir ) {
+	pendingPak_t	*grown, *pak;
+	int				i;
+
+	if ( !SV_PendingSearched( gameDir ) ) {
+		return;
+	}
+	for ( i = 0; i < pending.numPaks && strcmp( pending.paks[i].ospath, ospath ); i++ ) {
+	}
+	if ( i == pending.numPaks ) {
+		if ( !( grown = realloc( pending.paks, ( pending.numPaks + 1 ) * sizeof( *grown ) ) ) ) {
+			return;
+		}
+		pending.paks = grown;
+		pending.numPaks++;
+	}
+	pak = &pending.paks[i];
+	Q_strncpyz( pak->ospath, ospath, sizeof( pak->ospath ) );
+	Q_strncpyz( pak->gameDir, gameDir, sizeof( pak->gameDir ) );
+	if ( !Content_FileStat( ospath, &pak->size, &pak->mtime ) ) {
+		pak->size = pak->mtime = -1;
+	}
+	SV_PendingRead();
+}
+
+/*
+=================
+SV_PendingMapsRead
+
+The search path is read again (SV_SpawnServer's FS_Restart), and has the
+pending maps' paks: none is pending
+=================
+*/
+void SV_PendingMapsRead( void ) {
+	if ( !pending.numPaks ) {
+		return;
+	}
+	free( pending.maps );
+	free( pending.paks );
+	Com_Memset( &pending, 0, sizeof( pending ) );
+	pendingChanges++;
+}
+
+// whether a map is pending, for the map command (SV_Map_f)
+qboolean SV_MapPending( const char *map ) {
+	int	i;
+
+	SV_PendingCheck();
+	for ( i = 0; i < pending.numMaps; i++ ) {
+		if ( !Q_stricmp( pending.maps[i].map, map ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+=================
+SV_ExtHasMap, SV_ExtPendingMapCount, SV_ExtGetPendingMap,
+SV_ExtPendingMapChanges
+
+The maps the server can load and the pending ones, for extensions
+(qcommon/hooks.h)
+=================
+*/
+qboolean SV_ExtHasMap( const char *map ) {
+	return FS_FOpenFileRead( va( "maps/%s.bsp", map ), NULL, qfalse ) > 0 || SV_MapPending( map );
+}
+
+int SV_ExtPendingMapCount( void ) {
+	SV_PendingCheck();
+	return pending.numMaps;
+}
+
+qboolean SV_ExtGetPendingMap( int index, extPendingMap_t *map ) {
+	if ( index < 0 || index >= pending.numMaps ) {
+		return qfalse;
+	}
+	*map = pending.maps[index];
+	return qtrue;
+}
+
+int SV_ExtPendingMapChanges( void ) {
+	// a pak deleted or replaced by hand counts in the frame it's seen
+	SV_PendingCheck();
+	return pendingChanges;
 }
 
 /*

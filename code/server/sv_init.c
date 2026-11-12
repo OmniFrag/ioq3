@@ -1018,6 +1018,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// get a new checksum feed and restart the file system
 	sv.checksumFeed = ( ((unsigned int)rand() << 16) ^ (unsigned int)rand() ) ^ Com_Milliseconds();
 	FS_Restart( sv.checksumFeed );
+	// which reads the paks content add installed meanwhile
+	SV_PendingMapsRead();
 	// its own pak leads, and the other map packs are set aside
 	FS_SetCurrentMap( server );
 

@@ -169,6 +169,12 @@ static void SV_Map_f( void ) {
 	// a typo at the server console won't end the game
 	Com_sprintf (expanded, sizeof(expanded), "maps/%s.bsp", map);
 	found = FS_ReadFile (expanded, NULL) != -1;
+	// or in a pak content add installed since the map loaded, which the
+	// load reads (SV_SpawnServer's FS_Restart)
+	if ( !found && SV_MapPending( map ) ) {
+		Com_Printf( "%s is in a pak added since the map loaded, which this map change reads\n", expanded );
+		found = qtrue;
+	}
 	SV_NoteStartupMap( map, found );
 	// --check loads no map: it noted which, for its report
 	if ( com_check ) {
