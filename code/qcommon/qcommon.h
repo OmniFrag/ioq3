@@ -1938,6 +1938,11 @@ void SV_PacketEvent( netadr_t from, msg_t *msg );
 // whether a client in the game is at this address: with directOnly, one
 // that came directly, so a proxy naming it is never believed
 qboolean SV_ClientAt( const netadr_t *adr, qboolean directOnly );
+// where other machines on this network reach the server when that isn't
+// one of this machine's own addresses, as from inside a container
+// (sv_lanAddress): host[:port], the game port added where none is given;
+// "" when it's unset or isn't an address or a name
+const char *SV_LanAddress( void );
 int SV_FrameMsec(void);
 int SV_FrameLength( void );
 qboolean SV_GameCommand( void );

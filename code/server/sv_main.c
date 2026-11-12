@@ -59,6 +59,7 @@ cvar_t	*sv_minRate;
 cvar_t	*sv_maxRate;
 cvar_t	*sv_dlRate;
 cvar_t	*sv_dlMaxRate;		// fast downloads' upload together, KB/s, 0 for no limit
+cvar_t	*sv_lanAddress;		// where this network's other machines reach the server, if not its own address
 cvar_t	*sv_showContent;
 cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;

@@ -997,6 +997,59 @@ void SV_FreeClient(client_t *client)
 
 /*
 =====================
+SV_LanAddress
+
+sv_lanAddress as links and the start summary give it: a name or an IPv4
+address, or an IPv6 one in brackets or bare, then :port, the game port's
+where it names none; "" when it's empty or isn't one of those
+=====================
+*/
+const char *SV_LanAddress( void ) {
+	static char	shown[MAX_CVAR_VALUE_STRING + 16];
+	const char	*value = sv_lanAddress ? sv_lanAddress->string : "", *end, *colon = NULL;
+	int			length = strlen( value ), port;
+	qboolean	bare6 = qfalse;		// an IPv6 address without its brackets
+
+	if ( !length || length > 253 + 8 || strspn( value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:[]" )
+			!= (size_t)length ) {
+		return "";
+	}
+	if ( value[0] == '[' ) {
+		// [v6] or [v6]:port
+		if ( !( end = strchr( value, ']' ) ) || end == value + 1 || strchr( value + 1, '[' ) ||
+				( end[1] && end[1] != ':' ) ) {
+			return "";
+		}
+		colon = end[1] ? end + 1 : NULL;
+		end++;
+	} else if ( strchr( value, ']' ) ) {
+		return "";
+	} else if ( ( colon = strchr( value, ':' ) ) != NULL && strchr( colon + 1, ':' ) ) {
+		// a bare IPv6 address, which names no port
+		colon = NULL;
+		end = value + length;
+		bare6 = qtrue;
+	} else {
+		end = colon ? colon : value + length;
+	}
+	if ( colon ) {
+		port = atoi( colon + 1 );
+		if ( !colon[1] || strspn( colon + 1, "0123456789" ) != strlen( colon + 1 ) || port < 1 || port > 65535 ) {
+			return "";
+		}
+	} else {
+		port = NET_Port();
+	}
+	if ( end == value ) {
+		return "";
+	}
+	Com_sprintf( shown, sizeof( shown ), "%s%.*s%s:%d", bare6 ? "[" : "", (int)( end - value ), value, bare6 ? "]" : "",
+		port );
+	return shown;
+}
+
+/*
+=====================
 SV_ClientAt
 
 Whether a client in the game is at this address. With directOnly, only one

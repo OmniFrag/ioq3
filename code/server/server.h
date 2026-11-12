@@ -369,6 +369,7 @@ extern	cvar_t	*sv_minRate;
 extern	cvar_t	*sv_maxRate;
 extern	cvar_t	*sv_dlRate;
 extern	cvar_t	*sv_dlMaxRate;
+extern	cvar_t	*sv_lanAddress;
 extern	cvar_t	*sv_showContent;
 extern	cvar_t	*sv_minPing;
 extern	cvar_t	*sv_maxPing;

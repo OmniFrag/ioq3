@@ -537,7 +537,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
 	qboolean	local;
-	const char	*data, *leftOut;
+	const char	*data, *leftOut, *lan;
 	const char	*ip = Cvar_VariableString( "net_ip" );
 	const char	*ip6 = Cvar_VariableString( "net_ip6" );
 	char		pure[MAX_STRING_CHARS];
@@ -598,9 +598,13 @@ static void SV_PrintStartSummary( const char *heading ) {
 	// addresses (RFC 1918's), where the start's list has every
 	// interface's, VPNs' and carriers' shared space among them. --check
 	// opens no socket, so knows none
-	if ( port && !local ) {
+	lan = SV_LanAddress();
+	if ( port && !local && lan[0] ) {
+		Com_Printf( "  local:    %s, for players on this network (sv_lanAddress)\n", lan );
+	} else if ( port && !local ) {
 		netadr_t	addresses[8];
 		char		joined[MAX_STRING_CHARS] = "";
+		const char	*container = getenv( "OMNIFRAG_CONTAINER" ), *lead;
 		int			count = NET_LocalAddresses( addresses, ARRAY_LEN( addresses ) ), shown = 0;
 
 		for ( i = 0; i < count; i++ ) {
@@ -615,6 +619,17 @@ static void SV_PrintStartSummary( const char *heading ) {
 		}
 		if ( shown ) {
 			Com_Printf( "  local:    %s, for players on this network\n", joined );
+		}
+		// set, but not an address (SV_LanAddress gave none); or a
+		// container's own addresses, which other machines may not reach
+		// (the image and the panels set OMNIFRAG_CONTAINER)
+		lead = shown ? "            " : "  local:    ";
+		if ( sv_lanAddress->string[0] ) {
+			Com_Printf( "%ssv_lanAddress \"%s\" isn't an address or a name, with :port if it isn't the game "
+				"port\n", lead, sv_lanAddress->string );
+		} else if ( container && container[0] ) {
+			Com_Printf( "%sin a container, whose own address other machines may not reach: set "
+				"OMNIFRAG_SV_LANADDRESS to the host's\n", lead );
 		}
 	}
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
@@ -1484,6 +1499,12 @@ void SV_Init (void)
 		"4 = no direct: refuse to send files, even with 1\n"
 		"8 = stay connected: players don't disconnect for web downloads\n"
 		"16 = no fast download: files come from sv_dlURL or the classic way" );
+	sv_lanAddress = Cvar_Get( "sv_lanAddress", "", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_lanAddress,
+		"Address other machines reach the server at, when it isn't its own\n"
+		"Inside a container, the server's own address is the container's, which other machines can't "
+		"reach: set the host's address or name here, with :port if the host publishes the game port on "
+		"another, and the start summary and pair links name it. Empty for the machine's own addresses." );
 	sv_dlMaxRate = Cvar_Get( "sv_dlMaxRate", "10000", CVAR_ARCHIVE );
 	Cvar_CheckRange( sv_dlMaxRate, 0, 1000000, qtrue );
 	Cvar_SetDescription( sv_dlMaxRate,
