@@ -361,6 +361,7 @@ typedef struct {
 	sha256_t		sha;
 	byte			*buffer;
 	sysThread_t		*thread;		// NULL when sliced
+	int				sliceMsec;		// a poll's most, when sliced
 	qboolean		running;
 } hashJob_t;
 
@@ -454,9 +455,16 @@ qboolean Content_HashJob_Start( const hashItem_t *items, int count ) {
 	job->count = count;
 	job->next = 0;
 	job->file = NULL;
+	job->sliceMsec = HASH_SLICE_MSEC;
 	job->running = qtrue;
 	job->thread = Sys_StartThread( Content_HashJob_Thread, job );
 	return qtrue;
+}
+
+// the job under way is one the connect screen waits on: without a thread,
+// it gets more of each frame
+static void Content_HashJob_Hurry( void ) {
+	hashJob.sliceMsec = HASH_WAIT_SLICE_MSEC;
 }
 
 /*
@@ -487,7 +495,7 @@ const hashItem_t *Content_HashJob_Poll( int *count ) {
 		}
 		job->thread = NULL;
 	} else {
-		end = Sys_Nanoseconds() + HASH_SLICE_MSEC * 1000000;
+		end = Sys_Nanoseconds() + (int64_t)job->sliceMsec * 1000000;
 		do {
 			more = Content_HashJob_Step( job );
 		} while ( more && Sys_Nanoseconds() < end );
@@ -525,6 +533,7 @@ static int64_t		pakIndexFileSize = -1, pakIndexFileMtime, pakIndexFileSeen;
 // what to hash once the job running is done
 static pakRecord_t	*pakIndexQueued;
 static int			pakIndexQueuedCount;
+static int			pakIndexWaited;		// the queue's first, which the client waits on (Content_PakIndex_QueueFirst)
 // whether the job running is the index's: a client's checks of installed
 // paks share the job (P192)
 static qboolean		pakIndexHashing;
@@ -909,6 +918,10 @@ static void Content_PakIndex_StartQueued( void ) {
 	}
 	free( items );
 	pakIndexHashing = n > 0;
+	if ( pakIndexHashing && pakIndexWaited > 0 ) {
+		Content_HashJob_Hurry();
+	}
+	pakIndexWaited = MAX( pakIndexWaited - count, 0 );
 	pakIndexQueuedCount -= count;
 	memmove( pakIndexQueued, pakIndexQueued + count, pakIndexQueuedCount * sizeof( *pakIndexQueued ) );
 	if ( !pakIndexQueuedCount ) {
@@ -953,6 +966,7 @@ void Content_PakIndex_Queue( const pakRecord_t *paks, int count ) {
 	free( pakIndexQueued );
 	pakIndexQueued = NULL;
 	pakIndexQueuedCount = 0;
+	pakIndexWaited = 0;
 	Content_PakIndex_Append( paks, count, qfalse );
 	Content_PakIndex_StartQueued();
 }
@@ -962,7 +976,8 @@ void Content_PakIndex_Queue( const pakRecord_t *paks, int count ) {
 Content_PakIndex_QueueFirst
 
 Before the paks queued already, which are taken out of their place
-further on; the job under way finishes first
+further on; the job under way finishes first. The client waits on them,
+so the queue's jobs, and the one under way, hurry
 =================
 */
 void Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count ) {
@@ -978,6 +993,11 @@ void Content_PakIndex_QueueFirst( const pakRecord_t *paks, int count ) {
 	}
 	pakIndexQueuedCount = kept;
 	Content_PakIndex_Append( paks, count, qtrue );
+	// only those it added: the paks queued behind them aren't the client's
+	pakIndexWaited = pakIndexQueuedCount - kept;
+	if ( Content_HashJob_Running() ) {
+		Content_HashJob_Hurry();
+	}
 	Content_PakIndex_StartQueued();
 }
 
@@ -1013,6 +1033,8 @@ int Content_FileHash_Poll( byte sha256[SHA256_DIGEST_SIZE] ) {
 			fileHashState = FILE_HASH_NONE;
 			return -1;
 		}
+		// a download's, which the client waits on to mount it
+		Content_HashJob_Hurry();
 		fileHashState = FILE_HASH_RUNNING;
 		return 0;
 	}

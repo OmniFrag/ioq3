@@ -120,6 +120,7 @@ typedef struct {
 } hashItem_t;
 
 #define HASH_SLICE_MSEC		1		// without a thread, at most this a poll
+#define HASH_WAIT_SLICE_MSEC	8		// and for a job the connect screen waits on, with nothing else to do
 #define HASH_JOB_MAX		64		// items a job
 
 // starts hashing a copy of the items, at most HASH_JOB_MAX; qfalse if a job
