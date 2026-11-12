@@ -204,6 +204,8 @@ typedef enum {
 } netScope_t;
 netScope_t	NET_AdrScope( const netadr_t *adr );
 qboolean	NET_AdrReachableFrom( const netadr_t *adr, netScope_t from );
+qboolean	NET_IsLANv4( const netadr_t *adr );
+qboolean	NET_IsSharedv4( const netadr_t *adr );
 qboolean	NET_SockaddrToAdr( const void *sockaddr, size_t length, netadr_t *a );
 const char	*NET_TakeBroadcastFailure( void );
 // why a broadcast failed since the last call, or NULL
@@ -2231,6 +2233,7 @@ void		Sys_ShowIP(void);
 // IPv6's, neither loopback nor link local, or a family's net_ip address
 // alone; at most max, and how many
 int		NET_LocalAddresses( netadr_t *out, int max );
+int		NET_LANAddresses( netadr_t *out, int max );
 
 FILE	*Sys_FOpen( const char *ospath, const char *mode );
 int		Sys_PID( void );

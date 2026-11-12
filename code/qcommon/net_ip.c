@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef _WIN32
 #	include <winsock2.h>
 #	include <ws2tcpip.h>
+#	include <iphlpapi.h>
 #	if WINVER < 0x501
 #		ifdef __MINGW32__
 			// wspiapi.h isn't available on MinGW, so if it's
@@ -180,11 +181,12 @@ typedef struct {
 	qboolean proxy;
 } netsocks_t;
 
-#define	MAX_IPS		32
+#define	MAX_IPS		64
 
 typedef struct
 {
 	char ifname[IF_NAMESIZE];
+	qboolean virtualIf;		// a VPN's, a tunnel's, a virtual machine's, a container's or a cellular link's
 	
 	netadrtype_t type;
 	sa_family_t family;
@@ -1732,6 +1734,36 @@ int NET_LocalAddresses( netadr_t *out, int max ) {
 	return n;
 }
 
+/*
+==================
+NET_LANAddresses
+
+The machine's addresses on its own network, as a player there types one:
+its IPv4 ones in RFC 1918's ranges, not a VPN's, a virtual machine's or a
+container's, in NET_LocalAddresses' order; the one net_ip names alone,
+when it's one of them. At most max, and how many, with no port
+==================
+*/
+int NET_LANAddresses( netadr_t *out, int max ) {
+	netadr_t	a;
+	qboolean	bound = NET_BoundAdr( NA_IP, &a ) && !NET_IsUnspecified( &a );
+	int			i, n = 0;
+
+	for ( i = 0; n < max && i < ( bound ? 1 : numIP ); i++ ) {
+		if ( !bound ) {
+			if ( localIP[i].type != NA_IP || localIP[i].virtualIf ) {
+				continue;
+			}
+			SockadrToNetadr( (struct sockaddr *)&localIP[i].addr, &a );
+		}
+		if ( NET_IsLANv4( &a ) ) {
+			a.port = 0;
+			out[n++] = a;
+		}
+	}
+	return n;
+}
+
 //=============================================================================
 
 #define NET_SOCKET_BUFFER	( 2 * 1024 * 1024 )
@@ -2231,7 +2263,7 @@ void NET_OpenSocks( int port ) {
 NET_AddLocalAddress
 =====================
 */
-static void NET_AddLocalAddress(char *ifname, struct sockaddr *addr, struct sockaddr *netmask)
+static void NET_AddLocalAddress(const char *ifname, struct sockaddr *addr, struct sockaddr *netmask, qboolean virtualIf)
 {
 	int addrlen;
 	sa_family_t family;
@@ -2258,6 +2290,7 @@ static void NET_AddLocalAddress(char *ifname, struct sockaddr *addr, struct sock
 			return;
 		
 		Q_strncpyz(localIP[numIP].ifname, ifname, sizeof(localIP[numIP].ifname));
+		localIP[numIP].virtualIf = virtualIf;
 	
 		localIP[numIP].family = family;
 
@@ -2268,7 +2301,128 @@ static void NET_AddLocalAddress(char *ifname, struct sockaddr *addr, struct sock
 	}
 }
 
+#ifndef __EMSCRIPTEN__
+/*
+=====================
+NET_DefaultRouteAddress
+
+The IPv4 address the system sends from by its default route: a UDP
+socket connected to a documentation address (RFC 5737's), which only
+picks the route and sends nothing
+=====================
+*/
+static qboolean NET_DefaultRouteAddress( netadr_t *out ) {
+	struct sockaddr_in		to;
+	struct sockaddr_storage	from;
+	socklen_t				length = sizeof( from );
+	SOCKET					s = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+	qboolean				found;
+
+	if ( s == INVALID_SOCKET ) {
+		return qfalse;
+	}
+	memset( &to, 0, sizeof( to ) );
+	to.sin_family = AF_INET;
+	to.sin_port = htons( 9 );
+	to.sin_addr.s_addr = htonl( 0xc0000201 );		// 192.0.2.1
+	found = connect( s, (struct sockaddr *)&to, sizeof( to ) ) != SOCKET_ERROR &&
+		getsockname( s, (struct sockaddr *)&from, &length ) != SOCKET_ERROR;
+	closesocket( s );
+	if ( found ) {
+		SockadrToNetadr( (struct sockaddr *)&from, out );
+	}
+	return found;
+}
+
+/*
+=====================
+NET_LocalAddressRank
+
+Where an address goes among the machine's, as people would type or scan
+one: the IPv4 default route's, then the LAN's, then public ones, then a
+VPN's, a virtual machine's or a container's, and carriers' and VPNs'
+shared space (100.64.0.0/10), the default route's too when a VPN carries
+it, and last those no other machine reaches (loopback, link-local).
+IPv6's default route gives a temporary address, which no one should keep,
+so IPv6's go by their scope alone
+=====================
+*/
+static int NET_LocalAddressRank( const nip_localaddr_t *local, const netadr_t *route ) {
+	netadr_t	a;
+
+	SockadrToNetadr( (struct sockaddr *)&local->addr, &a );
+	if ( !NET_IsReachable( &a ) ) {
+		return 4;
+	}
+	if ( local->virtualIf || NET_IsSharedv4( &a ) ) {
+		return 3;
+	}
+	if ( route && NET_CompareBaseAdr( a, *route ) ) {
+		return 0;
+	}
+	return NET_AdrScope( &a ) == NET_SCOPE_PRIVATE ? 1 : 2;
+}
+
+/*
+=====================
+NET_OrderLocalAddresses
+
+The machine's addresses in NET_LocalAddressRank's order, each rank in the
+order the system gave, so the first of a family is the one players reach
+it at: what the pair links and the start summary give
+=====================
+*/
+static void NET_OrderLocalAddresses( void ) {
+	netadr_t	route;
+	qboolean	hasRoute = NET_DefaultRouteAddress( &route );
+	int			rank[MAX_IPS], i, j;
+
+	for ( i = 0; i < numIP; i++ ) {
+		rank[i] = NET_LocalAddressRank( &localIP[i], hasRoute ? &route : NULL );
+	}
+	// an insertion sort, which keeps each rank's order
+	for ( i = 1; i < numIP; i++ ) {
+		nip_localaddr_t	moving = localIP[i];
+		int				movingRank = rank[i];
+
+		for ( j = i; j > 0 && rank[j - 1] > movingRank; j-- ) {
+			localIP[j] = localIP[j - 1];
+			rank[j] = rank[j - 1];
+		}
+		localIP[j] = moving;
+		rank[j] = movingRank;
+	}
+}
+#endif
+
 #if defined(__linux__) || defined(__APPLE__) || defined(__BSD__)
+/*
+=====================
+NET_VirtualInterface
+
+An interface by its name that a VPN, a tunnel, a virtual machine or a
+container makes, or a phone's cellular link, whose carrier's 10/8
+addresses no player nearby reaches: not the machine's own network
+=====================
+*/
+static qboolean NET_VirtualInterface( const char *name ) {
+	// macOS's bridge100 and up are Internet Sharing's and virtual machines';
+	// bridge0 is Thunderbolt Bridge, a cable to another machine. PPP is a
+	// VPN's, as Windows' NET_VirtualAdapter takes it
+	static const char *const	prefixes[] = { "utun", "tun", "tap", "wg", "tailscale", "zt", "ipsec", "gif", "stf",
+		"ppp", "nordlynx", "docker", "br-", "veth", "virbr", "vnet", "vnic", "lxc", "lxdbr", "incusbr", "podman",
+		"cni", "flannel", "cali", "cilium", "kube-", "vmnet", "vboxnet", "bridge1", "awdl", "llw",
+		"pdp_ip", "rmnet", "ccmni" };
+	int							i;
+
+	for ( i = 0; i < ARRAY_LEN( prefixes ); i++ ) {
+		if ( !Q_stricmpn( name, prefixes[i], strlen( prefixes[i] ) ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static void NET_GetLocalAddress(void)
 {
 	struct ifaddrs *ifap, *search;
@@ -2279,17 +2433,127 @@ static void NET_GetLocalAddress(void)
 		Com_Printf("NET_GetLocalAddress: Unable to get list of network interfaces: %s\n", NET_ErrorString());
 	else
 	{
-		for(search = ifap; search; search = search->ifa_next)
+		int pass;
+
+		// the machine's own interfaces, then virtual ones, so MAX_IPS
+		// never leaves out the former
+		for(pass = 0; pass < 2; pass++)
 		{
-			// Only add interfaces that are up.
-			if(search->ifa_flags & IFF_UP)
-				NET_AddLocalAddress(search->ifa_name, search->ifa_addr, search->ifa_netmask);
+			for(search = ifap; search; search = search->ifa_next)
+			{
+				// Only add interfaces that are up.
+				if((search->ifa_flags & IFF_UP) && NET_VirtualInterface(search->ifa_name) == pass)
+					NET_AddLocalAddress(search->ifa_name, search->ifa_addr, search->ifa_netmask, pass);
+			}
 		}
 	
 		freeifaddrs(ifap);
+		NET_OrderLocalAddresses();
 		
 		Sys_ShowIP();
 	}
+}
+#elif defined(_WIN32)
+/*
+=====================
+NET_VirtualAdapter
+
+An adapter a VPN, a tunnel, a virtual machine or a container makes, not
+the machine's own network: Tailscale's and WireGuard's Wintun, OpenVPN's
+TAP, and Hyper-V's, WSL's, VMware's and VirtualBox's switches. A switch
+with a gateway is Hyper-V's external one, which holds the host's own LAN
+=====================
+*/
+static qboolean NET_VirtualAdapter( const IP_ADAPTER_ADDRESSES *adapter ) {
+	// AnyConnect's, GlobalProtect's (PANGP) and Juniper's say "Virtual" but
+	// not "VPN", and carry a gateway when they take the default route
+	static const char *const	tunnels[] = { "vpn", "tunnel", "tap-", "wintun", "wireguard", "tailscale", "zerotier",
+		"anyconnect", "pangp", "juniper", "pulse secure" };
+	static const char *const	switches[] = { "virtual", "hyper-v", "vmware", "virtualbox" };
+	char						description[1024];
+	int							i;
+
+	if ( adapter->IfType == IF_TYPE_TUNNEL || adapter->IfType == IF_TYPE_PPP ) {
+		return qtrue;
+	}
+	if ( !WideCharToMultiByte( CP_UTF8, 0, adapter->Description, -1, description, sizeof( description ), NULL, NULL ) ) {
+		return qfalse;
+	}
+	for ( i = 0; i < ARRAY_LEN( tunnels ); i++ ) {
+		if ( Q_stristr( description, tunnels[i] ) ) {
+			return qtrue;
+		}
+	}
+	for ( i = 0; i < ARRAY_LEN( switches ); i++ ) {
+		if ( Q_stristr( description, switches[i] ) ) {
+			return !adapter->FirstGatewayAddress;
+		}
+	}
+	return qfalse;
+}
+
+/*
+=====================
+NET_GetLocalAddress
+
+Each adapter that's up and its addresses: Windows' own list, where the
+host name's lookup gave them in no useful order and no word of their
+adapters. The machine's own adapters go first, so MAX_IPS never leaves
+them out; a duplicate address, an old one, and a temporary IPv6 one,
+which no one should keep, are left out. Each mask is
+all ones, as the lookup's were, so Sys_IsLANAddress counts this machine's
+own addresses alone, as it did
+=====================
+*/
+static void NET_GetLocalAddress( void ) {
+	const ULONG				flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER |
+		GAA_FLAG_INCLUDE_GATEWAYS;
+	ULONG					size = 16 * 1024, result = ERROR_BUFFER_OVERFLOW;
+	IP_ADAPTER_ADDRESSES	*adapters = NULL, *adapter;
+	struct sockaddr_storage	mask;
+	int						tries, pass;
+
+	numIP = 0;
+	for ( tries = 0; tries < 3 && result == ERROR_BUFFER_OVERFLOW; tries++ ) {
+		free( adapters );
+		if ( !( adapters = malloc( size ) ) ) {
+			return;
+		}
+		result = GetAdaptersAddresses( AF_UNSPEC, flags, NULL, adapters, &size );
+	}
+	if ( result != NO_ERROR ) {
+		Com_Printf( "NET_GetLocalAddress: Unable to get list of network interfaces: error %lu\n", result );
+		free( adapters );
+		return;
+	}
+	for ( pass = 0; pass < 2; pass++ ) {
+		for ( adapter = adapters; adapter; adapter = adapter->Next ) {
+			IP_ADAPTER_UNICAST_ADDRESS	*unicast;
+			char						name[1024];
+
+			if ( adapter->OperStatus != IfOperStatusUp || NET_VirtualAdapter( adapter ) != pass ) {
+				continue;
+			}
+			if ( !WideCharToMultiByte( CP_UTF8, 0, adapter->FriendlyName, -1, name, sizeof( name ), NULL, NULL ) ) {
+				name[0] = '\0';
+			}
+			for ( unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next ) {
+				struct sockaddr	*addr = unicast->Address.lpSockaddr;
+
+				// still being checked at a service's start, as at boot, is kept
+				if ( ( unicast->DadState != IpDadStatePreferred && unicast->DadState != IpDadStateTentative ) ||
+					( addr->sa_family == AF_INET6 && unicast->SuffixOrigin == IpSuffixOriginRandom ) ) {
+					continue;
+				}
+				memset( &mask, 0xff, sizeof( mask ) );
+				mask.ss_family = addr->sa_family;
+				NET_AddLocalAddress( name, addr, (struct sockaddr *)&mask, pass );
+			}
+		}
+	}
+	free( adapters );
+	NET_OrderLocalAddresses();
+	Sys_ShowIP();
 }
 #else
 static void NET_GetLocalAddress( void ) {
@@ -2329,10 +2593,13 @@ static void NET_GetLocalAddress( void ) {
 		for(search = res; search; search = search->ai_next)
 		{
 			if(search->ai_family == AF_INET)
-				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask4);
+				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask4, qfalse);
 			else if(search->ai_family == AF_INET6)
-				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask6);
+				NET_AddLocalAddress("", search->ai_addr, (struct sockaddr *) &mask6, qfalse);
 		}
+#ifndef __EMSCRIPTEN__
+		NET_OrderLocalAddresses();
+#endif
 	
 		Sys_ShowIP();
 	}

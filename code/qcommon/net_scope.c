@@ -29,20 +29,44 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 NET_IPv4Scope
 ==================
 */
+// RFC 1918's private ranges, a LAN's
+static qboolean NET_IPv4Private( const byte *ip ) {
+	return ip[0] == 10 || ( ip[0] == 172 && ( ip[1] & 0xf0 ) == 16 ) || ( ip[0] == 192 && ip[1] == 168 );
+}
+
+// RFC 6598's shared space, 100.64.0.0/10, carriers' and VPNs' NAT
+static qboolean NET_IPv4Shared( const byte *ip ) {
+	return ip[0] == 100 && ( ip[1] & 0xc0 ) == 64;
+}
+
 static netScope_t NET_IPv4Scope( const byte *ip ) {
 	// unspecified ("this network"), multicast, reserved and broadcast
 	if ( ip[0] == 0 || ip[0] >= 224 ) {
 		return NET_SCOPE_NONE;
 	}
 	if ( ip[0] == 127 ||								// loopback
-		ip[0] == 10 ||									// private
-		( ip[0] == 172 && ( ip[1] & 0xf0 ) == 16 ) ||
-		( ip[0] == 192 && ip[1] == 168 ) ||
+		NET_IPv4Private( ip ) ||
 		( ip[0] == 169 && ip[1] == 254 ) ||				// link-local
-		( ip[0] == 100 && ( ip[1] & 0xc0 ) == 64 ) ) {	// shared, as carriers' and VPNs' NAT
+		NET_IPv4Shared( ip ) ) {
 		return NET_SCOPE_PRIVATE;
 	}
 	return NET_SCOPE_PUBLIC;
+}
+
+/*
+==================
+NET_IsLANv4, NET_IsSharedv4
+
+Whether an IPv4 address is in RFC 1918's private ranges, a LAN's, or in
+the shared space carriers' and VPNs' NAT use (100.64.0.0/10)
+==================
+*/
+qboolean NET_IsLANv4( const netadr_t *adr ) {
+	return adr->type == NA_IP && NET_IPv4Private( adr->ip );
+}
+
+qboolean NET_IsSharedv4( const netadr_t *adr ) {
+	return adr->type == NA_IP && NET_IPv4Shared( adr->ip );
 }
 
 /*

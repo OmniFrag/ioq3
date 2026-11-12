@@ -29,6 +29,7 @@ endif()
 
 list(APPEND COMMON_LIBRARIES
     ws2_32 # Windows Sockets 2
+    iphlpapi # the adapters and their addresses (GetAdaptersAddresses)
     winmm  # timeBeginPeriod/timeEndPeriod
     psapi  # EnumProcesses
     ole32 oleaut32 uuid # Windows Firewall's policy (Sys_PrintFirewall)
