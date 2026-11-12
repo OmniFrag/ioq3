@@ -1026,8 +1026,13 @@ static void CL_ContentOverflowed( uint32_t pn ) {
 	clContent.receiveWindow = MAX( clContent.receiveWindow / 2, floor );
 	if ( !clContent.overflowShown ) {
 		clContent.overflowShown = qtrue;
-		Com_Printf( "The fast download lost datagrams in a row, as when the socket's receive buffer overflows, "
-			"so it asks for less at once. A larger buffer helps: on Linux, raise net.core.rmem_max\n" );
+		// no socket buffer to raise, as a web client's data channel has none
+		if ( NET_ReceiveBufferSize( clc.netchan.remoteAddress.type ) <= 0 ) {
+			Com_Printf( "The fast download lost datagrams in a row, so it asks for less at once\n" );
+		} else {
+			Com_Printf( "The fast download lost datagrams in a row, as when the socket's receive buffer overflows, "
+				"so it asks for less at once. A larger buffer helps: on Linux, raise net.core.rmem_max\n" );
+		}
 	}
 }
 
