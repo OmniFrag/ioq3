@@ -69,6 +69,9 @@ const END_SIZE = 22, ENTRY_SIZE = 46, ZIP64_LOCATOR_SIZE = 20;
 // record (unzlocal_SearchCentralDir); and how far back the first look goes,
 // as a pak seldom has a comment
 const COMMENT_MAX = 0xffff, FIRST_LOOK = 1024;
+// the most of a name the engine keeps, its terminator's byte included
+// (MAX_ZPATH, qcommon/pak_dir.h)
+const ZPATH_MAX = 256;
 // a directory larger than any pak's is damaged, rather than read whole:
 // pak0's, of 3,539 files, is about 300 KB
 const DIRECTORY_MAX = 32 << 20;
@@ -87,7 +90,21 @@ const read = async (blob, start, end) => new DataView(await blob.slice(start, en
 // (0xffffffff) can't be opened, and one that holds them still has zip64's
 // records between it and the directory, which unzip takes for bytes before
 // the zip (byte_before_the_zipfile), so it reads none of the entries.
-export const checkPak = (blob) => checksumOfPak(blob).catch(() => ({ damaged: 'unreadable' }));
+export const checkPak = (blob) => readPak(blob, { most: 0 }).then(({ checksum, damaged }) => (damaged ? { damaged } : { checksum }));
+
+// The same read, with what the directory says of each file, for a page that
+// shows a pak's contents before it's sent (OmniFrag's admin page; not
+// upstream's): { checksum, count, before, entries } or { damaged }, as
+// checkPak says it. count is the directory's entries; before is how many
+// bytes come ahead of the zip, which unzip skips; and entries are the first
+// most of them, each { name, flags, method, crc, compressedSize, size,
+// offset }: its name as the engine keeps it, its bytes up to the first NUL
+// and no more than 255 of them, as PakDir_Read cuts it (UTF-8 where its
+// flags say, else each byte a character), its general purpose flags, compression method and CRC-32,
+// its sizes packed and unpacked, and where its local header is from the
+// zip's start, so in the file at before + offset. They're what the
+// directory claims, never checked against the files themselves.
+export const readPak = (blob, { most = Infinity } = {}) => readDirectory(blob, most).catch(() => ({ damaged: 'unreadable' }));
 
 // The last end record's signature in a file's last back bytes, the one
 // unzip finds: the bytes read from from, tail, and its place there, at, -1
@@ -106,7 +123,9 @@ export function lastEndRecord(view) {
     return at >= 0 && at + END_SIZE <= view.byteLength ? at : -1;
 }
 
-async function checksumOfPak(blob) {
+const utf8 = new TextDecoder('utf-8');
+
+async function readDirectory(blob, most) {
     let { from, tail, at } = await findEnd(blob, FIRST_LOOK);
     if (at < 0 && from > 0) ({ from, tail, at } = await findEnd(blob, COMMENT_MAX));
     if (at < 0) return { damaged: 'no end record' };
@@ -126,15 +145,30 @@ async function checksumOfPak(blob) {
     const directory = await read(blob, end - size, blob.size);
     const unreadable = { damaged: at >= ZIP64_LOCATOR_SIZE && tail.getUint32(at - ZIP64_LOCATOR_SIZE, true) === ZIP64_LOCATOR
         ? 'zip64' : 'unreadable entry' };
-    const crcs = [];
+    const crcs = [], listed = [];
     for (let i = 0, p = 0; i < entries; i++) {
         if (p + ENTRY_SIZE > directory.byteLength || directory.getUint32(p, true) !== ENTRY) return unreadable;
         const name = directory.getUint16(p + 28, true);
         if (p + ENTRY_SIZE + name > directory.byteLength) return unreadable;
         if (directory.getUint32(p + 24, true) > 0) crcs.push(directory.getUint32(p + 16, true));
+        if (listed.length < most) {
+            const flags = directory.getUint16(p + 8, true);
+            let bytes = new Uint8Array(directory.buffer, directory.byteOffset + p + ENTRY_SIZE, Math.min(name, ZPATH_MAX - 1));
+            const nul = bytes.indexOf(0);
+            if (nul >= 0) bytes = bytes.subarray(0, nul);
+            listed.push({
+                name: flags & 0x800 ? utf8.decode(bytes) : String.fromCharCode(...bytes),
+                flags,
+                method: directory.getUint16(p + 10, true),
+                crc: directory.getUint32(p + 16, true),
+                compressedSize: directory.getUint32(p + 20, true),
+                size: directory.getUint32(p + 24, true),
+                offset: directory.getUint32(p + 42, true),
+            });
+        }
         p += ENTRY_SIZE + name + directory.getUint16(p + 30, true) + directory.getUint16(p + 32, true);
     }
-    return { checksum: checksumOf(crcs) };
+    return { checksum: checksumOf(crcs), count: entries, before: end - size - offset, entries: listed };
 }
 
 // A stamp of a file's bytes, cheap enough to take on every visit: the
