@@ -35,11 +35,13 @@ int			cvar_modifiedFlags;
 cvar_t		cvar_indexes[MAX_CVARS];
 int			cvar_numIndexes;
 
-// where an int's range ends (Cvar_SetRangeByName), which help and cvar_dump
+// where an int's range ends (Cvar_IntegralBounds), which help and cvar_dump
 // read as no bound: INT_MAX as a float is 2^31, one past it, which a value
 // held at the bound would overflow as it's written back as an int, so the
-// largest float under 2^31
-#define CVAR_INT_MIN	( (float)INT_MIN )
+// largest float under 2^31; and at the other end its mirror, since a value
+// that rounds to -2^31 would pass as it is and overflow atoi, and -2^31
+// itself is written back as -2.14748365e+09
+#define CVAR_INT_MIN	-2147483520.0f
 #define CVAR_INT_MAX	2147483520.0f
 
 #define FILE_HASH_SIZE		256
@@ -3559,6 +3561,20 @@ static void Cvar_ValidateLayers( cvar_t *var, qboolean keepSaved )
 
 /*
 =====================
+Cvar_IntegralBounds
+
+An integer's bounds as whole numbers, inside the ones given and inside an
+int's range as a float holds it (CVAR_INT_MIN, CVAR_INT_MAX)
+=====================
+*/
+static void Cvar_IntegralBounds( float *min, float *max )
+{
+	*min = MAX( ceilf( *min ), CVAR_INT_MIN );
+	*max = MIN( floorf( *max ), CVAR_INT_MAX );
+}
+
+/*
+=====================
 Cvar_CheckRange
 
 The cvar's own range: kept for later while a game module's is in place
@@ -3566,6 +3582,8 @@ The cvar's own range: kept for later while a game module's is in place
 */
 void Cvar_CheckRange( cvar_t *var, float min, float max, qboolean integral )
 {
+	if( integral )
+		Cvar_IntegralBounds( &min, &max );
 	if( var->own )
 	{
 		var->own->validate = qtrue;
@@ -3822,13 +3840,8 @@ void Cvar_SetRangeByName( cvarModule_t module, const char *var_name, int type, c
 		min = atof( minString );
 	if( maxString )
 		max = atof( maxString );
-	// an integer's bounds are whole numbers, inside the ones given and
-	// inside an int
 	if( type != CVAR_RANGE_FLOAT )
-	{
-		min = MAX( ceilf( min ), CVAR_INT_MIN );
-		max = MIN( floorf( max ), CVAR_INT_MAX );
-	}
+		Cvar_IntegralBounds( &min, &max );
 	// also refuses NaN
 	if( !( min <= max ) )
 	{
