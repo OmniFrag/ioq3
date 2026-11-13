@@ -511,6 +511,8 @@ qboolean SV_MapPending( const char *map );
 const char *SV_ContentDir( void );
 qboolean SV_ContentWorking( void );
 qboolean SV_ContentPakName( const char *gameDir, const char *base );
+// whether the content command running is the server's owner's (sv_export.c)
+qboolean SV_ContentOwnerLine( void );
 qboolean SV_PendingSearchedGame( const char *gameDir );
 void SV_AddPending( const char *ospath, const char *gameDir );
 const char *SV_PendingPak( int index, const char **gameDir );

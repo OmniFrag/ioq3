@@ -1400,6 +1400,28 @@ int		FS_Seek( fileHandle_t f, long offset, int origin );
 qboolean FS_FilenameCompare( const char *s1, const char *s2 );
 
 qboolean FS_RetailPak( const char *download, char *retail, int size );
+// which of the game's own files a pak's checksum is, by checksum alone,
+// its number in index (pak<index>.pk3, -1 for none or a tests' stand-in
+// known by its name): one test for content add, content list and the map
+// facts (files.c)
+typedef enum {
+	FS_OWN_NONE,		// not one of the game's own
+	FS_OWN_DEMO,		// the demo's pak0
+	FS_OWN_BASE,		// the full game's baseq3 pak0 to pak8
+	FS_OWN_MISSIONPACK	// Team Arena's missionpack pak0 to pak3
+} fsGameOwn_t;
+fsGameOwn_t	FS_GameOwnPak( unsigned int checksum, int *index );
+// which of a set of the game's own files are here, in the search path or
+// on disk by checksum, or held by content add until the set is whole: the
+// set's size (files.c)
+int			FS_GameOwnHave( fsGameOwn_t own, qboolean *have, qboolean *held );
+// a set's folder and size, the full game's 9 in baseq3 or Team Arena's 4
+// in missionpack; and a pak's number by its name, pak<n> below count, or -1
+#define NUM_TA_PAKS	4
+const char	*FS_OwnGame( fsGameOwn_t own, int *count );
+int			FS_IdPakIndex( const char *basename, int count );
+// whether the engine chose the demo for want of the full game (files.c)
+qboolean	FS_DemoChosen( void );
 qboolean FS_RetailPakChecksum( const char *download, unsigned int checksum, char *retail, int size );
 qboolean FS_DemoPak0Checksum( unsigned int checksum );
 // the point release left out while the demo plays from baseq3: "pak1.pk3, ..."
@@ -1409,7 +1431,7 @@ const char *FS_LeftOutPaks( void );
 qboolean FS_InstalledPakNamed( const char *download );
 // whether an installed pak has a download's name ("<game>/<name>.pk3")
 const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
-	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict );
+	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict, qboolean gameOwn );
 // content add's checks of a pak (files.c), with its verdict's code and
 // warnings (hooks.h's extContentVerdict_t) where verdict is given; and its
 // words for a pak of the game's own (its own name) and for other contents

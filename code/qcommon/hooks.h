@@ -689,6 +689,21 @@ const char	*SV_ExtDrainReason( void );
 // game leaves out, running its own (FS_CodeLeftOut), and
 // classic_clients_load_code, where classic clients that get that pak load
 // its cgame or ui (FS_ClassicClientCode).
+// a set of the game's own files, the full game's or Team Arena's, as the
+// owner adds them: how many of it are here or held, the rest, and when
+// they count (sv_export.c)
+typedef struct {
+	const char	*set;			// "base" (the full game's 9) or "missionpack" (Team Arena's 4); NULL for none
+	char		name[MAX_QPATH];	// for a verdict, the file as installed, "baseq3/pak0.pk3"; "" otherwise
+	int			inPlace, of;	// how many of the set are here or held, of how many
+	char		missing[128];	// the rest, "pak1.pk3 pak2.pk3"
+	const char	*applies;		// "when_complete", "restart" or "never"
+	char		reason[256];	// for never, or a note for restart, in an admin's words; "" for none
+} extGameOwnSet_t;
+// each of the game's sets that's partly there, or whole with some held:
+// how many, at most max into sets
+int		SV_ExtGameOwnSets( extGameOwnSet_t *sets, int max );
+
 #define EXT_CONTENT_MAX_WARNINGS	16
 typedef struct {
 	const char	*code;
@@ -700,25 +715,31 @@ typedef struct {
 	}		warnings[EXT_CONTENT_MAX_WARNINGS];
 	char		sha256[65];		// the pak's, in lowercase hex; "" where it wasn't read
 	long long	size;			// its bytes, -1 where unknown
+	// one of the game's own files, which the server's owner may add
+	// (owner): installed under its own name and held until its set is
+	// whole, taken up as the program next starts (files.c's FS_TakeHeldSets)
+	extGameOwnSet_t	gameOwn;
 } extContentVerdict_t;
 typedef void	( *extContentDone_t )( void *user, const extContentVerdict_t *verdict );
 // Starts content add of file, a pak's name in incoming, for gameDir, this
 // server's for NULL. done gets the verdict with user, at once for a pak
 // refused before its copy starts, else as the add ends, a frame or more
 // later. With removeSource, the file is removed from incoming as the add
-// ends, whatever the verdict, unless its name can't be a pak's. qfalse,
-// doing nothing, while an add or an export runs
-qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, extContentDone_t done,
-	void *user );
+// ends, whatever the verdict, unless its name can't be a pak's. owner: the
+// server's owner's, who may add the game's own files, refused (retail) to
+// anyone else. qfalse, doing nothing, while an add or an export runs
+qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, qboolean owner,
+	extContentDone_t done, void *user );
 // What content add would say of a pak before it's in incoming, from file,
 // gameDir (NULL for this server's), its size and its pak checksum, which a
 // page computes from the zip's directory (code/web/pak_check.js): the
 // names, the size, one of the game's own by its checksum, and an installed
 // pak of its name, the same file if it's the same size and checksum. With
 // hasChecksum qfalse, an installed pak of another size is another one, and
-// the rest is left to the add. The console says nothing
+// the rest is left to the add; owner as for SV_ExtContentAdd. The console
+// says nothing
 void	SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
-	unsigned int checksum, extContentVerdict_t *verdict );
+	unsigned int checksum, qboolean owner, extContentVerdict_t *verdict );
 
 // The paks the server has, and taking one away (server/sv_installed.c),
 // as the console's content list, content remove and content restore.
@@ -761,8 +782,10 @@ void		SV_ExtContentListFree( extContentList_t *list );
 // pruned, a map loaded, the pending maps, sv_pool or nextmap changed
 int			SV_ExtContentRevision( void );
 // content remove's and restore's verdict: code, removed or restored, else
-// installed_already (restore) or why not: not_found, game_own,
-// not_server_folder, in_use, bad_name, bad_game, other_contents, failed,
+// installed_already (restore) or why not: not_found, game_own (one of the
+// game's own files, to anyone but the owner), game_needs (one the running
+// game needs, even to the owner), not_server_folder, in_use, bad_name,
+// bad_game, other_contents, failed,
 // or content add's codes for a copy it refuses (restore); its words, for
 // an admin; when it applies, "now" or "next_session", NULL when it
 // doesn't; and the file's entry, its maps and uses, where it was found.
@@ -775,7 +798,7 @@ typedef struct {
 	extContentList_t	list;
 } extContentChange_t;
 // qfalse, doing nothing, while an add or an export runs
-qboolean	SV_ExtContentRemove( const char *name, const char *gameDir, extContentChange_t *change );
+qboolean	SV_ExtContentRemove( const char *name, const char *gameDir, qboolean owner, extContentChange_t *change );
 qboolean	SV_ExtContentRestore( const char *name, const char *gameDir, extContentChange_t *change );
 void		SV_ExtContentChangeFree( extContentChange_t *change );
 

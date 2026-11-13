@@ -1199,6 +1199,9 @@ static struct {
 	extContentDone_t	done;
 	void			*user;
 	char			removing[MAX_OSPATH];
+	// one of the game's own files, which the owner may add, held until its
+	// set is whole (SV_AddGameOwn)
+	fsGameOwn_t		own;
 } addPak;
 
 #define ADD_NO_CONTENT_DIR	"sv_contentDir can't be used; the console says why"
@@ -1521,19 +1524,154 @@ qboolean SV_ContentPakName( const char *gameDir, const char *base ) {
 =================
 SV_AddPlace
 
-Where content add puts a pak, in the home's game directory, into ospath;
-qfalse, saying so, for a game directory that's sv_contentDir
+Where content add puts a pak, in the home's game directory, into ospath,
+as ".pk3.pending" for one of the game's own held until its set is whole
+(held); qfalse, saying so, for a game directory that's sv_contentDir
 =================
 */
-static qboolean SV_AddPlace( extContentVerdict_t *verdict, const char *gameDir, const char *base, char *ospath,
-		int size ) {
-	Q_strncpyz( ospath, FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", base ) ), size );
+static qboolean SV_AddPlace( extContentVerdict_t *verdict, const char *gameDir, const char *base, qboolean held,
+		char *ospath, int size ) {
+	Q_strncpyz( ospath, FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir,
+		va( held ? "%s.pk3.pending" : "%s.pk3", base ) ), size );
 	// nor into sv_contentDir, by a game directory of its name
 	if ( SV_ContentInside( contentRoot, ospath ) ) {
 		SV_AddSay( verdict, "bad_game", "%s is sv_contentDir, not a game folder", gameDir );
 		return qfalse;
 	}
 	return qtrue;
+}
+
+/*
+=================
+SV_ContentOwnerLine
+
+Whether the content command running is the server's owner's, who alone
+may add or remove the game's own files: the console's, rcon's, a config's
+and a console tool's (no player's origin); a player's, run through a
+role's lists ("player <name> (<role>, <who>)", hosting's roles.c), only
+for the owner role, read from the last parenthesis, after any a name has
+=================
+*/
+qboolean SV_ContentOwnerLine( void ) {
+	const char	*origin = Cmd_Origin(), *role;
+
+	if ( !origin || Q_strncmp( origin, "player ", 7 ) ) {
+		return qtrue;
+	}
+	role = strrchr( origin, '(' );
+	return role && !Q_strncmp( role, "(owner, ", 8 );
+}
+
+/*
+=================
+SV_GameOwnState
+
+A set of the game's own files' state into state: how many are here or
+held, with index's counted too (-1 for none), the rest, and when they
+count: at a restart once the set is whole, or never on a server whose
+base game was set by hand, not the demo the engine chose. qtrue when any
+is here or held but the set isn't, or it's whole with some held
+=================
+*/
+static qboolean SV_GameOwnState( fsGameOwn_t own, int index, extGameOwnSet_t *state ) {
+	qboolean	have[NUM_ID_PAKS], held[NUM_ID_PAKS], anyHeld = qfalse;
+	int			i, count;
+
+	Com_Memset( state, 0, sizeof( *state ) );
+	state->set = own == FS_OWN_BASE ? "base" : "missionpack";
+	count = FS_GameOwnHave( own, have, held );
+	if ( index >= 0 && index < count ) {
+		have[index] = held[index] = qtrue;
+	}
+	state->of = count;
+	for ( i = 0; i < count; i++ ) {
+		anyHeld |= held[i];
+		if ( have[i] ) {
+			state->inPlace++;
+		} else {
+			Q_strcat( state->missing, sizeof( state->missing ), va( "%spak%d.pk3", state->missing[0] ? " " : "", i ) );
+		}
+	}
+	// another base game set by hand, not the demo the engine chose
+	if ( own == FS_OWN_BASE && Q_stricmp( com_basegame->string, BASEGAME ) && !FS_DemoChosen() ) {
+		state->applies = "never";
+		Com_sprintf( state->reason, sizeof( state->reason ), "this server is set to play %s (com_basegame on its "
+			"command line); take that away to play the full game", com_basegame->string );
+	} else if ( state->inPlace < count ) {
+		state->applies = "when_complete";
+	} else {
+		state->applies = "restart";
+		if ( own == FS_OWN_MISSIONPACK && Q_stricmp( FS_GetCurrentGameDir(), BASETA ) ) {
+			Q_strncpyz( state->reason, "Team Arena plays when the server starts with fs_game missionpack",
+				sizeof( state->reason ) );
+		}
+	}
+	return state->inPlace && ( state->inPlace < count || anyHeld );
+}
+
+/*
+=================
+SV_ExtGameOwnSets
+
+Each of the game's sets that's partly there, or whole with some held
+(hooks.h), for a page's progress on a fresh load
+=================
+*/
+int SV_ExtGameOwnSets( extGameOwnSet_t *sets, int max ) {
+	static const fsGameOwn_t	owns[] = { FS_OWN_BASE, FS_OWN_MISSIONPACK };
+	int							i, count = 0;
+
+	for ( i = 0; i < ARRAY_LEN( owns ) && count < max; i++ ) {
+		count += SV_GameOwnState( owns[i], -1, &sets[count] );
+	}
+	return count;
+}
+
+/*
+=================
+SV_AddGameOwn
+
+A pak of the game's own the server's owner adds, by its checksum: its
+place and name, baseq3/pak<n> or missionpack/pak<n>, into gameDir and base,
+whatever it arrived as (a tests' single stand-in by its name's number);
+and in the verdict, with this one counted, how many of its set are here,
+the rest, and when they count: at a restart once the set is whole, or
+never on a server told to play the demo. Its set, FS_OWN_NONE for one
+that isn't
+================
+*/
+static fsGameOwn_t SV_AddGameOwn( extContentVerdict_t *verdict, unsigned int checksum, const char *arrived,
+		char *gameDir, int gameDirSize, char *base, int baseSize ) {
+	int			index;
+	fsGameOwn_t	own = FS_GameOwnPak( checksum, &index );
+
+	if ( own != FS_OWN_BASE && own != FS_OWN_MISSIONPACK ) {
+		return FS_OWN_NONE;
+	}
+	if ( index < 0 && ( index = FS_IdPakIndex( arrived, NUM_ID_PAKS ) ) < 0 ) {
+		return FS_OWN_NONE;
+	}
+	Q_strncpyz( gameDir, FS_OwnGame( own, NULL ), gameDirSize );
+	Com_sprintf( base, baseSize, "pak%d", index );
+	SV_GameOwnState( own, index, &verdict->gameOwn );
+	return own;
+}
+
+// the added verdict's words for one of the game's own: where it went, and
+// what's still needed before it counts
+static void SV_AddGameOwnSay( extContentVerdict_t *verdict, const char *arrived ) {
+	const char	*set = !strcmp( verdict->gameOwn.set, "base" ) ? "the full game's" : "Team Arena's";
+
+	if ( !strcmp( verdict->gameOwn.applies, "never" ) ) {
+		SV_AddSay( verdict, "added", "%s added as %s; it's held, as %s", arrived, addPak.name, verdict->gameOwn.reason );
+	} else if ( !strcmp( verdict->gameOwn.applies, "when_complete" ) ) {
+		SV_AddSay( verdict, "added", "%s added as %s, held until %s files are all here: %d of %d; add %s, then "
+			"restart the server", arrived, addPak.name, set, verdict->gameOwn.inPlace, verdict->gameOwn.of,
+			verdict->gameOwn.missing );
+	} else {
+		SV_AddSay( verdict, "added", "%s added as %s; %s files are all here: restart the server to play them%s%s",
+			arrived, addPak.name, set, verdict->gameOwn.reason[0] ? ". " : "", verdict->gameOwn.reason );
+	}
 }
 
 /*
@@ -1547,11 +1685,12 @@ incoming folder (FS_CheckAddPak), then clones or copies it on the thread
 goes from incoming as the add ends
 =================
 */
-static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean removeSource ) {
+static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean removeSource, qboolean owner ) {
 	exportJob_t			*job = &exportJob;
 	exportItem_t		*item;
 	extContentVerdict_t	*verdict = &addPak.verdict;
 	char				name[MAX_OSPATH], source[MAX_OSPATH], overrides[MAX_STRING_CHARS];
+	char				ownGame[OFCM_GAMEDIR_SIZE];
 	const char			*refused, *installedAt;
 	unsigned int		installed;
 	int64_t				size, mtime;
@@ -1560,6 +1699,7 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	Com_Memset( verdict, 0, sizeof( *verdict ) );
 	verdict->size = -1;
 	addPak.removing[0] = '\0';
+	addPak.own = FS_OWN_NONE;
 	if ( !SV_ContentRoot() ) {
 		// its lines said why
 		verdict->code = "failed";
@@ -1598,7 +1738,23 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	Com_sprintf( addPak.name, sizeof( addPak.name ), "%s/%s.pk3", gameDir, name );
 	Q_strncpyz( addPak.gameDir, gameDir, sizeof( addPak.gameDir ) );
 	Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
-	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ), verdict );
+	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ), verdict, qfalse );
+	// the game's own, which the owner may add: under its own name, checked
+	// again as that
+	if ( refused && owner && !strcmp( verdict->code, "retail" ) && ( addPak.own = SV_AddGameOwn( verdict, addPak.checksum,
+		name, ownGame, sizeof( ownGame ), name, sizeof( name ) ) ) != FS_OWN_NONE ) {
+		gameDir = ownGame;
+		Com_sprintf( addPak.name, sizeof( addPak.name ), "%s/%s.pk3", gameDir, name );
+		Q_strncpyz( verdict->gameOwn.name, addPak.name, sizeof( verdict->gameOwn.name ) );
+		Q_strncpyz( addPak.gameDir, gameDir, sizeof( addPak.gameDir ) );
+		Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
+		verdict->code = NULL;
+		verdict->message[0] = '\0';
+		// none of the override warnings: the game's own files are what
+		// others override
+		overrides[0] = '\0';
+		refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, NULL, 0, verdict, qtrue );
+	}
 	if ( refused ) {
 		SV_AddRefused( verdict, verdict->code ? verdict->code : "failed", refused );
 		// where the installed one is, at the console alone: a tool's caller
@@ -1627,7 +1783,8 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	Q_strncpyz( item->name, addPak.name, sizeof( item->name ) );
 	item->size = size;
 	item->mtime = mtime;
-	if ( !SV_AddPlace( verdict, gameDir, name, item->targets[EXPORT_BY_NAME].ospath, MAX_OSPATH ) ) {
+	if ( !SV_AddPlace( verdict, gameDir, name, addPak.own != FS_OWN_NONE, item->targets[EXPORT_BY_NAME].ospath,
+		MAX_OSPATH ) ) {
 		return qfalse;
 	}
 	FS_CreatePath( item->targets[EXPORT_BY_NAME].ospath );
@@ -1650,8 +1807,8 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 }
 
 // content add, ended at once with its verdict unless its thread started
-static void SV_AddStart( const char *file, const char *gameDir, qboolean removeSource ) {
-	if ( !SV_AddBegin( file, gameDir, removeSource ) ) {
+static void SV_AddStart( const char *file, const char *gameDir, qboolean removeSource, qboolean owner ) {
+	if ( !SV_AddBegin( file, gameDir, removeSource, owner ) ) {
 		SV_AddEnd();
 	}
 }
@@ -1712,7 +1869,7 @@ static void SV_AddFinish( void ) {
 
 	Com_sprintf( part, sizeof( part ), "%s.part", target->ospath );
 	verdict->code = NULL;
-	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, NULL, 0, verdict );
+	refused = FS_CheckAddPak( part, addPak.gameDir, addPak.base, &checksum, NULL, 0, verdict, addPak.own != FS_OWN_NONE );
 	if ( !refused && checksum != addPak.checksum ) {
 		refused = "it changed while it was copied";
 	}
@@ -1733,10 +1890,15 @@ static void SV_AddFinish( void ) {
 		Q_strncpyz( record.path, addPak.name, sizeof( record.path ) );
 		Content_PakIndex_Put( &record );
 	}
-	addPak.added = qtrue;
 	SV_InstalledAdded( addPak.gameDir, va( "%s.pk3", addPak.base ), target->ospath );
-	SV_AddPending( target->ospath, addPak.gameDir );
 	Com_SHA256Hex( item->sha256, verdict->sha256 );
+	// one of the game's own, held: read at the start that takes its set
+	if ( addPak.own != FS_OWN_NONE ) {
+		SV_AddGameOwnSay( verdict, item->source[0] ? FS_OSPathName( item->source ) : addPak.name );
+		return;
+	}
+	addPak.added = qtrue;
+	SV_AddPending( target->ospath, addPak.gameDir );
 	// the extension's file goes as the add ends (SV_AddEnd); else a copy
 	// or a clone, so the operator's own stays, which may be on purpose. A
 	// clone takes no more space until either file changes
@@ -1764,20 +1926,20 @@ extension as it ends; and content.check's, before the pak is in incoming,
 which says nothing at the console
 =================
 */
-qboolean SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, extContentDone_t done,
-		void *user ) {
+qboolean SV_ExtContentAdd( const char *file, const char *gameDir, qboolean removeSource, qboolean owner,
+		extContentDone_t done, void *user ) {
 	if ( exportThread ) {
 		return qfalse;
 	}
 	addPak.done = done;
 	addPak.user = user;
-	SV_AddStart( file, gameDir, removeSource );
+	SV_AddStart( file, gameDir, removeSource, owner );
 	return qtrue;
 }
 
 void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
-		unsigned int checksum, extContentVerdict_t *verdict ) {
-	char			name[MAX_OSPATH], place[MAX_OSPATH], retail[MAX_QPATH];
+		unsigned int checksum, qboolean owner, extContentVerdict_t *verdict ) {
+	char			name[MAX_OSPATH], place[MAX_OSPATH], retail[MAX_QPATH], ownGame[OFCM_GAMEDIR_SIZE];
 	const char		*other;
 	const pakRecord_t	*record;
 	unsigned int	installed = 0;
@@ -1794,7 +1956,7 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 	if ( !gameDir ) {
 		gameDir = FS_GetCurrentGameDir();
 	}
-	if ( !SV_AddName( verdict, file, gameDir, name, sizeof( name ) ) || !SV_AddPlace( verdict, gameDir, name, place,
+	if ( !SV_AddName( verdict, file, gameDir, name, sizeof( name ) ) || !SV_AddPlace( verdict, gameDir, name, qfalse, place,
 			sizeof( place ) ) ) {
 		return;
 	}
@@ -1804,6 +1966,12 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 		return;
 	}
 	if ( hasChecksum && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), checksum, retail, sizeof( retail ) ) ) {
+		// the owner's: where it would go, held, and what it would need
+		if ( owner && SV_AddGameOwn( verdict, checksum, name, ownGame, sizeof( ownGame ), name, sizeof( name ) ) !=
+			FS_OWN_NONE ) {
+			Com_sprintf( verdict->gameOwn.name, sizeof( verdict->gameOwn.name ), "%s/%s.pk3", ownGame, name );
+			return;
+		}
 		SV_AddSay( verdict, "retail", "%s/%s.pk3 is refused: " ADD_PAK_RETAIL, gameDir, name, retail );
 		return;
 	}
@@ -2087,7 +2255,7 @@ void SV_Content_f( void ) {
 		}
 	} else if ( !Q_stricmp( sub, "add" ) && ( argc == 3 || argc == 4 ) ) {
 		if ( !SV_AddRunning() ) {
-			SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL, qfalse );
+			SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL, qfalse, SV_ContentOwnerLine() );
 		}
 		return;
 	} else if ( !Q_stricmp( sub, "list" ) && argc <= 3 ) {

@@ -690,6 +690,24 @@ static void SV_ContentList( const char *game, const char *name, qboolean removed
 			list->count--;
 		}
 	}
+	// the game's own the owner added, held until their set is whole
+	// (files.c's FS_TakeHeldSets): never loaded, removable at once
+	for ( i = 0; i < NUM_ID_PAKS + NUM_TA_PAKS; i++ ) {
+		gameDir = FS_OwnGame( i < NUM_ID_PAKS ? FS_OWN_BASE : FS_OWN_MISSIONPACK, NULL );
+		ospath = SV_HomePak( gameDir, va( "pak%d.pk3.pending", i < NUM_ID_PAKS ? i : i - NUM_ID_PAKS ) );
+		if ( !SV_Stat( ospath, NULL ) ||
+			!( file = SV_ListEntry( &l, gameDir, va( "pak%d", i < NUM_ID_PAKS ? i : i - NUM_ID_PAKS ) ) ) ) {
+			continue;
+		}
+		file->state = "held";
+		file->home = qtrue;
+		SV_ListOrigin( file, ospath );
+		if ( !FS_DescribePak( ospath, gameDir, SV_ListFacts, NULL, &l ) ) {
+			list->count--;
+			continue;
+		}
+		file->removable = qtrue;
+	}
 	root = removed ? SV_ContentDir() : NULL;
 	for ( i = 0; root && i < inst.count; i++ ) {
 		const record_t	*rec = &inst.records[i];
@@ -864,7 +882,10 @@ static qboolean SV_ChangeNames( extContentChange_t *change, const char *name, co
 		SV_ChangeSay( change, "bad_name", "%s isn't a name the server can use for a file.", name );
 		return qfalse;
 	}
-	if ( !SV_PendingSearchedGame( *gameDir ) || !SV_InstalledName( name, *gameDir ) ) {
+	// the game's own folders too, where a server on the demo holds what its
+	// owner added of them (files.c's FS_TakeHeldSets)
+	if ( ( !SV_PendingSearchedGame( *gameDir ) && Q_stricmp( *gameDir, BASEGAME ) && Q_stricmp( *gameDir, BASETA ) ) ||
+		!SV_InstalledName( name, *gameDir ) ) {
 		SV_ChangeSay( change, "bad_game", "%s isn't a game folder this server reads.", *gameDir );
 		return qfalse;
 	}
@@ -885,26 +906,38 @@ static extContentFile_t *SV_ChangeFind( extContentChange_t *change, const char *
 
 	SV_ExtContentChangeFree( change );
 	SV_ContentList( gameDir, name, removed, qtrue, list );
-	for ( i = 0; i < list->count && ( list->files[i].rank == 1 ) != removed; i++ ) {
+	change->entry = NULL;
+	for ( i = 0; i < list->count; i++ ) {
+		if ( ( list->files[i].rank == 1 ) != removed ) {
+			continue;
+		}
+		// one of the game's own held beside a loaded one of its name, as
+		// the demo's pak0 in the home's baseq3: the held one, which can go
+		if ( !change->entry || !strcmp( list->files[i].state, "held" ) ) {
+			change->entry = &list->files[i];
+		}
 	}
-	change->entry = i < list->count ? &list->files[i] : NULL;
 	return (extContentFile_t *)change->entry;
 }
 
 /*
 =================
-SV_KeepAside
+SV_KeepAsideAs, SV_KeepAside
 
-A pak moved into sv_contentDir's removed folder, its kept copy recorded,
-and its record as a file dropped; when it can't be moved, as its folder is
-on another disk, it's deleted, without a copy. qfalse when neither can be
-done, as Windows won't while a file's open. keptCopy, when given, says
-whether a copy was kept
+A pak, file in the home's gameDir, moved into sv_contentDir's removed
+folder as name, its kept copy recorded, and file's record as a file
+dropped; when it can't be moved, as its folder is on another disk, it's
+deleted, without a copy. qfalse when neither can be done, as Windows won't
+while a file's open. keptCopy, when given, says whether a copy was kept.
+SV_KeepAside keeps a pak under its own name; SV_KeepAsideAs one of the
+game's own held or moved aside (".pk3.pending", ".pk3.replaced") under
+its name as a pak, so the list and content restore know it
 =================
 */
-static qboolean SV_KeepAside( const char *gameDir, const char *name, const char *origin, qboolean *keptCopy ) {
-	char		from[MAX_OSPATH], to[MAX_OSPATH];
-	const char	*root = SV_ContentDir();
+static qboolean SV_KeepAsideAs( const char *gameDir, const char *file, const char *name, const char *origin,
+		qboolean *keptCopy ) {
+	char		from[MAX_OSPATH], to[MAX_OSPATH], fileName[INSTALLED_NAME];
+	const char	*root;
 	record_t	*rec;
 	int64_t		size, mtime;
 	qboolean	kept;
@@ -912,7 +945,11 @@ static qboolean SV_KeepAside( const char *gameDir, const char *name, const char 
 	if ( keptCopy ) {
 		*keptCopy = qfalse;
 	}
-	Q_strncpyz( from, SV_HomePak( gameDir, name ), sizeof( from ) );
+	// a copy first: the caller's may be va's, which SV_ContentDir's own
+	// va() calls would overwrite
+	Q_strncpyz( fileName, file, sizeof( fileName ) );
+	root = SV_ContentDir();
+	Q_strncpyz( from, SV_HomePak( gameDir, fileName ), sizeof( from ) );
 	if ( !Content_FileStat( from, &size, &mtime ) ) {
 		return qtrue;
 	}
@@ -924,7 +961,7 @@ static qboolean SV_KeepAside( const char *gameDir, const char *name, const char 
 	if ( !kept ) {
 		if ( remove( from ) ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: content remove: %s/%s can't be moved or deleted now: %s\n", gameDir,
-				name, strerror( errno ) );
+				fileName, strerror( errno ) );
 			return qfalse;
 		}
 		Com_Printf( S_COLOR_YELLOW "WARNING: content remove: %s/%s couldn't be moved into %s, so it's deleted, "
@@ -933,7 +970,7 @@ static qboolean SV_KeepAside( const char *gameDir, const char *name, const char 
 		Com_Printf( "content remove: %s/%s removed; its copy is kept for %d days in %s\n", gameDir, name,
 			INSTALLED_KEEP_DAYS, to );
 	}
-	if ( ( rec = SV_RecordFind( REC_FILE, gameDir, name ) ) != NULL ) {
+	if ( ( rec = SV_RecordFind( REC_FILE, gameDir, fileName ) ) != NULL ) {
 		SV_RecordDrop( rec );
 	}
 	if ( keptCopy ) {
@@ -949,6 +986,10 @@ static qboolean SV_KeepAside( const char *gameDir, const char *name, const char 
 	return qtrue;
 }
 
+static qboolean SV_KeepAside( const char *gameDir, const char *name, const char *origin, qboolean *keptCopy ) {
+	return SV_KeepAsideAs( gameDir, name, name, origin, keptCopy );
+}
+
 /*
 =================
 SV_ExtContentRemove
@@ -958,7 +999,7 @@ verdict in change: removed, or why not. qfalse, doing nothing, while an
 add or an export runs
 =================
 */
-qboolean SV_ExtContentRemove( const char *name, const char *gameDir, extContentChange_t *change ) {
+qboolean SV_ExtContentRemove( const char *name, const char *gameDir, qboolean owner, extContentChange_t *change ) {
 	extContentFile_t	*file;
 	record_t			*rec;
 	qboolean			keptCopy;
@@ -975,8 +1016,31 @@ qboolean SV_ExtContentRemove( const char *name, const char *gameDir, extContentC
 		SV_ChangeSay( change, "not_found", "There's no file named %s in the %s folder.", name, gameDir );
 		return qtrue;
 	}
+	// the game's own: the owner's alone, and only one the running game
+	// doesn't read, held until its set is whole, which goes at once
+	if ( file->gameOwn && !owner ) {
+		SV_ChangeSay( change, "game_own", "%s is one of the game's own files, so only the server's owner can remove "
+			"it.", file->name );
+		return qtrue;
+	}
+	if ( file->gameOwn && strcmp( file->state, "held" ) ) {
+		SV_ChangeSay( change, "game_needs", "%s is one of the game's own files the server runs on; stop the server, "
+			"then remove it by hand.", file->name );
+		return qtrue;
+	}
 	if ( file->gameOwn ) {
-		SV_ChangeSay( change, "game_own", "%s is one of the game's own files, so it can't be removed.", file->name );
+		if ( !SV_KeepAsideAs( file->game, va( "%s.pending", file->name ), file->name, file->origin, &keptCopy ) ) {
+			SV_ChangeSay( change, "failed", "The server couldn't remove %s: the file can't be moved.", file->name );
+			return qtrue;
+		}
+		if ( ( rec = SV_RecordFind( REC_FILE, file->game, file->name ) ) != NULL ) {
+			SV_RecordDrop( rec );
+		}
+		SV_RecordWrite();
+		file->state = "removed";
+		change->applies = "now";
+		SV_ChangeSay( change, "removed", keptCopy ? "%s is removed. A copy is kept for %d days." : "%s is removed.",
+			file->name, INSTALLED_KEEP_DAYS );
 		return qtrue;
 	}
 	if ( !file->home ) {
@@ -1054,6 +1118,13 @@ qboolean SV_ExtContentRestore( const char *name, const char *gameDir, extContent
 	if ( !SV_ChangeNames( change, name, &gameDir ) ) {
 		return qtrue;
 	}
+	// the game's own folders SV_ChangeNames takes for a held file's removal
+	// aren't read while another game plays: a copy back there would wait
+	// unread
+	if ( !SV_PendingSearchedGame( gameDir ) ) {
+		SV_ChangeSay( change, "bad_game", "%s isn't a game folder this server reads.", gameDir );
+		return qtrue;
+	}
 	SV_RecordRead();
 	if ( ( rec = SV_RecordFind( REC_REMOVING, gameDir, name ) ) != NULL ) {
 		SV_RecordDrop( rec );
@@ -1075,7 +1146,7 @@ qboolean SV_ExtContentRestore( const char *name, const char *gameDir, extContent
 	Q_strncpyz( to, SV_HomePak( kept.game, kept.name ), sizeof( to ) );
 	COM_StripExtension( kept.name, base, sizeof( base ) );
 	Com_Memset( &verdict, 0, sizeof( verdict ) );
-	refused = FS_CheckAddPak( from, kept.game, base, &checksum, NULL, 0, &verdict );
+	refused = FS_CheckAddPak( from, kept.game, base, &checksum, NULL, 0, &verdict, qfalse );
 	if ( refused ) {
 		SV_ChangeSay( change, verdict.code ? verdict.code : "failed", "%s can't come back: %s.", kept.name, refused );
 		return qtrue;
@@ -1372,10 +1443,22 @@ void SV_InstalledMapLoad( const char *server ) {
 
 	inst.mapLoads++;
 	SV_RecordRead();
+	// a file the start moved aside for the game's own files taken into
+	// place (files.c's FS_TakeHeldSets), the demo's pak0: a kept copy
+	for ( i = 0; i < NUM_ID_PAKS + NUM_TA_PAKS; i++ ) {
+		const char	*gameDir = FS_OwnGame( i < NUM_ID_PAKS ? FS_OWN_BASE : FS_OWN_MISSIONPACK, NULL );
+		char		pak[MAX_QPATH], aside[MAX_QPATH];
+
+		Com_sprintf( pak, sizeof( pak ), "pak%d.pk3", i < NUM_ID_PAKS ? i : i - NUM_ID_PAKS );
+		Com_sprintf( aside, sizeof( aside ), "%s.replaced", pak );
+		if ( SV_Stat( SV_HomePak( gameDir, aside ), NULL ) ) {
+			changed |= SV_KeepAsideAs( gameDir, aside, pak, "game", NULL );
+		}
+	}
 	for ( i = 0; i < inst.count && inst.records[i].kind != REC_REMOVING; i++ ) {
 	}
 	if ( i < inst.count ) {
-		changed = SV_LoadRemove( server );
+		changed |= SV_LoadRemove( server );
 	}
 	// the kept copies past their time, or gone; sv_contentDir only looked
 	// at (SV_ContentRoot makes it) when there are some, and none dropped
@@ -1439,7 +1522,7 @@ void SV_InstalledList_f( const char *game ) {
 void SV_InstalledChange_f( qboolean restore, const char *name, const char *game ) {
 	extContentChange_t	change;
 
-	if ( !( restore ? SV_ExtContentRestore : SV_ExtContentRemove )( name, game, &change ) ) {
+	if ( !( restore ? SV_ExtContentRestore( name, game, &change ) : SV_ExtContentRemove( name, game, SV_ContentOwnerLine(), &change ) ) ) {
 		Com_Printf( "content %s: an add or an export is running; try again once it's done\n", restore ? "restore" :
 			"remove" );
 		return;

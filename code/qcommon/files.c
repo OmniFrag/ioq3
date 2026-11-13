@@ -213,14 +213,29 @@ static const unsigned int missionpak_checksums[] =
 };
 #endif
 
-// a checksum the tests have the server take for one of the game's own
-// paks (FS_RetailPak), any of pak0 to pak8 (FS_CheckPak0, FS_ChooseDemo),
-// from OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM at startup
+// checksums the tests have the server take for the game's own paks, from
+// OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM at startup: one, which stands for any
+// of pak0 to pak8 by its name (FS_RetailPak, FS_CheckPak0, FS_ChooseDemo),
+// or a comma list, which stands for baseq3's pak0, pak1, ... in order
+// (FS_GameOwnPak)
 static qboolean		fs_refusedTestPak;
-static unsigned int	fs_refusedTestChecksum;
+static unsigned int	fs_testChecksums[NUM_ID_PAKS];
+static int			fs_numTestChecksums;
+
+// a tests' stand-in's place in the list, from 0, or -1
+static int FS_TestPakIndex( unsigned int checksum ) {
+	int	i;
+
+	for ( i = 0; fs_refusedTestPak && i < fs_numTestChecksums; i++ ) {
+		if ( checksum == fs_testChecksums[i] ) {
+			return i;
+		}
+	}
+	return -1;
+}
 
 static qboolean FS_TestPakChecksum( unsigned int checksum ) {
-	return fs_refusedTestPak && checksum == fs_refusedTestChecksum;
+	return FS_TestPakIndex( checksum ) >= 0;
 }
 
 // the demo the engine chose (FS_ChooseDemo): from demoq3, where a dedicated
@@ -233,6 +248,8 @@ typedef enum {
 	FS_DEMO_IN_BASE
 } fsDemo_t;
 static fsDemo_t		fs_demo;
+// whether FS_ChooseDemo chose the demo, whatever fs_demo says of baseq3
+static qboolean		fs_demoChosen;
 static unsigned int	fs_leftOutPaks, fs_leftOutSaid;
 
 /*
@@ -257,6 +274,42 @@ static const char *FS_RetailPakGame( unsigned int checksum, int *index ) {
 	}
 #endif
 	return NULL;
+}
+
+/*
+================
+FS_GameOwnPak
+
+Whether a pak's checksum is one of the game's own files, and which, by
+checksum alone, whatever its name or folder: the demo's pak0, the full
+game's baseq3 pak0 to pak8, or Team Arena's missionpack pak0 to pak3, its
+number in index (-1 for none). The tests' stand-ins count: a list's as
+baseq3's in order; a single one's number is its name's, -1 here
+================
+*/
+fsGameOwn_t FS_GameOwnPak( unsigned int checksum, int *index ) {
+	const char	*game;
+	int			number, test = FS_TestPakIndex( checksum );
+
+	if ( !index ) {
+		index = &number;
+	}
+	*index = -1;
+	if ( test >= 0 ) {
+		*index = fs_numTestChecksums > 1 ? test : -1;
+		return FS_OWN_BASE;
+	}
+#ifndef STANDALONE
+	if ( checksum == DEMO_PAK0_CHECKSUM ) {
+		*index = 0;
+		return FS_OWN_DEMO;
+	}
+#endif
+	if ( ( game = FS_RetailPakGame( checksum, index ) ) != NULL ) {
+		return !Q_stricmp( game, BASEGAME ) ? FS_OWN_BASE : FS_OWN_MISSIONPACK;
+	}
+	*index = -1;
+	return FS_OWN_NONE;
 }
 
 // if this is defined, the executable positively won't work with any paks other
@@ -3621,7 +3674,8 @@ those warnings with its code
 =================
 */
 const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char *name,
-	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict ) {
+	unsigned int *checksum, char *overrides, int overridesSize, extContentVerdict_t *verdict,
+	qboolean gameOwn ) {
 	pack_t			*pak;
 	const searchpath_t	*search;
 	searchpath_t	added;
@@ -3716,13 +3770,17 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 		}
 	}
 	*checksum = pak->checksum;
-	if ( !why && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), pak->checksum, retail, sizeof( retail ) ) ) {
+	// the game's own, refused unless the server's owner adds it (gameOwn),
+	// under its own name, held until its set is whole (FS_TakeHeldSets)
+	if ( !why && !gameOwn &&
+		FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), pak->checksum, retail, sizeof( retail ) ) ) {
 		refused = "retail";
 		why = va( ADD_PAK_RETAIL, retail );
 	}
 	// a pak of its name in another of the game's directories, as the base
 	// path's, with other contents: players know a pak by its name
-	if ( !why && FS_AddPakInstalled( gameDir, name, pak->checksum, &installed ) && installed != pak->checksum ) {
+	if ( !why && !gameOwn && FS_AddPakInstalled( gameDir, name, pak->checksum, &installed ) &&
+		installed != pak->checksum ) {
 		refused = "other_contents";
 		why = va( ADD_PAK_OTHER_CONTENTS, gameDir, name );
 	}
@@ -5065,7 +5123,6 @@ static int QDECL paksort( const void *a, const void *b ) {
 	return FS_PathCmp( aa, bb );
 }
 
-#ifndef STANDALONE
 /*
 ================
 FS_IdPakIndex
@@ -5074,14 +5131,13 @@ One of id's paks' numbers by its name, pak0 to pak<count - 1>; -1 for
 none
 ================
 */
-static int FS_IdPakIndex( const char *basename, int count ) {
+int FS_IdPakIndex( const char *basename, int count ) {
 	if ( strlen( basename ) != 4 || Q_stricmpn( basename, "pak", 3 ) ||
 		basename[3] < '0' || basename[3] > '0' + count - 1 ) {
 		return -1;
 	}
 	return basename[3] - '0';
 }
-#endif
 
 /*
 ================
@@ -5854,14 +5910,12 @@ Team Arena's or the demo's
 ================
 */
 static qboolean FS_IdPak( const pack_t *pak ) {
-	int		index;
-
-#ifndef STANDALONE
-	if ( pak->checksum == DEMO_PAK0_CHECKSUM ) {
-		return qtrue;
+	// a single test stand-in, which stands for one by its name, isn't id's
+	// here, as before the list (map-pack scope, pakconflicts)
+	if ( fs_numTestChecksums == 1 && FS_TestPakChecksum( pak->checksum ) ) {
+		return qfalse;
 	}
-#endif
-	return FS_RetailPakGame( pak->checksum, &index ) != NULL;
+	return FS_GameOwnPak( pak->checksum, NULL ) != FS_OWN_NONE;
 }
 
 /*
@@ -7957,7 +8011,7 @@ static qboolean FS_ChooseDemo( void ) {
 
 	if( Cvar_Source( com_basegame ) != CVAR_SOURCE_DEFAULT || Q_stricmp( com_basegame->string, BASEGAME ) ||
 		FS_FindPak0( BASEGAME, pak_checksums[0] ) ||
-		( fs_refusedTestPak && FS_FindPak0( BASEGAME, fs_refusedTestChecksum ) ) ) {
+		( fs_refusedTestPak && FS_FindPak0( BASEGAME, fs_testChecksums[0] ) ) ) {
 		return qfalse;
 	}
 	demo = FS_FindPak0( BASEGAME, DEMO_PAK0_CHECKSUM );
@@ -7990,10 +8044,176 @@ static qboolean FS_ChooseDemo( void ) {
 		return qfalse;
 	}
 
+	fs_demoChosen = qtrue;
 	Com_Printf( "Playing the demo's data (%s): the full game's paks weren't found. "
 		"Put pak0.pk3 to pak8.pk3 in %s%c" BASEGAME " to play the full game.\n",
 		demo->pakFilename, fs_homedatapath->string, PATH_SEP );
 	return qtrue;
+}
+#endif
+
+// a set of the game's own files' folder and size: the full game's 9 in
+// baseq3, Team Arena's 4 in missionpack
+const char *FS_OwnGame( fsGameOwn_t own, int *count ) {
+	if ( count ) {
+		*count = own == FS_OWN_BASE ? NUM_ID_PAKS : own == FS_OWN_MISSIONPACK ? NUM_TA_PAKS : 0;
+	}
+	return own == FS_OWN_MISSIONPACK ? BASETA : BASEGAME;
+}
+
+// whether the engine chose the demo, for want of the full game
+// (FS_ChooseDemo), rather than an admin's com_basegame
+qboolean FS_DemoChosen( void ) {
+	return fs_demoChosen;
+}
+
+// whether pak<i>.pk3 in game, in the install's or the home's folder, is
+// that one of a set of the game's own by its checksum (FS_GameOwnPak): one
+// the search path leaves out, as the demo's does the point release, or a
+// set's folder it doesn't read, as missionpack while baseq3 plays
+static qboolean FS_GameOwnOnDisk( fsGameOwn_t own, const char *game, int i ) {
+	const char	*roots[] = { fs_basepath->string, fs_homedatapath->string };
+	char		ospath[MAX_OSPATH];
+	pack_t		*pak;
+	qboolean	match;
+	int			r, index;
+
+	for ( r = 0; r < ARRAY_LEN( roots ); r++ ) {
+		Q_strncpyz( ospath, FS_BuildOSPath( roots[r], game, va( "pak%d.pk3", i ) ), sizeof( ospath ) );
+		if ( !FS_FileInPathExists( ospath ) || !( pak = FS_LoadZipFile( ospath, "", "", "" ) ) ) {
+			continue;
+		}
+		match = FS_GameOwnPak( pak->checksum, &index ) == own && ( index == i || index < 0 );
+		FS_FreePak( pak );
+		if ( match ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+================
+FS_GameOwnHave
+
+Which of a set of the game's own files are here, each by its number: one
+in the search path with its checksum (FS_GameOwnPak), or held by content
+add in the home's game folder (".pk3.pending"), into have, and held alone
+into held where it's given. The set's size, 0 for none: the full game's 9
+in baseq3, Team Arena's 4 in missionpack. One the search path doesn't
+have counts by its checksum on disk (FS_GameOwnOnDisk), as the start that
+takes a held set counts it (FS_TakeHeldSets)
+================
+*/
+int FS_GameOwnHave( fsGameOwn_t own, qboolean *have, qboolean *held ) {
+	const searchpath_t	*path;
+	int					count, i, index;
+	const char			*game = FS_OwnGame( own, &count );
+	qboolean			pending;
+
+	for ( i = 0; i < count; i++ ) {
+		pending = FS_FileInPathExists( FS_BuildOSPath( fs_homedatapath->string, game, va( "pak%d.pk3.pending", i ) ) );
+		if ( held ) {
+			held[i] = pending;
+		}
+		have[i] = pending;
+		for ( path = fs_searchpaths; path && !have[i]; path = path->next ) {
+			have[i] = path->pack && !Q_stricmp( path->pack->pakGamename, game ) &&
+				FS_GameOwnPak( path->pack->checksum, &index ) == own &&
+				( index == i || ( index < 0 && FS_IdPakIndex( path->pack->pakBasename, count ) == i ) );
+		}
+		if ( !have[i] ) {
+			have[i] = FS_GameOwnOnDisk( own, game, i );
+		}
+	}
+	return count;
+}
+
+#ifndef STANDALONE
+/*
+================
+FS_TakeHeldSets
+
+The game's own files content add held back (".pk3.pending" in the home's
+game folder) until their set was whole, taken into place as the program
+starts, when each of the full game's pak0 to pak8, or Team Arena's pak0 to
+pak3, is held or found by its checksum (FS_GameOwnHave): never one
+alone, since a full game short of its update files stops at the next
+start or map change (FS_CheckPak0). A file in the way, the demo's pak0 in
+the home's baseq3, is renamed ".pk3.replaced", which the server keeps as
+a removed copy. Whether any was taken, for the search path to be read
+again
+================
+*/
+// a held file's paths: held, in place, and the one in its way moved aside
+static void FS_HeldPaths( const char *game, int i, char *pending, char *target, char *replaced ) {
+	Q_strncpyz( pending, FS_BuildOSPath( fs_homedatapath->string, game, va( "pak%d.pk3.pending", i ) ), MAX_OSPATH );
+	Q_strncpyz( target, FS_BuildOSPath( fs_homedatapath->string, game, va( "pak%d.pk3", i ) ), MAX_OSPATH );
+	Com_sprintf( replaced, MAX_OSPATH, "%s.replaced", target );
+}
+
+static qboolean FS_TakeHeldSets( void ) {
+	static const fsGameOwn_t	sets[] = { FS_OWN_BASE, FS_OWN_MISSIONPACK };
+	qboolean		have[NUM_ID_PAKS], held[NUM_ID_PAKS], moved[NUM_ID_PAKS], aside[NUM_ID_PAKS], any, whole, ok;
+	qboolean		taken = qfalse;
+	char			pending[MAX_OSPATH], target[MAX_OSPATH], replaced[MAX_OSPATH];
+	const char		*game;
+	int				s, i, count;
+
+	for ( s = 0; s < ARRAY_LEN( sets ); s++ ) {
+		game = FS_OwnGame( sets[s], NULL );
+		count = FS_GameOwnHave( sets[s], have, held );
+		any = qfalse;
+		whole = qtrue;
+		for ( i = 0; i < count; i++ ) {
+			any |= held[i];
+			whole &= have[i];
+		}
+		if ( !any ) {
+			continue;
+		}
+		if ( !whole ) {
+			Com_Printf( "%s's own files added are held until the rest are added too\n", game );
+			continue;
+		}
+		// all or none: a file that can't go into place puts back those that
+		// went, so a set is never part taken
+		ok = qtrue;
+		for ( i = 0; i < count && ok; i++ ) {
+			moved[i] = aside[i] = qfalse;
+			if ( !held[i] ) {
+				continue;
+			}
+			FS_HeldPaths( game, i, pending, target, replaced );
+			if ( FS_FileInPathExists( target ) ) {
+				ok = !FS_FileInPathExists( replaced ) && Sys_Rename( target, replaced );
+				aside[i] = ok;
+			}
+			ok = ok && Sys_Rename( pending, target );
+			moved[i] = ok;
+		}
+		if ( !ok ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s/pak%d.pk3 couldn't go into place, so %s's own files added stay "
+				"held\n", game, i - 1, game );
+			for ( i--; i >= 0; i-- ) {
+				FS_HeldPaths( game, i, pending, target, replaced );
+				if ( moved[i] ) {
+					Sys_Rename( target, pending );
+				}
+				if ( aside[i] ) {
+					Sys_Rename( replaced, target );
+				}
+			}
+			continue;
+		}
+		for ( i = 0; i < count; i++ ) {
+			if ( held[i] ) {
+				Com_Printf( "%s/pak%d.pk3, added with the rest of the game's own files, is in place\n", game, i );
+			}
+		}
+		taken = qtrue;
+	}
+	return taken;
 }
 #endif
 
@@ -8011,8 +8231,13 @@ void FS_InitFilesystem( void ) {
 	// read once, so setenv can't change it later; signed, as
 	// sv_referencedPaks lists it
 	if ( refusedTest && *refusedTest ) {
+		const char	*p = refusedTest;
+
 		fs_refusedTestPak = qtrue;
-		fs_refusedTestChecksum = (unsigned int)strtoll( refusedTest, NULL, 10 );
+		while ( fs_numTestChecksums < NUM_ID_PAKS && *p ) {
+			fs_testChecksums[fs_numTestChecksums++] = (unsigned int)strtoll( p, NULL, 10 );
+			p = strchr( p, ',' ) ? strchr( p, ',' ) + 1 : p + strlen( p );
+		}
 	}
 
 	// allow command line parms to override our defaults
@@ -8033,6 +8258,12 @@ void FS_InitFilesystem( void ) {
 	FS_Startup(com_basegame->string);
 
 #ifndef STANDALONE
+	// the game's own files held until their set was whole, before the demo
+	// or the full game is chosen
+	if ( FS_TakeHeldSets() ) {
+		FS_Shutdown( qfalse );
+		FS_Startup( com_basegame->string );
+	}
 	FS_ChooseDemo( );
 	FS_CheckPak0( );
 #endif
