@@ -44,6 +44,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // an index's file written first under the process's own name: <file>.<pid>.tmp
 #define CONTENT_TEMP_FORMAT		"%s.%d.tmp"
 
+// a whole file into a malloc'd buffer, at most maxLength bytes, or NULL;
+// and a file replaced whole, through one of this process's own and a
+// rename (content.c, which --check never writes)
+byte		*Content_ReadFile( const char *ospath, int maxLength, int *length );
+qboolean	Content_WriteFile( const char *ospath, const byte *data, int length );
+
 /*
 ==============================================================
 

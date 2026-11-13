@@ -1427,6 +1427,30 @@ const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned 
 void FS_PakMaps( const char *ospath, void ( *fn )( void *context, const char *map, const char *title ),
 	void *context );
 
+// a pak the search path reads, or one outside it (FS_EachPak, FS_DescribePak)
+typedef struct {
+	const char	*ospath;
+	const char	*gameDir;
+	const char	*baseName;		// its name without .pk3
+	qboolean	gameOwn;		// one of the game's own paks, by its checksum
+	qboolean	mapPack;		// a map pack, as map-pack scope counts one (fs_mapPakScope)
+	qboolean	gameCode;		// it carries vm/*.qvm
+	qboolean	codeLeftOut;	// a map pak's game code the game leaves out (FS_CodeLeftOut)
+	const void	*pak;			// the file system's, for FS_EachPakMap
+} fsPak_t;
+// each pak the search path reads, the content cache's downloads aside
+void FS_EachPak( void ( *fn )( void *user, const fsPak_t *pak ), void *user );
+// one of those paks' maps, by name
+void FS_EachPakMap( const fsPak_t *pak, void ( *fn )( void *user, const char *map ), void *user );
+// whether one of those paks has a file
+qboolean FS_PakHolds( const fsPak_t *pak, const char *name );
+// the file's name at an OS path's end, after either separator
+const char *FS_OSPathName( const char *ospath );
+// a pak outside the search path, as if gameDir's, to fn, then its maps to
+// mapFn when it's given: qfalse for a file that isn't a pak
+qboolean FS_DescribePak( const char *ospath, const char *gameDir, void ( *fn )( void *user, const fsPak_t *pak ),
+	void ( *mapFn )( void *user, const char *map ), void *user );
+
 const char *FS_LoadedPakNames( void );
 const char *FS_LoadedPakChecksums( void );
 const char *FS_LoadedPakPureChecksums( void );

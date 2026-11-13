@@ -720,6 +720,65 @@ qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean remov
 void	SV_ExtContentCheck( const char *file, const char *gameDir, long long size, qboolean hasChecksum,
 	unsigned int checksum, extContentVerdict_t *verdict );
 
+// The paks the server has, and taking one away (server/sv_installed.c),
+// as the console's content list, content remove and content restore.
+typedef struct {
+	const char	*map;
+	const char	*why;			// "playing", "next" (nextmap names it) or "rotation" (sv_pool has it)
+} extContentUse_t;
+typedef struct {
+	char		game[MAX_QPATH];
+	char		name[MAX_QPATH * 2];	// its file's name, with .pk3
+	int64_t		size;
+	const char	*origin;		// "game" (one of the game's own), "added" (content add, or
+								// restored as added) or "by_hand"
+	const char	*state;			// "loaded", "pending" (added since the map loaded),
+								// "removing" (goes as the next map loads) or "removed" (a kept copy)
+	qboolean	home;			// in the home's game directory, where content add installs
+	int			rank;			// its place among files of its game and name: 0 the home's,
+								// 1 its kept copy, 2 another folder's (the list's order)
+	qboolean	removable;		// content remove may take it
+	int64_t		addedAt, removedAt, keptUntil;	// Unix seconds, 0 for none
+	qboolean	gameOwn, mapPack, gameCode, codeLeftOut;	// as the file system says (fsPak_t)
+	int			numMaps;		// with details: its maps, none for the game's own
+	const char	**maps;
+	int			numUses;		// and those in use, a map once for each why
+	extContentUse_t	*uses;
+} extContentFile_t;
+typedef struct {
+	int					count;
+	extContentFile_t	*files;
+	int					installed;	// the files not removed, and their bytes
+	int64_t				bytes;
+	void				*blocks;	// its strings'
+} extContentList_t;
+// the list, sorted by game directory, then name, the home's file before
+// another of its name; only game's for a game, removed's kept copies with
+// removed, and maps and uses with details. Freed by SV_ExtContentListFree
+qboolean	SV_ExtContentList( const char *game, qboolean removed, qboolean details, extContentList_t *list );
+void		SV_ExtContentListFree( extContentList_t *list );
+// moves whenever the list may have: a pak added, removed, restored or
+// pruned, a map loaded, the pending maps, sv_pool or nextmap changed
+int			SV_ExtContentRevision( void );
+// content remove's and restore's verdict: code, removed or restored, else
+// installed_already (restore) or why not: not_found, game_own,
+// not_server_folder, in_use, bad_name, bad_game, other_contents, failed,
+// or content add's codes for a copy it refuses (restore); its words, for
+// an admin; when it applies, "now" or "next_session", NULL when it
+// doesn't; and the file's entry, its maps and uses, where it was found.
+// Freed by SV_ExtContentChangeFree
+typedef struct {
+	const char			*code;
+	char				message[MAX_STRING_CHARS];
+	const char			*applies;
+	const extContentFile_t	*entry;	// the file's entry, in list, or NULL
+	extContentList_t	list;
+} extContentChange_t;
+// qfalse, doing nothing, while an add or an export runs
+qboolean	SV_ExtContentRemove( const char *name, const char *gameDir, extContentChange_t *change );
+qboolean	SV_ExtContentRestore( const char *name, const char *gameDir, extContentChange_t *change );
+void		SV_ExtContentChangeFree( extContentChange_t *change );
+
 // The maps the server can load (server/sv_export.c): those the search
 // path has, and the pending ones, in the paks content add installed since
 // the map loaded for a game directory the search path reads. It reads
@@ -734,8 +793,12 @@ typedef struct {
 	char	title[256];		// its pak's own .arena's longname, as written, cut to fit; "" for none
 } extPendingMap_t;
 
-// whether the server has maps/<map>.bsp, or can load it as a pending map
+// whether the server has maps/<map>.bsp, or can load it as a pending map,
+// and not only in paks waiting to be removed (SV_ExtMapRemoving)
 qboolean	SV_ExtHasMap( const char *map );
+// whether a map the search path has is only in paks content remove took,
+// so it's gone as the next map loads
+qboolean	SV_ExtMapRemoving( const char *map );
 int		SV_ExtPendingMapCount( void );
 qboolean	SV_ExtGetPendingMap( int index, extPendingMap_t *map );
 // changes whenever the pending maps do: a pak added, removed or changed, or

@@ -3837,14 +3837,51 @@ and none past a token outside a block. A file that doesn't load as a pak
 has none
 =================
 */
+// a pak's maps, maps/<name>.bsp by name, under MAX_QPATH - 1 so the map
+// command takes it whole, and not an empty one (maps/.bsp)
+static void FS_EachMapIn( const pack_t *pak, void ( *fn )( void *user, const char *map ), void *user ) {
+	char	map[MAX_QPATH];
+	int		i;
+
+	for ( i = 0; i < pak->numfiles; i++ ) {
+		if ( FS_IsMapFile( pak->buildBuffer[i].name )
+			&& strlen( pak->buildBuffer[i].name + 5 ) - 5 < sizeof( map ) - 1 ) {
+			COM_StripExtension( pak->buildBuffer[i].name + 5, map, sizeof( map ) );
+			fn( user, map );
+		}
+	}
+}
+
+// FS_PakMaps' map, with its arena's title
+typedef struct {
+	const pakArena_t	*arenas;
+	int					numArenas;
+	void				( *fn )( void *context, const char *map, const char *title );
+	void				*context;
+} pakTitled_t;
+
+static void FS_TitleMap( void *user, const char *map ) {
+	const pakTitled_t	*titled = user;
+	const char			*title = "";
+	int					a;
+
+	for ( a = 0; a < titled->numArenas; a++ ) {
+		if ( !Q_stricmp( titled->arenas[a].map, map ) ) {
+			title = titled->arenas[a].longname;
+			break;
+		}
+	}
+	titled->fn( titled->context, map, title );
+}
+
 void FS_PakMaps( const char *ospath, void ( *fn )( void *context, const char *map, const char *title ),
 	void *context ) {
 	searchpath_t		search;
 	const fileInPack_t	*entry;
 	pakArena_t			*arenas = NULL, *arena, *grown;
-	char				*text, *p, *token, key[MAX_TOKEN_CHARS], map[MAX_QPATH];
-	const char			*title;
-	int					i, a, numArenas = 0, room = 0;
+	pakTitled_t			titled;
+	char				*text, *p, *token, key[MAX_TOKEN_CHARS];
+	int					i, numArenas = 0, room = 0;
 
 	Com_Memset( &search, 0, sizeof( search ) );
 	if ( !( search.pack = FS_LoadZipFile( ospath, "", "", "" ) ) ) {
@@ -3881,25 +3918,15 @@ void FS_PakMaps( const char *ospath, void ( *fn )( void *context, const char *ma
 		FS_FreeFile( text );
 	}
 
-	for ( i = 0; i < search.pack->numfiles; i++ ) {
-		// a name the map command can't take whole isn't one it loads, nor
-		// an empty one (maps/.bsp)
-		if ( !FS_IsMapFile( search.pack->buildBuffer[i].name )
-			|| strlen( search.pack->buildBuffer[i].name + 5 ) - 5 >= sizeof( map ) - 1 ) {
-			continue;
-		}
-		COM_StripExtension( search.pack->buildBuffer[i].name + 5, map, sizeof( map ) );
-		for ( a = 0, title = ""; a < numArenas; a++ ) {
-			if ( !Q_stricmp( arenas[a].map, map ) ) {
-				title = arenas[a].longname;
-				break;
-			}
-		}
-		fn( context, map, title );
-	}
+	titled.arenas = arenas;
+	titled.numArenas = numArenas;
+	titled.fn = fn;
+	titled.context = context;
+	FS_EachMapIn( search.pack, FS_TitleMap, &titled );
 	free( arenas );
 	FS_FreePak( search.pack );
 }
+
 
 /*
 =================
@@ -4716,6 +4743,85 @@ static mapPackPlace_t FS_MapPackPlace( const searchpath_t *search ) {
 		return MAPPACK_GLOBAL;
 	}
 	return fs_mapPakScope->integer ? MAPPACK_OWN : MAPPACK_UNSCOPED;
+}
+
+// a search path entry's pak, as FS_EachPak and FS_DescribePak say it
+static void FS_PakFacts( const searchpath_t *search, fsPak_t *facts ) {
+	mapPackPlace_t	place = FS_MapPackPlace( search );
+
+	facts->ospath = search->pack->pakFilename;
+	facts->gameDir = search->pack->pakGamename;
+	facts->baseName = search->pack->pakBasename;
+	facts->gameOwn = FS_IdPak( search->pack );
+	facts->mapPack = place == MAPPACK_OWN || place == MAPPACK_SET_ASIDE;
+	facts->gameCode = search->pack->holdsCode;
+	facts->codeLeftOut = FS_CodeLeftOut( search );
+	facts->pak = search->pack;
+}
+
+/*
+=================
+FS_EachPak, FS_EachPakMap, FS_DescribePak
+
+The paks the search path reads, but the content cache's downloads, each to
+fn: its file, its game directory and name, whether it's one of the game's
+own (by its checksum), a map pack as map-pack scope counts one, and
+whether it carries game code. FS_EachPakMap gives one's maps, and
+FS_DescribePak says the same of a pak outside the search path, as a map
+pack of its game directory, with its maps; qfalse for a file that isn't a
+pak
+=================
+*/
+void FS_EachPak( void ( *fn )( void *user, const fsPak_t *pak ), void *user ) {
+	const searchpath_t	*search;
+	fsPak_t				facts;
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack && !search->pack->cached ) {
+			FS_PakFacts( search, &facts );
+			fn( user, &facts );
+		}
+	}
+}
+
+void FS_EachPakMap( const fsPak_t *pak, void ( *fn )( void *user, const char *map ), void *user ) {
+	FS_EachMapIn( pak->pak, fn, user );
+}
+
+qboolean FS_PakHolds( const fsPak_t *pak, const char *name ) {
+	return FS_PakHasFile( pak->pak, name );
+}
+
+// the file's name at an OS path's end, after either separator
+const char *FS_OSPathName( const char *ospath ) {
+	const char	*name = ospath, *c;
+
+	for ( c = ospath; *c; c++ ) {
+		if ( *c == '/' || *c == '\\' ) {
+			name = c + 1;
+		}
+	}
+	return name;
+}
+
+qboolean FS_DescribePak( const char *ospath, const char *gameDir, void ( *fn )( void *user, const fsPak_t *pak ),
+		void ( *mapFn )( void *user, const char *map ), void *user ) {
+	searchpath_t	search;
+	fsPak_t			facts;
+	char			base[MAX_OSPATH];
+
+	Com_Memset( &search, 0, sizeof( search ) );
+	COM_StripExtension( FS_OSPathName( ospath ), base, sizeof( base ) );
+	if ( !( search.pack = FS_LoadZipFile( ospath, base, "", gameDir ) ) ) {
+		return qfalse;
+	}
+	FS_PakFacts( &search, &facts );
+	fn( user, &facts );
+	if ( mapFn ) {
+		FS_EachMapIn( search.pack, mapFn, user );
+	}
+	FS_FreePak( search.pack );
+	return qtrue;
 }
 
 /*

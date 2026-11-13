@@ -281,7 +281,7 @@ A whole file into a malloc'd buffer, at most maxLength bytes; NULL if
 it's missing, unreadable or longer
 =================
 */
-static byte *Content_ReadFile( const char *ospath, int maxLength, int *length ) {
+byte *Content_ReadFile( const char *ospath, int maxLength, int *length ) {
 	FILE	*f = Sys_FOpen( ospath, "rb" );
 	byte	*data;
 	long	size;
@@ -314,7 +314,7 @@ or another sharing the home, sees the old file or the new one, never half
 of one, and two writing at once don't mix
 =================
 */
-static qboolean Content_WriteFile( const char *ospath, const byte *data, int length ) {
+qboolean Content_WriteFile( const char *ospath, const byte *data, int length ) {
 	char		target[MAX_OSPATH], tmp[MAX_OSPATH];
 	FILE		*f;
 	qboolean	ok;

@@ -507,6 +507,22 @@ void SV_ExportFrame( void );
 void SV_ExportMapLoaded( void );
 void SV_PendingMapsRead( void );
 qboolean SV_MapPending( const char *map );
+// sv_export.c's, for sv_installed.c
+const char *SV_ContentDir( void );
+qboolean SV_ContentWorking( void );
+qboolean SV_ContentPakName( const char *gameDir, const char *base );
+qboolean SV_PendingSearchedGame( const char *gameDir );
+void SV_AddPending( const char *ospath, const char *gameDir );
+const char *SV_PendingPak( int index, const char **gameDir );
+void SV_PendingChanged( void );
+
+//
+// sv_installed.c
+//
+void SV_InstalledAdded( const char *gameDir, const char *name, const char *ospath );
+void SV_InstalledMapLoad( const char *server );
+void SV_InstalledList_f( const char *game );
+void SV_InstalledChange_f( qboolean restore, const char *name, const char *game );
 void SV_ContentPacket( netadr_t from, msg_t *msg );
 int SV_ContentSend( void );
 void SV_ContentFreeClient( client_t *cl );

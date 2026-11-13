@@ -1043,6 +1043,8 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// so its own pak leads, the other map packs are set aside, and the
 	// list it prints says so
 	FS_NameCurrentMap( server );
+	// the paks content remove took go, as the file system lets go of them
+	SV_InstalledMapLoad( server );
 	FS_Restart( sv.checksumFeed );
 	// which reads the paks content add installed meanwhile
 	SV_PendingMapsRead();

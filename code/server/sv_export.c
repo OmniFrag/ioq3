@@ -118,7 +118,6 @@ static char			contentRoot[MAX_OSPATH], contentIncoming[MAX_OSPATH];
 static const char	exportDiskFull[] = "the disk is nearly full";
 
 static void SV_AddFinish( void );
-static void SV_AddPending( const char *ospath, const char *gameDir );
 static void SV_AddEnd( void );
 
 /*
@@ -1171,6 +1170,23 @@ static qboolean SV_ContentRoot( void ) {
 	return qtrue;
 }
 
+/*
+=================
+SV_ContentDir, SV_ContentWorking
+
+sv_contentDir with its links resolved, made if it isn't there, or NULL
+when it can't be used (SV_ContentRoot, which says why); and whether an
+add or an export runs, for content remove and restore (sv_installed.c)
+=================
+*/
+const char *SV_ContentDir( void ) {
+	return SV_ContentRoot() ? contentRoot : NULL;
+}
+
+qboolean SV_ContentWorking( void ) {
+	return exportThread != NULL;
+}
+
 // content add's pak
 static struct {
 	char			name[OFCM_GAMEDIR_SIZE + OFCM_NAME_SIZE + 8];	// "<gamedir>/<name>.pk3"
@@ -1464,7 +1480,7 @@ static qboolean SV_AddName( extContentVerdict_t *verdict, const char *file, cons
 		return qfalse;
 	}
 	base[strlen( base ) - 4] = '\0';
-	if ( !FS_ValidDownloadPak( gameDir, base ) || !OFCM_ValidName( gameDir, base ) ) {
+	if ( !SV_ContentPakName( gameDir, base ) ) {
 		// the game directory's fault, if a plain pak's name passes with it:
 		// both rules check each part alone
 		SV_AddSay( verdict, FS_ValidDownloadPak( gameDir, "x" ) && OFCM_ValidName( gameDir, "x" ) ? "bad_name" : "bad_game",
@@ -1472,6 +1488,12 @@ static qboolean SV_AddName( extContentVerdict_t *verdict, const char *file, cons
 		return qfalse;
 	}
 	return qtrue;
+}
+
+// whether a pak's name without .pk3, and its game directory, are ones
+// content add and remove take: a pak's that downloads may have
+qboolean SV_ContentPakName( const char *gameDir, const char *base ) {
+	return FS_ValidDownloadPak( gameDir, base ) && OFCM_ValidName( gameDir, base );
 }
 
 /*
@@ -1641,6 +1663,8 @@ static void SV_AddFinish( void ) {
 
 	switch ( target->result ) {
 	case EXPORT_THERE:
+		// adding it again says to keep it: any removal of its name is off
+		SV_InstalledAdded( addPak.gameDir, va( "%s.pk3", addPak.base ), NULL );
 		Com_SHA256Hex( item->sha256, verdict->sha256 );
 		SV_AddSay( verdict, "installed_already", "%s is installed already, the same file", addPak.name );
 		return;
@@ -1683,6 +1707,7 @@ static void SV_AddFinish( void ) {
 		Content_PakIndex_Put( &record );
 	}
 	addPak.added = qtrue;
+	SV_InstalledAdded( addPak.gameDir, va( "%s.pk3", addPak.base ), target->ospath );
 	SV_AddPending( target->ospath, addPak.gameDir );
 	Com_SHA256Hex( item->sha256, verdict->sha256 );
 	// the extension's file goes as the add ends (SV_AddEnd); else a copy
@@ -1815,7 +1840,7 @@ static int	pendingChanges;		// SV_ExtPendingMapChanges
 
 // whether the search path reads a game directory: com_basegame,
 // fs_basegame or fs_game, as FS_Startup adds them
-static qboolean SV_PendingSearched( const char *gameDir ) {
+qboolean SV_PendingSearchedGame( const char *gameDir ) {
 	return !Q_stricmp( gameDir, com_basegame->string ) || !Q_stricmp( gameDir, FS_GetCurrentGameDir() )
 		|| !Q_stricmp( gameDir, Cvar_VariableString( "fs_basegame" ) );
 }
@@ -1875,7 +1900,7 @@ static void SV_PendingCheck( void ) {
 	pending.checked = com_frameTime;
 	for ( i = pending.numPaks - 1; i >= 0; i-- ) {
 		pak = &pending.paks[i];
-		if ( !SV_PendingSearched( pak->gameDir ) || !Content_FileStat( pak->ospath, &size, &mtime ) ) {
+		if ( !SV_PendingSearchedGame( pak->gameDir ) || !Content_FileStat( pak->ospath, &size, &mtime ) ) {
 			pending.numPaks--;
 			memmove( pak, pak + 1, ( pending.numPaks - i ) * sizeof( *pak ) );
 			changed = qtrue;
@@ -1900,11 +1925,11 @@ reads the pak. One pending already, deleted by hand and added again before
 it was looked at, keeps its place
 =================
 */
-static void SV_AddPending( const char *ospath, const char *gameDir ) {
+void SV_AddPending( const char *ospath, const char *gameDir ) {
 	pendingPak_t	*grown, *pak;
 	int				i;
 
-	if ( !SV_PendingSearched( gameDir ) ) {
+	if ( !SV_PendingSearchedGame( gameDir ) ) {
 		return;
 	}
 	for ( i = 0; i < pending.numPaks && strcmp( pending.paks[i].ospath, ospath ); i++ ) {
@@ -1923,6 +1948,31 @@ static void SV_AddPending( const char *ospath, const char *gameDir ) {
 		pak->size = pak->mtime = -1;
 	}
 	SV_PendingRead();
+}
+
+/*
+=================
+SV_PendingPak, SV_PendingChanged
+
+A pak content add installed since the map loaded, by its index from 0,
+with its game directory; NULL past the last. And the pending maps' count
+of changes moved, as content remove changes the maps the server will have
+(sv_installed.c), and its paks looked at again at the next ask, though
+this frame looked already, as a removal may have taken one
+=================
+*/
+const char *SV_PendingPak( int index, const char **gameDir ) {
+	SV_PendingCheck();
+	if ( index < 0 || index >= pending.numPaks ) {
+		return NULL;
+	}
+	*gameDir = pending.paks[index].gameDir;
+	return pending.paks[index].ospath;
+}
+
+void SV_PendingChanged( void ) {
+	pendingChanges++;
+	pending.checked = -1;
 }
 
 /*
@@ -1966,7 +2016,9 @@ The maps the server can load and the pending ones, for extensions
 =================
 */
 qboolean SV_ExtHasMap( const char *map ) {
-	return FS_FOpenFileRead( va( "maps/%s.bsp", map ), NULL, qfalse ) > 0 || SV_MapPending( map );
+	// not one that goes with a pak content remove took
+	return ( FS_FOpenFileRead( va( "maps/%s.bsp", map ), NULL, qfalse ) > 0 && !SV_ExtMapRemoving( map ) ) ||
+		SV_MapPending( map );
 }
 
 int SV_ExtPendingMapCount( void ) {
@@ -2013,6 +2065,12 @@ void SV_Content_f( void ) {
 			SV_AddStart( Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL, qfalse );
 		}
 		return;
+	} else if ( !Q_stricmp( sub, "list" ) && argc <= 3 ) {
+		SV_InstalledList_f( argc == 3 ? Cmd_Argv( 2 ) : NULL );
+		return;
+	} else if ( ( !Q_stricmp( sub, "remove" ) || !Q_stricmp( sub, "restore" ) ) && ( argc == 3 || argc == 4 ) ) {
+		SV_InstalledChange_f( !Q_stricmp( sub, "restore" ), Cmd_Argv( 2 ), argc == 4 ? Cmd_Argv( 3 ) : NULL );
+		return;
 	}
 	Com_Printf( "usage:\n"
 		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in the folder "
@@ -2021,5 +2079,10 @@ void SV_Content_f( void ) {
 		"unless copy says to copy. It keeps the files of the versions it lists and of those the export before it listed, "
 		"and removes older ones it made (" EXPORT_RECORD ")\n"
 		"content add <file> [game]: checks a pak, a file in sv_contentDir's " CONTENT_INCOMING " folder, and "
-		"installs it in the game's directory (this one's, or game) for the next map\n" );
+		"installs it in the game's directory (this one's, or game) for the next map\n"
+		"content list [game]: the paks the server has, where each came from, its maps and those in use, and the "
+		"removed ones' kept copies\n"
+		"content remove <file> [game]: removes a pak from the server's own game directory as the next map loads, "
+		"or now for one added since this map loaded, and keeps a copy for 30 days in sv_contentDir's removed folder; refused for a pak with a map in use\n"
+		"content restore <file> [game]: calls a removal off, or brings a kept copy back for the next map\n" );
 }
