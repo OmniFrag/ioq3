@@ -6361,6 +6361,279 @@ static void FS_PakConflicts_f( void ) {
 	}
 }
 
+// a map's picture's formats, in the renderer's order (imageLoaders), but
+// for PCX, which a tool's page doesn't draw
+static const struct {
+	const char	*extension, *type;
+} fs_pictureFormats[] = {
+	{ "tga", "image/x-tga" }, { "jpg", "image/jpeg" }, { "jpeg", "image/jpeg" }, { "png", "image/png" },
+	{ "bmp", "image/bmp" }
+};
+
+/*
+================
+FS_LevelshotListed
+
+Whether any folder on the search path has levelshots/<name>, by the
+folders' listings, read once for each search path and sorted: so a list of
+thousands of maps opens files only for a levelshot one of them has,
+rather than trying five a map in each folder (FS_MapPictureSearch). A
+levelshot added to a folder shows once the path next changes, as with
+the paks
+================
+*/
+static struct {
+	const searchpath_t	*path;		// fs_searchpaths as listed
+	int					ranking;	// FS_Ranking as listed
+	char				**names;	// sorted, in one block with their text
+	int					count;
+} fs_levelshots;
+
+static int FS_CompareLevelshots( const void *a, const void *b ) {
+	return Q_stricmp( *(char *const *)a, *(char *const *)b );
+}
+
+static qboolean FS_LevelshotListed( const char *name ) {
+	const searchpath_t	*search;
+	char				**files, *text;
+	int					count, total, bytes, pass, i;
+
+	if ( !fs_levelshots.names || fs_levelshots.path != fs_searchpaths || fs_levelshots.ranking != FS_Ranking() ) {
+		free( fs_levelshots.names );
+		fs_levelshots.names = NULL;
+		// counted, then copied into one block of pointers and text
+		for ( pass = total = bytes = 0, text = NULL; pass < 2; pass++ ) {
+			for ( search = fs_searchpaths; search; search = search->next ) {
+				if ( !search->dir ) {
+					continue;
+				}
+				files = Sys_ListFiles( FS_BuildOSPath( search->dir->path, search->dir->gamedir, "levelshots" ), NULL,
+					NULL, &count, qfalse );
+				for ( i = 0; i < count; i++ ) {
+					if ( pass ) {
+						fs_levelshots.names[total++] = strcpy( text, files[i] );
+						text += strlen( files[i] ) + 1;
+					} else {
+						total++;
+						bytes += strlen( files[i] ) + 1;
+					}
+				}
+				Sys_FreeFileList( files );
+			}
+			if ( !pass ) {
+				if ( !( fs_levelshots.names = malloc( total * sizeof( char * ) + bytes + 1 ) ) ) {
+					return qtrue;	// unlisted: each look opens the file
+				}
+				text = (char *)( fs_levelshots.names + total );
+				total = 0;
+			}
+		}
+		qsort( fs_levelshots.names, total, sizeof( char * ), FS_CompareLevelshots );
+		fs_levelshots.count = total;
+		fs_levelshots.path = fs_searchpaths;
+		fs_levelshots.ranking = FS_Ranking();
+	}
+	return bsearch( &name, fs_levelshots.names, fs_levelshots.count, sizeof( char * ), FS_CompareLevelshots ) != NULL;
+}
+
+/*
+================
+FS_LevelshotMissing
+
+Whether levelshots/<map>.<extension> is in no pak, by the index, and in no
+folder's listing (FS_LevelshotListed): a miss told without opening a file.
+qfalse when the index can't say
+================
+*/
+static qboolean FS_LevelshotMissing( const char *path ) {
+	searchpath_t	*paks[INDEX_MAX_PAKS];
+	int				numPaks;
+
+	return FS_IndexPaks( path, paks, &numPaks ) && numPaks == 0 && !FS_LevelshotListed( path + strlen( "levelshots/" ) );
+}
+
+/*
+================
+FS_MapPictureSearch
+
+Where a map's picture is, the levelshot the menus draw for it,
+levelshots/<map>: in the pak or folder its BSP loads from first, in any
+format; else as a read finds one, format by format. Its name, and the
+entry it's in and its format's index; NULL for none, and for a name that
+isn't a map's: no BSP, or a path's characters, ':' among them, which the
+index reads as '/' and Windows as a file's stream. And whether the BSP
+loads from one of the game's own paks (FS_IdPak, by checksum, whatever its
+name or folder), in gameOwn, either way
+================
+*/
+static const searchpath_t *FS_MapPictureSearch( const char *map, char *name, int nameSize, int *format,
+	qboolean *gameOwn ) {
+	const searchpath_t	*search, *own;
+	char				bsp[MAX_QPATH];
+	int					pass, i;
+
+	*gameOwn = qfalse;
+	// a name cut short would be another file's
+	if ( !fs_searchpaths || !map[0] || strpbrk( map, "/\\:" ) || strstr( map, ".." ) ||
+		Com_sprintf( bsp, sizeof( bsp ), "maps/%s.bsp", map ) >= (int)sizeof( bsp ) ||
+		Com_sprintf( name, nameSize, "levelshots/%s.jpeg", map ) >= nameSize ) {
+		return NULL;
+	}
+	// by the index, as a list of thousands of maps asks for each
+	if ( !( own = FS_FileSearch( bsp ) ) ) {
+		return NULL;
+	}
+	*gameOwn = own->pack && FS_IdPak( own->pack );
+	for ( pass = 0; pass < 2; pass++ ) {
+		for ( i = 0; i < ARRAY_LEN( fs_pictureFormats ); i++ ) {
+			Com_sprintf( name, nameSize, "levelshots/%s.%s", map, fs_pictureFormats[i].extension );
+			if ( FS_LevelshotMissing( name ) ) {
+				continue;
+			}
+			search = pass ? FS_FileSearch( name ) : FS_SearchHasFile( own, name ) ? own : NULL;
+			if ( search ) {
+				*format = i;
+				return search;
+			}
+		}
+	}
+	return NULL;
+}
+
+/*
+================
+FS_MapPicture
+
+A map's picture (FS_MapPictureSearch): its media type, size, and a
+version that changes whenever its bytes may, the pak's checksum and the
+entry's name hashed, or a loose file's size, of a fixed width, and
+modification time; and where it is, for FS_WriteMapPicture while the
+search path stays as it is. qfalse for none, an empty one, and one past
+FS_MAP_PICTURE_MAX. Its gameOwn is set either way (FS_MapPictureSearch)
+================
+*/
+qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
+	const searchpath_t	*search;
+	int64_t				size, mtime;
+	long				length;
+	int					format;
+
+	if ( !( search = FS_MapPictureSearch( map, picture->name, sizeof( picture->name ), &format,
+		&picture->gameOwn ) ) ) {
+		return qfalse;
+	}
+	if ( search->pack ) {
+		length = (long)FS_PakEntry( search->pack, picture->name )->len;
+		Com_sprintf( picture->version, sizeof( picture->version ), "p%08x%08x", search->pack->checksum,
+			FS_IndexHash( picture->name ) );
+	} else if ( Content_FileStat( FS_BuildOSPath( search->dir->path, search->dir->gamedir, picture->name ), &size,
+			&mtime ) && size <= FS_MAP_PICTURE_MAX ) {
+		length = (long)size;
+		Com_sprintf( picture->version, sizeof( picture->version ), "f%08x%08x%llx", FS_IndexHash( picture->name ),
+			(unsigned)size, (long long)mtime );
+	} else {
+		return qfalse;
+	}
+	if ( length <= 0 || length > FS_MAP_PICTURE_MAX ) {
+		return qfalse;
+	}
+	picture->type = fs_pictureFormats[format].type;
+	picture->extension = fs_pictureFormats[format].extension;
+	picture->size = (int)length;
+	picture->search = search;
+	return qtrue;
+}
+
+/*
+================
+FS_PictureLooksRight
+
+Whether a picture's first bytes are its format's, never decoding it: a
+JPEG's or PNG's signature, a BMP's "BM", or a TGA's header of an
+uncompressed or run-length true color image of 24 or 32 bits a pixel, or
+gray of 8, without a color map, 1 to 4096 pixels a side, as the page that
+draws it takes
+================
+*/
+// the most of a picture's first bytes FS_PictureLooksRight reads: a TGA's header
+#define FS_PICTURE_HEAD		18
+
+static qboolean FS_PictureLooksRight( const byte *data, int length, const char *type ) {
+	static const byte	png[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+	int					width, height;
+
+	if ( !strcmp( type, "image/jpeg" ) ) {
+		return length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff;
+	}
+	if ( !strcmp( type, "image/png" ) ) {
+		return length >= (int)sizeof( png ) && !memcmp( data, png, sizeof( png ) );
+	}
+	if ( !strcmp( type, "image/bmp" ) ) {
+		return length >= 2 && data[0] == 'B' && data[1] == 'M';
+	}
+	if ( length < FS_PICTURE_HEAD || data[1] != 0 ) {
+		return qfalse;
+	}
+	if ( data[2] == 2 || data[2] == 10 ) {
+		if ( data[16] != 24 && data[16] != 32 ) {
+			return qfalse;
+		}
+	} else if ( ( data[2] != 3 && data[2] != 11 ) || data[16] != 8 ) {
+		return qfalse;
+	}
+	width = data[12] | data[13] << 8;
+	height = data[14] | data[15] << 8;
+	return width >= 1 && width <= 4096 && height >= 1 && height <= 4096;
+}
+
+/*
+================
+FS_WriteMapPicture
+
+A map's picture, as FS_MapPicture just found it, written whole to
+ospath, through a file of its own beside it, once its first bytes are its
+format's, read before the rest, so one that doesn't look right costs a
+few bytes however often it's asked for: qfalse, with nothing written, for
+that, or a failed read or write. Not synced: it's a copy the next asking
+writes again if it's lost
+================
+*/
+qboolean FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath ) {
+	char			tmp[MAX_OSPATH];
+	byte			*data;
+	fileHandle_t	h = 0;
+	FILE			*f = NULL;
+	int				head = MIN( picture->size, FS_PICTURE_HEAD );
+	qboolean		ok;
+
+	if ( FS_FOpenFileReadDir( picture->name, (searchpath_t *)picture->search, &h, qfalse, qfalse ) !=
+		picture->size ) {
+		if ( h ) {
+			FS_FCloseFile( h );
+		}
+		return qfalse;
+	}
+	// not the hunk, whose want of room would drop the map (Com_Error)
+	if ( !( data = malloc( picture->size ) ) ) {
+		FS_FCloseFile( h );
+		return qfalse;
+	}
+	ok = FS_Read( data, head, h ) == head && FS_PictureLooksRight( data, head, picture->type ) &&
+		FS_Read( data + head, picture->size - head, h ) == picture->size - head &&
+		Com_sprintf( tmp, sizeof( tmp ), "%s.%d.tmp", ospath, Sys_PID() ) < (int)sizeof( tmp ) &&
+		( f = Sys_FOpen( tmp, "wb" ) ) != NULL;
+	FS_FCloseFile( h );
+	if ( ok ) {
+		ok = (int)fwrite( data, 1, picture->size, f ) == picture->size;
+		ok = fclose( f ) == 0 && ok && Sys_Rename( tmp, ospath );
+		if ( !ok ) {
+			remove( tmp );
+		}
+	}
+	free( data );
+	return ok;
+}
+
 /*
 ================
 FS_UnusedServerCode

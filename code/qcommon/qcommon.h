@@ -1324,6 +1324,24 @@ int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // the server game code an original server would run where this one runs its
 // own, and what that means; qfalse when there's none
 qboolean	FS_UnusedServerCode( char *file, int fileSize, char *notice, int noticeSize );
+// a map's picture, the levelshot the menus draw for it: its media type,
+// size, a version that changes whenever its bytes may, and the extension of
+// its file, with its name and where it is, which FS_WriteMapPicture takes
+// to write it to a file, once its first bytes are its format's, while the
+// search path stays as it is; and, picture or not, whether the map's BSP
+// loads from one of the game's own paks (files.c)
+#define FS_MAP_PICTURE_MAX		( 4 << 20 )
+#define FS_MAP_PICTURE_VERSION	40
+typedef struct {
+	const char	*type, *extension;
+	int			size;
+	char		version[FS_MAP_PICTURE_VERSION];
+	char		name[MAX_QPATH];
+	const void	*search;
+	qboolean	gameOwn;
+} fsMapPicture_t;
+qboolean	FS_MapPicture( const char *map, fsMapPicture_t *picture );
+qboolean	FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath );
 // returns 1 if a file is in the PAK file, otherwise -1
 void	FS_SetCurrentMap( const char *map );
 void	FS_NameCurrentMap( const char *map );
