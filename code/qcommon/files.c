@@ -3628,7 +3628,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	unz_global_info	gi;
 	unz_file_info	info;
 	char			entry[MAX_ZPATH], retail[MAX_QPATH], clause[MAX_STRING_CHARS];
-	const char		*why = NULL, *refused = NULL, *code, *named, *classic;
+	const char		*why = NULL, *refused = NULL, *code, *classic;
 	byte			first[4];
 	uint64_t		unpacked = 0;
 	unsigned int	installed;
@@ -3649,7 +3649,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 		if ( verdict ) {
 			verdict->code = zip64 ? "zip64" : "damaged";
 		}
-		return zip64 ? ADD_PAK_ZIP64 : "it isn't a zip that loads as a pak";
+		return zip64 ? ADD_PAK_ZIP64 : "it isn't a zip file the game can load";
 	}
 	// FS_LoadZipFile keeps the entries before a record it can't read
 	if ( unzGetGlobalInfo( pak->handle, &gi ) != UNZ_OK || pak->numfiles < gi.number_entry ) {
@@ -3722,10 +3722,9 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	}
 	// a pak of its name in another of the game's directories, as the base
 	// path's, with other contents: players know a pak by its name
-	if ( !why && ( named = FS_AddPakInstalled( gameDir, name, pak->checksum, &installed ) ) != NULL
-		&& installed != pak->checksum ) {
+	if ( !why && FS_AddPakInstalled( gameDir, name, pak->checksum, &installed ) && installed != pak->checksum ) {
 		refused = "other_contents";
-		why = va( ADD_PAK_OTHER_CONTENTS, gameDir, name, named );
+		why = va( ADD_PAK_OTHER_CONTENTS, gameDir, name );
 	}
 	if ( verdict && why ) {
 		verdict->code = refused;
@@ -3780,7 +3779,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 			Com_sprintf( clause, sizeof( clause ), "%s.pk3 overrides %d file%s of %s/%s.pk3%s%s", name, count,
 				count == 1 ? "" : "s", other->pakGamename, other->pakBasename, code ? ", including " : "", code ? code : "" );
 			if ( dropped ) {
-				Q_strcat( clause, sizeof( clause ), va( ", and its shader files leave out %d of that pak's shaders",
+				Q_strcat( clause, sizeof( clause ), va( ", and its shader files leave out %d of that file's shaders",
 					dropped ) );
 			}
 			Q_strcat( overrides, overridesSize, va( "%s%s", overrides[0] ? "; " : "", clause ) );

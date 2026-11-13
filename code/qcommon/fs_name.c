@@ -59,6 +59,35 @@ static qboolean FS_DeviceName( const char *name, size_t length ) {
 		name[3] >= '0' && name[3] <= '9';
 }
 
+// FS_ValidName's rules, the first one a name breaks as words that follow
+// it, or NULL; a pak's name is without its .pk3
+static const char *FS_NameRule( const char *name, size_t length, qboolean pak ) {
+	size_t	i;
+
+	if ( !length ) {
+		return "is empty";
+	}
+	if ( name[0] == '.' ) {
+		return "starts with a dot";
+	}
+	if ( name[length - 1] == '.' || name[length - 1] == ' ' ) {
+		return pak ? "ends in a dot or a space before .pk3" : "ends in a dot or a space";
+	}
+	for ( i = 0; i < length; i++ ) {
+		if ( (unsigned char)name[i] < 0x20 || (unsigned char)name[i] > 0x7e || strchr( "/\\:*?\"<>|$", name[i] ) ) {
+			return "has a character a downloadable file's name can't have: use printable ASCII without / \\ : * ? \" "
+				"< > | or $";
+		}
+		if ( name[i] == '~' && i + 1 < length && name[i + 1] >= '0' && name[i + 1] <= '9' ) {
+			return "has a ~ before a digit, as Windows' made-up short names do";
+		}
+	}
+	if ( FS_DeviceName( name, length ) ) {
+		return "is a name Windows keeps for a device (con, prn, aux, nul, com0 to com9 or lpt0 to lpt9)";
+	}
+	return NULL;
+}
+
 /*
 ================
 FS_ValidName
@@ -73,18 +102,27 @@ device name Windows reserves (FS_DeviceName)
 ================
 */
 static qboolean FS_ValidName( const char *name, size_t length ) {
-	size_t	i;
+	return !FS_NameRule( name, length, qfalse );
+}
 
-	if ( !length || name[0] == '.' || name[length - 1] == '.' || name[length - 1] == ' ' ) {
-		return qfalse;
+/*
+================
+FS_NameProblem
+
+What keeps a name from being one FS_ValidName takes, as words that follow
+it ("zz-map.pk3 starts with a dot"), or NULL when it's valid; for a pak,
+without its .pk3, and for a game folder, with the engine's own folders too
+(FS_EngineFolder)
+================
+*/
+const char *FS_NameProblem( const char *name, qboolean gameFolder ) {
+	if ( gameFolder && strlen( name ) >= MAX_QPATH ) {
+		return "is 64 characters or longer";
 	}
-	for ( i = 0; i < length; i++ ) {
-		if ( (unsigned char)name[i] < 0x20 || (unsigned char)name[i] > 0x7e ||
-			strchr( "/\\:*?\"<>|$", name[i] ) || ( name[i] == '~' && i + 1 < length && name[i + 1] >= '0' && name[i + 1] <= '9' ) ) {
-			return qfalse;
-		}
+	if ( gameFolder && name[0] && FS_EngineFolder( name ) ) {
+		return "is one of the engine's own folders";
 	}
-	return !FS_DeviceName( name, length );
+	return FS_NameRule( name, strlen( name ), !gameFolder );
 }
 
 /*

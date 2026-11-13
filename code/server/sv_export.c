@@ -243,7 +243,7 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 	}
 	in = Sys_FOpen( item->source, "rb" );
 	if ( !in ) {
-		return "the pak can't be read";
+		return "the file can't be read";
 	}
 	out = Sys_FCreateReadable( part );
 	if ( !out ) {
@@ -261,7 +261,7 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 		}
 	}
 	if ( !why && ferror( in ) ) {
-		why = "the pak can't be read";
+		why = "the file can't be read";
 	}
 	if ( fclose( out ) != 0 && !why ) {
 		why = "the file can't be written";
@@ -272,12 +272,12 @@ static const char *SV_ExportCopy( exportJob_t *job, exportItem_t *item, const ch
 		return why;
 	}
 	if ( read != item->size ) {
-		return "the pak changed since it was hashed";
+		return "the file changed since it was hashed";
 	}
 	if ( job->add ) {
 		memcpy( item->sha256, digest, SHA256_DIGEST_SIZE );
 	} else if ( memcmp( digest, item->sha256, SHA256_DIGEST_SIZE ) ) {
-		return "the pak changed since it was hashed";
+		return "the file changed since it was hashed";
 	}
 	return NULL;
 }
@@ -341,7 +341,7 @@ static void SV_ExportTarget( exportJob_t *job, exportItem_t *item, int t ) {
 	linked = !job->copies && !cloned && ( Sys_HardLink( item->source, part ) || ( t == EXPORT_BY_NAME
 		&& byHash->result != EXPORT_FAILED && Sys_HardLink( byHash->ospath, part ) ) );
 	if ( cloned || linked ) {
-		why = SV_ExportUnchanged( item ) ? NULL : "the pak changed since it was hashed";
+		why = SV_ExportUnchanged( item ) ? NULL : "the file changed since it was hashed";
 	} else {
 		why = SV_ExportCopy( job, item, part );
 	}
@@ -397,7 +397,7 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 			target->result = EXPORT_DIFFERENT;
 		} else if ( !Content_HashFile( item->source, item->sha256, &size ) || size != item->size ) {
 			target->result = EXPORT_FAILED;
-			target->why = "the pak can't be read";
+			target->why = "the file can't be read";
 		} else {
 			target->result = Content_HashFile( target->ospath, digest, &size ) && size == item->size
 				&& !memcmp( digest, item->sha256, SHA256_DIGEST_SIZE ) ? EXPORT_THERE : EXPORT_DIFFERENT;
@@ -408,8 +408,8 @@ static void SV_AddTarget( exportJob_t *job, exportItem_t *item ) {
 	remove( part );
 	cloned = Sys_CloneFile( item->source, part );
 	if ( cloned ) {
-		why = !Content_HashFile( part, item->sha256, &size ) ? "the pak can't be read"
-			: size != item->size ? "the pak changed since it was hashed" : NULL;
+		why = !Content_HashFile( part, item->sha256, &size ) ? "the file can't be read"
+			: size != item->size ? "the file changed since it was hashed" : NULL;
 	} else {
 		why = SV_ExportCopy( job, item, part );
 	}
@@ -1201,14 +1201,15 @@ static struct {
 	char			removing[MAX_OSPATH];
 } addPak;
 
-#define ADD_NO_CONTENT_DIR	"content add: sv_contentDir can't be used; the console says why"
+#define ADD_NO_CONTENT_DIR	"sv_contentDir can't be used; the console says why"
 
 /*
 =================
 SV_AddSay
 
 A line of a verdict, as its code: into it, and at the console for content
-add's own, not content.check's (SV_ExtContentCheck)
+add's own, not content.check's (SV_ExtContentCheck), with the console's
+prefix before a refusal's
 =================
 */
 static Q_PRINTF_FUNC( 3, 4 ) void QDECL SV_AddSay( extContentVerdict_t *verdict, const char *code, const char *fmt,
@@ -1222,7 +1223,20 @@ static Q_PRINTF_FUNC( 3, 4 ) void QDECL SV_AddSay( extContentVerdict_t *verdict,
 	verdict->code = code;
 	Q_strncpyz( verdict->message, line, sizeof( verdict->message ) );
 	if ( verdict == &addPak.verdict ) {
-		Com_Printf( "%s\n", line );
+		Com_Printf( "%s%s\n", code && ( !strcmp( code, "added" ) || !strcmp( code, "installed_already" ) ) ? ""
+			: "content add: ", line );
+	}
+}
+
+// a refusal of content add's pak, why: "<game>/<name>.pk3 is refused: <why>",
+// but other contents under its name alone, as its words name the pak and
+// read the same wherever they're found, the page showing them under the
+// file's own row
+static void SV_AddRefused( extContentVerdict_t *verdict, const char *code, const char *why ) {
+	if ( !strcmp( code, "other_contents" ) ) {
+		SV_AddSay( verdict, code, "%s", why );
+	} else {
+		SV_AddSay( verdict, code, "%s is refused: %s", addPak.name, why );
 	}
 }
 
@@ -1469,22 +1483,29 @@ qfalse, saying why in the verdict
 =================
 */
 static qboolean SV_AddName( extContentVerdict_t *verdict, const char *file, const char *gameDir, char *base, int size ) {
+	const char	*problem;
+
 	// to say so: OFCM_ValidName below refuses these too
 	if ( strpbrk( file, "/\\:" ) ) {
-		SV_AddSay( verdict, "bad_name", "content add: give the name of a pak in %s, not a path", contentIncoming );
+		SV_AddSay( verdict, "bad_name", "give the name of a file in sv_contentDir's " CONTENT_INCOMING
+			" folder, not a path" );
 		return qfalse;
 	}
 	Q_strncpyz( base, file, size );
 	if ( !COM_CompareExtension( base, ".pk3" ) ) {
-		SV_AddSay( verdict, "bad_name", "content add: %s isn't a pak (.pk3)", file );
+		SV_AddSay( verdict, "bad_name", "%s isn't a .pk3 file", file );
 		return qfalse;
 	}
 	base[strlen( base ) - 4] = '\0';
 	if ( !SV_ContentPakName( gameDir, base ) ) {
-		// the game directory's fault, if a plain pak's name passes with it:
-		// both rules check each part alone
-		SV_AddSay( verdict, FS_ValidDownloadPak( gameDir, "x" ) && OFCM_ValidName( gameDir, "x" ) ? "bad_name" : "bad_game",
-			"content add: %s/%s.pk3 isn't a name a pak can have for downloads", gameDir, base );
+		// what's wrong, the game folder's first (FS_NameProblem), as both
+		// rules check each part alone
+		if ( ( problem = FS_NameProblem( gameDir, qtrue ) ) != NULL ) {
+			SV_AddSay( verdict, "bad_game", "the game folder %s%s%s", gameDir, gameDir[0] ? " " : "", problem );
+		} else {
+			problem = FS_NameProblem( base, qfalse );
+			SV_AddSay( verdict, "bad_name", "%s.pk3 %s", base, problem ? problem : "isn't a name a downloaded file can have" );
+		}
 		return qfalse;
 	}
 	return qtrue;
@@ -1509,7 +1530,7 @@ static qboolean SV_AddPlace( extContentVerdict_t *verdict, const char *gameDir, 
 	Q_strncpyz( ospath, FS_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), gameDir, va( "%s.pk3", base ) ), size );
 	// nor into sv_contentDir, by a game directory of its name
 	if ( SV_ContentInside( contentRoot, ospath ) ) {
-		SV_AddSay( verdict, "bad_game", "content add: %s is sv_contentDir, %s, not a game directory", gameDir, contentRoot );
+		SV_AddSay( verdict, "bad_game", "%s is sv_contentDir, not a game folder", gameDir );
 		return qfalse;
 	}
 	return qtrue;
@@ -1531,7 +1552,8 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	exportItem_t		*item;
 	extContentVerdict_t	*verdict = &addPak.verdict;
 	char				name[MAX_OSPATH], source[MAX_OSPATH], overrides[MAX_STRING_CHARS];
-	const char			*refused;
+	const char			*refused, *installedAt;
+	unsigned int		installed;
 	int64_t				size, mtime;
 	FILE				*f;
 
@@ -1554,12 +1576,12 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 		Com_sprintf( addPak.removing, sizeof( addPak.removing ), "%s%c%s", contentIncoming, PATH_SEP, file );
 	}
 	if ( !Sys_RealPath( va( "%s%c%s", contentIncoming, PATH_SEP, file ), source, sizeof( source ) ) ) {
-		SV_AddSay( verdict, "failed", "content add: there's no %s in %s", file, contentIncoming );
+		SV_AddSay( verdict, "failed", "there's no %s in sv_contentDir's " CONTENT_INCOMING " folder", file );
 		return qfalse;
 	}
 	if ( !SV_ContentUnder( contentIncoming, source ) ) {
-		SV_AddSay( verdict, "failed", "content add: %s is a link out of %s, which content add doesn't follow", file,
-			contentIncoming );
+		SV_AddSay( verdict, "failed", "%s is a link out of sv_contentDir's " CONTENT_INCOMING " folder, which "
+			"content add doesn't follow", file );
 		return qfalse;
 	}
 	// Content_FileStat refuses what's too large for a pak too, which opens
@@ -1568,8 +1590,8 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 		if ( f ) {
 			fclose( f );
 		}
-		SV_AddSay( verdict, f ? "too_big" : "failed", "content add: %s can't be read, or is %d MB or larger, which no pak "
-			"may be", file, ( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
+		SV_AddSay( verdict, f ? "too_big" : "failed", "%s can't be read, or is %d MB or larger, and the game "
+			"can't load a file that big", file, ( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
 		return qfalse;
 	}
 	verdict->size = size;
@@ -1578,7 +1600,13 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	Q_strncpyz( addPak.base, name, sizeof( addPak.base ) );
 	refused = FS_CheckAddPak( source, gameDir, name, &addPak.checksum, overrides, sizeof( overrides ), verdict );
 	if ( refused ) {
-		SV_AddSay( verdict, verdict->code, "content add: %s is refused: %s", addPak.name, refused );
+		SV_AddRefused( verdict, verdict->code ? verdict->code : "failed", refused );
+		// where the installed one is, at the console alone: a tool's caller
+		// may not be the server's owner
+		if ( !strcmp( verdict->code, "other_contents" ) &&
+			( installedAt = FS_AddPakInstalled( gameDir, name, addPak.checksum, &installed ) ) != NULL ) {
+			Com_Printf( "content add: the installed %s is %s\n", addPak.name, installedAt );
+		}
 		return qfalse;
 	}
 	if ( overrides[0] ) {
@@ -1591,7 +1619,7 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 		job->buffer = malloc( EXPORT_BUFFER_SIZE );
 	}
 	if ( !job->items || !job->buffer ) {
-		SV_AddSay( verdict, "failed", "content add: out of memory" );
+		SV_AddSay( verdict, "failed", "out of memory" );
 		return qfalse;
 	}
 	item = &job->items[0];
@@ -1613,7 +1641,7 @@ static qboolean SV_AddBegin( const char *file, const char *gameDir, qboolean rem
 	job->bytes = 0;
 	exportThread = Sys_StartThread( SV_ExportThread, job );
 	if ( !exportThread ) {
-		SV_AddSay( verdict, "failed", "content add: this build has no threads to copy with" );
+		SV_AddSay( verdict, "failed", "this build has no threads to copy with" );
 		return qfalse;
 	}
 	job->started = Sys_Milliseconds();
@@ -1669,15 +1697,15 @@ static void SV_AddFinish( void ) {
 		SV_AddSay( verdict, "installed_already", "%s is installed already, the same file", addPak.name );
 		return;
 	case EXPORT_DIFFERENT:
-		SV_AddSay( verdict, "other_contents", "content add: a pak named %s is already installed with different contents; give "
-			"the new version its own name so players who have the old one aren't confused", addPak.name );
+		SV_AddSay( verdict, "other_contents", ADD_PAK_OTHER_CONTENTS, addPak.gameDir, addPak.base );
+		Com_Printf( "content add: the installed %s is %s\n", addPak.name, target->ospath );
 		return;
 	case EXPORT_COPIED:
 	case EXPORT_CLONED:
 		break;
 	default:
 		// SV_ExportCopy's, as the disk keeps CACHE_DISK_RESERVE free
-		SV_AddSay( verdict, target->why == exportDiskFull ? "no_room" : "failed", "content add: %s: %s", addPak.name,
+		SV_AddSay( verdict, target->why == exportDiskFull ? "no_room" : "failed", "%s: %s", addPak.name,
 			target->why );
 		return;
 	}
@@ -1693,8 +1721,7 @@ static void SV_AddFinish( void ) {
 	}
 	if ( refused ) {
 		remove( part );
-		SV_AddSay( verdict, verdict->code ? verdict->code : "failed", "content add: %s is refused: %s", addPak.name,
-			refused );
+		SV_AddRefused( verdict, verdict->code ? verdict->code : "failed", refused );
 		return;
 	}
 
@@ -1772,12 +1799,12 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 		return;
 	}
 	if ( size < 0 || size > CONTENT_MAX_PAK_SIZE ) {
-		SV_AddSay( verdict, "too_big", "content add: %s is %d MB or larger, which no pak may be", file,
+		SV_AddSay( verdict, "too_big", "%s is %d MB or larger, and the game can't load a file that big", file,
 			( CONTENT_MAX_PAK_SIZE >> 20 ) + 1 );
 		return;
 	}
 	if ( hasChecksum && FS_RetailPakChecksum( va( "%s/%s.pk3", gameDir, name ), checksum, retail, sizeof( retail ) ) ) {
-		SV_AddSay( verdict, "retail", "content add: %s/%s.pk3 is refused: " ADD_PAK_RETAIL, gameDir, name, retail );
+		SV_AddSay( verdict, "retail", "%s/%s.pk3 is refused: " ADD_PAK_RETAIL, gameDir, name, retail );
 		return;
 	}
 	other = FS_AddPakInstalled( gameDir, name, checksum, &installed );
@@ -1792,8 +1819,7 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 		record = hasChecksum && installedSize == size ? Content_PakIndex_Find( SV_AddHomeRoot(),
 			va( "%s/%s.pk3", gameDir, name ), installedSize, mtime ) : NULL;
 		if ( installedSize != size || ( record && record->pakChecksum != checksum ) ) {
-			SV_AddSay( verdict, "other_contents", "content add: a pak named %s/%s.pk3 is already installed with different "
-				"contents; give the new version its own name so players who have the old one aren't confused", gameDir, name );
+			SV_AddSay( verdict, "other_contents", ADD_PAK_OTHER_CONTENTS, gameDir, name );
 		} else if ( record ) {
 			SV_AddSay( verdict, "installed_already", "%s/%s.pk3 is installed already, the same file", gameDir, name );
 		}
@@ -1803,8 +1829,7 @@ void SV_ExtContentCheck( const char *file, const char *gameDir, long long size, 
 	// tells by its hash
 	Content_FileStat( other, &installedSize, &mtime );
 	if ( installedSize != size || ( hasChecksum && installed != checksum ) ) {
-		SV_AddSay( verdict, "other_contents", "content add: %s/%s.pk3 is refused: " ADD_PAK_OTHER_CONTENTS, gameDir, name,
-			gameDir, name, other );
+		SV_AddSay( verdict, "other_contents", ADD_PAK_OTHER_CONTENTS, gameDir, name );
 	} else if ( hasChecksum ) {
 		SV_AddSay( verdict, "installed_already", "%s/%s.pk3 is installed already, the same file", gameDir, name );
 	}

@@ -1413,10 +1413,11 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 // content add's checks of a pak (files.c), with its verdict's code and
 // warnings (hooks.h's extContentVerdict_t) where verdict is given; and its
 // words for a pak of the game's own (its own name) and for other contents
-// under an installed pak's name (the game, the name, the installed file)
-#define ADD_PAK_RETAIL			"it's one of the game's own paks, %s, which players add from their own copies"
-#define ADD_PAK_OTHER_CONTENTS	"a pak named %s/%s.pk3 is already installed with different contents (%s); give the " \
-	"new version its own name"
+// under an installed pak's name (the game, the name), which leave out where
+// the installed one is: a tool's caller may not be the server's owner
+#define ADD_PAK_RETAIL			"it's one of the game's own files, %s, which players add from their own copies"
+#define ADD_PAK_OTHER_CONTENTS	"a file named %s/%s.pk3 is already installed with different contents; give the new " \
+	"version its own name so players who have the old one aren't confused"
 const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned int checksum,
 	unsigned int *installed );
 // the file of an installed pak named gameDir/name.pk3, one whose checksum
@@ -1494,6 +1495,9 @@ qboolean FS_InvalidGameDir(const char *gamedir);
 // names a server may give the files a client writes (fs_name.c)
 qboolean FS_EngineFolder( const char *name );
 qboolean FS_ValidFolderName( const char *name );
+// what keeps a name from being a valid one, as words that follow it, or
+// NULL: a pak's without .pk3, or a game folder's
+const char *FS_NameProblem( const char *name, qboolean gameFolder );
 qboolean FS_ValidDownloadName( const char *name );
 qboolean FS_ValidDownloadPak( const char *gameDir, const char *name );
 // FS_ValidDownloadName's rule for a pak's game directory and name apart, as
