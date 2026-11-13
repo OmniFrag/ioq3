@@ -1696,6 +1696,85 @@ static searchpath_t *FS_NextSearch( const searchpath_t *search ) {
 }
 
 /*
+===========
+FS_IsQVM
+
+Whether a file is game code, vm/<name>.qvm
+===========
+*/
+static qboolean FS_IsQVM( const char *filename ) {
+	return !Q_strncmp( filename, "vm", 2 ) && ( filename[2] == '/' || filename[2] == '\\' ) &&
+		COM_CompareExtension( filename, ".qvm" );
+}
+
+/*
+===========
+FS_GameCodeLinked
+
+Whether the game runs the code linked into the executable for a game
+directory, never a pak's (VM_FindLinked): one is linked for it
+(VM_GameDirLinked) and vm_linked is on, read as a value given on the
+command line before VM_Init registers it, and 1 unset
+===========
+*/
+static qboolean FS_GameCodeLinked( const char *gameDir ) {
+	const char	*linked = Cvar_VariableString( "vm_linked" );
+
+	return ( !linked[0] || atoi( linked ) ) && VM_GameDirLinked( gameDir );
+}
+
+// the game code a client loads, its cgame and ui
+static const char	*fs_clientQVMs[] = { "vm/cgame.qvm", "vm/ui.qvm" };
+
+/*
+===========
+FS_ClientQVM, FS_PakHasClientCode
+
+Whether a file is game code a client loads, and whether a pak holds any
+===========
+*/
+static qboolean FS_ClientQVM( const char *filename ) {
+	int		i;
+
+	for ( i = 0; i < ARRAY_LEN( fs_clientQVMs ); i++ ) {
+		if ( !Q_stricmp( filename, fs_clientQVMs[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static qboolean FS_PakHasClientCode( const pack_t *pak ) {
+	int		i;
+
+	for ( i = 0; i < ARRAY_LEN( fs_clientQVMs ); i++ ) {
+		if ( FS_PakHasFile( pak, fs_clientQVMs[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+===========
+FS_NextSearchFor
+
+FS_NextSearch for a lookup of a file, but for game code the path's own
+order, as a classic client's, whatever the tiers: a map pack whose code
+the game leaves out (FS_CodeLeftOut) is set aside on other maps, but a
+classic client still loads its cgame and ui from it, a pure server
+expects them from that pak (SV_VerifyPaks_f), and our client names the
+same one
+===========
+*/
+static searchpath_t *FS_NextSearchFor( const searchpath_t *search, const char *filename ) {
+	if ( !FS_IsQVM( filename ) ) {
+		return FS_NextSearch( search );
+	}
+	return search ? search->next : fs_searchpaths;
+}
+
+/*
 =============================================================================
 
 THE NAME INDEX
@@ -1873,7 +1952,8 @@ static qboolean FS_IndexPaks( const char *filename, searchpath_t **paks, int *nu
 	searchpath_t		*swap;
 	int					i, j;
 
-	if ( !fs_index || !fs_indexUse || !fs_indexUse->integer || fs_lookupTimed == 2 ) {
+	// game code is looked up in the path's own order (FS_NextSearchFor)
+	if ( !fs_index || !fs_indexUse || !fs_indexUse->integer || fs_lookupTimed == 2 || FS_IsQVM( filename ) ) {
 		return qfalse;
 	}
 	// as FS_FOpenFileReadDir takes it
@@ -2356,7 +2436,7 @@ static const searchpath_t *FS_WalkFinds( const char *filename, qboolean exists, 
 {
 	const searchpath_t	*search;
 
-	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+	for ( search = FS_NextSearchFor( NULL, filename ); search; search = FS_NextSearchFor( search, filename ) ) {
 		if ( ( isLocalConfig && FS_IsGameContent( search ) ) ||
 			( isExec && search->pack && search->pack->cached && FS_CachePakRefusesName( filename ) ) ) {
 			continue;
@@ -2426,7 +2506,7 @@ static long FS_FOpenFileReadAs(const char *filename, fileHandle_t *file, qboolea
 			return len;
 		}
 	} else {
-		for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+		for ( search = FS_NextSearchFor( NULL, filename ); search; search = FS_NextSearchFor( search, filename ) ) {
 			if ( FS_TryRead( search, filename, file, uniqueFILE, isExec, isLocalConfig, &len ) ) {
 				return len;
 			}
@@ -2560,7 +2640,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 	Com_sprintf(qvmName, sizeof(qvmName), "vm/%s.qvm", name);
 
 	lastSearch = *startSearch;
-	search = FS_NextSearch(lastSearch);
+	search = FS_NextSearchFor(lastSearch, qvmName);
 
 	while(search)
 	{
@@ -2612,7 +2692,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 
 				if(!FS_FilenameCompare(lastSearch->pack->pakPathname, pack->pakPathname))
 				{
-					search = FS_NextSearch(search);
+					search = FS_NextSearchFor(search, qvmName);
 					continue;
 				}
 			}
@@ -2625,7 +2705,7 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 			}
 		}
 
-		search = FS_NextSearch(search);
+		search = FS_NextSearchFor(search, qvmName);
 	}
 
 	return -1;
@@ -2905,7 +2985,7 @@ int	FS_FileIsInPAK(const char *filename, int *pChecksum ) {
 	// search through the path, one element at a time
 	//
 
-	for ( search = FS_NextSearch( NULL ) ; search ; search = FS_NextSearch( search ) ) {
+	for ( search = FS_NextSearchFor( NULL, filename ) ; search ; search = FS_NextSearchFor( search, filename ) ) {
 		//
 		if (search->pack) {
 			hash = FS_HashFileName(filename, search->pack->hashSize);
@@ -3293,8 +3373,7 @@ static pack_t *FS_LoadZipFile(const char *zipfile, const char *basename, const c
 		const char	*name = pack->buildBuffer[i].name;
 
 		pack->holdsMap |= FS_IsMapFile( name );
-		pack->holdsCode |= !strncmp( name, "vm", 2 ) && ( name[2] == '/' || name[2] == '\\' ) &&
-			COM_CompareExtension( name, ".qvm" );
+		pack->holdsCode |= FS_IsQVM( name );
 	}
 	return pack;
 }
@@ -3318,6 +3397,9 @@ static void FS_FreePak(pack_t *thepak)
 
 static qboolean FS_HoldsMapOnly( const searchpath_t *search );
 static const char *FS_PakConflictsWhere( const searchpath_t *search );
+static qboolean FS_CodeLeftOut( const searchpath_t *search );
+static qboolean FS_IdPak( const pack_t *pak );
+int FS_PathCmp( const char *s1, const char *s2 );
 static int FS_DroppedShaders( const searchpath_t *search, const searchpath_t *other, const char *name,
 	qboolean print );
 
@@ -3464,6 +3546,62 @@ const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned 
 
 /*
 =================
+FS_PakQVMs
+
+A pak's game code, its vm/<name>.qvm files, listed with spaces
+=================
+*/
+static const char *FS_PakQVMs( const pack_t *pak ) {
+	static char	list[MAX_STRING_CHARS];
+	int			i;
+
+	list[0] = '\0';
+	for ( i = 0; i < pak->numfiles; i++ ) {
+		if ( FS_IsQVM( pak->buildBuffer[i].name ) ) {
+			Q_strcat( list, sizeof( list ), va( "%s%s", list[0] ? " " : "", pak->buildBuffer[i].name ) );
+		}
+	}
+	return list;
+}
+
+/*
+=================
+FS_ClassicClientCode
+
+What of a pak's game code a classic client that gets it from the server
+loads, "HUD" for its cgame and "menus" for its ui, or NULL: a classic
+client takes each from the last pak by name that has it, and no other pak
+clients get in gameDir that sorts after name has it, nor one of the
+current game's when that's a mod's. A pak the server has in its base path
+counts by name all the same, and id's paks don't count, as ioquake3 keeps
+a download in the player's home folder, beside the others and above id's
+=================
+*/
+static const char *FS_ClassicClientCode( const pack_t *pak, const char *gameDir, const char *name ) {
+	const searchpath_t	*search;
+	qboolean			loads[ARRAY_LEN( fs_clientQVMs )];
+	int					i;
+
+	for ( i = 0; i < ARRAY_LEN( fs_clientQVMs ); i++ ) {
+		loads[i] = FS_PakHasFile( pak, fs_clientQVMs[i] );
+		for ( search = fs_searchpaths; search && loads[i]; search = search->next ) {
+			const pack_t	*other = search->pack;
+
+			if ( other && !other->excluded && !FS_IdPak( other ) && FS_PakHasFile( other, fs_clientQVMs[i] ) &&
+				( Q_stricmp( other->pakGamename, gameDir ) ? !Q_stricmp( other->pakGamename, FS_GetCurrentGameDir() ) :
+				FS_PathCmp( other->pakBasename, name ) > 0 ) ) {
+				loads[i] = qfalse;
+			}
+		}
+	}
+	if ( loads[0] && loads[1] ) {
+		return "HUD and menus";
+	}
+	return loads[0] ? "HUD" : loads[1] ? "menus" : NULL;
+}
+
+/*
+=================
 FS_CheckAddPak
 
 What content add checks of a pak an operator installs as gameDir/name.pk3:
@@ -3473,8 +3611,11 @@ name or its first bytes, within CONTENT_MAX_PAK_SIZE unpacked; and not one
 of the game's own. NULL, with the pak's checksum, or why it's refused. In
 overrides, the paks of the search path it would take code (a QVM in vm/),
 more than PAK_ADD_OVERRIDES files or a shader from, where its copy of a
-shader file leaves some out, and of a map pack where its files count, said
-as a warning, or ""; with overrides NULL, none of that is looked at. In
+shader file leaves some out, of a map pack where its files count, and the
+game code of a map pak the game leaves out (FS_CodeLeftOut), which isn't
+an override, with what of it classic clients still load
+(FS_ClassicClientCode), said as a warning, or ""; with overrides NULL,
+none of that is looked at. In
 verdict, when it's given, the refusal's code, and with overrides each of
 those warnings with its code
 =================
@@ -3487,12 +3628,12 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	unz_global_info	gi;
 	unz_file_info	info;
 	char			entry[MAX_ZPATH], retail[MAX_QPATH], clause[MAX_STRING_CHARS];
-	const char		*why = NULL, *refused = NULL, *code, *named;
+	const char		*why = NULL, *refused = NULL, *code, *named, *classic;
 	byte			first[4];
 	uint64_t		unpacked = 0;
 	unsigned int	installed;
 	int				i, got, count, dropped;
-	qboolean		zip64;
+	qboolean		zip64, leftOut;
 
 	if ( overrides ) {
 		overrides[0] = '\0';
@@ -3595,6 +3736,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 	// entry of the search path's
 	Com_Memset( &added, 0, sizeof( added ) );
 	added.pack = pak;
+	leftOut = FS_CodeLeftOut( &added );
 	for ( search = fs_searchpaths; search && overrides && !why; search = search->next ) {
 		const pack_t	*other = search->pack;
 
@@ -3621,8 +3763,12 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 				continue;
 			}
 			file = ours->name;
+			// code the game leaves out replaces nothing
+			if ( leftOut && FS_IsQVM( file ) ) {
+				continue;
+			}
 			count++;
-			if ( !code && !Q_strncmp( file, "vm/", 3 ) && COM_CompareExtension( file, ".qvm" ) ) {
+			if ( !code && FS_IsQVM( file ) ) {
 				code = file;
 			}
 			// a copy the same as the other's, by its CRC, leaves nothing out
@@ -3655,6 +3801,18 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 		Com_sprintf( clause, sizeof( clause ), "as a map pack, its files count %s", FS_PakConflictsWhere( &added ) );
 		Q_strcat( overrides, overridesSize, va( "; %s", clause ) );
 		FS_AddPakWarning( verdict, "map_pack_scope", clause );
+	}
+	if ( overrides && !why && leftOut ) {
+		Com_sprintf( clause, sizeof( clause ), "%s.pk3's game code is left out (%s): the server runs its own", name,
+			FS_PakQVMs( pak ) );
+		Q_strcat( overrides, overridesSize, va( "%s%s", overrides[0] ? "; " : "", clause ) );
+		FS_AddPakWarning( verdict, "game_code_left_out", clause );
+		if ( ( classic = FS_ClassicClientCode( pak, gameDir, name ) ) != NULL ) {
+			Com_sprintf( clause, sizeof( clause ), "Players using original Quake III clients get this file's %s on "
+				"every map", classic );
+			Q_strcat( overrides, overridesSize, va( "; %s", clause ) );
+			FS_AddPakWarning( verdict, "classic_clients_load_code", clause );
+		}
 	}
 	FS_FreePak( pak );
 	return why;
@@ -4482,7 +4640,6 @@ FS_Path_f
 ============
 */
 
-static qboolean FS_IdPak( const pack_t *pak );
 static qboolean FS_GlobalPak( const searchpath_t *search );
 
 /*
@@ -4569,10 +4726,7 @@ What path says a pak or pk3dir is, and so where its files count; NULL for
 a game directory
 ================
 */
-static const char *FS_EntryKind( const searchpath_t *search ) {
-	if ( search->pack && FS_IdPak( search->pack ) ) {
-		return "id's";
-	}
+static const char *FS_MapPackKind( const searchpath_t *search ) {
 	switch ( FS_MapPackPlace( search ) ) {
 	case MAPPACK_OWN: return "a map pack, this map's own";
 	// with no map yet, as at the first start, every map pack waits, as
@@ -4581,7 +4735,18 @@ static const char *FS_EntryKind( const searchpath_t *search ) {
 		"set aside: a map pack, and there's no map";
 	case MAPPACK_GLOBAL: return "a map pack fs_globalPaks counts on every map";
 	case MAPPACK_UNSCOPED: return "a map pack, counted on every map with fs_mapPakScope 0";
-	default: break;
+	default: return NULL;
+	}
+}
+
+static const char *FS_EntryKind( const searchpath_t *search ) {
+	const char	*kind;
+
+	if ( search->pack && FS_IdPak( search->pack ) ) {
+		return "id's";
+	}
+	if ( ( kind = FS_MapPackKind( search ) ) != NULL ) {
+		return FS_CodeLeftOut( search ) ? va( "%s (its game code left out)", kind ) : kind;
 	}
 	if ( !FS_IsGameContent( search ) ) {
 		return NULL;
@@ -4609,7 +4774,8 @@ static const char *FS_LostReason( const searchpath_t *loser, const searchpath_t 
 	if ( loser->dir && FS_PureRefusesDirFile( filename ) ) {
 		return "a pure server reads it only from its paks";
 	}
-	if ( loser->tier > winner->tier ) {
+	// game code is looked up whatever the tiers (FS_NextSearchFor)
+	if ( loser->tier > winner->tier && !FS_IsQVM( filename ) ) {
 		if ( !fs_currentMap[0] ) {
 			return "set aside: a map pack, and there's no map";
 		}
@@ -4752,8 +4918,12 @@ void FS_Which_f( void ) {
 		Com_Printf( "File not found: \"%s\"\n", filename );
 	} else {
 		FS_Which( filename, (void *)winner );
+		if ( FS_IsQVM( filename ) && FS_CodeLeftOut( winner ) ) {
+			Com_Printf( "    left out: the game runs its own%s\n",
+				FS_ClientQVM( filename ) ? ", but a classic client loads it from here" : "" );
+		}
 	}
-	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+	for ( search = FS_NextSearchFor( NULL, filename ); search; search = FS_NextSearchFor( search, filename ) ) {
 		if ( search != winner && FS_FOpenFileReadDir( filename, (searchpath_t *)search, NULL, qfalse, qfalse ) > 0 ) {
 			Com_Printf( "    also in \"%s\": %s\n", FS_SearchSource( search ),
 				winner ? FS_LostReason( search, winner, filename ) : "not on the pure server's list" );
@@ -5649,18 +5819,42 @@ static qboolean FS_GlobalPak( const searchpath_t *search ) {
 
 /*
 ================
+FS_CodeLeftOut
+
+Whether a pak or pk3dir with a map also holds game code, vm/<name>.qvm, the
+game leaves out: in a game directory whose code is linked into the
+executable, the base game's or missionpack, a QVM of a pak never runs
+(FS_GameCodeLinked), while the current game's is too. A classic client
+may still load its
+cgame and ui, which the QVM lookups' order keeps the pure checks agreeing
+on (FS_NextSearchFor)
+================
+*/
+static qboolean FS_CodeLeftOut( const searchpath_t *search ) {
+	if ( !( search->pack ? search->pack->holdsMap && search->pack->holdsCode :
+		search->dir->holdsMap && search->dir->holdsCode ) ) {
+		return qfalse;
+	}
+	// under a mod without linked code, a QVM of the base game's may run
+	return FS_GameCodeLinked( FS_EntryGame( search ) ) && FS_GameCodeLinked( FS_GetCurrentGameDir() );
+}
+
+/*
+================
 FS_MapPack
 
 Whether a search path entry is a map pack: a pak or pk3dir that holds a
-map, maps/<name>.bsp, but no game code, vm/<name>.qvm, and isn't one of
-id's (FS_HoldsMapOnly), or one fs_globalPaks names
+map, maps/<name>.bsp, but no game code, vm/<name>.qvm, or only code the
+game leaves out (FS_CodeLeftOut), and isn't one of id's (FS_HoldsMapOnly),
+or one fs_globalPaks names
 ================
 */
 static qboolean FS_HoldsMapOnly( const searchpath_t *search ) {
 	if ( search->pack ) {
-		return search->pack->holdsMap && !search->pack->holdsCode && !FS_IdPak( search->pack );
+		return search->pack->holdsMap && ( !search->pack->holdsCode || FS_CodeLeftOut( search ) ) &&
+			!FS_IdPak( search->pack );
 	}
-	return search->dir->holdsMap && !search->dir->holdsCode;
+	return search->dir->holdsMap && ( !search->dir->holdsCode || FS_CodeLeftOut( search ) );
 }
 
 static qboolean FS_MapPack( const searchpath_t *search ) {
@@ -5897,9 +6091,9 @@ static int FS_DroppedShaders( const searchpath_t *search, const searchpath_t *ot
 ================
 FS_PakConflicts
 
-How many of a pak's files one of id's paks also has, with other contents;
-with print, lists them, and of a shader file the shaders it leaves out of
-id's copy
+How many of a pak's files one of id's paks also has, with other contents,
+but game code the game leaves out (FS_CodeLeftOut); with print, lists
+them, and of a shader file the shaders it leaves out of id's copy
 ================
 */
 static int FS_PakConflicts( const searchpath_t *search, const searchpath_t **ids, int numIds, qboolean print ) {
@@ -5907,11 +6101,13 @@ static int FS_PakConflicts( const searchpath_t *search, const searchpath_t **ids
 	const fileInPack_t	*id;
 	const searchpath_t	*idSearch;
 	int					count = 0, i;
+	qboolean			leftOut = FS_CodeLeftOut( search );
 
 	for ( i = 0; i < pak->numfiles; i++ ) {
 		const fileInPack_t	*file = &pak->buildBuffer[i];
 
-		if ( !file->len || !( idSearch = FS_IdCopy( ids, numIds, file->name, &id ) ) || id->crc == file->crc ) {
+		if ( !file->len || !( idSearch = FS_IdCopy( ids, numIds, file->name, &id ) ) || id->crc == file->crc ||
+			( leftOut && FS_IsQVM( file->name ) ) ) {
 			continue;
 		}
 		count++;
@@ -5968,25 +6164,86 @@ static const char *FS_PakConflictsWhere( const searchpath_t *search ) {
 FS_PakConflicts_f
 
 pakconflicts: each installed pak's copies of id's files that differ from
-id's, and where they count
+id's, and where they count, and the game code of a map pak the game leaves
+out (FS_CodeLeftOut), which the pak still holds for classic clients; then
+the server game code an original server would run (FS_UnusedServerCode)
 ================
 */
 static void FS_PakConflicts_f( void ) {
 	const searchpath_t	*search, *ids[MAX_ID_PAKS];
 	int					numIds = FS_IdPaks( ids ), count, paks = 0;
+	qboolean			leftOut;
+	char				file[MAX_OSPATH], notice[MAX_STRING_CHARS];
 
 	for ( search = fs_searchpaths; search; search = search->next ) {
-		if ( !search->pack || search->pack->cached || FS_IdPak( search->pack ) ||
-			!( count = FS_PakConflicts( search, ids, numIds, qfalse ) ) ) {
+		if ( !search->pack || search->pack->cached || FS_IdPak( search->pack ) ) {
 			continue;
 		}
-		Com_Printf( "%s: %d of id's files, %s\n", search->pack->pakFilename, count, FS_PakConflictsWhere( search ) );
+		count = FS_PakConflicts( search, ids, numIds, qfalse );
+		leftOut = FS_CodeLeftOut( search );
+		if ( !count && !leftOut ) {
+			continue;
+		}
+		Com_Printf( "%s: %s of id's files, %s\n", search->pack->pakFilename, count ? va( "%d", count ) : "none",
+			FS_PakConflictsWhere( search ) );
 		FS_PakConflicts( search, ids, numIds, qtrue );
+		if ( leftOut ) {
+			Com_Printf( "    it keeps its game code, which the server leaves out, running its own: %s%s\n",
+				FS_PakQVMs( search->pack ),
+				FS_PakHasClientCode( search->pack ) ? "; a classic client may still load its cgame and ui" : "" );
+		}
 		paks++;
 	}
 	if ( !paks ) {
 		Com_Printf( "No installed pak has its own copy of one of id's files\n" );
 	}
+	if ( FS_UnusedServerCode( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+		Com_Printf( "%s\n", notice );
+	}
+}
+
+/*
+================
+FS_UnusedServerCode
+
+The server game code an original Quake III server would run where this
+one runs its own: the file holding vm/qagame.qvm that comes first in the
+path's order, in a game directory whose code is linked into the
+executable and run (FS_GameCodeLinked), when it isn't one of
+id's paks. Its path under the game folders in file, and what that means in
+notice; qfalse when there's none
+================
+*/
+qboolean FS_UnusedServerCode( char *file, int fileSize, char *notice, int noticeSize ) {
+	const char			*qvm = "vm/qagame.qvm";
+	const searchpath_t	*search;
+
+	if ( !fs_searchpaths || !FS_GameCodeLinked( FS_GetCurrentGameDir() ) ) {
+		return qfalse;
+	}
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack ? !FS_PakHasFile( search->pack, qvm ) :
+			FS_FOpenFileReadDir( qvm, (searchpath_t *)search, NULL, qfalse, qfalse ) <= 0 ) {
+			continue;
+		}
+		if ( search->pack && FS_IdPak( search->pack ) ) {
+			return qfalse;
+		}
+		if ( search->pack ) {
+			Com_sprintf( file, fileSize, "%s/%s.pk3", search->pack->pakGamename, search->pack->pakBasename );
+		} else if ( Q_stricmp( search->dir->gamedir, FS_EntryGame( search ) ) ) {
+			Com_sprintf( file, fileSize, "%s/%s/%s", FS_EntryGame( search ), search->dir->gamedir, qvm );
+		} else {
+			Com_sprintf( file, fileSize, "%s/%s", search->dir->gamedir, qvm );
+		}
+		Com_sprintf( notice, noticeSize, "%s holds server game code. An original Quake III server would run it from "
+			"this folder, with its rules; this server runs OmniFrag's own. To run that code, put the file in a folder "
+			"of its own and start the server with +set fs_game <that folder>; or, to run it from this folder as an "
+			"original server does, start with +set vm_linked 0.",
+			file );
+		return qtrue;
+	}
+	return qfalse;
 }
 
 /*
@@ -6022,6 +6279,33 @@ static void FS_NoteMapPackConflicts( void ) {
 	} else {
 		Com_Printf( "%d map pack%s copies of id's files, which with fs_mapPakScope 0 apply on every map (pakconflicts lists them)\n",
 			count, count == 1 ? " carries" : "s carry" );
+	}
+}
+
+/*
+================
+FS_NoteServerCode
+
+Says once, as a dedicated server's file system first starts, what
+FS_UnusedServerCode finds
+================
+*/
+static void FS_NoteServerCode( void ) {
+	static qboolean	noted;
+	char			file[MAX_OSPATH], notice[MAX_STRING_CHARS];
+
+#ifndef DEDICATED
+	// a client asked to serve, before com_dedicated is registered
+	if ( !Cvar_VariableIntegerValue( "dedicated" ) ) {
+		return;
+	}
+#endif
+	if ( noted ) {
+		return;
+	}
+	noted = qtrue;
+	if ( FS_UnusedServerCode( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+		Com_Printf( "%s\n", notice );
 	}
 }
 
@@ -6536,7 +6820,7 @@ static void FS_Startup( const char *gameName )
 	Cvar_CheckRange( fs_mapPakScope, 0, 1, qtrue );
 	Cvar_SetDescription( fs_mapPakScope,
 		"Whether a map pack changes only its own maps\n"
-		"A map pack, a pak file (.pk3) with maps and no game code, can carry its own copies of the game's "
+		"A map pack, a pak file (.pk3) with maps and no game code the game would run, can carry its own copies of the game's "
 		"files: shaders, textures, sounds, bot files. On, its copies apply only on its own maps, as their "
 		"author tested them; on every other map it only fills in files nothing else has, so another map's "
 		"look and sounds stay as they were made. Mods, id's paks and paks without maps are unchanged. "
@@ -6657,6 +6941,7 @@ static void FS_Startup( const char *gameName )
 	FS_NoteServerPaks();
 	FS_RankPaks();
 	FS_NoteMapPackConflicts();
+	FS_NoteServerCode();
 
 	// when the cached paks mounted were last used
 	Content_Cache_Flush();
@@ -7159,7 +7444,7 @@ pure check's cgame and ui, when one of those holds them
 void FS_TouchFileInPak( const char *filename, int flags ) {
 	searchpath_t	*search;
 
-	for ( search = FS_NextSearch( NULL ); search; search = FS_NextSearch( search ) ) {
+	for ( search = FS_NextSearchFor( NULL, filename ); search; search = FS_NextSearchFor( search, filename ) ) {
 		if ( search->pack && !search->pack->excluded && FS_PakHasFile( search->pack, filename ) ) {
 			search->pack->referenced |= flags;
 			return;
@@ -8227,7 +8512,7 @@ int FS_ContentPaks( contentPak_t *paks, int max ) {
 			p->checksum = pak->checksum;
 			p->referenced = FS_PakIsReferenced( pak );
 			p->refused = FS_PakRefused( pak );
-			p->code = FS_PakHasFile( pak, "vm/cgame.qvm" ) || FS_PakHasFile( pak, "vm/ui.qvm" );
+			p->code = FS_PakHasClientCode( pak );
 			// a refused pak is known by its checksum alone, even where an
 			// earlier run or another process sharing the home hashed it, so
 			// nothing finds it by that hash to send; and a record another

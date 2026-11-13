@@ -684,8 +684,11 @@ const char	*SV_ExtDrainReason( void );
 // retail, damaged, zip64, native_code, encrypted, method, escapes,
 // long_name, too_big, unpacks_too_big, bad_name, bad_game, no_room or
 // failed; and ok, from SV_ExtContentCheck, for a pak it can't refuse yet.
-// Its warnings' codes: overrides_game_code, overrides_many, drops_shaders
-// and map_pack_scope.
+// Its warnings' codes: overrides_game_code, overrides_many, drops_shaders,
+// map_pack_scope, game_code_left_out, for a map pak whose game code the
+// game leaves out, running its own (FS_CodeLeftOut), and
+// classic_clients_load_code, where classic clients that get that pak load
+// its cgame or ui (FS_ClassicClientCode).
 #define EXT_CONTENT_MAX_WARNINGS	16
 typedef struct {
 	const char	*code;

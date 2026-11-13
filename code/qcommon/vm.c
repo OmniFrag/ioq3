@@ -764,6 +764,26 @@ static vmLinkedModule_t *VM_FindLinked( const char *module ) {
 	return baseGame;
 }
 
+/*
+================
+VM_GameDirLinked
+
+Whether a module is linked into the executable for a game directory's
+code: the base game's, or one a module was built for, such as missionpack
+(VM_FindLinked), whatever vm_linked says
+================
+*/
+qboolean VM_GameDirLinked( const char *gameDir ) {
+	const vmLinkedModule_t	*linked;
+
+	for ( linked = vm_linkedModules; linked->name; linked++ ) {
+		if ( linked->gameDir ? !Q_stricmp( linked->gameDir, gameDir ) : !Q_stricmp( gameDir, com_basegame->string ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 // MSVC defines __SANITIZE_ADDRESS__ too, but has no __attribute__, and
 // can't build linked modules
 #if defined( __SANITIZE_ADDRESS__ ) && defined( __GNUC__ )

@@ -421,6 +421,7 @@ typedef struct {
 } vmLinkedModule_t;
 
 extern vmLinkedModule_t vm_linkedModules[];
+qboolean VM_GameDirLinked( const char *gameDir );
 
 // Game modules look up engine extensions by name, as in Quake3e: the
 // "//trap_GetValue" cvar holds this syscall number, which every module
@@ -1320,6 +1321,9 @@ const char	*FS_LastFileContent( void );
 // the pk3 or pk3dir the last file read is in ("pak0.pk3"), or ""
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
+// the server game code an original server would run where this one runs its
+// own, and what that means; qfalse when there's none
+qboolean	FS_UnusedServerCode( char *file, int fileSize, char *notice, int noticeSize );
 // returns 1 if a file is in the PAK file, otherwise -1
 void	FS_SetCurrentMap( const char *map );
 void	FS_NameCurrentMap( const char *map );
