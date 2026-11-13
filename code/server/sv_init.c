@@ -23,6 +23,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server.h"
 #include "../qcommon/content.h"
 
+// the most seconds a setting may give a wait the server counts in an
+// int's milliseconds (a time less the setting * 1000)
+#define SV_MAX_SECONDS	( INT_MAX / 1000 )
+// the most KB/s sv_dlRate may give: SV_SendQueuedPackets divides by it in
+// bytes, an int
+#define SV_MAX_DLRATE	( INT_MAX / 1024 )
 
 /*
 ===============
@@ -1289,6 +1295,8 @@ void SV_Init (void)
 		"browser and the master servers don't use it, and nothing in the game reads it." );
 	sv_mapname = Cvar_Get ("mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM);
 	sv_privateClients = Cvar_Get ("sv_privateClients", "0", CVAR_SERVERINFO);
+	// MAX_CLIENTS keeps every slot, as any more does
+	Cvar_CheckRange( sv_privateClients, 0, MAX_CLIENTS, qtrue );
 	Cvar_SetDescription( sv_privateClients,
 		"Player slots kept for those who know sv_privatePassword\n"
 		"The slots come out of sv_maxclients, and server lists don't count them: 16 slots with 2 kept "
@@ -1313,12 +1321,14 @@ void SV_Init (void)
 		"about 7 KB/s at sv_fps 40 in a busy match." );
 
 	sv_minRate = Cvar_Get ("sv_minRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_CheckRange( sv_minRate, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_minRate,
 		"Least each player is sent, in bytes a second; 0 for no floor\n"
 		"A player whose own rate setting is lower is sent this much anyway, which can be more than the "
 		"player's connection takes. It wins over sv_maxRate where they cross. OmniFrag players' rate is "
 		"90000 by default, so it matters only for players who lowered it or play with another engine." );
 	sv_maxRate = Cvar_Get ("sv_maxRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_CheckRange( sv_maxRate, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_maxRate,
 		"Most each player is sent, in bytes a second; 0 for no limit\n"
 		"A player's own rate setting, 90000 by default in OmniFrag and 3000 in Quake III, is lowered to "
@@ -1328,6 +1338,7 @@ void SV_Init (void)
 	// one player downloads at about 850 KB/s at best, as the protocol's
 	// window and acks allow; 500 is under half a 10 Mbit/s uplink
 	sv_dlRate = Cvar_Get("sv_dlRate", "500", CVAR_ARCHIVE | CVAR_SERVERINFO);
+	Cvar_CheckRange( sv_dlRate, 0, SV_MAX_DLRATE, qtrue );
 	Cvar_SetDescription( sv_dlRate,
 		"Upload for all direct downloads together, in KB/s; 0 for no limit\n"
 		"Players downloading pak files (.pk3) from the server share it, so at 500 a 20 MB map takes about "
@@ -1335,6 +1346,7 @@ void SV_Init (void)
 		"server don't count, and the game's own updates to players aren't slowed by it. The fast "
 		"download has its own ceiling, sv_dlMaxRate." );
 	sv_minPing = Cvar_Get ("sv_minPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_CheckRange( sv_minPing, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_minPing,
 		"Lowest ping a player may join with, in ms; 0 for no limit\n"
 		"Players nearer than this are dropped with \"Server is for high pings only\", so a server can be "
@@ -1342,6 +1354,7 @@ void SV_Init (void)
 		"the game, over the whole path, a relay's or the gateway's included. Players on the local network "
 		"are never dropped." );
 	sv_maxPing = Cvar_Get ("sv_maxPing", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_CheckRange( sv_maxPing, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_maxPing,
 		"Highest ping a player may join with, in ms; 0 for no limit\n"
 		"Players farther than this are dropped with \"Server is for low pings only\". The ping is checked "
@@ -1433,6 +1446,7 @@ void SV_Init (void)
 		"divides 1000 (20, 25, 40, 50, 100, 125): others run whole-millisecond frames, so 30 runs 30.3 a "
 		"second, and the server warns." );
 	sv_timeout = Cvar_Get ("sv_timeout", "200", CVAR_TEMP );
+	Cvar_CheckRange( sv_timeout, 0, SV_MAX_SECONDS, qtrue );
 	Cvar_SetDescription( sv_timeout,
 		"Seconds of silence before a player is dropped as timed out\n"
 		"A player whose game stops sending, from a lost connection, a frozen game or a hidden browser "
@@ -1448,6 +1462,7 @@ void SV_Init (void)
 		"nothing is logged, but server lists still show it, its bots too, and rcon works. The first player "
 		"to connect wakes it and the match carries on where it stopped; a listen server never freezes." );
 	sv_zombietime = Cvar_Get ("sv_zombietime", "2", CVAR_TEMP );
+	Cvar_CheckRange( sv_zombietime, 0, SV_MAX_SECONDS, qtrue );
 	Cvar_SetDescription( sv_zombietime,
 		"Seconds a slot stays held after its player leaves or is kicked\n"
 		"While it's held, the server resends the reason for the drop and the same player can reconnect "
@@ -1499,6 +1514,7 @@ void SV_Init (void)
 		"With 1, each downloading player's datagrams sent and sent again, rate, window and round trip, "
 		"and the content datagrams ignored." );
 	sv_maxDownloads = Cvar_Get ("sv_maxDownloads", "8", CVAR_ARCHIVE);
+	Cvar_CheckRange( sv_maxDownloads, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_maxDownloads,
 		"Most players downloading from the server at once; 0 for no limit\n"
 		"A player who starts a classic download over the limit is disconnected, with a message to try "
@@ -1552,6 +1568,7 @@ void SV_Init (void)
 	}
 
 	sv_reconnectlimit = Cvar_Get ("sv_reconnectlimit", "3", 0);
+	Cvar_CheckRange( sv_reconnectlimit, 0, SV_MAX_SECONDS, qtrue );
 	Cvar_SetDescription( sv_reconnectlimit,
 		"Seconds before the same player can connect again; 0 for no wait\n"
 		"It counts from the last connect from the same address and port, and a connect that comes sooner "
