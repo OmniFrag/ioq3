@@ -69,6 +69,7 @@ cvar_t	*fs_excludeReference;		// the server's own paks, which clients aren't sen
 cvar_t	*sv_floodProtect;
 cvar_t	*sv_statusOnePacket;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
+cvar_t	*sv_visibility;
 cvar_t	*sv_banFile;
 cvar_t	*sv_rconAllow;		// the addresses rcon is taken from, empty for any
 cvar_t	*sv_trustedProxies;	// relays players' real addresses are taken from (P8)
@@ -368,11 +369,53 @@ but not on every player enter or exit.
 #define	MASTERDNS_MSEC	24*60*60*1000
 /*
 ================
+SV_ExtVisibility
+
+Who the server takes, as sv_visibility says: "" leaves it to dedicated as
+ever. The engine takes only the values its description names, so another
+can't come; one would be said and read as "". Read again only as the cvar
+changes, as connectionless packets ask
+================
+*/
+extVisibility_t SV_ExtVisibility( void ) {
+	static const char *const	names[] = { "", "local", "invite", "everyone" };
+	static int					read = -1;
+	static extVisibility_t		visibility;
+	int							i;
+
+	if ( !sv_visibility ) {
+		return EXT_VISIBILITY_UNSET;
+	}
+	if ( sv_visibility->modificationCount == read ) {
+		return visibility;
+	}
+	read = sv_visibility->modificationCount;
+	for ( i = 0; i < ARRAY_LEN( names ) && Q_stricmp( sv_visibility->string, names[i] ); i++ ) {
+	}
+	if ( i == ARRAY_LEN( names ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sv_visibility \"%s\" isn't local, invite, everyone or \"\": read as \"\"\n",
+			sv_visibility->string );
+		i = EXT_VISIBILITY_UNSET;
+	}
+	visibility = (extVisibility_t)i;
+	return visibility;
+}
+
+qboolean SV_ExtListingWanted( void ) {
+	extVisibility_t	visibility = SV_ExtVisibility();
+
+	return visibility == EXT_VISIBILITY_UNSET ? com_dedicated && com_dedicated->integer == 2 :
+		visibility == EXT_VISIBILITY_EVERYONE;
+}
+
+/*
+================
 SV_ExtListed
 
-Whether the server lists itself on the masters: "dedicated 1" is for LAN
-play, "dedicated 2" for public play, with a network on and a master set. A
-draining server leaves their lists: it doesn't answer their polls
+Whether the server lists itself on the masters: with sv_visibility "",
+"dedicated 1" is for LAN play, "dedicated 2" for public play; with it set,
+everyone alone lists it. A network must be on and a master set. A draining
+server leaves their lists: it doesn't answer their polls
 (SV_IsMasterAddress), nor send them heartbeats, nor does one holding them
 off (SV_ExtHoldListing), though it's listed for the rest
 ================
@@ -380,7 +423,7 @@ off (SV_ExtHoldListing), though it's listed for the rest
 qboolean SV_ExtListed( void ) {
 	int	i;
 
-	if ( !com_dedicated || com_dedicated->integer != 2 ||
+	if ( !com_dedicated || !SV_ExtListingWanted() ||
 		!( Cvar_VariableIntegerValue( "net_enabled" ) & ( NET_ENABLEV4 | NET_ENABLEV6 ) ) || sv_drainReason[0] ) {
 		return qfalse;
 	}
@@ -1624,8 +1667,10 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	Com_DPrintf ("SV packet %s : %s\n", NET_AdrToString(from), c);
 
 	// a draining server doesn't answer the masters' polls, so they drop it,
-	// nor one holding them off (SV_ExtHoldListing), whose entry expires
-	if ( ( sv_drainReason[0] || sv_listingHold[0] ) && ( !Q_stricmp( c, "getstatus" ) || !Q_stricmp( c, "getinfo" ) ) &&
+	// nor one holding them off (SV_ExtHoldListing), whose entry expires,
+	// nor one set to stay off their lists (sv_visibility local or invite)
+	if ( ( sv_drainReason[0] || sv_listingHold[0] || ( SV_ExtVisibility() != EXT_VISIBILITY_UNSET && !SV_ExtListingWanted() ) ) &&
+		( !Q_stricmp( c, "getstatus" ) || !Q_stricmp( c, "getinfo" ) ) &&
 		SV_IsMasterAddress( from ) ) {
 		return;
 	}
@@ -2253,6 +2298,68 @@ static qboolean SV_Hibernate( void ) {
 }
 
 /*
+================
+SV_OutsidePlayer
+
+Whether a client is a player from outside the local network
+(NET_IsLocalNetwork): never a bot, nor the server's own player
+================
+*/
+static qboolean SV_OutsidePlayer( const client_t *cl ) {
+	return cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
+		!NET_IsLocalNetwork( cl->netchan.remoteAddress );
+}
+
+/*
+================
+SV_ExtOutsidePlayers
+
+How many players on the server come from outside the local network, as a
+change to sv_visibility local would drop
+================
+*/
+int SV_ExtOutsidePlayers( void ) {
+	int	i, count = 0;
+
+	for ( i = 0; svs.clients && i < svs.maxclients; i++ ) {
+		count += SV_OutsidePlayer( &svs.clients[i] );
+	}
+	return count;
+}
+
+/*
+================
+SV_CheckVisibility
+
+A change of sv_visibility, as the frame starts to send: local drops the
+players from outside the local network; a change that lists the server
+sends the masters a heartbeat now, rather than in up to five minutes
+================
+*/
+static void SV_CheckVisibility( void ) {
+	// as the last frame left it, a drain's or a master's change too; -1
+	// before the first look, which the map's own heartbeat covers
+	static int	listed = -1;
+	qboolean	now = SV_ExtListed();
+	int			i;
+
+	if ( sv_visibility->modified ) {
+		sv_visibility->modified = qfalse;
+		if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL ) {
+			for ( i = 0; i < svs.maxclients; i++ ) {
+				if ( SV_OutsidePlayer( &svs.clients[i] ) ) {
+					SV_DropClient( &svs.clients[i], "was dropped, as the server is now for its local network only" );
+				}
+			}
+		}
+		if ( now && listed == 0 ) {
+			SV_Heartbeat_f();
+		}
+	}
+	listed = now;
+}
+
+/*
 ==================
 SV_Frame
 
@@ -2434,6 +2541,10 @@ void SV_Frame( int msec ) {
 	if ( !frozen ) {
 		SV_SendClientMessages();
 	}
+
+	// who the server takes changed: those it no longer takes go, and a
+	// server now listed tells the masters at once
+	SV_CheckVisibility();
 
 	// send a heartbeat to the master if needed
 	SV_MasterHeartbeat(HEARTBEAT_FOR_MASTER);

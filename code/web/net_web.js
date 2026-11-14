@@ -125,6 +125,10 @@ addToLibrary({
 
       var answer = await signal(NetWeb.offer(pc.localDescription.sdp));
       if (peer.closed) return;
+      // a server for its local network alone (sv_visibility local) says so
+      if (answer && answer.refused == 'local') {
+        throw new Error('the server is for players on its local network only');
+      }
       if (answer && typeof answer.refused == 'string') {
         throw new Error('the server turned it down (' + answer.refused.slice(0, 40) + ')');
       }

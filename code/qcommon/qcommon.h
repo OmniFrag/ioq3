@@ -2352,6 +2352,10 @@ qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
 qboolean	Sys_NumericToAdr( const char *s, netadr_t *a );
 
 qboolean	Sys_IsLANAddress (netadr_t adr);
+// a player's address is on the network this computer is on: loopback, a
+// private range, an interface's subnet, 100.64/10 where this computer has
+// an address in it, or a browser's through this computer's own proxy
+qboolean	NET_IsLocalNetwork( netadr_t adr );
 void		Sys_ShowIP(void);
 // the machine's own addresses another would reach it at: IPv4's, then
 // IPv6's, neither loopback nor link local, or a family's net_ip address

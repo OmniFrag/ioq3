@@ -646,9 +646,26 @@ void	SV_ExtClientPrint( int clientNum, const char *text );
 // screens (cp) with center, else on their consoles and chat (print), quotes
 // made ' as SV_ExtClientPrint makes them; nothing with no map running
 void	SV_ExtBroadcast( const char *text, qboolean center );
-// whether the server lists itself now: dedicated 2, a network on, a master
-// set, and no drain, as its heartbeats go
+// whether the server lists itself now: sv_visibility everyone, or with it
+// "" dedicated 2; a network on, a master set, and no drain, as its
+// heartbeats go
 qboolean	SV_ExtListed( void );
+// who the server takes, as sv_visibility says:
+// unset leaves it to dedicated; local takes the local network alone,
+// unlisted; invite anyone with the address, unlisted; everyone lists it
+typedef enum {
+	EXT_VISIBILITY_UNSET,
+	EXT_VISIBILITY_LOCAL,
+	EXT_VISIBILITY_INVITE,
+	EXT_VISIBILITY_EVERYONE
+} extVisibility_t;
+extVisibility_t	SV_ExtVisibility( void );
+// whether who can join asks for the masters' lists: everyone, or with it
+// unset dedicated 2, as ever; SV_ExtListed says whether it's listed now
+qboolean	SV_ExtListingWanted( void );
+// how many players come from outside the local network (NET_IsLocalNetwork),
+// as sv_visibility local would drop: never a bot or the server's own player
+int		SV_ExtOutsidePlayers( void );
 // the slots the server has and the game type its map plays, as it started
 // (ENG-083): the cvars can hold a latched change a module applied early
 int		SV_ExtMaxClients( void );

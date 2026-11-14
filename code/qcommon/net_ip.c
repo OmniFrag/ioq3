@@ -1560,23 +1560,19 @@ int Sys_SendPackets( int count, int size, int length, const void *data, netadr_t
 
 /*
 ==================
-Sys_IsLANAddress
+NET_LANRanges
 
-LAN clients will have their rate var ignored
+Whether an address is on a network this computer is on: loopback, a
+private range, or a subnet of one of its interfaces
 ==================
 */
-qboolean Sys_IsLANAddress( netadr_t adr ) {
+static qboolean NET_LANRanges( netadr_t adr ) {
 	int		index, run, addrsize;
 	qboolean differed;
 	byte *compareadr, *comparemask, *compareip;
 
 	if( adr.type == NA_LOOPBACK ) {
 		return qtrue;
-	}
-
-	// a player behind a proxy is never on the LAN, whatever its address
-	if( NET_ProxyRoute( &adr ) ) {
-		return qfalse;
 	}
 
 	if( adr.type == NA_IP )
@@ -1643,6 +1639,66 @@ qboolean Sys_IsLANAddress( netadr_t adr ) {
 		}
 	}
 	
+	return qfalse;
+}
+
+/*
+==================
+Sys_IsLANAddress
+
+LAN clients will have their rate var ignored
+==================
+*/
+qboolean Sys_IsLANAddress( netadr_t adr ) {
+	// a player behind a proxy is never on the LAN, whatever its address
+	if( adr.type != NA_LOOPBACK && NET_ProxyRoute( &adr ) ) {
+		return qfalse;
+	}
+	return NET_LANRanges( adr );
+}
+
+// an IPv4 address in the shared address space, 100.64/10 (RFC 6598)
+static qboolean NET_SharedSpace( const byte *ip ) {
+	return ip[0] == 100 && ( ip[1] & 0xc0 ) == 64;
+}
+
+/*
+==================
+NET_IsLocalNetwork
+
+Whether a player's address is on the network this computer is on, as a
+server open to its local network alone takes (sv_visibility local):
+loopback, a private range, a subnet of one of its interfaces, or the
+shared address space 100.64/10 that overlay networks such as tailnets
+give out, where this computer has an address in it too. A player whose
+datagrams come through a proxy is judged by the address the proxy names
+when the proxy is this computer's own (the proxy socket); one through a
+relay or another proxy comes from elsewhere
+==================
+*/
+qboolean NET_IsLocalNetwork( netadr_t adr ) {
+	const netProxyRoute_t	*route;
+	int						i;
+
+	if ( adr.type == NA_LOOPBACK ) {
+		return qtrue;
+	}
+	route = NET_ProxyRoute( &adr );
+	if ( route && !route->onProxySocket ) {
+		return qfalse;
+	}
+	if ( NET_LANRanges( adr ) ) {
+		return qtrue;
+	}
+	if ( adr.type != NA_IP || !NET_SharedSpace( adr.ip ) ) {
+		return qfalse;
+	}
+	for ( i = 0; i < numIP; i++ ) {
+		if ( localIP[i].type == NA_IP &&
+			NET_SharedSpace( (const byte *)&( (struct sockaddr_in *)&localIP[i].addr )->sin_addr.s_addr ) ) {
+			return qtrue;
+		}
+	}
 	return qfalse;
 }
 

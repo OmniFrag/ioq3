@@ -751,6 +751,13 @@ void SV_DirectConnect( netadr_t from ) {
 		SVC_RateRestoreBurstAddress( from, 10, 1000 );
 	}
 
+	// one open to its local network alone takes no player from elsewhere,
+	// a reconnect into a slot it was just dropped from included
+	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !NET_IsLocalNetwork( from ) ) {
+		SV_RefuseConnect( from, "This server is for players on its local network only.\n" );
+		return;
+	}
+
 	newcl = &temp;
 	Com_Memset (newcl, 0, sizeof(client_t));
 

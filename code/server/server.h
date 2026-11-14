@@ -380,6 +380,8 @@ extern	cvar_t	*fs_excludeReference;
 extern	cvar_t	*sv_floodProtect;
 extern	cvar_t	*sv_statusOnePacket;
 extern	cvar_t	*sv_lanForceRate;
+extern	cvar_t	*sv_visibility;
+
 extern	cvar_t	*sv_banFile;
 extern	cvar_t	*sv_rconAllow;
 extern	cvar_t	*sv_trustedProxies;

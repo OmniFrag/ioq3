@@ -543,6 +543,7 @@ static void SV_PrintStartSummary( const char *heading ) {
 	int	port6 = NET_OpenPort( NA_IP6 );
 	int	i;
 	qboolean	local;
+	extVisibility_t	visibility;
 	const char	*data, *leftOut;
 	const char	*ip = Cvar_VariableString( "net_ip" );
 	const char	*ip6 = Cvar_VariableString( "net_ip6" );
@@ -621,11 +622,16 @@ static void SV_PrintStartSummary( const char *heading ) {
 			break;
 		}
 	}
+	visibility = SV_ExtVisibility();
 	if ( local ) {
 		Com_Printf( "  listed:   no, only this computer can connect\n" );
-	} else if ( com_dedicated->integer == 2 && i < MAX_MASTER_SERVERS ) {
-		Com_Printf( "  listed:   on the master servers (dedicated 2)\n" );
-	} else if ( com_dedicated->integer == 2 ) {
+	} else if ( visibility == EXT_VISIBILITY_LOCAL ) {
+		Com_Printf( "  listed:   no, players on the local network alone (sv_visibility local)\n" );
+	} else if ( visibility == EXT_VISIBILITY_INVITE ) {
+		Com_Printf( "  listed:   no, anyone with its address can join (sv_visibility invite)\n" );
+	} else if ( SV_ExtListingWanted() && i < MAX_MASTER_SERVERS ) {
+		Com_Printf( "  listed:   on the master servers (%s)\n", visibility ? "sv_visibility everyone" : "dedicated 2" );
+	} else if ( SV_ExtListingWanted() ) {
 		Com_Printf( "  listed:   no, no master servers are set (sv_master1 and on)\n" );
 	} else {
 		Com_Printf( "  listed:   no, found on the local network only; dedicated 2 lists it\n" );
@@ -1594,6 +1600,23 @@ void SV_Init (void)
 	// a request: the client's, or the ui's (uiSetCvars)
 	sv_killserver = Cvar_Get ("sv_killserver", "0", CVAR_ROM);
 	sv_mapChecksum = Cvar_Get ("sv_mapChecksum", "", CVAR_ROM);
+	// a dedicated server keeps its owner's choice; a client's is the menu's,
+	// for the server it starts, which a later one mustn't inherit
+#ifdef DEDICATED
+	sv_visibility = Cvar_Get( "sv_visibility", "", CVAR_ARCHIVE );
+#else
+	sv_visibility = Cvar_Get( "sv_visibility", "", 0 );
+#endif
+	Cvar_SetDescription( sv_visibility,
+		"Who can join the server, and whether it's on the public server lists\n"
+		"Left empty, dedicated decides as it always has: 2 lists the server, 1 doesn't. local takes "
+		"players on this computer's own networks alone, refusing others and dropping those already in as "
+		"it's set; invite takes anyone with the server's address, unlisted, and everyone lists it on the "
+		"master servers.\n"
+		"\"\" = Not chosen: as dedicated says\n"
+		"local = This network only: its local network alone, unlisted\n"
+		"invite = People you invite: anyone with its address, unlisted\n"
+		"everyone = Everyone: on the public server lists" );
 	sv_lanForceRate = Cvar_Get ("sv_lanForceRate", "1", CVAR_ARCHIVE );
 	Cvar_SetDescription( sv_lanForceRate,
 		"Whether players on the local network get unlimited bandwidth\n"
