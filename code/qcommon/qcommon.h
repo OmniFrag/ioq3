@@ -1352,8 +1352,9 @@ const char	*FS_LastFileContent( void );
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
 // the server game code a notice is due for and what it means, qfalse when
 // there's none: one an original server would run where this one runs its
-// own, or a mod's that comes in a pak with a map, which it runs too
-qboolean	FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize );
+// own, or a mod's that comes in a pak with a map, which it runs too, as
+// runs says if it isn't NULL
+qboolean	FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize, qboolean *runs );
 // a map's picture, the levelshot the menus draw for it: its media type,
 // size, a version that changes whenever its bytes may, and the extension of
 // its file, with its name and where it is, which FS_WriteMapPicture takes

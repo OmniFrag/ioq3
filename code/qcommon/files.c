@@ -6485,7 +6485,7 @@ static void FS_PakConflicts_f( void ) {
 	if ( !paks ) {
 		Com_Printf( "No installed pak has its own copy of one of id's files\n" );
 	}
-	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ), NULL ) ) {
 		Com_Printf( "%s\n", notice );
 	}
 }
@@ -6788,10 +6788,11 @@ and the notice, or qfalse when there's none:
   would run it where this one runs its own;
 - in a mod's folder whose only game code comes in a pak with a map
   (FS_MapPakOwnCode), that pak: this server runs it, as an original server
-  does, where a player may have meant the folder for its maps
+  does, where a player may have meant the folder for its maps; runs, if
+  not NULL, says which
 ================
 */
-qboolean FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize ) {
+qboolean FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize, qboolean *runs ) {
 	const char			*qvm = "vm/qagame.qvm";
 	const searchpath_t	*search;
 	char				modules[MAX_QPATH * 3];
@@ -6812,6 +6813,9 @@ qboolean FS_ServerCodeNotice( char *file, int fileSize, char *notice, int notice
 			file, modules, FS_EntryHasModule( search, "qagame" ) ?
 			"The server runs it, as an original Quake III server does." :
 			"Clients run it, as they would on an original Quake III server." );
+		if ( runs ) {
+			*runs = qtrue;
+		}
 		return qtrue;
 	}
 	for ( search = fs_searchpaths; search; search = search->next ) {
@@ -6828,6 +6832,9 @@ qboolean FS_ServerCodeNotice( char *file, int fileSize, char *notice, int notice
 			"of its own and start the server with +set fs_game <that folder>; or, to run it from this folder as an "
 			"original server does, start with +set vm_linked 0.",
 			file );
+		if ( runs ) {
+			*runs = qfalse;
+		}
 		return qtrue;
 	}
 	return qfalse;
@@ -6891,7 +6898,7 @@ static void FS_NoteServerCode( void ) {
 		return;
 	}
 	noted = qtrue;
-	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ), NULL ) ) {
 		Com_Printf( "%s\n", notice );
 	}
 }
