@@ -526,8 +526,11 @@ typedef struct {
 // game's own value for a cvar, as G_CVAR_SET sets it, unless an admin's
 // value is held (Cvar_AdminValue): then the admin's plays, any earlier
 // game's value dropped from under it, and it returns 0. A map's own
-// gravity, say, which an admin's setting outranks. On engines without
-// it, game code sets the value as before
+// gravity, say, which an admin's setting outranks. A cvar game code
+// registers with CVAR_MAPVALUE keeps the game's value apart, playing as
+// soon as no admin's is held, and takes CVAR_MAP_WORD ("map") from an
+// admin, the map's own over the layers below. On engines without it,
+// game code sets the value as before
 #define	COM_TRAP_CVAR_GAMEVALUE	817
 
 // A cgame's or ui's 2D, in window pixels:
@@ -925,6 +928,7 @@ typedef struct {
 	const char	*applies;	// "at once", "next map", "vid_restart", "snd_restart", "restart"; NULL: as its flags say
 	const char	*key;		// a server's file's friendly name for it, "public_name", or NULL for its own
 	const char	*may;		// the role a player's change to it needs, "admin", or NULL for the default policy
+	qboolean	mapValue;	// game code registers it CVAR_MAPVALUE: it takes CVAR_MAP_WORD, the map's own
 } cvarDeclaration_t;
 
 extern const cvarDeclaration_t cvar_declarations[];
@@ -960,7 +964,8 @@ void	Cvar_DropUser( cvar_t *var );
 // tool's, or one set after
 // startup at the console or by rcon; not the default, game code's, or a
 // config file's line, as server.cfg's set is a classic server's default,
-// even one set over the command line's: the value in force decides
+// even one set over the command line's: the value in force decides; and
+// for a CVAR_MAPVALUE cvar, not CVAR_MAP_WORD, the map's own
 qboolean	Cvar_AdminValue( const cvar_t *var );
 // the game's own value for name unless an admin's is held, which then plays
 // with any earlier game's value dropped from under it; qfalse when an

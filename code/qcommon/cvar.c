@@ -309,6 +309,10 @@ static const char *Cvar_Validate( cvar_t *var,
 	if( !value )
 		return value;
 
+	// the map's own: the word, as it's written, in any case
+	if( ( var->flags & CVAR_MAPVALUE ) && CVAR_IS_MAP_WORD( value ) )
+		return CVAR_MAP_WORD;
+
 	if( !var->validate )
 	{
 		if( Cvar_NamedValue( var, value, words, sizeof( words ) ) )
@@ -501,14 +505,77 @@ const char *Cvar_UnderUser( const cvar_t *var, cvarSource_t *source ) {
 
 /*
 ============
+Cvar_MapAdmin, Cvar_MapValue
+
+A CVAR_MAPVALUE cvar's admin's value in force: the player's above the
+layers, but a config file's line's, a classic server's default the map
+overrides; qfalse when there's none, or it's CVAR_MAP_WORD, the map's own.
+And its value: the admin's, else game code's (gameString), else, before
+the map sets its own, a config line's or the default; with whose (source)
+============
+*/
+// the player's value an admin's: the command line's, a tool's, or set at
+// the console or by rcon once the server runs, not a config file's line
+static qboolean Cvar_UserAdmin( const cvar_t *var ) {
+	if ( !var->userString ) {
+		return qfalse;
+	}
+	switch ( var->userSource ) {
+	case CVAR_SOURCE_SESSION:
+	case CVAR_SOURCE_TOOL:
+		return qtrue;
+	case CVAR_SOURCE_PLAYER:
+		return !var->userConfigLine;
+	default:
+		return qfalse;
+	}
+}
+
+static qboolean Cvar_MapAdmin( const cvar_t *var, const char **value, cvarSource_t *source ) {
+	if ( Cvar_UserAdmin( var ) ) {
+		*value = var->userString;
+		*source = var->userSource;
+	} else {
+		*value = Cvar_UnderUser( var, source );
+	}
+	return *source != CVAR_SOURCE_DEFAULT && !CVAR_IS_MAP_WORD( *value );
+}
+
+static const char *Cvar_MapValue( const cvar_t *var, cvarSource_t *source ) {
+	const char	*value;
+
+	if ( Cvar_MapAdmin( var, &value, source ) ) {
+		return value;
+	}
+	if ( var->gameString ) {
+		*source = CVAR_SOURCE_GAME;
+		return var->gameString;
+	}
+	// the word itself is never the value in force: before the map sets its
+	// own (+set g_gravity map, say), the default
+	if ( var->userString && !CVAR_IS_MAP_WORD( var->userString ) ) {
+		*source = var->userSource;
+		return var->userString;
+	}
+	*source = CVAR_SOURCE_DEFAULT;
+	return var->resetString;
+}
+
+/*
+============
 Cvar_Resolve
 
 A cvar's value, from its layers (cvar_t)
 ============
 */
 static const char *Cvar_Resolve( const cvar_t *var ) {
+	cvarSource_t	source;
+
 	if ( var->serverString ) {
 		return var->serverString;
+	}
+	if ( var->flags & CVAR_MAPVALUE ) {
+		return Cvar_MapValue( var, &source );
 	}
 	if ( var->userString ) {
 		return var->userString;
@@ -849,6 +916,10 @@ cvarSource_t Cvar_Source( const cvar_t *var ) {
 
 	if ( var->serverString ) {
 		return CVAR_SOURCE_SERVER;
+	}
+	if ( var->flags & CVAR_MAPVALUE ) {
+		Cvar_MapValue( var, &source );
+		return source;
 	}
 	if ( var->userString ) {
 		return var->userSource;
@@ -1204,6 +1275,16 @@ refuses a tool's set, and the console's and a script's last for this run,
 unsaved. The set's origin is noted before the change hook hears of it
 ============
 */
+// the word, the map's own, given a number cvar game code doesn't set from
+// the map: refused by name wherever it's set, as what it means there is
+// nothing, rather than taken as the default
+#define CVAR_MAP_WORD_REFUSED	"takes a number: \"" CVAR_MAP_WORD "\", the map's own, is for a setting a map sets"
+// the same, as a layer's refusal reads after "<name> is" (Cvar_SetServerLayer)
+#define CVAR_MAP_WORD_LAYER_REFUSED	"a number: \"" CVAR_MAP_WORD "\", the map's own, is for a setting a map sets"
+static qboolean Cvar_MapWordRefused( const cvar_t *var, const char *value ) {
+	return var->validate && !( var->flags & CVAR_MAPVALUE ) && CVAR_IS_MAP_WORD( value );
+}
+
 static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source, qboolean force ) {
 	int	serverLayer = Cvar_ServerLayer( source );
 	char **layer = source == CVAR_SOURCE_SERVER ? &var->serverString :
@@ -1216,6 +1297,10 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	// is, where an engine's forced set takes its default (Cvar_Validate)
 	if ( value && !force && !Cvar_NamedValue( var, value, words, sizeof( words ) ) ) {
 		Com_Printf( "%s takes %s, not \"%s\".\n", var->name, words, value );
+		return var;
+	}
+	if ( !force && Cvar_MapWordRefused( var, value ) ) {
+		Com_Printf( "%s " CVAR_MAP_WORD_REFUSED ".\n", var->name );
 		return var;
 	}
 	if ( value ) {
@@ -1275,6 +1360,15 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 		// a set's, not a reset's, which leaves no value to have come from it
 		if ( cvar_setOrigin && value ) {
 			Cvar_NoteOrigin( var, cvar_setOrigin );
+		}
+		// a config line's set after the map's own plays over it on that
+		// map, as the last set does on a classic server (and the map's own
+		// after it over the config line's, Cvar_SetGameValue), as game
+		// code's own set does (a module without the trap's); but the word,
+		// which asks for the map's own
+		if ( ( var->flags & CVAR_MAPVALUE ) && ( var->userConfigLine || source == CVAR_SOURCE_GAME ) &&
+			value && !CVAR_IS_MAP_WORD( value ) ) {
+			Cvar_SetLayer( &var->gameString, NULL );
 		}
 	}
 	if ( saves ) {
@@ -1902,6 +1996,9 @@ const char *Cvar_SetServerLayer( const char *var_name, const char *value, cvarSo
 		Q_strcat( only, sizeof( only ), " only" );
 		return only;
 	}
+	if ( var && Cvar_MapWordRefused( var, value ) ) {
+		return CVAR_MAP_WORD_LAYER_REFUSED;
+	}
 	if ( !var && !Cvar_ValidateString( var_name ) ) {
 		return "not a setting's name";
 	}
@@ -1920,30 +2017,54 @@ default a map's own value overrides
 ============
 */
 qboolean Cvar_AdminValue( const cvar_t *var ) {
-	int	i;
+	const char		*value;
+	cvarSource_t	source;
+	int				i;
 
+	// the word, the map's own, at the top says there's none
+	if ( var->flags & CVAR_MAPVALUE ) {
+		return Cvar_MapAdmin( var, &value, &source );
+	}
 	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
 		if ( var->layerStrings[i] ) {
 			return qtrue;
 		}
 	}
-	if ( !var->userString ) {
-		return qfalse;
-	}
-	switch ( var->userSource ) {
-	case CVAR_SOURCE_SESSION:
-	case CVAR_SOURCE_TOOL:
-		return qtrue;
-	case CVAR_SOURCE_PLAYER:
-		return !var->userConfigLine;
-	default:
-		return qfalse;
-	}
+	return Cvar_UserAdmin( var );
 }
 
 qboolean Cvar_SetGameValue( const char *name, const char *value ) {
 	cvar_t	*var = Cvar_FindVar( name );
 
+	// a CVAR_MAPVALUE cvar keeps the game's value apart, below an admin's,
+	// so it plays again as soon as theirs goes, or says the word; never the
+	// word itself, which a map can't give
+	if ( var && ( var->flags & CVAR_MAPVALUE ) ) {
+		char		*old;
+		const char	*refusal = Cvar_Refusal( var );
+
+		// game code can register an engine cvar with the flag: what keeps
+		// one from its sets keeps it from this one too (Cvar_SetFromVM)
+		Cvar_CheckSafeSet( name, value );
+		if ( refusal && !( var->flags & ( CVAR_VM_CREATED | CVAR_USER_CREATED | CVAR_SERVER_CREATED ) ) ) {
+			Com_Printf( "%s is %s.\n", name, refusal );
+			return qfalse;
+		}
+		old = cvar_changeHook ? Cvar_HookOld( var ) : NULL;
+		value = value && !CVAR_IS_MAP_WORD( value ) ? Cvar_Validate( var, value, qtrue ) : var->resetString;
+		// and a config line's value before it, a classic server's default,
+		// gives way to it, as to the map's own on a classic server
+		if ( var->userString && var->userConfigLine ) {
+			Cvar_ForgetUser( var );
+		}
+		Cvar_SetLayer( &var->gameString, value );
+		Cvar_Apply( var, qfalse );
+		if ( old ) {
+			cvar_changeHook( var, old, CVAR_SOURCE_GAME );
+			Z_Free( old );
+		}
+		return !Cvar_AdminValue( var );
+	}
 	if ( var && Cvar_AdminValue( var ) ) {
 		// an earlier map's own value would outrank the server's layers
 		if ( var->userString && var->userSource == CVAR_SOURCE_GAME ) {
@@ -2266,12 +2387,19 @@ void Cvar_Why_f( void ) {
 	if ( var->userString && var->userSource == CVAR_SOURCE_SYSTEM ) {
 		Cvar_PlainPrintf( "  the system set \"%s" S_COLOR_WHITE "\" for this run, by its own means\n", var->userString );
 	}
-	for ( i = 0, above = var->userString != NULL; i < CVAR_SERVER_LAYERS; i++ ) {
+	// a CVAR_MAPVALUE cvar's config line's value is below the layers
+	// (Cvar_MapValue), an admin's above them
+	for ( i = 0, above = var->userString != NULL && ( !( var->flags & CVAR_MAPVALUE ) || Cvar_UserAdmin( var ) );
+		i < CVAR_SERVER_LAYERS; i++ ) {
 		if ( var->layerStrings[i] ) {
 			Cvar_PlainPrintf( "  %s sets \"%s" S_COLOR_WHITE "\"%s\n", var->layerOrigins[i] ? var->layerOrigins[i] :
 				cvar_serverLayers[i].unnamed, var->layerStrings[i], above ? ", under the value above" : "" );
 			above = qtrue;
 		}
+	}
+	if ( var->gameString ) {
+		Cvar_PlainPrintf( "  the map's own is \"%s" S_COLOR_WHITE "\"%s\n", var->gameString,
+			Cvar_AdminValue( var ) ? ", under the admin's value above" : "" );
 	}
 	if ( var->lockOrigin ) {
 		Cvar_PlainPrintf( "  locked: %s sets it%s, so tools can't change it, and the console's change lasts "
@@ -3377,6 +3505,7 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	}
 	Cvar_SetLayer( &cv->lockOrigin, NULL );
 	Cvar_SetLayer( &cv->lockString, NULL );
+	Cvar_SetLayer( &cv->gameString, NULL );
 	Cvar_SetLayer( &cv->reason, NULL );
 
 	if(cv->prev)
@@ -3626,9 +3755,19 @@ static void Cvar_ValidateLayers( cvar_t *var, qboolean keepSaved )
 	Cvar_SetLayer( &var->resetString, Cvar_Validate( var, var->resetString, qfalse ) );
 	// a server's own layers (server.toml's, a mode's, an entry's), set
 	// before code registered the cvar, kept as the saved value is
-	for ( i = 0; i < CVAR_SERVER_LAYERS && !keepSaved; i++ )
-		if ( var->layerStrings[i] )
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		// the word on a number game code doesn't set from the map, said
+		// with where it was set (server.toml:3), and left out, a game
+		// module's range (keepSaved) too, which would play it as 0
+		if ( Cvar_MapWordRefused( var, var->layerStrings[i] ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s: %s " CVAR_MAP_WORD_REFUSED ", so it's left out\n",
+				var->layerOrigins[i] ? var->layerOrigins[i] : cvar_serverLayers[i].unnamed, var->name );
+			Cvar_SetLayer( &var->layerStrings[i], NULL );
+			Cvar_SetLayer( &var->layerOrigins[i], NULL );
+		} else if ( var->layerStrings[i] && !keepSaved ) {
 			Cvar_SetLayer( &var->layerStrings[i], Cvar_Validate( var, var->layerStrings[i], qtrue ) );
+		}
+	}
 	if ( var->serverString )
 		Cvar_SetLayer( &var->serverString, Cvar_Validate( var, var->serverString, qtrue ) );
 	if ( var->userString )

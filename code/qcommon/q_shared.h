@@ -950,6 +950,12 @@ default values.
 #define CVAR_ARCHIVE_ND		(CVAR_ARCHIVE | CVAR_NODEFAULT)	// Quake3e's name and value
 #define CVAR_PRIVATE		0x8000	// game code can't read or change it (a path, a
 					// password); Quake3e's name and value
+#define CVAR_MAPVALUE		0x20000000	// game code sets it from the map (Cvar_SetGameValue),
+					// and an admin's CVAR_MAP_WORD gives way to that; a high
+					// bit, as Quake3e's CVAR_DEVELOPER is 0x10000
+// the value that says "the map's own" for a CVAR_MAPVALUE cvar, in any case
+#define CVAR_MAP_WORD		"map"
+#define CVAR_IS_MAP_WORD( s )	( ( s ) && !Q_stricmp( ( s ), CVAR_MAP_WORD ) )
 // These flags are only returned by the Cvar_Flags() function
 #define CVAR_MODIFIED		0x40000000	// Cvar was modified
 #define CVAR_NONEXISTENT	0x80000000	// Cvar doesn't exist.
@@ -1016,6 +1022,7 @@ struct cvar_s {
 	char		*layerOrigins[CVAR_SERVER_LAYERS];
 	char		*lockOrigin;
 	char		*lockString;	// the value it locked, which settings_revert goes back to
+	char		*gameString;	// a CVAR_MAPVALUE cvar's: game code's, the map's own, or NULL
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1
 
