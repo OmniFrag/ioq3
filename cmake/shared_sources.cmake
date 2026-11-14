@@ -26,6 +26,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/exttokens.c
     ${SOURCE_DIR}/qcommon/files.c
     ${SOURCE_DIR}/qcommon/fs_name.c
+    ${SOURCE_DIR}/qcommon/fs_picture.c
     ${SOURCE_DIR}/qcommon/hooks.c
     ${SOURCE_DIR}/qcommon/identity.c
     ${SOURCE_DIR}/qcommon/logs.c

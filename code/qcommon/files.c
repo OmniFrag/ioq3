@@ -6527,14 +6527,14 @@ qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
 		Com_sprintf( picture->version, sizeof( picture->version ), "p%08x%08x", search->pack->checksum,
 			FS_IndexHash( picture->name ) );
 	} else if ( Content_FileStat( FS_BuildOSPath( search->dir->path, search->dir->gamedir, picture->name ), &size,
-			&mtime ) && size <= FS_MAP_PICTURE_MAX ) {
+			&mtime ) && FS_PictureSizeAllowed( size ) ) {
 		length = (long)size;
 		Com_sprintf( picture->version, sizeof( picture->version ), "f%08x%08x%llx", FS_IndexHash( picture->name ),
 			(unsigned)size, (long long)mtime );
 	} else {
 		return qfalse;
 	}
-	if ( length <= 0 || length > FS_MAP_PICTURE_MAX ) {
+	if ( !FS_PictureSizeAllowed( length ) ) {
 		return qfalse;
 	}
 	picture->type = fs_pictureFormats[format].type;
@@ -6542,48 +6542,6 @@ qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
 	picture->size = (int)length;
 	picture->search = search;
 	return qtrue;
-}
-
-/*
-================
-FS_PictureLooksRight
-
-Whether a picture's first bytes are its format's, never decoding it: a
-JPEG's or PNG's signature, a BMP's "BM", or a TGA's header of an
-uncompressed or run-length true color image of 24 or 32 bits a pixel, or
-gray of 8, without a color map, 1 to 4096 pixels a side, as the page that
-draws it takes
-================
-*/
-// the most of a picture's first bytes FS_PictureLooksRight reads: a TGA's header
-#define FS_PICTURE_HEAD		18
-
-static qboolean FS_PictureLooksRight( const byte *data, int length, const char *type ) {
-	static const byte	png[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-	int					width, height;
-
-	if ( !strcmp( type, "image/jpeg" ) ) {
-		return length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff;
-	}
-	if ( !strcmp( type, "image/png" ) ) {
-		return length >= (int)sizeof( png ) && !memcmp( data, png, sizeof( png ) );
-	}
-	if ( !strcmp( type, "image/bmp" ) ) {
-		return length >= 2 && data[0] == 'B' && data[1] == 'M';
-	}
-	if ( length < FS_PICTURE_HEAD || data[1] != 0 ) {
-		return qfalse;
-	}
-	if ( data[2] == 2 || data[2] == 10 ) {
-		if ( data[16] != 24 && data[16] != 32 ) {
-			return qfalse;
-		}
-	} else if ( ( data[2] != 3 && data[2] != 11 ) || data[16] != 8 ) {
-		return qfalse;
-	}
-	width = data[12] | data[13] << 8;
-	height = data[14] | data[15] << 8;
-	return width >= 1 && width <= 4096 && height >= 1 && height <= 4096;
 }
 
 /*
@@ -6603,7 +6561,7 @@ qboolean FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath )
 	byte			*data;
 	fileHandle_t	h = 0;
 	FILE			*f = NULL;
-	int				head = MIN( picture->size, FS_PICTURE_HEAD );
+	int				head = FS_PictureHead( picture->size );
 	qboolean		ok;
 
 	if ( FS_FOpenFileReadDir( picture->name, (searchpath_t *)picture->search, &h, qfalse, qfalse ) !=

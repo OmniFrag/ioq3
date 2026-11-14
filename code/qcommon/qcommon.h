@@ -1371,6 +1371,12 @@ typedef struct {
 } fsMapPicture_t;
 qboolean	FS_MapPicture( const char *map, fsMapPicture_t *picture );
 qboolean	FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath );
+// whether a picture's size and first bytes are its format's, read no further
+// than FS_PictureHead's count (fs_picture.c)
+#define FS_PICTURE_HEAD		18	// a TGA's header, the most FS_PictureLooksRight reads
+qboolean	FS_PictureSizeAllowed( int64_t size );
+int			FS_PictureHead( int size );
+qboolean	FS_PictureLooksRight( const byte *data, int length, const char *type );
 // returns 1 if a file is in the PAK file, otherwise -1
 void	FS_SetCurrentMap( const char *map );
 void	FS_NameCurrentMap( const char *map );
