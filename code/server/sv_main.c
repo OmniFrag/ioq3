@@ -88,6 +88,9 @@ static qboolean	sv_inRcon;
 // the masters' addresses, as SV_MasterHeartbeat resolved them: [2] for v4
 // and v6 addresses of the same name
 static netadr_t	sv_masterAdr[MAX_MASTER_SERVERS][2];
+// when each was last sent a heartbeat, and last had its getinfo answered,
+// 0 for never since its name was set (SV_ExtMasters)
+static time_t	sv_masterHeartbeatAt[MAX_MASTER_SERVERS], sv_masterPolledAt[MAX_MASTER_SERVERS];
 
 serverBan_t serverBans[SERVER_MAXBANS];
 int serverBansCount = 0;
@@ -525,6 +528,9 @@ void SV_MasterHeartbeat(const char *message)
 		// resolving usually causes hitches on win95, so only do it when needed
 		if (sv_master[i]->modified || svs.time > svs.masterResolveTime[i])
 		{
+			// another master by that number: nothing known of it yet
+			if (sv_master[i]->modified)
+				sv_masterHeartbeatAt[i] = sv_masterPolledAt[i] = 0;
 			sv_master[i]->modified = qfalse;
 			svs.masterResolveTime[i] = svs.time + MASTERDNS_MSEC;
 			
@@ -580,18 +586,19 @@ void SV_MasterHeartbeat(const char *message)
 			NET_OutOfBandPrintDirect( NS_SERVER, adr[i][0], "heartbeat %s\n", message);
 		if(adr[i][1].type != NA_BAD)
 			NET_OutOfBandPrintDirect( NS_SERVER, adr[i][1], "heartbeat %s\n", message);
+		sv_masterHeartbeatAt[i] = time( NULL );
 	}
 }
 
 /*
 =================
-SV_IsMasterAddress
+SV_MasterOf, SV_IsMasterAddress
 
-Whether a packet came from a master server: a heartbeat's resolved
-address and port, which a master polls the server from
+The master server a packet came from, its number, or -1: a heartbeat's
+resolved address and port, which a master polls the server from
 =================
 */
-static qboolean SV_IsMasterAddress( netadr_t from ) {
+static int SV_MasterOf( netadr_t from ) {
 	int	i, j;
 
 	for ( i = 0; i < MAX_MASTER_SERVERS; i++ ) {
@@ -601,11 +608,40 @@ static qboolean SV_IsMasterAddress( netadr_t from ) {
 		}
 		for ( j = 0; j < 2; j++ ) {
 			if ( sv_masterAdr[i][j].type != NA_BAD && NET_CompareAdr( from, sv_masterAdr[i][j] ) ) {
-				return qtrue;
+				return i;
 			}
 		}
 	}
-	return qfalse;
+	return -1;
+}
+
+static qboolean SV_IsMasterAddress( netadr_t from ) {
+	return SV_MasterOf( from ) >= 0;
+}
+
+/*
+=================
+SV_ExtMasters
+
+The masters set, in sv_master's order, each with when it was last sent a
+heartbeat and last had its getinfo answered; up to max, and how many
+=================
+*/
+int SV_ExtMasters( extMaster_t *masters, int max ) {
+	int	i, count = 0;
+
+	for ( i = 0; i < MAX_MASTER_SERVERS && count < max; i++ ) {
+		if ( !sv_master[i] || !sv_master[i]->string[0] ) {
+			continue;
+		}
+		masters[count].name = sv_master[i]->string;
+		// a name set since the last resolve: nothing known of it yet, as
+		// SV_MasterHeartbeat clears once it resolves the new one
+		masters[count].heartbeatAt = sv_master[i]->modified ? 0 : sv_masterHeartbeatAt[i];
+		masters[count].polledAt = sv_master[i]->modified ? 0 : sv_masterPolledAt[i];
+		count++;
+	}
+	return count;
 }
 
 /*
@@ -1222,6 +1258,10 @@ void SVC_Info( netadr_t from ) {
 		SV_ContentInfo( infostring );
 	}
 	SV_OutOfBandReply( from, "infoResponse\n%s", infostring );
+	// a master's poll answered: it has the server's info
+	if ( ( i = SV_MasterOf( from ) ) >= 0 ) {
+		sv_masterPolledAt[i] = time( NULL );
+	}
 }
 
 /*

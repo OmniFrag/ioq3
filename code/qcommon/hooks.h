@@ -660,6 +660,15 @@ int		SV_ExtGametype( void );
 void	SV_ExtHoldListing( const char *why );
 // why the masters are held off now, "" when they aren't
 const char	*SV_ExtListingHold( void );
+// a master server set (sv_master1 and on): its name, when it was last sent
+// a heartbeat, and when its getinfo was last answered, as the master asks
+// once it has a heartbeat; 0 for never since its name was set
+typedef struct {
+	const char	*name;
+	time_t		heartbeatAt, polledAt;
+} extMaster_t;
+// the masters set, in order, up to max, and how many
+int		SV_ExtMasters( extMaster_t *masters, int max );
 // its ping in milliseconds, as status and getstatus give it; 999 while it
 // loads the map, 0 for a bot or none
 int		SV_ExtClientPing( int clientNum );
