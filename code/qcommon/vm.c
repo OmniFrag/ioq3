@@ -33,6 +33,8 @@ and one exported function: Perform
 
 */
 
+#include <setjmp.h>
+
 #include "vm_local.h"
 
 
@@ -42,6 +44,9 @@ int		vm_debugLevel;
 
 // used by Com_Error to get rid of running vm's before longjmp
 static int forced_unload;
+// the call into a module made while an error unwinds, its shutdown's: a
+// fault of a QVM's code inside it ends that call, not the program (VM_Fault)
+static jmp_buf	*vm_unwindCall;
 
 static cvar_t	*vm_linked;
 
@@ -714,8 +719,9 @@ vm_t *VM_Restart(vm_t *vm, qboolean unpure)
 		return vm;
 	}
 
-	// load the image
+	// load the image, which runs again
 	Com_Printf("VM_Restart()\n");
+	vm->broken = qfalse;
 
 	if(!(header = VM_LoadQVM(vm, qfalse, unpure)))
 	{
@@ -1014,7 +1020,8 @@ void VM_Free( vm_t *vm ) {
 		!Q_stricmp( vm->name, "cgame" ) ? CVAR_MODULE_CGAME :
 		!Q_stricmp( vm->name, "ui" ) ? CVAR_MODULE_UI : 0;
 
-	if(vm->callLevel) {
+	// a broken module's calls ended mid-way, as a fault does (VM_Fault)
+	if(vm->callLevel && !vm->broken) {
 		if(!forced_unload) {
 			Com_Error( ERR_FATAL, "VM_Free(%s) on running vm", vm->name );
 			return;
@@ -1064,12 +1071,33 @@ void VM_Clear(void) {
 	}
 }
 
+/*
+============
+VM_Forced_Unload_Start, VM_Forced_Unload_Done
+
+Modules being shut down as the program quits or an error unwinds. An
+error's calls never return into their modules, so a QVM it caught
+mid-call has its program stack back at its base, and its system calls
+counted afresh, for the shutdown it then calls
+============
+*/
 void VM_Forced_Unload_Start(void) {
+	int	i;
+
 	forced_unload = 1;
+	for ( i = 0; com_errorEntered && i < MAX_VM; i++ ) {
+		vm_t	*vm = &vmTable[i];
+
+		if ( vm->name[0] && !vm->entryPoint && vm->callLevel ) {
+			vm->programStack = vm->stackBottom + PROGRAM_STACK_SIZE;
+			vm->syscallCount = 0;
+		}
+	}
 }
 
 void VM_Forced_Unload_Done(void) {
 	forced_unload = 0;
+	vm_unwindCall = NULL;
 }
 
 /*
@@ -1142,13 +1170,33 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
 	vm_t	*oldVM;
 	intptr_t r;
 	int i;
+	jmp_buf	unwindCall;
+	qboolean	guarded = qfalse;
 
 	if(!vm || !vm->name[0])
 		Com_Error(ERR_FATAL, "VM_Call with NULL vm");
 
+	// a module whose code broke the VM's rules runs no more: the call its
+	// error's shutdown makes would run that code again (VM_Fault)
+	if ( vm->broken ) {
+		return 0;
+	}
+
 	oldVM = currentVM;
 	currentVM = vm;
 	lastVM = vm;
+	// a call an error's unwinding makes, which a fault of the module's
+	// code inside ends (VM_Fault); never a quit's, whose own error unwinds
+	// as any does
+	if ( com_errorEntered && forced_unload && !vm_unwindCall ) {
+		if ( setjmp( unwindCall ) ) {
+			vm_unwindCall = NULL;
+			currentVM = oldVM;
+			return 0;
+		}
+		vm_unwindCall = &unwindCall;
+		guarded = qtrue;
+	}
 
 	if ( vm_debugLevel ) {
 	  Com_Printf( "VM_Call( %d )\n", callnum );
@@ -1158,7 +1206,8 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
 	// programStack, which a system call that reenters the VM leaves where
 	// the caller had it
 	if ( !vm->entryPoint && vm->programStack - ( 8 + 4 * MAX_VMMAIN_ARGS ) < vm->stackBottom ) {
-		Com_Error( ERR_DROP, "VM_Call: %s's program stack overflowed", vm->name );
+		// the error leaves it so, and the shutdown's call would find it again
+		VM_Fault( vm, "VM_Call: %s's program stack overflowed", vm->name );
 	}
 
 	if ( vm->callLevel == 0 ) {
@@ -1210,6 +1259,9 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
 #endif
 	}
 	--vm->callLevel;
+	if ( guarded ) {
+		vm_unwindCall = NULL;
+	}
 
 	if ( oldVM != NULL )
 	  currentVM = oldVM;
@@ -1338,6 +1390,44 @@ Executes a block copy operation within currentVM data space
 =================
 */
 
+/*
+=================
+VM_Fault
+
+A module's code broke one of the VM's rules as it ran, as the interpreter,
+the compiled code or a check of theirs found: a program counter or stack
+out of range, a bad opcode, a copy outside its memory. The VM is marked
+broken, so VM_Call runs none of its code again, the shutdown entry its
+error's shutdown would call among it (SV_ShutdownGameProgs and the
+client's), and VM_Free unloads it as the error unwinds. A module's own
+error (trap_Error, or a system call that refuses its arguments) isn't one:
+its code is whole, and its shutdown still runs, as stock's does. A fault
+inside the shutdown an error's unwinding called ends that shutdown, said,
+and the first error goes on, rather than a second error ending the program.
+Linked modules are native code, which no check of these watches, so they're
+never marked
+=================
+*/
+void Q_NO_RETURN QDECL VM_Fault( vm_t *vm, const char *fmt, ... )
+{
+	va_list		argptr;
+	char		text[MAX_STRING_CHARS];
+
+	va_start( argptr, fmt );
+	Q_vsnprintf( text, sizeof( text ), fmt, argptr );
+	va_end( argptr );
+	vm->broken = qtrue;
+	// inside the shutdown an error's unwinding called: that shutdown ends,
+	// and the first error goes on, rather than a second one ending the
+	// program
+	if ( com_errorEntered && vm_unwindCall ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s, as %s shut down after an error: its shutdown ends there\n",
+			text, vm->name );
+		longjmp( *vm_unwindCall, 1 );
+	}
+	Com_Error( ERR_DROP, "%s", text );
+}
+
 void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n)
 {
 	unsigned int dataMask = currentVM->dataMask;
@@ -1347,7 +1437,7 @@ void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n)
 	|| ((dest + n) & dataMask) != dest + n
 	|| ((src + n) & dataMask) != src + n)
 	{
-		Com_Error(ERR_DROP, "OP_BLOCK_COPY out of range!");
+		VM_Fault( currentVM, "OP_BLOCK_COPY out of range!" );
 	}
 
 	Com_Memcpy(currentVM->dataBase + dest, currentVM->dataBase + src, n);
@@ -1366,7 +1456,7 @@ void VM_CheckSyscall( vm_t *vm, int programStack )
 {
 	// the return address, then the syscall number and its arguments
 	if ( (unsigned)programStack - (unsigned)vm->stackBottom > PROGRAM_STACK_SIZE - 4 * ( 1 + MAX_VMSYSCALL_ARGS ) ) {
-		Com_Error( ERR_DROP, "VM_CheckSyscall: %s's program stack is out of range", vm->name );
+		VM_Fault( vm, "VM_CheckSyscall: %s's program stack is out of range", vm->name );
 	}
 
 	VM_CountSyscall( vm );

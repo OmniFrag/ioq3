@@ -776,8 +776,7 @@ static void dst_insn_append(struct func_info * const fp)
 
 static void ErrJump(void)
 { 
-	Com_Error(ERR_DROP, "program tried to execute code outside VM");
-	exit(1);
+	VM_Fault( currentVM, "program tried to execute code outside VM" );
 }
 
 static void jump_insn_append(vm_t *vm, struct func_info * const fp, enum sparc_iname iname, int dest)

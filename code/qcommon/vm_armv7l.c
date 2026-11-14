@@ -219,7 +219,7 @@ Error handler for jump/call to invalid instruction number
 
 static void Q_NO_RETURN ErrJump(unsigned num)
 {
-	Com_Error(ERR_DROP, "program tried to execute code outside VM (%x)", num);
+	VM_Fault( currentVM, "program tried to execute code outside VM (%x)", num );
 }
 
 static int asmcall(int call, int pstack)
@@ -1213,11 +1213,11 @@ int VM_CallCompiled(vm_t *vm, int *args)
 
 	if(*opStack != 0xDEADBEEF)
 	{
-		Com_Error(ERR_DROP, "opStack corrupted in compiled code");
+		VM_Fault( vm, "opStack corrupted in compiled code" );
 	}
 
 	if(programStack != stackOnEntry - (8 + 4 * MAX_VMMAIN_ARGS))
-		Com_Error(ERR_DROP, "programStack corrupted in compiled code");
+		VM_Fault( vm, "programStack corrupted in compiled code" );
 
 	vm->programStack = stackOnEntry;
 	vm->currentlyInterpreting = qfalse;

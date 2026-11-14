@@ -191,6 +191,7 @@ struct vm_s {
 	struct vmSymbol_s	*symbols;
 
 	int			callLevel;		// counts recursive VM_Call
+	qboolean	broken;			// its code broke the VM's rules as it ran (VM_Fault): never run again
 	int			syscallCount;		// since the outermost VM_Call began
 	int			breakFunction;		// increment breakCount on function entry to this
 	int			breakCount;
@@ -222,4 +223,5 @@ const char *VM_ValueToSymbol( vm_t *vm, int value );
 void VM_LogSyscalls( int *args );
 
 void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n);
+void Q_NO_RETURN QDECL VM_Fault( vm_t *vm, const char *fmt, ... ) Q_PRINTF_FUNC(2, 3);
 void VM_CheckSyscall( vm_t *vm, int programStack );

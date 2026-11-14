@@ -374,17 +374,17 @@ nextInstruction:
 nextInstruction2:
 #ifdef DEBUG_VM
 		if ( (unsigned)programCounter >= vm->codeLength ) {
-			Com_Error( ERR_DROP, "VM pc out of range" );
+			VM_Fault( vm, "VM pc out of range" );
 			return 0;
 		}
 
 		if ( programStack < vm->stackBottom ) {
-			Com_Error( ERR_DROP, "VM stack overflow" );
+			VM_Fault( vm, "VM stack overflow" );
 			return 0;
 		}
 
 		if ( programStack & 3 ) {
-			Com_Error( ERR_DROP, "VM program stack misaligned" );
+			VM_Fault( vm, "VM program stack misaligned" );
 			return 0;
 		}
 
@@ -399,7 +399,7 @@ nextInstruction2:
 		default:
 			// VM_PrepareInterpreter checked the opcodes and ended the
 			// code with OP_MAX
-			Com_Error( ERR_DROP, "VM program counter out of range" );
+			VM_Fault( vm, "VM program counter out of range" );
 			return 0;
 		case OP_UNDEF:
 		case OP_IGNORE:
@@ -426,7 +426,7 @@ nextInstruction2:
 #ifdef DEBUG_VM
 			if(opStack[opStackOfs] & 3)
 			{
-				Com_Error( ERR_DROP, "OP_LOAD4 misaligned" );
+				VM_Fault( vm, "OP_LOAD4 misaligned" );
 				return 0;
 			}
 #endif
@@ -530,7 +530,7 @@ nextInstruction2:
 				}
 #endif
 			} else if ( (unsigned)programCounter >= vm->instructionCount ) {
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_CALL" );
+				VM_Fault( vm, "VM program counter out of range in OP_CALL" );
 				return 0;
 			} else {
 				programCounter = vm->instructionPointers[ programCounter ];
@@ -555,7 +555,7 @@ nextInstruction2:
 			programCounter += 1;
 			// the frame must fit between here and the stack's bottom
 			if ( (unsigned)v1 > (unsigned)( programStack - vm->stackBottom ) ) {
-				Com_Error( ERR_DROP, "VM stack overflow" );
+				VM_Fault( vm, "VM stack overflow" );
 				return 0;
 			}
 			programStack -= v1;
@@ -581,7 +581,7 @@ nextInstruction2:
 			// a frame larger than OP_ENTER made would take the stack past
 			// its top, where the return address is read
 			if ( (unsigned)v1 > (unsigned)( stackTop - programStack ) ) {
-				Com_Error( ERR_DROP, "VM stack underflow" );
+				VM_Fault( vm, "VM stack underflow" );
 				return 0;
 			}
 			programStack += v1;
@@ -602,7 +602,7 @@ nextInstruction2:
 				|| codeImage[ programCounter - 1 ] != OP_CALL ) {
 				// the module can write the saved program counter; OP_CALL
 				// saved one that follows it, and so starts an instruction
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_LEAVE" );
+				VM_Fault( vm, "VM program counter out of range in OP_LEAVE" );
 				return 0;
 			}
 			goto nextInstruction;
@@ -616,7 +616,7 @@ nextInstruction2:
 		case OP_JUMP:
 			if ( (unsigned)r0 >= vm->instructionCount )
 			{
-				Com_Error( ERR_DROP, "VM program counter out of range in OP_JUMP" );
+				VM_Fault( vm, "VM program counter out of range in OP_JUMP" );
 				return 0;
 			}
 
@@ -907,7 +907,7 @@ done:
 	vm->currentlyInterpreting = qfalse;
 
 	if (opStackOfs != 1 || *opStack != 0xDEADBEEF)
-		Com_Error(ERR_DROP, "Interpreter error: opStack[0] = %X, opStackOfs = %d", opStack[0], opStackOfs);
+		VM_Fault( vm, "Interpreter error: opStack[0] = %X, opStackOfs = %d", opStack[0], opStackOfs);
 
 	vm->programStack = stackOnEntry;
 

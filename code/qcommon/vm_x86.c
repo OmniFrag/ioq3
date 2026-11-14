@@ -391,7 +391,7 @@ Error handler for jump/call to invalid instruction number
 
 static void Q_NO_RETURN ErrJump(void)
 { 
-	Com_Error(ERR_DROP, "program tried to execute code outside VM");
+	VM_Fault( currentVM, "program tried to execute code outside VM" );
 }
 
 /*
@@ -452,12 +452,12 @@ static void DoSyscall(void)
 		break;
 		case VM_BLOCK_COPY: 
 			if(vm_opStackOfs < 1)
-				Com_Error(ERR_DROP, "VM_BLOCK_COPY failed due to corrupted opStack");
+				VM_Fault( currentVM, "VM_BLOCK_COPY failed due to corrupted opStack" );
 			
 			VM_BlockCopy(vm_opStackBase[(vm_opStackOfs - 1)], vm_opStackBase[vm_opStackOfs], vm_arg);
 		break;
 		default:
-			Com_Error(ERR_DROP, "Unknown VM operation %d", vm_syscallNum);
+			VM_Fault( currentVM, "Unknown VM operation %d", vm_syscallNum );
 		break;
 		}
 	}
@@ -1810,10 +1810,10 @@ int VM_CallCompiled(vm_t *vm, int *args)
 
 	if(opStackOfs != 1 || *opStack != 0xDEADBEEF)
 	{
-		Com_Error(ERR_DROP, "opStack corrupted in compiled code");
+		VM_Fault( vm, "opStack corrupted in compiled code" );
 	}
 	if(programStack != stackOnEntry - (8 + 4 * MAX_VMMAIN_ARGS))
-		Com_Error(ERR_DROP, "programStack corrupted in compiled code");
+		VM_Fault( vm, "programStack corrupted in compiled code" );
 
 	vm->programStack = stackOnEntry;
 
