@@ -344,6 +344,7 @@ static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_GameFact_OF", COM_TRAP_GAMEFACT },
 	{ "trap_ClientRole_OF", COM_TRAP_CLIENTROLE },
 	{ "trap_VoteCommand_OF", COM_TRAP_VOTECOMMAND },
+	{ "trap_Cvar_GameValue_OF", COM_TRAP_CVAR_GAMEVALUE },
 	{ NULL, 0 }
 };
 
@@ -550,6 +551,7 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( COM_TRAP_GAMEFACT ),
 	SYSCALL( COM_TRAP_CLIENTROLE ),
 	SYSCALL( COM_TRAP_VOTECOMMAND ),
+	SYSCALL( COM_TRAP_CVAR_GAMEVALUE ),
 };
 
 // the game's facts (COM_TRAP_GAMEFACT): how many came in the game frame at
@@ -1298,6 +1300,9 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		}
 		return Hooks_ClientRole( clientNum, cl->identityProven ? cl->identity : NULL );
 	}
+
+	case COM_TRAP_CVAR_GAMEVALUE:
+		return Cvar_SetGameValue( VMA_STR( 1 ), VMA_STR_OPT( 2 ) );
 
 	case COM_TRAP_VOTECOMMAND: {
 		// the voter's name is the engine's, as the client gave it, printable;

@@ -522,6 +522,14 @@ typedef struct {
 // 180 or more) is none, the view's own; it holds for one scene
 #define	COM_TRAP_R_SETWEAPONFOV	816
 
+// trap_Cvar_GameValue( const char *name, const char *value ) in game: the
+// game's own value for a cvar, as G_CVAR_SET sets it, unless an admin's
+// value is held (Cvar_AdminValue): then the admin's plays, any earlier
+// game's value dropped from under it, and it returns 0. A map's own
+// gravity, say, which an admin's setting outranks. On engines without
+// it, game code sets the value as before
+#define	COM_TRAP_CVAR_GAMEVALUE	817
+
 // A cgame's or ui's 2D, in window pixels:
 // - trap_R_SetClipRegion( const int rect[4] ) keeps its pictures and
 //   triangles inside a rectangle (x, y, width and height), or with NULL
@@ -781,6 +789,8 @@ const char *Cmd_Origin( void );
 // "the command line", or NULL: typed at a console, sent by rcon or game
 // code, or queued by the engine
 qboolean Cmd_OriginIsCommandLine( void );
+// whether origin is the running command's and a config file's line
+qboolean Cmd_OriginIsConfigLine( const char *origin );
 qboolean Cmd_IsPakConfig( void );
 // the running command is a pak's config's, on a dedicated server
 qboolean Cmd_IsVote( void );
@@ -945,6 +955,18 @@ const char	*Cvar_UnderUser( const cvar_t *var, cvarSource_t *source );
 // a cvar's value without the player's or a server's: the pool entry's, the
 // file's, the mode's or the default, and whose (source, if not NULL)
 void	Cvar_DropUser( cvar_t *var );
+// whether an admin's value is held: one of the server's layers (server.toml's,
+// a mode's, a pool entry's), the command line's or the environment's, a
+// tool's, or one set after
+// startup at the console or by rcon; not the default, game code's, or a
+// config file's line, as server.cfg's set is a classic server's default,
+// even one set over the command line's: the value in force decides
+qboolean	Cvar_AdminValue( const cvar_t *var );
+// the game's own value for name unless an admin's is held, which then plays
+// with any earlier game's value dropped from under it; qfalse when an
+// admin's held, qtrue when the game's set was made (which a protected
+// cvar's refusal may still turn down, as G_CVAR_SET's can)
+qboolean	Cvar_SetGameValue( const char *name, const char *value );
 // drops the player's value and the saved choice, so the file's or the
 // default shows again: a live change reverted or kept in the file
 void	Cvar_Lock( cvar_t *var, const char *origin );
@@ -1039,6 +1061,8 @@ void	Cvar_SetSafe( const char *var_name, const char *value );
 void	Cvar_ResetSafe( const char *var_name );
 qboolean Cvar_RunsRestricted( const char *var_name );
 qboolean Cvar_SetByPak( const char *var_name );
+// the config file's line that set its value ("server.cfg:12"), or NULL
+const char *Cvar_ConfigLine( const char *var_name );
 // a pak's config on a dedicated server set it last (Cmd_IsPakConfig)
 // whether a cvar's value, run as commands, runs restricted: with the
 // rights of whoever set it

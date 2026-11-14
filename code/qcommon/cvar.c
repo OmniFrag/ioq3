@@ -424,7 +424,24 @@ Drops the player's value, and where it came from, a pak's config included
 static void Cvar_ClearUser( cvar_t *var ) {
 	Cvar_SetLayer( &var->userString, NULL );
 	Cvar_SetLayer( &var->userOrigin, NULL );
+	var->userConfigLine = qfalse;
 	var->pakSet = qfalse;
+}
+
+/*
+============
+Cvar_ForgetUser
+
+Drops the player's layer and its saved copy, to apply after (Cvar_Apply)
+============
+*/
+static void Cvar_ForgetUser( cvar_t *var ) {
+	Cvar_ClearUser( var );
+	var->userSource = CVAR_SOURCE_DEFAULT;
+	if ( var->savedString ) {
+		Cvar_SetLayer( &var->savedString, NULL );
+		Cvar_MarkSaved( var );
+	}
 }
 
 /*
@@ -1246,9 +1263,15 @@ static cvar_t *Cvar_SetVar( cvar_t *var, const char *value, cvarSource_t source,
 	Cvar_SetLayer( layer, value );
 	if ( serverLayer >= 0 ) {
 		Cvar_SetLayer( &var->layerOrigins[serverLayer], value ? cvar_setOrigin : NULL );
+		// an admin's value now, so the loaded map's own gives way to it at
+		// once, as the next load's would (Cvar_SetGameValue)
+		if ( value && var->userString && var->userSource == CVAR_SOURCE_GAME ) {
+			Cvar_ForgetUser( var );
+		}
 	} else if ( layer == &var->userString ) {
 		var->userSource = source;
 		Cvar_SetLayer( &var->userOrigin, NULL );
+		var->userConfigLine = qfalse;
 		// a set's, not a reset's, which leaves no value to have come from it
 		if ( cvar_setOrigin && value ) {
 			Cvar_NoteOrigin( var, cvar_setOrigin );
@@ -1678,6 +1701,20 @@ qboolean Cvar_SetByPak( const char *var_name ) {
 
 /*
 ============
+Cvar_ConfigLine
+
+The config file's line that set a cvar's value ("server.cfg:12"), or NULL
+when something else did (Cvar_NoteOrigin)
+============
+*/
+const char *Cvar_ConfigLine( const char *var_name ) {
+	cvar_t	*var = Cvar_FindVar( var_name );
+
+	return var && var->userString && var->userConfigLine ? var->userOrigin : NULL;
+}
+
+/*
+============
 Cvar_KeptFromText, Cvar_AllowedFromText
 
 Restricted text (Cmd_IsRestricted) can't use a private or protected
@@ -1820,6 +1857,7 @@ void Cvar_NoteOrigin( cvar_t *var, const char *origin ) {
 	static int	order;
 
 	Cvar_SetLayer( &var->userOrigin, origin );
+	var->userConfigLine = Cmd_OriginIsConfigLine( origin );
 	var->originOrder = ++order;
 	Cvar_LogSet( var, origin );
 }
@@ -1873,6 +1911,52 @@ const char *Cvar_SetServerLayer( const char *var_name, const char *value, cvarSo
 
 /*
 ============
+Cvar_AdminValue, Cvar_SetGameValue
+
+Whether an admin holds a value for a cvar, and the game's own set that
+yields to it (qcommon.h). A config file's line (userConfigLine, noted as
+it set the value) isn't an admin's: a classic server's config sets the
+default a map's own value overrides
+============
+*/
+qboolean Cvar_AdminValue( const cvar_t *var ) {
+	int	i;
+
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		if ( var->layerStrings[i] ) {
+			return qtrue;
+		}
+	}
+	if ( !var->userString ) {
+		return qfalse;
+	}
+	switch ( var->userSource ) {
+	case CVAR_SOURCE_SESSION:
+	case CVAR_SOURCE_TOOL:
+		return qtrue;
+	case CVAR_SOURCE_PLAYER:
+		return !var->userConfigLine;
+	default:
+		return qfalse;
+	}
+}
+
+qboolean Cvar_SetGameValue( const char *name, const char *value ) {
+	cvar_t	*var = Cvar_FindVar( name );
+
+	if ( var && Cvar_AdminValue( var ) ) {
+		// an earlier map's own value would outrank the server's layers
+		if ( var->userString && var->userSource == CVAR_SOURCE_GAME ) {
+			Cvar_DropUser( var );
+		}
+		return qfalse;
+	}
+	Cvar_SetFromVM( name, value, NULL, CVAR_SOURCE_GAME );
+	return qtrue;
+}
+
+/*
+============
 Cvar_DropUser
 ============
 */
@@ -1880,12 +1964,7 @@ void Cvar_DropUser( cvar_t *var ) {
 	char	*old = cvar_changeHook ? Cvar_HookOld( var ) : NULL;
 	cvarSource_t	source = var->userSource;
 
-	Cvar_ClearUser( var );
-	var->userSource = CVAR_SOURCE_DEFAULT;
-	if ( var->savedString ) {
-		Cvar_SetLayer( &var->savedString, NULL );
-		Cvar_MarkSaved( var );
-	}
+	Cvar_ForgetUser( var );
 	Cvar_Apply( var, qfalse );
 	if ( old ) {
 		cvar_changeHook( var, old, source );
