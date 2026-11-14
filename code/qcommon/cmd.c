@@ -693,11 +693,44 @@ const char *Cmd_Origin( void ) {
 
 /*
 ============
+Cmd_ParseOrigin
+
+A config line's origin as Cmd_Origin writes it ("server.cfg:12") read
+back into its name and line: false for NULL, or one with no line
+============
+*/
+static qboolean Cmd_ParseOrigin( const char *origin, char *name, int size, int *line ) {
+	const char	*colon = origin ? strrchr( origin, ':' ) : NULL;
+
+	if ( !colon || ( *line = atoi( colon + 1 ) ) <= 0 ) {
+		return qfalse;
+	}
+	Q_strncpyz( name, origin, MIN( size, (int)( colon - origin ) + 1 ) );
+	return qtrue;
+}
+
+/*
+============
 Cmd_OriginIsCommandLine
 ============
 */
 qboolean Cmd_OriginIsCommandLine( void ) {
 	return !strcmp( cmd_origin.name, CMD_ORIGIN_COMMAND_LINE );
+}
+
+/*
+============
+Cmd_OriginIsConfigLine
+
+Whether origin is the running command's, and that a config file's line:
+only a config's text counts its lines, where rcon's, a vote's and a
+tool's origins have none
+============
+*/
+qboolean Cmd_OriginIsConfigLine( const char *origin ) {
+	const char	*running = Cmd_Origin();
+
+	return cmd_origin.line > 0 && !cmd_origin.by && origin && running && !strcmp( origin, running );
 }
 
 /*
@@ -1055,7 +1088,9 @@ Inserts the current value of a variable as command text
 ===============
 */
 void Cmd_Vstr_f( void ) {
-	char	*v;
+	char		*v, name[CMD_ORIGIN_NAME];
+	const char	*marker = NULL;
+	int			line;
 
 	if (Cmd_Argc () != 2) {
 		Com_Printf ("vstr <variablename> : execute a variable command\n");
@@ -1071,8 +1106,17 @@ void Cmd_Vstr_f( void ) {
 	// pak's config's, run later by game code (vstr nextmap), keeps its limits
 	v = Cvar_VariableString( Cmd_Argv( 1 ) );
 	if ( Cvar_SetByPak( Cmd_Argv( 1 ) ) ) {
-		Cbuf_InsertFrame( Cbuf_For( Cvar_RunsRestricted( Cmd_Argv( 1 ) ), cmd_script ),
-			Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, qtrue, 0 ), v );
+		marker = Cbuf_OriginMarker( cmd_origin.name, cmd_origin.line, qtrue, 0 );
+	} else if ( cmd_restricted && Cmd_ParseOrigin( Cvar_ConfigLine( Cmd_Argv( 1 ) ), name, sizeof( name ), &line ) ) {
+		// game code's vstr of a config line's text, a classic rotation's
+		// vstr nextmap at a match's end or a passed callvote nextmap's
+		// (restricted text, both), runs as that line: its sets are a
+		// config's, not an admin's (Cvar_AdminValue). Anyone else's vstr,
+		// the console's, rcon's, a tool's, keeps their own origin and role
+		marker = Cbuf_OriginMarker( name, line, qfalse, 0 );
+	}
+	if ( marker ) {
+		Cbuf_InsertFrame( Cbuf_For( Cvar_RunsRestricted( Cmd_Argv( 1 ) ), cmd_script ), marker, v );
 	} else {
 		Cbuf_InsertTextRestricted( va("%s\n", v ), Cvar_RunsRestricted( Cmd_Argv( 1 ) ) );
 	}

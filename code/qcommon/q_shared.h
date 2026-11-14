@@ -1003,6 +1003,7 @@ struct cvar_s {
 	char		*userString;
 	int		userSource;	// whose userString is, a cvarSource_t (qcommon.h)
 	char		*userOrigin;	// the config line that set userString ("server.cfg:12", Cmd_Origin), or NULL
+	qboolean	userConfigLine;	// userOrigin is a config file's line, not rcon's, a vote's or a tool's
 	int		originOrder;	// when it was set, among the cvars a config's line set
 	char		*savedString;
 	// below the player's value, a dedicated server's own, highest first
