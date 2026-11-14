@@ -3246,6 +3246,8 @@ static void NET_Event(netsocks_t *readsocks)
 
 			if(com_sv_running->integer)
 				Com_RunAndTimeServerPacket(&from, &netmsg);
+			else if(com_dedicated->integer)
+				SV_IdlePacket(from, &netmsg);
 			else
 				CL_PacketEvent(from, &netmsg);
 		}

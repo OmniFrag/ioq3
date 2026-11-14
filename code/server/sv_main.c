@@ -76,6 +76,14 @@ cvar_t	*sv_trustedProxies;	// relays players' real addresses are taken from (P8)
 // drain's reason (SV_Drain_f), while the server drains
 char		sv_drainReason[MAX_DRAIN_REASON];
 int			sv_drainStatus;
+// a map shutdown asked for (SV_ExtShutdown), as the next frame starts:
+// what the players are told
+static char	sv_shutdownReason[MAX_STRING_CHARS];
+// a dedicated server with no map on purpose (SV_ExtHold): what a connect
+// is told
+static char	sv_heldReason[MAX_DRAIN_REASON];
+// rcon's command is running (SV_ExtRcon)
+static qboolean	sv_inRcon;
 
 // the masters' addresses, as SV_MasterHeartbeat resolved them: [2] for v4
 // and v6 addresses of the same name
@@ -605,9 +613,10 @@ static qboolean SV_IsMasterAddress( netadr_t from ) {
 SV_DrainDone
 
 A draining server's end, once its players have left or its map ends:
-said, its players told why, and it exits with the drain's status. Inside an extension's hook
-(a map an admin's command starts) it quits once the hooks return, and
-returns meanwhile
+said, its players told why, and it exits with the drain's status, or for
+SV_DRAIN_STOP shuts the map down as the next frame starts. Inside an
+extension's hook (a map an admin's command starts) it quits once the
+hooks return, and returns meanwhile
 =================
 */
 void SV_DrainDone( void ) {
@@ -618,7 +627,89 @@ void SV_DrainDone( void ) {
 	// in the log, before Com_Quit's own, though an rcon map ended the drain
 	Com_EndRedirect();
 	Com_Printf( "Drained: %s\n", reason );
+	if ( sv_drainStatus == SV_DRAIN_STOP ) {
+		SV_ExtShutdown( reason );
+		return;
+	}
 	Com_QuitStatus( reason, sv_drainStatus );
+}
+
+/*
+=================
+SV_ExtShutdown, SV_ExtHold
+
+The map shut down for an extension (an owner's stop), its players told
+reason: as the next frame starts, never inside a hook or the map change
+that asked for it. And a server with no map on purpose: a connect is
+told why (SV_IdlePacket)
+=================
+*/
+void SV_ExtShutdown( const char *reason ) {
+	if ( com_sv_running && com_sv_running->integer ) {
+		Q_strncpyz( sv_shutdownReason, reason && reason[0] ? reason : "The server has stopped.",
+			sizeof( sv_shutdownReason ) );
+	}
+}
+
+qboolean SV_ExtRcon( void ) {
+	return sv_inRcon;
+}
+
+// a map's start or shutdown: a shutdown asked for is the last map's
+void SV_ForgetShutdown( void ) {
+	sv_shutdownReason[0] = '\0';
+}
+
+int SV_ExtHumanCount( void ) {
+	return com_sv_running && com_sv_running->integer ? SV_HumanCount() : 0;
+}
+
+void SV_ExtHold( const char *reason ) {
+	Q_strncpyz( sv_heldReason, reason ? reason : "", sizeof( sv_heldReason ) );
+}
+
+/*
+=================
+SV_IdlePacket
+
+A packet to a dedicated server with no map: rcon, under its password and
+limits, so an admin can start it again (start, map); and for a server
+held with no map on purpose (SV_ExtHold), a challenge or connect told
+why, so a player with its address sees it rather than waiting. The rest
+stays unanswered, as stock leaves it, the masters' polls too, so they
+drop the server
+=================
+*/
+static void SVC_RemoteCommand( netadr_t from, msg_t *msg );
+static void SV_ParseRconAllow( void );
+
+void SV_IdlePacket( netadr_t from, msg_t *msg ) {
+	static rateLimit_t	held;
+	const char			*text = (const char *)msg->data + 4;
+
+	if ( msg->cursize < 4 + 4 || *(int *)msg->data != -1 || SV_IsMasterAddress( from ) ) {
+		return;
+	}
+	if ( !Q_strncmp( text, "rcon", 4 ) ) {
+		MSG_BeginReadingOOB( msg );
+		MSG_ReadLong( msg );
+		Cmd_TokenizeString( MSG_ReadStringLine( msg ) );
+		if ( !Q_stricmp( Cmd_Argv( 0 ), "rcon" ) ) {
+			// as SV_Frame parses it, which a server with no map doesn't run
+			SV_ParseRconAllow();
+			SVC_RemoteCommand( from, msg );
+		}
+		return;
+	}
+	if ( !sv_heldReason[0] || ( Q_strncmp( text, "getchallenge", 12 ) && Q_strncmp( text, "connect", 7 ) ) ) {
+		return;
+	}
+	// a flood can't turn the server into a reflector: as the server's own
+	// outbound limit (SVC_Info's)
+	if ( SVC_RateLimitAddress( from, 10, 1000 ) || SVC_RateLimit( &held, 10, 100 ) ) {
+		return;
+	}
+	NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", sv_heldReason );
 }
 
 /*
@@ -1437,7 +1528,9 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		
 		// its sets' origin, for cvar_why and the settings' history
 		Cmd_PushOrigin( va( "rcon from %s", NET_AdrToString( from ) ), 0 );
+		sv_inRcon = qtrue;
 		Cmd_ExecuteString (remaining);
+		sv_inRcon = qfalse;
 		Cmd_PopOrigin();
 
 	}
@@ -2133,6 +2226,9 @@ void SV_Frame( int msec ) {
 	qboolean	frozen;
 	qboolean	ran = qfalse;
 
+	// an rcon an error ended (Com_Error's longjmp) runs no longer
+	sv_inRcon = qfalse;
+
 	// the menu kills the server with this cvar
 	if ( sv_killserver->integer ) {
 		SV_Shutdown ("Server was killed");
@@ -2176,6 +2272,16 @@ void SV_Frame( int msec ) {
 	// before the pause, as rcon is taken while paused
 	SV_ParseRconAllow();
 	SV_ParseTrustedProxies();
+
+	// a shutdown an extension asked for (an owner's stop)
+	if ( sv_shutdownReason[0] ) {
+		char	reason[MAX_STRING_CHARS];
+
+		Q_strncpyz( reason, sv_shutdownReason, sizeof( reason ) );
+		sv_shutdownReason[0] = '\0';
+		SV_Shutdown( reason );
+		return;
+	}
 
 	// a draining server stops once its players have left, bots aside
 	if ( sv_drainReason[0] && !SV_HumanCount() ) {

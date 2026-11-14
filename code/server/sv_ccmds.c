@@ -156,9 +156,15 @@ static void SV_Map_f( void ) {
 	qboolean	killBots, cheat, found;
 	char		expanded[MAX_QPATH];
 	char		mapname[MAX_QPATH];
+	char		why[MAX_STRING_CHARS];
 
 	map = Cmd_Argv(1);
 	if ( !map ) {
+		return;
+	}
+	// an extension's refusal: a stopped server's config line, say
+	if ( !Hooks_MapAllowed( map, why, sizeof( why ) ) ) {
+		Com_Printf( "%s\n", why );
 		return;
 	}
 

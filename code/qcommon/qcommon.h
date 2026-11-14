@@ -1997,6 +1997,9 @@ void SV_FixServerInfo( char *info, int size );
 qboolean SV_RestartAfterError( char *why, int size );
 void SV_Frame( int msec );
 void SV_PacketEvent( netadr_t from, msg_t *msg );
+// a packet to a dedicated server with no map: a connect to one held
+// stopped told why (SV_ExtHold), the rest unanswered
+void	SV_IdlePacket( netadr_t from, msg_t *msg );
 // whether a client in the game is at this address: with directOnly, one
 // that came directly, so a proxy naming it is never believed
 qboolean SV_ClientAt( const netadr_t *adr, qboolean directOnly );

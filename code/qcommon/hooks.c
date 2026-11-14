@@ -336,6 +336,21 @@ void Hooks_StartSummary( void ) {
 	}
 }
 
+qboolean Hooks_MapAllowed( const char *map, char *why, int whySize ) {
+	int			i;
+	qboolean	allowed = qtrue;
+
+	why[0] = '\0';
+	for ( i = 0; allowed && engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->mapAllowed ) {
+			hooks_depth[i]++;
+			allowed = engineExtensions[i]->mapAllowed( map, why, whySize );
+			hooks_depth[i]--;
+		}
+	}
+	return allowed;
+}
+
 qboolean Hooks_CheckRotation( void ) {
 	int	i;
 

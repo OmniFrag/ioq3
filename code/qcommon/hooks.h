@@ -171,6 +171,11 @@ typedef struct {
 	qboolean	(*startDefault)( void );
 	void		(*startSummary)( void );
 	qboolean	(*checkRotation)( void );
+	// A map command (map, devmap, spmap) is about to change or start the
+	// map, from Cmd_Origin's origin: return qfalse with why, in an admin's
+	// words, to refuse it, as a server its owner stopped refuses a config's
+	// map line. Every extension's, until one refuses
+	qboolean	(*mapAllowed)( const char *map, char *why, int whySize );
 
 	// The console's status command printed the server's map and players,
 	// or that it isn't running: print lines of the extension's own after
@@ -384,6 +389,9 @@ qboolean	Hooks_WriteServerSettings( void );
 qboolean	Hooks_StartDefault( void );
 void	Hooks_StartSummary( void );
 qboolean	Hooks_CheckRotation( void );
+// whether every extension lets the map command run (mapAllowed), else
+// qfalse with the first refusal's why
+qboolean	Hooks_MapAllowed( const char *map, char *why, int whySize );
 // the status command's lines of the extensions' own, after its players,
 // on the console alone (not under a redirect)
 void	Hooks_Status( void );
@@ -687,6 +695,21 @@ int			SV_ExtDrainStatus( void );
 // has status: qfalse, saying why, without a map up on a dedicated server.
 // Started again, it takes the new reason and status
 qboolean	SV_ExtDrain( const char *reason, int status );
+// SV_ExtDrain's status for a drain whose end shuts the map down, the
+// program staying up with no map (an owner's stop), rather than an exit
+#define	SV_DRAIN_STOP	256
+// the map shut down, its players told reason, as the next frame starts
+// (never inside the hook or map change asking); nothing with no map
+void		SV_ExtShutdown( const char *reason );
+// while a dedicated server has no map on purpose (its owner stopped it), a
+// connect is answered with text, "The server is stopped: <reason>", say,
+// masters left unanswered; NULL or "" for none, as a server with no map
+// is otherwise silent but for rcon
+void		SV_ExtHold( const char *text );
+// whether the command running came by rcon, which names nobody
+qboolean	SV_ExtRcon( void );
+// the players on, bots not counting, as a drain and keeping awake count
+int			SV_ExtHumanCount( void );
 // a drain called off, as undrain does; nothing while it isn't draining
 void		SV_ExtUndrain( void );
 

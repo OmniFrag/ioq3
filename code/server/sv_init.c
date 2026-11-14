@@ -765,8 +765,11 @@ qboolean SV_RestartAfterError( char *why, int size ) {
 	// a draining server stops as its map ends, by an error too
 	if ( sv_drainReason[0] ) {
 		Com_Printf( "Drained: %s\n", sv_drainReason );
-		Com_SetQuitStatus( sv_drainStatus );
-		Cbuf_AddText( "quit\n" );
+		// a stop's drain leaves the server with no map, as the error did
+		if ( sv_drainStatus != SV_DRAIN_STOP ) {
+			Com_SetQuitStatus( sv_drainStatus );
+			Cbuf_AddText( "quit\n" );
+		}
 		return qtrue;
 	}
 	if ( sv_mapRetried && Sys_Milliseconds() - sv_retryTime < SV_ERROR_RETRY_MSEC ) {
@@ -961,6 +964,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 		SV_DrainDone();
 		return;
 	}
+	SV_ForgetShutdown();
 
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
@@ -1673,6 +1677,7 @@ before Sys_Quit or Sys_Error
 ================
 */
 void SV_Shutdown( char *finalmsg ) {
+	SV_ForgetShutdown();
 	if ( !com_sv_running || !com_sv_running->integer ) {
 		return;
 	}
