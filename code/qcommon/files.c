@@ -2679,6 +2679,36 @@ Return the searchpath in "startSearch".
 =================
 */
 
+/*
+=================
+FS_DirLibrary
+
+A game module's library loose in a directory, its path, or NULL. The
+original Q3 put the architecture in the library name; in case we're
+loading an old binary only mod, fallback on this format if the
+architecture-less library doesn't exist
+=================
+*/
+static char *FS_DirLibrary(const directory_t *dir, const char *name)
+{
+	static const char *const dllNameFormats[] =
+	{
+		"%s" DLL_EXT,
+		"%s" ARCH_STRING DLL_EXT
+	};
+	char dllName[MAX_OSPATH], *netpath;
+
+	for(int i = 0; i < ARRAY_LEN(dllNameFormats); i++)
+	{
+		Com_sprintf(dllName, sizeof(dllName), dllNameFormats[i], name);
+		netpath = FS_BuildOSPath(dir->path, dir->gamedir, dllName);
+
+		if(FS_FileInPathExists(netpath))
+			return netpath;
+	}
+	return NULL;
+}
+
 int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, int enableDll)
 {
 	searchpath_t *search, *lastSearch;
@@ -2701,31 +2731,12 @@ int FS_FindVM(void **startSearch, char *found, int foundlen, const char *name, i
 		{
 			dir = search->dir;
 
-			if(enableDll)
+			if(enableDll && (netpath = FS_DirLibrary(dir, name)))
 			{
-				// The original Q3 put the architecture in the library name; in case
-				// we're loading an old binary only mod, fallback on this format if
-				// the architecture-less library doesn't exist
-				const char *dllNameFormats[] =
-				{
-					"%s" DLL_EXT,
-					"%s" ARCH_STRING DLL_EXT
-				};
+				Q_strncpyz(found, netpath, foundlen);
+				*startSearch = search;
 
-				for(int i = 0; i < ARRAY_LEN(dllNameFormats); i++)
-				{
-					char dllName[MAX_OSPATH];
-					Com_sprintf(dllName, sizeof(dllName), dllNameFormats[i], name);
-					netpath = FS_BuildOSPath(dir->path, dir->gamedir, dllName);
-
-					if(FS_FileInPathExists(netpath))
-					{
-						Q_strncpyz(found, netpath, foundlen);
-						*startSearch = search;
-
-						return VMI_NATIVE;
-					}
-				}
+				return VMI_NATIVE;
 			}
 
 			if(FS_FOpenFileReadDir(qvmName, search, NULL, qfalse, qfalse) > 0)
@@ -5977,16 +5988,134 @@ static qboolean FS_GlobalPak( const searchpath_t *search ) {
 }
 
 /*
+===========
+FS_ModEntry
+
+Whether a search path entry is a mod's: the current game directory's, or
+that of the game it's based on (fs_basegame), where either is neither the
+base game nor a directory whose code is linked into the executable, such
+as missionpack (FS_GameCodeLinked), whose own runs instead
+===========
+*/
+static qboolean FS_ModEntry( const searchpath_t *search ) {
+	const char	*game = FS_EntryGame( search );
+
+	if ( !Q_stricmp( game, com_basegame->string ) || FS_GameCodeLinked( game ) ) {
+		return qfalse;
+	}
+	return !Q_stricmp( game, FS_GetCurrentGameDir() ) ||
+		( fs_basegame->string[0] && !Q_stricmp( game, fs_basegame->string ) );
+}
+
+/*
+===========
+FS_LibraryAsked
+
+Whether a game module's library would load, its vm_ cvar (vm_game for
+qagame) asking for native code, as FS_FindVM's search has it; read as a
+value given on the command line before VM_Init registers it, 2 unset
+===========
+*/
+static qboolean FS_LibraryAsked( const char *module ) {
+	const char	*interpret = Cvar_VariableString( !Q_stricmp( module, "qagame" ) ? "vm_game" : va( "vm_%s", module ) );
+
+	return interpret[0] && atoi( interpret ) == VMI_NATIVE;
+}
+
+/*
+===========
+FS_EntryHasModule
+
+Whether a search path entry holds a game module's code: vm/<module>.qvm, or
+its library loose in a directory, where one would load (FS_LibraryAsked)
+===========
+*/
+static qboolean FS_EntryHasModule( const searchpath_t *search, const char *module ) {
+	return FS_SearchHasFile( search, va( "vm/%s.qvm", module ) ) ||
+		( search->dir && FS_LibraryAsked( module ) && FS_DirLibrary( search->dir, module ) );
+}
+
+/*
+===========
+FS_OwnGameCode
+
+Whether the current game directory, or the one it's based on
+(fs_basegame), not the base game's, holds a game module's code of its
+own: its library, loose in the directory, where one would load, or
+vm/<module>.qvm loose or in any of its paks or pk3dirs, one that also
+holds a map among them, as an original server would run it. A folder
+with no game code at all, only content such as maps, runs the linked
+module (VM_FindLinked). Purity applies, as FS_FindVM's search does
+===========
+*/
+qboolean FS_OwnGameCode( const char *module ) {
+	const searchpath_t	*search;
+
+	if ( !fs_searchpaths || !Q_stricmp( FS_GetCurrentGameDir(), com_basegame->string ) ) {
+		return qfalse;
+	}
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		// a pure client's loose files aren't read, as FS_FindVM has it
+		if ( FS_ModEntry( search ) && !( search->dir && fs_numServerPaks ) && FS_EntryHasModule( search, module ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+// FS_CurrentGameLinked's answer, -1 until it's asked after the search
+// path or its pure paks changed (FS_ReorderPurePaks, which every start
+// runs, and FS_PureServerSetLoadedPaks), and the cvars it read then
+// (FS_LinkedCvars)
+static int	fs_currentGameLinked = -1, fs_currentGameLinkedCvars;
+
+/*
+===========
+FS_LinkedCvars
+
+What FS_CurrentGameLinked reads of the cvars, which change without a
+restart of the file system: vm_linked, and which modules' libraries would
+load (FS_LibraryAsked)
+===========
+*/
+static int FS_LinkedCvars( void ) {
+	return FS_GameCodeLinked( com_basegame->string ) | FS_LibraryAsked( "qagame" ) << 1 |
+		FS_LibraryAsked( "cgame" ) << 2 | FS_LibraryAsked( "ui" ) << 3;
+}
+
+/*
+===========
+FS_CurrentGameLinked
+
+Whether the current game runs the code linked into the executable: its
+directory's own (FS_GameCodeLinked), or, for a directory with no game code
+of its own, none of its modules' (FS_OwnGameCode), the base game's
+===========
+*/
+static qboolean FS_CurrentGameLinked( void ) {
+	const char	*gameDir = FS_GetCurrentGameDir();
+	int			cvars = FS_LinkedCvars();
+
+	if ( fs_currentGameLinked < 0 || cvars != fs_currentGameLinkedCvars ) {
+		fs_currentGameLinkedCvars = cvars;
+		fs_currentGameLinked = FS_GameCodeLinked( gameDir ) || ( FS_GameCodeLinked( com_basegame->string ) &&
+			!FS_OwnGameCode( "qagame" ) && !FS_OwnGameCode( "cgame" ) && !FS_OwnGameCode( "ui" ) );
+	}
+	return fs_currentGameLinked;
+}
+
+/*
 ================
 FS_CodeLeftOut
 
 Whether a pak or pk3dir with a map also holds game code, vm/<name>.qvm, the
-game leaves out: in a game directory whose code is linked into the
-executable, the base game's or missionpack, a QVM of a pak never runs
-(FS_GameCodeLinked), while the current game's is too. A classic client
-may still load its
-cgame and ui, which the QVM lookups' order keeps the pure checks agreeing
-on (FS_NextSearchFor)
+game leaves out: while the current game runs linked code
+(FS_CurrentGameLinked), a QVM of a pak never runs in a game directory
+whose code is linked into the executable, the base game's or missionpack
+(FS_GameCodeLinked). A mod's folder runs its own (FS_OwnGameCode), as an
+original server would. A classic client may still load its cgame and ui,
+which the QVM lookups' order keeps the pure checks agreeing on
+(FS_NextSearchFor)
 ================
 */
 static qboolean FS_CodeLeftOut( const searchpath_t *search ) {
@@ -5994,8 +6123,8 @@ static qboolean FS_CodeLeftOut( const searchpath_t *search ) {
 		search->dir->holdsMap && search->dir->holdsCode ) ) {
 		return qfalse;
 	}
-	// under a mod without linked code, a QVM of the base game's may run
-	return FS_GameCodeLinked( FS_EntryGame( search ) ) && FS_GameCodeLinked( FS_GetCurrentGameDir() );
+	// under a mod with code of its own, a QVM of the base game's may run
+	return FS_CurrentGameLinked() && FS_GameCodeLinked( FS_EntryGame( search ) );
 }
 
 /*
@@ -6325,7 +6454,7 @@ FS_PakConflicts_f
 pakconflicts: each installed pak's copies of id's files that differ from
 id's, and where they count, and the game code of a map pak the game leaves
 out (FS_CodeLeftOut), which the pak still holds for classic clients; then
-the server game code an original server would run (FS_UnusedServerCode)
+the server game code a notice is due for (FS_ServerCodeNotice)
 ================
 */
 static void FS_PakConflicts_f( void ) {
@@ -6356,7 +6485,7 @@ static void FS_PakConflicts_f( void ) {
 	if ( !paks ) {
 		Com_Printf( "No installed pak has its own copy of one of id's files\n" );
 	}
-	if ( FS_UnusedServerCode( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ) ) ) {
 		Com_Printf( "%s\n", notice );
 	}
 }
@@ -6594,22 +6723,96 @@ qboolean FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath )
 
 /*
 ================
-FS_UnusedServerCode
+FS_EntryFile
 
-The server game code an original Quake III server would run where this
-one runs its own: the file holding vm/qagame.qvm that comes first in the
-path's order, in a game directory whose code is linked into the
-executable and run (FS_GameCodeLinked), when it isn't one of
-id's paks. Its path under the game folders in file, and what that means in
-notice; qfalse when there's none
+A search path entry's file holding name, under the game folders: a pak's,
+a pk3dir's file, or a directory's
 ================
 */
-qboolean FS_UnusedServerCode( char *file, int fileSize, char *notice, int noticeSize ) {
+static void FS_EntryFile( const searchpath_t *search, const char *name, char *file, int fileSize ) {
+	if ( search->pack ) {
+		Com_sprintf( file, fileSize, "%s/%s.pk3", search->pack->pakGamename, search->pack->pakBasename );
+	} else if ( Q_stricmp( search->dir->gamedir, FS_EntryGame( search ) ) ) {
+		Com_sprintf( file, fileSize, "%s/%s/%s", FS_EntryGame( search ), search->dir->gamedir, name );
+	} else {
+		Com_sprintf( file, fileSize, "%s/%s", search->dir->gamedir, name );
+	}
+}
+
+/*
+================
+FS_MapPakOwnCode
+
+In a mod's folder (FS_ModEntry) whose game code, every module's, all comes
+in paks or pk3dirs that also hold a map, the first of them, which this
+server runs as an original server does (FS_OwnGameCode), and the modules
+it holds; NULL when some of the folder's code is apart from any map
+================
+*/
+static const searchpath_t *FS_MapPakOwnCode( char *modules, int size ) {
+	static const char *const	names[] = { "qagame", "cgame", "ui" };
+	const searchpath_t			*search, *found = NULL;
+	int							i;
+
+	modules[0] = '\0';
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( !FS_ModEntry( search ) || ( search->dir && fs_numServerPaks ) ) {
+			continue;
+		}
+		for ( i = 0; i < ARRAY_LEN( names ); i++ ) {
+			if ( !FS_EntryHasModule( search, names[i] ) ) {
+				continue;
+			}
+			if ( !( search->pack ? search->pack->holdsMap : search->dir->holdsMap ) ) {
+				return NULL;
+			}
+			if ( !found || found == search ) {
+				found = search;
+				Q_strcat( modules, size, va( "%svm/%s.qvm", modules[0] ? " " : "", names[i] ) );
+			}
+		}
+	}
+	return found;
+}
+
+/*
+================
+FS_ServerCodeNotice
+
+The server game code a notice is due for, its file under the game folders
+and the notice, or qfalse when there's none:
+
+- while the current game runs code linked into the executable
+  (FS_CurrentGameLinked), the file holding vm/qagame.qvm that comes first
+  in the path's order, when it isn't one of id's paks: an original server
+  would run it where this one runs its own;
+- in a mod's folder whose only game code comes in a pak with a map
+  (FS_MapPakOwnCode), that pak: this server runs it, as an original server
+  does, where a player may have meant the folder for its maps
+================
+*/
+qboolean FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize ) {
 	const char			*qvm = "vm/qagame.qvm";
 	const searchpath_t	*search;
+	char				modules[MAX_QPATH * 3];
 
-	if ( !fs_searchpaths || !FS_GameCodeLinked( FS_GetCurrentGameDir() ) ) {
+	if ( !fs_searchpaths ) {
 		return qfalse;
+	}
+	if ( !FS_CurrentGameLinked() ) {
+		// with vm_linked 0, taking the code out plays no linked game
+		if ( !FS_GameCodeLinked( com_basegame->string ) ||
+			!( search = FS_MapPakOwnCode( modules, sizeof( modules ) ) ) ) {
+			return qfalse;
+		}
+		FS_EntryFile( search, qvm, file, fileSize );
+		// the server runs its linked qagame where the pak holds none
+		Com_sprintf( notice, noticeSize, "%s holds this folder's game code (%s) in a pak with a map. %s To play "
+			"OmniFrag's own game in this folder, take the code out of the pak, or the pak out of the folder.",
+			file, modules, FS_EntryHasModule( search, "qagame" ) ?
+			"The server runs it, as an original Quake III server does." :
+			"Clients run it, as they would on an original Quake III server." );
+		return qtrue;
 	}
 	for ( search = fs_searchpaths; search; search = search->next ) {
 		if ( search->pack ? !FS_PakHasFile( search->pack, qvm ) :
@@ -6619,13 +6822,7 @@ qboolean FS_UnusedServerCode( char *file, int fileSize, char *notice, int notice
 		if ( search->pack && FS_IdPak( search->pack ) ) {
 			return qfalse;
 		}
-		if ( search->pack ) {
-			Com_sprintf( file, fileSize, "%s/%s.pk3", search->pack->pakGamename, search->pack->pakBasename );
-		} else if ( Q_stricmp( search->dir->gamedir, FS_EntryGame( search ) ) ) {
-			Com_sprintf( file, fileSize, "%s/%s/%s", FS_EntryGame( search ), search->dir->gamedir, qvm );
-		} else {
-			Com_sprintf( file, fileSize, "%s/%s", search->dir->gamedir, qvm );
-		}
+		FS_EntryFile( search, qvm, file, fileSize );
 		Com_sprintf( notice, noticeSize, "%s holds server game code. An original Quake III server would run it from "
 			"this folder, with its rules; this server runs OmniFrag's own. To run that code, put the file in a folder "
 			"of its own and start the server with +set fs_game <that folder>; or, to run it from this folder as an "
@@ -6677,7 +6874,7 @@ static void FS_NoteMapPackConflicts( void ) {
 FS_NoteServerCode
 
 Says once, as a dedicated server's file system first starts, what
-FS_UnusedServerCode finds
+FS_ServerCodeNotice finds
 ================
 */
 static void FS_NoteServerCode( void ) {
@@ -6694,7 +6891,7 @@ static void FS_NoteServerCode( void ) {
 		return;
 	}
 	noted = qtrue;
-	if ( FS_UnusedServerCode( file, sizeof( file ), notice, sizeof( notice ) ) ) {
+	if ( FS_ServerCodeNotice( file, sizeof( file ), notice, sizeof( notice ) ) ) {
 		Com_Printf( "%s\n", notice );
 	}
 }
@@ -6998,6 +7195,9 @@ static void FS_ReorderPurePaks( void )
 	int i;
 	searchpath_t **p_insert_index, // for linked list reordering
 		**p_previous; // when doing the scan
+
+	// the path is whole, or its pure paks changed
+	fs_currentGameLinked = -1;
 
 	fs_reordered = qfalse;
 
@@ -7997,8 +8197,12 @@ void FS_PureServerSetLoadedPaks( const char *pakSums, const char *pakNames ) {
 		moved |= sum != fs_serverPaks[i];
 		fs_serverPaks[i] = sum;
 	}
-	// the paks a read may take changed (FS_Ranking)
+	// the paks a read may take changed (FS_Ranking), and the game code
+	// they hold (FS_CurrentGameLinked)
 	fs_rankings += moved;
+	if ( moved ) {
+		fs_currentGameLinked = -1;
+	}
 
 	if (fs_numServerPaks) {
 		Com_DPrintf( "Connected to a pure server.\n" );

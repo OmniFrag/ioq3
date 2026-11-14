@@ -1350,9 +1350,10 @@ const char	*FS_LastFileContent( void );
 // the pk3 or pk3dir the last file read is in ("pak0.pk3"), or ""
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
-// the server game code an original server would run where this one runs its
-// own, and what that means; qfalse when there's none
-qboolean	FS_UnusedServerCode( char *file, int fileSize, char *notice, int noticeSize );
+// the server game code a notice is due for and what it means, qfalse when
+// there's none: one an original server would run where this one runs its
+// own, or a mod's that comes in a pak with a map, which it runs too
+qboolean	FS_ServerCodeNotice( char *file, int fileSize, char *notice, int noticeSize );
 // a map's picture, the levelshot the menus draw for it: its media type,
 // size, a version that changes whenever its bytes may, and the extension of
 // its file, with its name and where it is, which FS_WriteMapPicture takes
@@ -1600,6 +1601,11 @@ void	FS_FilenameCompletion( const char *dir, const char *ext, char *filter,
 		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk );
 
 const char *FS_GetCurrentGameDir(void);
+qboolean FS_OwnGameCode( const char *module );
+// whether the current game directory, or the one it's based on
+// (fs_basegame), not the base game's, holds a game module's code of its
+// own, "qagame", "cgame" or "ui": its library, where one would load, or its
+// QVM, loose or in any of its paks, one with a map among them (VM_FindLinked)
 const char *FS_ServerDir( void );
 // the game directory FS_ServerDir is in, and a file of it relative to the
 // home: baseq3 on the demo the engine chose for want of the full game's

@@ -741,15 +741,19 @@ VM_FindLinked
 
 A game module linked into the executable is the code of one game
 directory: the base game's, or the one the build named, such as
-missionpack. A mod with none linked still loads its own from its game
-directory. A module linked for the current directory wins over the base
-game's, as when com_basegame names that directory too.
+missionpack. A module linked for the current directory wins over the base
+game's, as when com_basegame names that directory too. A mod with none
+linked loads its own from its game directory, or the one it's based on
+(fs_basegame), where it has one. A directory with no code of its own, only
+content such as maps (FS_OwnGameCode), runs the linked module of the game
+it's based on, missionpack's under fs_basegame missionpack, or else the
+base game's, as it would run that game's QVM. vm_linked 0 keeps the search
+for every directory.
 ================
 */
 static vmLinkedModule_t *VM_FindLinked( const char *module ) {
-	const char			*gameDir = FS_GetCurrentGameDir();
-	qboolean			inBaseGame = !Q_stricmp( gameDir, com_basegame->string );
-	vmLinkedModule_t	*linked, *baseGame = NULL;
+	const char			*gameDir = FS_GetCurrentGameDir(), *basedOn = Cvar_VariableString( "fs_basegame" );
+	vmLinkedModule_t	*linked, *baseGame = NULL, *based = NULL;
 
 	if ( !vm_linked->integer ) {
 		return NULL;
@@ -762,12 +766,22 @@ static vmLinkedModule_t *VM_FindLinked( const char *module ) {
 		if ( linked->gameDir && !Q_stricmp( linked->gameDir, gameDir ) ) {
 			return linked;
 		}
-		if ( !linked->gameDir && inBaseGame ) {
+		// the base game's: one linked for com_basegame's directory, as
+		// missionpack under com_basegame missionpack, wins over the base build's
+		if ( linked->gameDir && basedOn[0] && !Q_stricmp( linked->gameDir, basedOn ) ) {
+			based = linked;
+		} else if ( linked->gameDir ? !Q_stricmp( linked->gameDir, com_basegame->string ) : !baseGame ) {
 			baseGame = linked;
 		}
 	}
 
-	return baseGame;
+	if ( !Q_stricmp( gameDir, com_basegame->string ) ) {
+		return baseGame;
+	}
+	if ( FS_OwnGameCode( module ) ) {
+		return NULL;
+	}
+	return based ? based : baseGame;
 }
 
 /*
