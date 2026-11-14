@@ -294,8 +294,9 @@ static qboolean Cvar_NamedValue( const cvar_t *var, const char *value, char *wor
 ============
 Cvar_Validate
 
-A value as the cvar takes it: a number held in its range, or an enum's
-name it doesn't have (Cvar_NamedValue) taken as its default
+A value as the cvar takes it: a number held in its range, text that isn't
+a number or is NaN taken as its default, or an enum's name it doesn't have
+(Cvar_NamedValue) taken as its default
 ============
 */
 static const char *Cvar_Validate( cvar_t *var,
@@ -324,7 +325,11 @@ static const char *Cvar_Validate( cvar_t *var,
 		return var->resetString;
 	}
 
-	if( Q_isanumber( value ) )
+	// a NaN ("nan", "-nan") is a number to strtod, and slips past every
+	// comparison below, so it's taken as text that isn't one: ps->gravity
+	// and the like can't hold it. An infinity ("inf", "1e999") is held at
+	// a bound as any number past one is
+	if( Q_isanumber( value ) && !isnan( atof( value ) ) )
 	{
 		valuef = atof( value );
 
