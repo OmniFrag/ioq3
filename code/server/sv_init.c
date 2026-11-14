@@ -765,6 +765,7 @@ qboolean SV_RestartAfterError( char *why, int size ) {
 	// a draining server stops as its map ends, by an error too
 	if ( sv_drainReason[0] ) {
 		Com_Printf( "Drained: %s\n", sv_drainReason );
+		Com_SetQuitStatus( sv_drainStatus );
 		Cbuf_AddText( "quit\n" );
 		return qtrue;
 	}
@@ -1715,6 +1716,7 @@ void SV_Shutdown( char *finalmsg ) {
 	Com_Memset( &svs, 0, sizeof( svs ) );
 	// a drain is the running server's
 	sv_drainReason[0] = '\0';
+	sv_drainStatus = 0;
 	// and the proxies it trusted
 	SV_ForgetTrustedProxies();
 

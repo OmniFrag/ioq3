@@ -634,6 +634,10 @@ qboolean	SV_ExtClientIsBot( int clientNum );
 qboolean	SV_ExtClientIdentity( int clientNum, byte key[32] );
 // prints text on a client's console only, as print does; nothing for none
 void	SV_ExtClientPrint( int clientNum, const char *text );
+// a line to every player, as the server's own: in the middle of their
+// screens (cp) with center, else on their consoles and chat (print), quotes
+// made ' as SV_ExtClientPrint makes them; nothing with no map running
+void	SV_ExtBroadcast( const char *text, qboolean center );
 // whether the server lists itself now: dedicated 2, a network on, a master
 // set, and no drain, as its heartbeats go
 qboolean	SV_ExtListed( void );
@@ -676,6 +680,15 @@ qboolean	SV_ExtClientMuted( int clientNum );
 // or "" while it isn't draining. A drain ends in the program's exit once
 // its players have left or its map ends, or with undrain
 const char	*SV_ExtDrainReason( void );
+// and the status that exit has: 0, or EXIT_RESTART for a restart asked
+// for; -1 while it isn't draining
+int			SV_ExtDrainStatus( void );
+// a drain started, as the console's drain [reason] starts one, whose exit
+// has status: qfalse, saying why, without a map up on a dedicated server.
+// Started again, it takes the new reason and status
+qboolean	SV_ExtDrain( const char *reason, int status );
+// a drain called off, as undrain does; nothing while it isn't draining
+void		SV_ExtUndrain( void );
 
 // content add, for extensions (server/sv_export.c): a pak in sv_contentDir's
 // incoming checked and installed, as the console's content add <file>

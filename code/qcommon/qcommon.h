@@ -1680,6 +1680,8 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 									// again soon after it was started again
 #define EXIT_CONFIG_ERROR	7	// a dedicated server's own file (server.toml)
 									// doesn't parse or holds a bad value
+#define EXIT_RESTART		8	// a restart asked for: a supervisor starts it again, as it
+									// would after any other status but 0
 qboolean	Com_ReadServerConfig( void );
 // for an extension keeping a dedicated server's settings (Hooks_ReadServerSettings):
 // the engine's own config of them, q3config_server.cfg, applied if there is one
@@ -1690,6 +1692,10 @@ void		Com_Quit( char *reason ) Q_NO_RETURN;
 // Com_Quit, or inside an extension's hook a quit once the hooks return:
 // returns only then
 void		Com_QuitAfterHooks( const char *reason );
+// Com_QuitAfterHooks with the status the program exits with, EXIT_RESTART
+// for a restart asked for; and that status set for the quit queued next
+void		Com_QuitStatus( const char *reason, int status );
+void		Com_SetQuitStatus( int status );
 // a quit waits for the hooks to return: what's queued to run meanwhile can
 // stop
 qboolean	Com_QuitPending( void );
@@ -2059,6 +2065,8 @@ void	Sys_SetExitNote( const char *path );
 // so a file a program writes as it starts and finds again with no end
 // tells it the last run was killed. NULL or "" for none
 void	Sys_Quit (void) Q_NO_RETURN;
+// Sys_Quit with a status: EXIT_RESTART notes "end restart", others "end quit"
+void	Sys_QuitStatus( int status ) Q_NO_RETURN;
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 void	Sys_SetClipboardData( const char *text );
 

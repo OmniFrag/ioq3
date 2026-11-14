@@ -503,8 +503,21 @@ Sys_Quit
 */
 void Sys_Quit( void )
 {
-	Sys_NoteExit( "quit", -1, NULL );
-	Sys_Exit( 0 );
+	Sys_QuitStatus( 0 );
+}
+
+/*
+=================
+Sys_QuitStatus
+
+A quit asked for, with its status: EXIT_RESTART notes "end restart", which
+the next start reads as a restart, not a crash
+=================
+*/
+void Sys_QuitStatus( int status )
+{
+	Sys_NoteExit( status == EXIT_RESTART ? "restart" : "quit", -1, NULL );
+	Sys_Exit( status );
 }
 
 /*

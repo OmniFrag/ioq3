@@ -1570,7 +1570,7 @@ static void SV_ConSayto_f(void) {
 ==================
 SV_Heartbeat_f
 
-Also called by SV_DropClient, SV_DirectConnect, SV_SpawnServer, and SV_Undrain_f
+Also called by SV_DropClient, SV_DirectConnect, SV_SpawnServer, and SV_ExtUndrain
 ==================
 */
 void SV_Heartbeat_f( void ) {
@@ -1579,28 +1579,29 @@ void SV_Heartbeat_f( void ) {
 
 /*
 ==================
-SV_Drain_f
+SV_ExtDrain
 
-drain [reason]: a dedicated server takes no new player, refusing them with
-the reason, leaves the master servers' lists, and stops (exit 0) once its
-players have left or its map ends (SV_DrainDone), its players told why;
-undrain cancels it before then. Its players can reconnect meanwhile
+A dedicated server takes no new player, refusing them with the reason,
+leaves the master servers' lists, and stops once its players have left or
+its map ends (SV_DrainDone), its players told why, exiting with status (0,
+or EXIT_RESTART for a restart asked for); SV_ExtUndrain cancels it before
+then. Its players can reconnect meanwhile
 ==================
 */
-static void SV_Drain_f( void ) {
-	const char	*reason = Cmd_ArgsFrom( 1 );
-	char		*s;
+qboolean SV_ExtDrain( const char *reason, int status ) {
+	char	*s;
 
 	if ( !com_dedicated->integer || !com_sv_running->integer ) {
 		Com_Printf( "drain is for a dedicated server with a map up.\n" );
-		return;
+		return qfalse;
 	}
 	// the masters' last heartbeat, before the server stops answering their
 	// polls, so they drop it
 	if ( !sv_drainReason[0] ) {
 		SV_MasterShutdown();
 	}
-	Q_strncpyz( sv_drainReason, *reason ? reason : "This server is closing.", sizeof( sv_drainReason ) );
+	Q_strncpyz( sv_drainReason, reason && *reason ? reason : "This server is closing.", sizeof( sv_drainReason ) );
+	sv_drainStatus = status;
 	// what an info string's value can't hold
 	for ( s = sv_drainReason; *s; s++ ) {
 		if ( *s == '\\' || *s == ';' || *s == '"' ) {
@@ -1609,22 +1610,31 @@ static void SV_Drain_f( void ) {
 	}
 	Com_Printf( "Draining: new players are refused (\"%s\"), the server leaves the master lists, and it "
 		"stops once its players have left or the map ends; undrain cancels it.\n", sv_drainReason );
+	return qtrue;
 }
 
-/*
-==================
-SV_Undrain_f
-==================
-*/
+void SV_ExtUndrain( void ) {
+	if ( !sv_drainReason[0] ) {
+		return;
+	}
+	sv_drainReason[0] = '\0';
+	sv_drainStatus = 0;
+	// back on the masters' lists
+	SV_Heartbeat_f();
+	Com_Printf( "Undrained: new players are let in, and the server is listed again.\n" );
+}
+
+// drain [reason]: SV_ExtDrain, exiting 0
+static void SV_Drain_f( void ) {
+	SV_ExtDrain( Cmd_ArgsFrom( 1 ), 0 );
+}
+
 static void SV_Undrain_f( void ) {
 	if ( !sv_drainReason[0] ) {
 		Com_Printf( "The server isn't draining.\n" );
 		return;
 	}
-	sv_drainReason[0] = '\0';
-	// back on the masters' lists
-	SV_Heartbeat_f();
-	Com_Printf( "Undrained: new players are let in, and the server is listed again.\n" );
+	SV_ExtUndrain();
 }
 
 

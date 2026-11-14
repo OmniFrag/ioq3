@@ -630,6 +630,7 @@ void QDECL Com_DPrintf( const char *fmt, ...) {
 // a quit asked for inside a hook, and its reason (Com_Quit_f)
 static qboolean	com_quitPending;
 static char		com_quitReason[MAX_STRING_CHARS];
+static int		com_quitStatus;		// what the quit exits with (Com_QuitStatus): 0, or EXIT_RESTART
 
 /*
 =============
@@ -828,7 +829,7 @@ void Com_Quit( char *reason ) {
 		Com_Shutdown ();
 		FS_Shutdown(qtrue);
 	}
-	Sys_Quit ();
+	Sys_QuitStatus( com_quitStatus );
 }
 
 /*
@@ -855,6 +856,26 @@ void Com_QuitAfterHooks( const char *reason ) {
 
 qboolean Com_QuitPending( void ) {
 	return com_quitPending;
+}
+
+/*
+=============
+Com_QuitStatus, Com_SetQuitStatus
+
+A quit that exits with a status of its own, EXIT_RESTART for a restart
+asked for, which a supervisor starts again; or that status set for the
+quit queued next (a drain's end in SV_RestartAfterError)
+=============
+*/
+void Com_QuitStatus( const char *reason, int status ) {
+	if ( !com_quitPending ) {
+		com_quitStatus = status;
+	}
+	Com_QuitAfterHooks( reason );
+}
+
+void Com_SetQuitStatus( int status ) {
+	com_quitStatus = status;
 }
 
 /*

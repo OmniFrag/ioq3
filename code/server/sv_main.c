@@ -75,6 +75,7 @@ cvar_t	*sv_trustedProxies;	// relays players' real addresses are taken from (P8)
 
 // drain's reason (SV_Drain_f), while the server drains
 char		sv_drainReason[MAX_DRAIN_REASON];
+int			sv_drainStatus;
 
 // the masters' addresses, as SV_MasterHeartbeat resolved them: [2] for v4
 // and v6 addresses of the same name
@@ -604,7 +605,7 @@ static qboolean SV_IsMasterAddress( netadr_t from ) {
 SV_DrainDone
 
 A draining server's end, once its players have left or its map ends:
-said, its players told why, and it exits 0. Inside an extension's hook
+said, its players told why, and it exits with the drain's status. Inside an extension's hook
 (a map an admin's command starts) it quits once the hooks return, and
 returns meanwhile
 =================
@@ -617,7 +618,7 @@ void SV_DrainDone( void ) {
 	// in the log, before Com_Quit's own, though an rcon map ended the drain
 	Com_EndRedirect();
 	Com_Printf( "Drained: %s\n", reason );
-	Com_QuitAfterHooks( reason );
+	Com_QuitStatus( reason, sv_drainStatus );
 }
 
 /*
@@ -1909,6 +1910,28 @@ qboolean SV_ExtClientIdentity( int clientNum, byte key[32] ) {
 	return qtrue;
 }
 
+/*
+==================
+SV_ExtBroadcast
+
+A line to every player as the server's own (hooks.h): center print or
+print, one command under SV_SendServerCommand's limit, its quotes made '
+==================
+*/
+void SV_ExtBroadcast( const char *text, qboolean center ) {
+	char	line[900];
+	int		n;
+
+	if ( sv.state != SS_GAME ) {
+		return;
+	}
+	for ( n = 0; text[n] && n < (int)sizeof( line ) - 1; n++ ) {
+		line[n] = text[n] == '"' ? '\'' : text[n];
+	}
+	line[n] = '\0';
+	SV_SendServerCommand( NULL, center ? "cp \"%s\"" : "print \"%s\n\"", line );
+}
+
 void SV_ExtClientPrint( int clientNum, const char *text ) {
 	client_t	*cl = SV_ExtClient( clientNum );
 	char		part[1000];
@@ -1969,6 +1992,10 @@ qboolean SV_ExtClientMuted( int clientNum ) {
 
 const char *SV_ExtDrainReason( void ) {
 	return sv_drainReason;
+}
+
+int SV_ExtDrainStatus( void ) {
+	return sv_drainReason[0] ? sv_drainStatus : -1;
 }
 
 /*
