@@ -746,32 +746,22 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	last_checksum = LittleLong (Com_BlockChecksum (buf.i, length));
 	*checksum = last_checksum;
 
-	if ( length < (int)sizeof( dheader_t ) ) {
+	// the checks a map's facts read ahead of loading it share (bsp_read.c)
+	switch ( BSP_CheckHeader( buf.i, length, length, &header, &i ) ) {
+	case BSP_TRUNCATED:
 		Com_Error( ERR_DROP, "CM_LoadMap: %s has a truncated header", name );
-	}
-
-	header = *(dheader_t *)buf.i;
-	for (i=0 ; i<sizeof(dheader_t)/4 ; i++) {
-		((int *)&header)[i] = LittleLong ( ((int *)&header)[i]);
-	}
-
-	if ( header.ident != BSP_IDENT ) {
+	case BSP_NOT_BSP:
 		Com_Error( ERR_DROP, "CM_LoadMap: %s isn't a BSP file", name );
-	}
-
-	if ( header.version != BSP_VERSION ) {
+	case BSP_WRONG_VERSION:
 		Com_Error (ERR_DROP, "CM_LoadMap: %s has wrong version number (%i should be %i)"
 		, name, header.version, BSP_VERSION );
-	}
-
-	for ( i = 0 ; i < HEADER_LUMPS ; i++ ) {
-		if ( !Com_RangeInTable( header.lumps[i].fileofs, header.lumps[i].filelen, length ) ) {
-			Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i outside the file", name, i );
-		}
-		// the lumps are read in place, as ints and floats
-		if ( header.lumps[i].fileofs & 3 ) {
-			Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i at an unaligned offset", name, i );
-		}
+	case BSP_LUMP_OUTSIDE:
+		Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i outside the file", name, i );
+	// the lumps are read in place, as ints and floats
+	case BSP_LUMP_UNALIGNED:
+		Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i at an unaligned offset", name, i );
+	case BSP_OK:
+		break;
 	}
 
 	cmod_base = (byte *)buf.i;

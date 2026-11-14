@@ -1379,6 +1379,62 @@ qboolean	FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath )
 qboolean	FS_PictureSizeAllowed( int64_t size );
 int			FS_PictureHead( int size );
 qboolean	FS_PictureLooksRight( const byte *data, int length, const char *type );
+
+// what a map's BSP says ahead of loading it (bsp_read.c): its header as
+// CM_LoadMap checks it, BSP_OK or the fault, lump the lump at fault
+typedef enum {
+	BSP_OK,
+	BSP_TRUNCATED,
+	BSP_NOT_BSP,
+	BSP_WRONG_VERSION,
+	BSP_LUMP_OUTSIDE,
+	BSP_LUMP_UNALIGNED
+} bspFault_t;
+bspFault_t	BSP_CheckHeader( const void *data, int length, int fileLength, dheader_t *header, int *lump );
+// a key of its worldspawn as game code reads the first entity, with the
+// game's limits (game code's MAX_SPAWN_VARS and MAX_SPAWN_VARS_CHARS): found
+// with its value, absent, more text wanted (not whole), or an entity the
+// game would stop the load over
+#define BSP_SPAWN_VARS			64
+#define BSP_SPAWN_VAR_CHARS		4096
+typedef enum {
+	BSP_KEY_FOUND,
+	BSP_KEY_ABSENT,
+	BSP_KEY_MORE,
+	BSP_KEY_BAD
+} bspKey_t;
+bspKey_t	BSP_WorldspawnKey( const char *text, qboolean whole, const char *key, char *value, int size );
+// the same read from the file a load of the map would read (files.c), a
+// step at a time: FS_MapKeyOpen opens it, qfalse for no BSP, with what
+// it's known by while it stays the same (FS_MapSource, which says so
+// without opening it); each FS_MapKeyStep reads for up to msec, and says
+// BSP_KEY_MORE until it has the key, its absence, or a fault, the file
+// unreadable or past BSP_ENTITY_TEXT_MAX before the entity ends;
+// FS_MapKeyClose ends it. A file system restart ends it too: its step then
+// says BSP_KEY_BAD and gone, and nothing's left to close
+#define BSP_ENTITY_TEXT_MAX		( 64 * 1024 )
+// what a map's BSP is known by while it stays the same: its pak's checksum,
+// or a loose file's size and modification time
+typedef struct {
+	qboolean		inPak;
+	int				checksum;
+	int64_t			size, mtime;
+} fsMapSource_t;
+typedef struct {
+	fileHandle_t	f;
+	int				restarts;		// the file system's restarts as it opened
+	int				length, at;		// the file's, and how far it's read
+	int				textAt, lumpLength;	// the entity lump: where, and its length
+	int				textLength, textRead;	// the most of it read, at most BSP_ENTITY_TEXT_MAX, and what is
+	char			*text;			// what's read of it, nul-terminated
+	byte			header[sizeof( dheader_t )];
+	qboolean		gone;			// the file system restarted under it
+	fsMapSource_t	source;
+} fsMapKey_t;
+qboolean	FS_MapSource( const char *map, fsMapSource_t *source );
+qboolean	FS_MapKeyOpen( fsMapKey_t *read, const char *map );
+bspKey_t	FS_MapKeyStep( fsMapKey_t *read, int msec, const char *key, char *value, int size );
+void		FS_MapKeyClose( fsMapKey_t *read );
 // returns 1 if a file is in the PAK file, otherwise -1
 void	FS_SetCurrentMap( const char *map );
 void	FS_NameCurrentMap( const char *map );

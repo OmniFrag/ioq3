@@ -6063,6 +6063,9 @@ qboolean FS_OwnGameCode( const char *module ) {
 	return qfalse;
 }
 
+// how many times the file system shut down, closing every handle
+static int	fs_restarts;
+
 // FS_CurrentGameLinked's answer, -1 until it's asked after the search
 // path or its pure paks changed (FS_ReorderPurePaks, which every start
 // runs, and FS_PureServerSetLoadedPaks), and the cvars it read then
@@ -6583,14 +6586,27 @@ static qboolean FS_LevelshotMissing( const char *path ) {
 
 /*
 ================
+FS_MapBSPName
+
+A map's BSP, maps/<map>.bsp, in bsp; qfalse for a name that isn't a
+map's: empty, cut short, or with a path's characters, ':' among them,
+which the index reads as '/' and Windows as a file's stream
+================
+*/
+static qboolean FS_MapBSPName( const char *map, char *bsp, int size ) {
+	return fs_searchpaths && map[0] && !strpbrk( map, "/\\:" ) && !strstr( map, ".." ) &&
+		Com_sprintf( bsp, size, "maps/%s.bsp", map ) < size;
+}
+
+/*
+================
 FS_MapPictureSearch
 
 Where a map's picture is, the levelshot the menus draw for it,
 levelshots/<map>: in the pak or folder its BSP loads from first, in any
 format; else as a read finds one, format by format. Its name, and the
 entry it's in and its format's index; NULL for none, and for a name that
-isn't a map's: no BSP, or a path's characters, ':' among them, which the
-index reads as '/' and Windows as a file's stream. And whether the BSP
+isn't a map's (FS_MapBSPName) or has no BSP. And whether the BSP
 loads from one of the game's own paks (FS_IdPak, by checksum, whatever its
 name or folder), in gameOwn, either way
 ================
@@ -6603,8 +6619,7 @@ static const searchpath_t *FS_MapPictureSearch( const char *map, char *name, int
 
 	*gameOwn = qfalse;
 	// a name cut short would be another file's
-	if ( !fs_searchpaths || !map[0] || strpbrk( map, "/\\:" ) || strstr( map, ".." ) ||
-		Com_sprintf( bsp, sizeof( bsp ), "maps/%s.bsp", map ) >= (int)sizeof( bsp ) ||
+	if ( !FS_MapBSPName( map, bsp, sizeof( bsp ) ) ||
 		Com_sprintf( name, nameSize, "levelshots/%s.jpeg", map ) >= nameSize ) {
 		return NULL;
 	}
@@ -6671,6 +6686,182 @@ qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
 	picture->size = (int)length;
 	picture->search = search;
 	return qtrue;
+}
+
+// the entry a load of the map reads its BSP from, as the load's own read
+// finds it, and what that file is known by; NULL for none
+static const searchpath_t *FS_MapKeySearch( const char *map, fsMapSource_t *source, char *bsp, int size ) {
+	const searchpath_t	*search;
+
+	Com_Memset( source, 0, sizeof( *source ) );
+	if ( !FS_MapBSPName( map, bsp, size ) || !( search = FS_FileSearch( bsp ) ) ) {
+		return NULL;
+	}
+	if ( search->pack ) {
+		source->inPak = qtrue;
+		source->checksum = search->pack->checksum;
+	} else {
+		Content_FileStat( FS_BuildOSPath( search->dir->path, search->dir->gamedir, bsp ), &source->size, &source->mtime );
+	}
+	return search;
+}
+
+/*
+================
+FS_MapSource
+
+What the BSP a load of the map would read is known by, without reading
+it: its pak's checksum, or a loose file's size and time; qfalse for none
+================
+*/
+qboolean FS_MapSource( const char *map, fsMapSource_t *source ) {
+	char	bsp[MAX_QPATH];
+
+	return FS_MapKeySearch( map, source, bsp, sizeof( bsp ) ) != NULL;
+}
+
+/*
+================
+FS_MapKeyOpen
+
+Opens the BSP a load of the map would read, on a handle of its own, for
+FS_MapKeyStep; qfalse for none, and for a name that isn't a map's. Marks
+no pak referenced: a read ahead isn't a use, and a referenced pak is one
+clients may download (SV_BeginDownload's FS_ReferencedPakNames)
+================
+*/
+qboolean FS_MapKeyOpen( fsMapKey_t *read, const char *map ) {
+	const searchpath_t	*search;
+	char				bsp[MAX_QPATH];
+	long				length;
+	int					referenced;
+
+	Com_Memset( read, 0, sizeof( *read ) );
+	if ( !( search = FS_MapKeySearch( map, &read->source, bsp, sizeof( bsp ) ) ) ) {
+		return qfalse;
+	}
+	referenced = search->pack ? search->pack->referenced : 0;
+	length = FS_FOpenFileReadDir( bsp, (searchpath_t *)search, &read->f, qtrue, qfalse );
+	if ( search->pack ) {
+		search->pack->referenced = referenced;
+	}
+	if ( !read->f ) {
+		return qfalse;
+	}
+	read->length = (int)length;
+	read->restarts = fs_restarts;
+	return qtrue;
+}
+
+// what a step reads at a time, inflating a pak's file to the entity lump:
+// small enough that one inflate stays near a frame's slice on a slow CPU,
+// and no less than BSP_ENTITY_TEXT_MAX, so the text takes one read
+#define FS_MAP_KEY_CHUNK	( 64 * 1024 )
+
+/*
+================
+FS_MapKeyStep
+
+Reads on for up to msec, as FS_MapKeyOpen opened it: the header, checked
+as CM_LoadMap checks it (BSP_CheckHeader); then to the entity lump, which
+a pak's file is inflated up to, since it sits near the end; then the lump,
+until the first entity says the key (BSP_WorldspawnKey), at most
+BSP_ENTITY_TEXT_MAX of it. BSP_KEY_MORE while it reads
+================
+*/
+bspKey_t FS_MapKeyStep( fsMapKey_t *read, int msec, const char *key, char *value, int size ) {
+	static byte	chunk[FS_MAP_KEY_CHUNK];
+	dheader_t	header;
+	bspKey_t	said;
+	int			start = Sys_Milliseconds(), lump, got, want;
+	qboolean	whole;
+
+	value[0] = '\0';
+	// the file system restarted: its handles are closed, this one with them
+	if ( read->restarts != fs_restarts ) {
+		read->f = 0;
+		read->gone = qtrue;
+		return BSP_KEY_BAD;
+	}
+	if ( !read->f ) {
+		return BSP_KEY_BAD;
+	}
+	while ( read->at < (int)sizeof( read->header ) ) {
+		if ( ( got = FS_Read( read->header + read->at, sizeof( read->header ) - read->at, read->f ) ) <= 0 ) {
+			return BSP_KEY_BAD;
+		}
+		read->at += got;
+	}
+	if ( !read->text ) {
+		if ( BSP_CheckHeader( read->header, sizeof( read->header ), read->length, &header, &lump ) != BSP_OK ||
+			header.lumps[LUMP_ENTITIES].filelen <= 0 ) {
+			return BSP_KEY_BAD;
+		}
+		read->textAt = header.lumps[LUMP_ENTITIES].fileofs;
+		read->lumpLength = header.lumps[LUMP_ENTITIES].filelen;
+		read->textLength = MIN( read->lumpLength, BSP_ENTITY_TEXT_MAX );
+		read->text = Z_Malloc( read->textLength + 1 );
+		// a lump that starts in the header's bytes, which are read already
+		if ( read->textAt < read->at ) {
+			read->textRead = MIN( read->at - read->textAt, read->textLength );
+			Com_Memcpy( read->text, read->header + read->textAt, read->textRead );
+		}
+	}
+	// to the lump: a loose file seeks, a pak's inflates its way there
+	while ( read->at < read->textAt ) {
+		if ( !fsh[read->f].zipFile ) {
+			if ( FS_Seek( read->f, read->textAt, FS_SEEK_SET ) ) {
+				return BSP_KEY_BAD;
+			}
+			read->at = read->textAt;
+			break;
+		}
+		want = MIN( (int)sizeof( chunk ), read->textAt - read->at );
+		if ( ( got = FS_Read( chunk, want, read->f ) ) <= 0 ) {
+			return BSP_KEY_BAD;
+		}
+		read->at += got;
+		if ( Sys_Milliseconds() - start >= msec ) {
+			return BSP_KEY_MORE;
+		}
+	}
+	for ( ;; ) {
+		read->text[read->textRead] = '\0';
+		// the game reads the lump's text up to a nul, and no further
+		whole = read->textRead == read->lumpLength || memchr( read->text, '\0', read->textRead );
+		said = BSP_WorldspawnKey( read->text, whole, key, value, size );
+		if ( said != BSP_KEY_MORE ) {
+			return said;
+		}
+		// the first entity runs past what's read of it
+		if ( read->textRead == read->textLength ) {
+			return BSP_KEY_BAD;
+		}
+		if ( Sys_Milliseconds() - start >= msec ) {
+			return BSP_KEY_MORE;
+		}
+		want = MIN( FS_MAP_KEY_CHUNK, read->textLength - read->textRead );
+		if ( ( got = FS_Read( read->text + read->textRead, want, read->f ) ) <= 0 ) {
+			return BSP_KEY_BAD;
+		}
+		read->textRead += got;
+		read->at += got;
+	}
+}
+
+/*
+================
+FS_MapKeyClose
+================
+*/
+void FS_MapKeyClose( fsMapKey_t *read ) {
+	if ( read->f && read->restarts == fs_restarts ) {
+		FS_FCloseFile( read->f );
+	}
+	if ( read->text ) {
+		Z_Free( read->text );
+	}
+	Com_Memset( read, 0, sizeof( *read ) );
 }
 
 /*
@@ -7137,6 +7328,9 @@ Frees all resources.
 void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
+
+	// the handles close: a map's key read (FS_MapKeyStep) knows its own went
+	fs_restarts++;
 
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {

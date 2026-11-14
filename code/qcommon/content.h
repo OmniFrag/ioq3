@@ -44,6 +44,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // an index's file written first under the process's own name: <file>.<pid>.tmp
 #define CONTENT_TEMP_FORMAT		"%s.%d.tmp"
 
+// little-endian fields, as content's files keep them
+void			Content_Put32( byte *p, unsigned int v );
+void			Content_Put64( byte *p, int64_t v );
+unsigned int	Content_Get32( const byte *p );
+int64_t			Content_Get64( const byte *p );
+
 // a whole file into a malloc'd buffer, at most maxLength bytes, or NULL;
 // and a file replaced whole, through one of this process's own and a
 // rename (content.c, which --check never writes)

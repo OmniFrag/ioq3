@@ -50,14 +50,14 @@ static void Content_Put16( byte *p, unsigned int v ) {
 	p[1] = ( v >> 8 ) & 0xff;
 }
 
-static void Content_Put32( byte *p, unsigned int v ) {
+void Content_Put32( byte *p, unsigned int v ) {
 	p[0] = v & 0xff;
 	p[1] = ( v >> 8 ) & 0xff;
 	p[2] = ( v >> 16 ) & 0xff;
 	p[3] = ( v >> 24 ) & 0xff;
 }
 
-static void Content_Put64( byte *p, int64_t v ) {
+void Content_Put64( byte *p, int64_t v ) {
 	Content_Put32( p, (unsigned int)( (uint64_t)v & 0xffffffffu ) );
 	Content_Put32( p + 4, (unsigned int)( (uint64_t)v >> 32 ) );
 }
@@ -66,11 +66,11 @@ static unsigned int Content_Get16( const byte *p ) {
 	return p[0] | ( p[1] << 8 );
 }
 
-static unsigned int Content_Get32( const byte *p ) {
+unsigned int Content_Get32( const byte *p ) {
 	return p[0] | ( p[1] << 8 ) | ( p[2] << 16 ) | ( (unsigned int)p[3] << 24 );
 }
 
-static int64_t Content_Get64( const byte *p ) {
+int64_t Content_Get64( const byte *p ) {
 	return (int64_t)( Content_Get32( p ) | ( (uint64_t)Content_Get32( p + 4 ) << 32 ) );
 }
 

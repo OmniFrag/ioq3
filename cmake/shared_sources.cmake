@@ -10,6 +10,7 @@ if(NOT CVAR_DECLARATIONS_SOURCE)
 endif()
 
 set(COMMON_SOURCES
+    ${SOURCE_DIR}/qcommon/bsp_read.c
     ${SOURCE_DIR}/qcommon/cm_load.c
     ${SOURCE_DIR}/qcommon/cm_patch.c
     ${SOURCE_DIR}/qcommon/cm_polylib.c
