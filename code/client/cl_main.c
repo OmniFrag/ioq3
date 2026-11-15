@@ -5096,7 +5096,12 @@ void CL_Init( void ) {
 	//
 	cl_noprint = Cvar_Get( "cl_noprint", "0", 0 );
 #ifdef UPDATE_SERVER_NAME
-	cl_motd = Cvar_Get ("cl_motd", "1", 0);
+	cl_motd = Cvar_Get ("cl_motd", "0", 0);
+	Cvar_SetDescription( cl_motd,
+		"Whether to ask id's update server for its message of the day at each connect\n"
+		"With 1, every connect sends the graphics driver's name and the game's version to "
+		UPDATE_SERVER_NAME ", id's server from the original release, for a message the old menus scroll. "
+		"0, the default, asks nothing." );
 #endif
 
 	cl_timeout = Cvar_Get ("cl_timeout", "200", 0);
