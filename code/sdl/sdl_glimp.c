@@ -1187,6 +1187,12 @@ attempts:
 				ri.Printf( PRINT_DEVELOPER, "SDL_CreateWindow failed: %s\n", SDL_GetError( ) );
 				break;
 			}
+#ifdef __EMSCRIPTEN__
+			// SDL ends the app on any beforeunload, the page's question to a
+			// player leaving a match included, so one who stays loses the
+			// game; the page ends it as it's really left (Sys_PageHide)
+			emscripten_set_beforeunload_callback( NULL, NULL );
+#endif
 
 			SDL_glContext = SDL_GL_CreateContext( SDL_window );
 			if ( !SDL_glContext )

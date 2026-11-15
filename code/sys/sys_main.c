@@ -30,6 +30,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 #ifndef DEDICATED
 // SDL runs the main loop (SDL_AppIterate), so the game keeps running while
@@ -382,6 +385,12 @@ qboolean Sys_OpenFolderInFileManager( const char *path, qboolean create )
 	return Sys_OpenFolderInPlatformFileManager( path );
 }
 
+#ifdef __EMSCRIPTEN__
+// exit() leaves the page's module alive while SDL's main loop holds it, so
+// the page can't tell the engine has gone (Sys_PageHide)
+static qboolean sysExited = qfalse;
+#endif
+
 /*
 =================
 Sys_Exit
@@ -391,6 +400,10 @@ Single exit point (regular exit or in case of error)
 */
 static Q_NO_RETURN void Sys_Exit( int exitCode )
 {
+#ifdef __EMSCRIPTEN__
+	sysExited = qtrue;
+#endif
+
 	// the server, not --status or --help before it starts, nor a client
 	if( com_fullyInitialized && !Com_IsClient( ) )
 		Sys_Notify( "STOPPING=1" );
@@ -1926,4 +1939,26 @@ void SDL_AppQuit( void *appstate, SDL_AppResult result )
 {
 	Cbuf_ExecuteText( EXEC_NOW, "quit\n" );
 }
+
+#ifdef __EMSCRIPTEN__
+/*
+=================
+Sys_PageHide
+
+The page calls this as it's closed or left for good (pagehide), the last
+it hears of the game: quit as the quit command does, writing the settings
+that changed, before the page saves them. A page asking first may be
+kept, so SDL's own end on every beforeunload is turned off as the window
+is made (GLimp_SetMode).
+=================
+*/
+EMSCRIPTEN_KEEPALIVE void Sys_PageHide( void )
+{
+	// a player's own quit, or an error's, ended it already
+	if( sysExited )
+		return;
+
+	Cbuf_ExecuteText( EXEC_NOW, "quit\n" );
+}
+#endif
 #endif

@@ -873,10 +873,13 @@ const saveFile = (path, bytes) => {
 // would replace what's stored with a new home. A browser that won't store
 // it, as in some private windows, plays without.
 const HOME = '/home/web_user';
+// A save asked for while one runs follows it, but the page's last, as it's
+// left, goes at once (now): the one running may have read the home before
+// the engine's quit wrote it, and the page may not outlive it.
 let homeFS, saving = false, saveAgain = false;
-const saveHome = () => {
+const saveHome = (now = false) => {
     if (!homeFS) return;
-    if (saving) {
+    if (saving && !now) {
         saveAgain = true;
         return;
     }
@@ -891,14 +894,39 @@ const saveHome = () => {
     });
 };
 // The config is written whenever a setting changes, every frame while a
-// slider is dragged: save a second after the last write
-let configSave = 0;
+// slider is dragged: the first write after a quiet second saves at once, as
+// a reload may come next, and those after it a second after the last
+let configSave = 0, lastWrite = -Infinity;
 const configWritten = () => {
+    const quiet = performance.now() - lastWrite > 1000;
+    lastWrite = performance.now();
     clearTimeout(configSave);
-    configSave = setTimeout(saveHome, 1000);
+    if (quiet) saveHome();
+    else configSave = setTimeout(saveHome, 1000);
 };
+// The engine, once it's started: the page ends it as it's closed or left
+// for good, as the quit command does, and the settings it writes then are
+// saved. A page the browser keeps in its back-forward cache may come back,
+// and keeps playing, so it's only saved
+let runningEngine = null;
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveHome(); });
-addEventListener('pagehide', saveHome);
+// A reload or a close starts here, before pagehide, and a save begun here has
+// the longest to finish: the engine writes its config in the frame a setting
+// changes, so it's current. One who stays saved for nothing
+addEventListener('beforeunload', () => saveHome(true));
+addEventListener('pagehide', (event) => {
+    if (!event.persisted && runningEngine) {
+        const ending = runningEngine;
+        runningEngine = null;
+        // quit's exit unwinds the call by throwing
+        try {
+            ending._Sys_PageHide();
+        } catch (e) {
+            if (e?.name !== 'ExitStatus') console.warn(`The engine's quit failed: ${e}`);
+        }
+    }
+    saveHome(true);
+});
 
 // What the page asks the player, over the game: build(box, done) fills the
 // box, and calls done once it has its answer
@@ -1583,6 +1611,9 @@ ioquake3({
     // a player who quit isn't asked before closing the page
     onExit: () => setPlaying(false),
     // the engine has started, and draws from here on
-    postRun: [() => showStatus()],
+    postRun: [(module) => {
+        runningEngine = module;
+        showStatus();
+    }],
 });
 </script>
