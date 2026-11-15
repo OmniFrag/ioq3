@@ -2875,11 +2875,14 @@ static qboolean NET_GetCvars( void ) {
 	modified += net_ip6->modified;
 	net_ip6->modified = qfalse;
 	
+	// a port, or 0 for one the system picks
 	net_port = Cvar_Get( "net_port", va( "%i", PORT_SERVER ), CVAR_LATCH );
+	Cvar_CheckRange( net_port, 0, 65535, qtrue );
 	modified += net_port->modified;
 	net_port->modified = qfalse;
 	
 	net_port6 = Cvar_Get( "net_port6", va( "%i", PORT_SERVER ), CVAR_LATCH );
+	Cvar_CheckRange( net_port6, 0, 65535, qtrue );
 	modified += net_port6->modified;
 	net_port6->modified = qfalse;
 

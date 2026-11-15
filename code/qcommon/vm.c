@@ -77,9 +77,12 @@ VM_Init
 ==============
 */
 void VM_Init( void ) {
+	cvar_t	*game;
+
 	// protected, since they can choose a library in place of a QVM
 	Cvar_Get( "vm_cgame", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
-	Cvar_Get( "vm_game", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
+	game = Cvar_Get( "vm_game", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
+	Cvar_CheckRange( game, 0, 2, qtrue );
 	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE | CVAR_PROTECTED );		// !@# SHIP WITH SET TO 2
 	// native code, so only the player or the operator chooses it, never a
 	// server or a game module

@@ -1459,13 +1459,14 @@ void SV_Init (void)
 		"divides 1000 (20, 25, 40, 50, 100, 125): others run whole-millisecond frames, so 30 runs 30.3 a "
 		"second, and the server warns." );
 	sv_timeout = Cvar_Get ("sv_timeout", "200", CVAR_TEMP );
-	Cvar_CheckRange( sv_timeout, 0, SV_MAX_SECONDS, qtrue );
+	// below 10, a slow map load or a hitch drops players; 0 dropped every
+	// player within a few frames
+	Cvar_CheckRange( sv_timeout, 10, SV_MAX_SECONDS, qtrue );
 	Cvar_SetDescription( sv_timeout,
 		"Seconds of silence before a player is dropped as timed out\n"
 		"A player whose game stops sending, from a lost connection, a frozen game or a hidden browser "
 		"tab, stays in the match standing still until then, and then everyone sees \"timed out\". It also "
-		"covers players loading a map, so a slow load needs it long. 0 doesn't mean never: it drops "
-		"every player within 6 server frames." );
+		"covers players loading a map, so a slow load needs it long. At least 10." );
 	sv_hibernateTime = Cvar_Get ("sv_hibernateTime", "30000", CVAR_TEMP );
 	// a day at most: a float holds it exactly, as it doesn't INT_MAX
 	Cvar_CheckRange( sv_hibernateTime, 0, 86400000, qtrue );
