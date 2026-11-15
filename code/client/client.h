@@ -494,8 +494,6 @@ typedef struct {
 	char		updateChallenge[MAX_TOKEN_CHARS];
 	char		updateInfoString[MAX_INFO_STRING];
 
-	netadr_t	authorizeServer;
-
 	netadr_t	rconAddress;
 	int			rconTime;		// cls.realtime of the last rcon sent
 
