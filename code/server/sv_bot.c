@@ -46,9 +46,18 @@ SV_BotAllocateClient
 */
 int SV_BotAllocateClient(void) {
 	int			i;
-	client_t	*cl = SV_OldestFreeClient( 0, svs.maxclients );
+	// a public slot alone, as a player without sv_privatePassword takes,
+	// so a reserved player always finds one of theirs
+	client_t	*cl = SV_OldestFreeClient( sv_privateClients->integer, svs.maxclients );
 
 	if ( !cl ) {
+		static int	saidFor = -1;	// the map it was said on, once each, as a filler tries again
+
+		if ( saidFor != sv.serverId && SV_OldestFreeClient( 0, sv_privateClients->integer ) ) {
+			saidFor = sv.serverId;
+			Com_Printf( "No bot is added: the public slots are full, and a bot never takes one of the %d "
+				"reserved for sv_privatePassword (sv_privateClients).\n", sv_privateClients->integer );
+		}
 		return -1;
 	}
 	i = cl - svs.clients;

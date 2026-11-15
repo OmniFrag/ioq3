@@ -1314,8 +1314,7 @@ void SV_Init (void)
 		"Player slots kept for those who know sv_privatePassword\n"
 		"The slots come out of sv_maxclients, and server lists don't count them: 16 slots with 2 kept "
 		"show as 14. A player whose /password matches sv_privatePassword may take any free slot, everyone "
-		"else only the rest. While g_password is set, both must be the same word, since a player sends "
-		"only one." );
+		"else only the rest, bots too, and the game lets it past g_password." );
 	// a name players can tell from "noname", the default every server had
 	sv_hostname = Cvar_Get ("sv_hostname", PRODUCT_NAME " server", CVAR_SERVERINFO | CVAR_ARCHIVE );
 	Cvar_SetDescription( sv_hostname,

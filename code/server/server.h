@@ -560,6 +560,7 @@ void SV_ChallengeRotate( void );
 uint32_t SV_AskedExtensions( int firstArg );
 
 client_t *SV_OldestFreeClient( int startIndex, int endIndex );
+qboolean SV_PrivatePassword( const char *userinfo );
 void SV_DirectConnect( netadr_t from );
 
 

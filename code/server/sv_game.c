@@ -343,6 +343,7 @@ static const vmExtension_t sv_gameExtensions[] = {
 	{ "trap_Cvar_SetRange", COM_TRAP_CVAR_SETRANGE },
 	{ "trap_GameFact_OF", COM_TRAP_GAMEFACT },
 	{ "trap_ClientRole_OF", COM_TRAP_CLIENTROLE },
+	{ "trap_ClientPrivate_OF", COM_TRAP_CLIENTPRIVATE },
 	{ "trap_VoteCommand_OF", COM_TRAP_VOTECOMMAND },
 	{ "trap_Cvar_GameValue_OF", COM_TRAP_CVAR_GAMEVALUE },
 	{ NULL, 0 }
@@ -550,6 +551,7 @@ static const char * const sv_gameSyscallNames[] = {
 	SYSCALL( COM_TRAP_CVAR_SETRANGE ),
 	SYSCALL( COM_TRAP_GAMEFACT ),
 	SYSCALL( COM_TRAP_CLIENTROLE ),
+	SYSCALL( COM_TRAP_CLIENTPRIVATE ),
 	SYSCALL( COM_TRAP_VOTECOMMAND ),
 	SYSCALL( COM_TRAP_CVAR_GAMEVALUE ),
 };
@@ -1299,6 +1301,14 @@ intptr_t SV_GameSystemCalls( intptr_t *args ) {
 			return ROLE_NONE;
 		}
 		return Hooks_ClientRole( clientNum, cl->identityProven ? cl->identity : NULL );
+	}
+
+	case COM_TRAP_CLIENTPRIVATE: {
+		int			clientNum = args[1];
+
+		return clientNum >= 0 && clientNum < svs.maxclients &&
+			svs.clients[clientNum].netchan.remoteAddress.type != NA_BOT &&
+			SV_PrivatePassword( svs.clients[clientNum].userinfo );
 	}
 
 	case COM_TRAP_CVAR_GAMEVALUE:

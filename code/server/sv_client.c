@@ -541,6 +541,20 @@ static Q_PRINTF_FUNC(2, 3) void QDECL SV_RefuseConnect( netadr_t to, const char 
 
 /*
 ==================
+SV_PrivatePassword
+
+Whether a userinfo's password is sv_privatePassword, which is set: the
+reserved slots' password
+==================
+*/
+qboolean SV_PrivatePassword( const char *userinfo ) {
+	const char	*password = Info_ValueForKey( userinfo, "password" );
+
+	return *password && !strcmp( password, sv_privatePassword->string );
+}
+
+/*
+==================
 SV_OldestFreeClient
 
 The free slot in [startIndex, endIndex) let go longest ago, a never used
@@ -646,7 +660,6 @@ void SV_DirectConnect( netadr_t from ) {
 	int			version;
 	int			qport;
 	int			challenge;
-	char		*password;
 	int			startIndex;
 	intptr_t		denied;
 	int			count;
@@ -831,8 +844,7 @@ void SV_DirectConnect( netadr_t from ) {
 	// servers so we can play without having to kick people.
 
 	// check for privateClient password
-	password = Info_ValueForKey( userinfo, "password" );
-	if ( ( *password && !strcmp( password, sv_privatePassword->string ) ) ||
+	if ( SV_PrivatePassword( userinfo ) ||
 		// an admin's device, as the keeper of roles says (hooks.h)
 		( identityProven && Hooks_ClientRole( -1, identity ) >= ROLE_ADMIN ) ) {
 		startIndex = 0;

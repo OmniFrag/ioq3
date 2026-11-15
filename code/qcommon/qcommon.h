@@ -495,6 +495,13 @@ typedef struct {
 // extension
 #define	COM_TRAP_CLIENTROLE	812
 
+// qboolean trap_ClientPrivate( int clientNum ) in game: whether a client
+// connecting or playing sent sv_privatePassword, set, as its password:
+// the reserved slots' password, which the game takes for its own too;
+// qfalse for a bot, a slot out of range, and on every engine without the
+// extension
+#define	COM_TRAP_CLIENTPRIVATE	818
+
 // trap_VoteCommand( int clientNum, const char *text ) in game: a passed
 // vote's command text, appended to run restricted as game code's does,
 // with "vote by <name>" as its origin, the name the engine's own copy of
