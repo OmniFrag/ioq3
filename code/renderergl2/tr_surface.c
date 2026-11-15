@@ -423,9 +423,6 @@ static qboolean RB_SurfaceVaoCached(int numVerts, srfVert_t *verts, int numIndex
 
 	VaoCache_BindVao();
 
-	tess.dlightBits |= dlightBits;
-	tess.pshadowBits |= pshadowBits;
-
 	VaoCache_CheckAdd(&endSurface, &recycleVertexBuffer, &recycleIndexBuffer, numVerts, numIndexes);
 
 	if (endSurface)
@@ -433,6 +430,10 @@ static qboolean RB_SurfaceVaoCached(int numVerts, srfVert_t *verts, int numIndex
 		RB_EndSurface();
 		RB_BeginSurface(tess.shader, tess.fogNum, tess.cubemapIndex);
 	}
+
+	// after any flush, which clears them
+	tess.dlightBits |= dlightBits;
+	tess.pshadowBits |= pshadowBits;
 
 	if (recycleVertexBuffer)
 		VaoCache_RecycleVertexBuffer();
@@ -984,10 +985,7 @@ static void RB_SurfaceGrid( srfBspSurface_t *srf ) {
 	RB_CheckVao(tess.vao);
 
 	dlightBits = srf->dlightBits;
-	tess.dlightBits |= dlightBits;
-
 	pshadowBits = srf->pshadowBits;
-	tess.pshadowBits |= pshadowBits;
 
 	// determine the allowable discrepance
 	lodError = LodErrorForVolume( srf->lodOrigin, srf->lodRadius );
@@ -1035,6 +1033,10 @@ static void RB_SurfaceGrid( srfBspSurface_t *srf ) {
 				break;
 			}
 		} while ( 1 );
+
+		// each pass, as a flush clears them
+		tess.dlightBits |= dlightBits;
+		tess.pshadowBits |= pshadowBits;
 		
 		rows = irows;
 		if ( vrows < irows + 1 ) {

@@ -232,9 +232,10 @@ static void RB_SurfaceTriangles( srfTriangles_t *srf ) {
 	qboolean	needsNormal;
 
 	dlightBits = srf->dlightBits;
-	tess.dlightBits |= dlightBits;
 
 	RB_CHECKOVERFLOW( srf->numVerts, srf->numIndexes );
+
+	tess.dlightBits |= dlightBits;
 
 	for ( i = 0 ; i < srf->numIndexes ; i += 3 ) {
 		tess.indexes[ tess.numIndexes + i + 0 ] = tess.numVertexes + srf->indexes[ i + 0 ];
@@ -883,7 +884,6 @@ static void RB_SurfaceGrid( srfGridMesh_t *cv ) {
 	qboolean	needsNormal;
 
 	dlightBits = cv->dlightBits;
-	tess.dlightBits |= dlightBits;
 
 	// determine the allowable discrepance
 	lodError = LodErrorForVolume( cv->lodOrigin, cv->lodRadius );
@@ -931,6 +931,9 @@ static void RB_SurfaceGrid( srfGridMesh_t *cv ) {
 				break;
 			}
 		} while ( 1 );
+
+		// each pass, as a flush clears them
+		tess.dlightBits |= dlightBits;
 		
 		rows = irows;
 		if ( vrows < irows + 1 ) {
