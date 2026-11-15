@@ -1463,6 +1463,8 @@ int		FS_FileTier( const char *filename );
 
 int		FS_Write( const void *buffer, int len, fileHandle_t f );
 int			FS_WriteFailed( fileHandle_t f );
+// flushes each file written since its last flush, once a second (Com_Frame)
+void		FS_FlushWrites( void );
 // a write to f failed, its errno or -1, so FS_Write drops its writes until
 // it's closed
 

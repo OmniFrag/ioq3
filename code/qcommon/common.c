@@ -5966,6 +5966,18 @@ void Com_Frame( void ) {
 	// a log compressed on its own thread
 	Log_Frame();
 
+	// what's written to a buffered file, qconsole.log and games.log among
+	// them, reaches it within a second, a quiet or hibernating server's too
+	{
+		static int	flushedAt;
+		int			now = Sys_Milliseconds();
+
+		if ( now - flushedAt >= 1000 ) {
+			FS_FlushWrites();
+			flushedAt = now;
+		}
+	}
+
 	com_frameNumber++;
 }
 

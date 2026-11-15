@@ -477,9 +477,13 @@ typedef struct {
 	const vm_t	*owner;			// the module that opened it (FS_VM_FOpenFile)
 	int			writeError;		// FS_Write drops its writes until it's closed
 	qboolean	isLog;			// and drops them while Log_Paused
+	qboolean	unflushed;		// written since it was last flushed (FS_FlushWrites)
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
+// any handle written since FS_FlushWrites last ran, so an idle pass costs
+// nothing: a pak's and a read's never are
+static qboolean			fs_unflushed;
 
 // TTimo - https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=540
 // wether we did a reorder on the current search path when joining the server
@@ -2887,7 +2891,38 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 		FS_FailWrite( h );
 		return 0;
 	}
+	if ( !fsh[h].handleSync ) {
+		fsh[h].unflushed = fs_unflushed = qtrue;
+	}
 	return len;
+}
+
+/*
+=================
+FS_FlushWrites
+
+Each file written since its last flush, flushed: a buffered log's lines
+reach the file within the interval Com_Frame calls this at, a quiet or
+hibernating server's too, and a kill that leaves no time to close it
+loses no more than that
+=================
+*/
+void FS_FlushWrites( void ) {
+	int		i;
+
+	if ( !fs_unflushed ) {
+		return;
+	}
+	fs_unflushed = qfalse;
+	for ( i = 1; i < MAX_FILE_HANDLES; i++ ) {
+		if ( fsh[i].unflushed ) {
+			fsh[i].unflushed = qfalse;
+			errno = 0;
+			if ( fflush( fsh[i].handleFiles.file.o ) ) {
+				FS_FailWrite( i );
+			}
+		}
+	}
 }
 
 /*
