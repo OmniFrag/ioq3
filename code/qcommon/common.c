@@ -4538,9 +4538,11 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	// as early, so the first lines have them too
 	com_timestamps = Cvar_Get( "com_timestamps", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( com_timestamps, 0, 2, qtrue );
-	Cvar_SetDescription( com_timestamps, "The date and time at the start of each line: "
-		"0 nowhere; 1 in qconsole.log, the default; 2 on the console too, where tools "
-		"reading the server's lines may not expect them." );
+	Cvar_SetDescription( com_timestamps, "Where each line starts with the date and time\n"
+		"Tools reading the server's console lines may not expect them there.\n"
+		"0 = Nowhere\n"
+		"1 = Console log: in qconsole.log alone, the default\n"
+		"2 = Log and console: on the console too" );
 
 	// done early so bind command exists
 	CL_InitKeyCommands();
@@ -4787,7 +4789,8 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 	Cvar_SetDescription( com_pipefile,
 		"Named pipe the server reads console commands from; empty for none\n"
 		"Each line written to it runs as a console command with full rights, and only the server's own "
-		"user can write it. A dedicated server's is in its own folder, servers/<port>/, and it works on "
+		"user can write it. A dedicated server's is in its own folder, servers/<port>/ or with sv_instance "
+		"servers/<name>/, and it works on "
 		"Linux and macOS, not Windows. It takes effect only as the program starts, so set it on the "
 		"command line; a server.cfg sets it too late." );
 	// a dedicated server's once its socket is open (Sys_Start)

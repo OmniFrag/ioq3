@@ -1338,14 +1338,15 @@ void SV_Init (void)
 	Cvar_SetDescription( sv_minRate,
 		"Least each player is sent, in bytes a second; 0 for no floor\n"
 		"A player whose own rate setting is lower is sent this much anyway, which can be more than the "
-		"player's connection takes. It wins over sv_maxRate where they cross. OmniFrag players' rate is "
+		"player's connection takes; below 1000 it reads as 1000. It wins over sv_maxRate where they cross. OmniFrag players' rate is "
 		"90000 by default, so it matters only for players who lowered it or play with another engine." );
 	sv_maxRate = Cvar_Get ("sv_maxRate", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_CheckRange( sv_maxRate, 0, INT_MAX, qtrue );
 	Cvar_SetDescription( sv_maxRate,
 		"Most each player is sent, in bytes a second; 0 for no limit\n"
 		"A player's own rate setting, 90000 by default in OmniFrag and 3000 in Quake III, is lowered to "
-		"this; the server holds rate to 90000 anyway, so more changes nothing. A player uses about 7 KB/s "
+		"this; below 1000 it reads as 1000, and the server holds rate to 90000 anyway, so more changes "
+		"nothing. A player uses about 7 KB/s "
 		"at sv_fps 40 in a busy match, so lower it only for a thin uplink. Players on the local network "
 		"are exempt (sv_lanForceRate)." );
 	// one player downloads at about 850 KB/s at best, as the protocol's
@@ -1593,9 +1594,9 @@ void SV_Init (void)
 	Cvar_CheckRange( sv_maxclientsPerIP, 0, MAX_CLIENTS, qtrue );
 	Cvar_SetDescription( sv_maxclientsPerIP,
 		"Most players from one address at once; 0 for no limit\n"
-		"Players behind one router, such as at a LAN party, share an address, and so today do all players "
-		"coming from the web version through its gateway. A player over the limit is refused with \"Too "
-		"many connections\". Quake3e has it too, and starts it at 3." );
+		"Players behind one router, such as at a LAN party, share an address; players through a relay or "
+		"the browser gateway count by their own, which those name. A player over the limit is refused "
+		"with \"Too many connections\". Quake3e has it too, and starts it at 3." );
 	sv_showloss = Cvar_Get ("sv_showloss", "0", 0);
 	sv_padPackets = Cvar_Get ("sv_padPackets", "0", 0);
 	// a request: the client's, or the ui's (uiSetCvars)
@@ -1622,9 +1623,10 @@ void SV_Init (void)
 	Cvar_SetDescription( sv_lanForceRate,
 		"Whether players on the local network get unlimited bandwidth\n"
 		"With 1, a player from a local address, such as 192.168.1.20 or 10.0.0.5, is sent updates with no "
-		"rate limit, sv_maxRate included, unless dedicated is 2. Players coming through a relay, a "
-		"gateway or a Docker network have local addresses too, so on a dedicated 1 server they count. The "
-		"server's own player is always unlimited." );
+		"rate limit, sv_maxRate included, unless dedicated is 2. A relay and the browser gateway name each "
+		"player's own address, but players reaching a server in a Docker network or behind another proxy "
+		"come from a local one, so on a dedicated 1 server they count. The server's own player is always "
+		"unlimited." );
 	// protected: banaddr writes the file it names, in the server's own
 	// directory beside its saved settings, which game code may not write
 	sv_banFile = Cvar_Get("sv_banFile", "serverbans.dat", CVAR_ARCHIVE | CVAR_PROTECTED);

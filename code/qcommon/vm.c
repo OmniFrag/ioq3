@@ -83,6 +83,12 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
 	game = Cvar_Get( "vm_game", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
 	Cvar_CheckRange( game, 0, 2, qtrue );
+	Cvar_SetDescription( game, "How the server runs a game module from a QVM file\n"
+		"A game directory whose game code is linked into the server runs that (vm_linked); this is for a "
+		"mod's own.\n"
+		"0 = Library: a native library beside the QVM, which runs as the server's own code\n"
+		"1 = Interpreted: the QVM's bytecode, a step at a time\n"
+		"2 = Compiled: the QVM's bytecode compiled as it loads, the default" );
 	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE | CVAR_PROTECTED );		// !@# SHIP WITH SET TO 2
 	// native code, so only the player or the operator chooses it, never a
 	// server or a game module
