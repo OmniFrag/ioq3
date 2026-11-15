@@ -877,7 +877,7 @@ const HOME = '/home/web_user';
 // left, goes at once (now): the one running may have read the home before
 // the engine's quit wrote it, and the page may not outlive it.
 let homeFS, saving = false, saveAgain = false;
-const saveHome = (now = false) => {
+const saveHome = (now = false, saved) => {
     if (!homeFS) return;
     if (saving && !now) {
         saveAgain = true;
@@ -886,12 +886,75 @@ const saveHome = (now = false) => {
     saving = true;
     homeFS.syncfs(false, (error) => {
         if (error) console.warn(`Couldn't save the settings: ${error}`);
+        else saved?.();
         saving = false;
         if (saveAgain) {
             saveAgain = false;
             saveHome();
         }
     });
+};
+
+// A copy of the settings files in the page's own storage, written at once as
+// the page is left: a browser may end the page before IndexedDB finishes the
+// save begun then, as Chromium and WebKit do, which loses a setting changed
+// in the second before. The next start takes from it each file written
+// later than IndexedDB's, with the time it was written, and drops it once a
+// save holds them. A full or blocked localStorage leaves IndexedDB's alone
+const SETTINGS_COPY = 'omnifrag-settings';
+// the home's settings files, the engine's .cfg files of a few KB each, as
+// [path, mtime]
+const settingsFiles = (fs, dir = HOME, out = []) => {
+    for (const name of fs.readdir(dir)) {
+        if (name === '.' || name === '..') continue;
+        const path = `${dir}/${name}`, stat = fs.stat(path);
+        if (fs.isDir(stat.mode)) settingsFiles(fs, path, out);
+        else if (name.endsWith('.cfg') && stat.size <= 65536) out.push([path, stat.mtime.getTime()]);
+    }
+    return out;
+};
+const copySettings = () => {
+    if (!homeFS) return;
+    try {
+        // each byte a character: a config needn't be UTF-8 (a name's high
+        // characters), and must come back as it was
+        const files = settingsFiles(homeFS).map(([path, mtime]) =>
+            [path, mtime, Array.from(homeFS.readFile(path), (byte) => String.fromCharCode(byte)).join('')]);
+        localStorage.setItem(SETTINGS_COPY, JSON.stringify(files));
+    } catch {
+        // the storage is full or blocked: IndexedDB's save is all there is,
+        // and an older copy mustn't stand for this leave's
+        try { localStorage.removeItem(SETTINGS_COPY); } catch { /* blocked */ }
+    }
+};
+const restoreSettings = (fs) => {
+    let kept;
+    try {
+        kept = localStorage.getItem(SETTINGS_COPY);
+    } catch {
+        return; // blocked: there's no copy
+    }
+    if (!kept) return;
+    try {
+        // only what IndexedDB's save missed: a file another tab saved since,
+        // or one this copy has as it was, is left as stored
+        for (const [path, mtime, text] of JSON.parse(kept)) {
+            const stored = fs.analyzePath(path).exists ? fs.stat(path).mtime.getTime() : -Infinity;
+            if (stored >= mtime) continue;
+            fs.mkdirTree(path.slice(0, path.lastIndexOf('/')));
+            fs.writeFile(path, Uint8Array.from(text, (c) => c.charCodeAt(0)));
+            fs.utime(path, mtime, mtime);
+        }
+        // kept until a save has them, should this page go as soon as it
+        // starts, unless a leave since wrote another
+        saveHome(true, () => {
+            try {
+                if (localStorage.getItem(SETTINGS_COPY) === kept) localStorage.removeItem(SETTINGS_COPY);
+            } catch { /* blocked */ }
+        });
+    } catch (e) {
+        console.warn(`Couldn't read the settings kept as the page was last left: ${e}`);
+    }
 };
 // The config is written whenever a setting changes, every frame while a
 // slider is dragged: the first write after a quiet second saves at once, as
@@ -909,11 +972,19 @@ const configWritten = () => {
 // saved. A page the browser keeps in its back-forward cache may come back,
 // and keeps playing, so it's only saved
 let runningEngine = null;
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveHome(); });
+// a phone may end a tab it has hidden without a pagehide, so its copy too
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    copySettings();
+    saveHome();
+});
 // A reload or a close starts here, before pagehide, and a save begun here has
 // the longest to finish: the engine writes its config in the frame a setting
 // changes, so it's current. One who stays saved for nothing
-addEventListener('beforeunload', () => saveHome(true));
+addEventListener('beforeunload', () => {
+    copySettings();
+    saveHome(true);
+});
 addEventListener('pagehide', (event) => {
     if (!event.persisted && runningEngine) {
         const ending = runningEngine;
@@ -925,6 +996,7 @@ addEventListener('pagehide', (event) => {
             if (e?.name !== 'ExitStatus') console.warn(`The engine's quit failed: ${e}`);
         }
     }
+    copySettings();
     saveHome(true);
 });
 
@@ -1596,7 +1668,10 @@ ioquake3({
         module.addRunDependency('load-home');
         module.FS.syncfs(true, (error) => {
             if (error) console.warn(`Couldn't read the settings saved before: ${error}`);
-            else homeFS = module.FS;
+            else {
+                homeFS = module.FS;
+                restoreSettings(homeFS);
+            }
             module.removeRunDependency('load-home');
         });
     }, async (module) => {
