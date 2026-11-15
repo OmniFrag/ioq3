@@ -2271,6 +2271,8 @@ void CL_Vid_Restart_f( void ) {
 		// start the cgame if connected
 		if(clc.state > CA_CONNECTED && clc.state != CA_CINEMATIC)
 		{
+			// a frozen demo starts the cgame again on the moment it shows
+			clc.frozenDemoRestart = clc.demoplaying && cl_freezeDemo->integer && cl.snap.valid;
 			cls.cgameStarted = qtrue;
 			CL_InitCGame();
 			// send pure checksums

@@ -281,6 +281,7 @@ typedef struct {
 	qboolean	demoplaying;
 	qboolean	demowaiting;	// don't record until a non-delta message is received
 	qboolean	firstDemoFrameSkipped;
+	qboolean	frozenDemoRestart;	// vid_restart while cl_freezeDemo held a demo's snapshot
 	fileHandle_t	demofile;
 
 	int			timeDemoFrames;		// counter of rendered frames

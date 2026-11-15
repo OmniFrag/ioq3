@@ -927,6 +927,34 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 
 /*
 ====================
+CL_FrozenDemoMessageNum
+
+The message number a frozen demo's cgame starts from after a vid_restart:
+the one before the newest snapshot at or before cl.serverTime, so the
+cgame reads that snapshot and the next again, the two it was drawing
+between, and shows the same moment
+====================
+*/
+static int CL_FrozenDemoMessageNum( void ) {
+	clSnapshot_t	*snap;
+	int				n;
+
+	// cl.snap is usually past cl.serverTime, which a pause can reach
+	for ( n = cl.snap.messageNum; n > cl.snap.messageNum - PACKET_BACKUP; n-- ) {
+		snap = &cl.snapshots[ n & PACKET_MASK ];
+		// as CL_GetSnapshot gives them
+		if ( snap->valid && snap->messageNum == n && snap->serverTime <= cl.serverTime
+			&& cl.parseEntitiesNum - snap->parseEntitiesNum < MAX_PARSE_ENTITIES ) {
+			return n - 1;
+		}
+	}
+
+	// nothing kept at or before it: the cgame starts on cl.snap
+	return cl.snap.messageNum - 1;
+}
+
+/*
+====================
 CL_InitCGame
 
 Should only be called by CL_StartHunkUsers
@@ -936,6 +964,7 @@ void CL_InitCGame( void ) {
 	const char			*info;
 	const char			*mapname;
 	int					t1, t2;
+	int					serverMessageNum;
 	vmInterpret_t		interpret;
 
 	t1 = Sys_Milliseconds();
@@ -973,7 +1002,8 @@ void CL_InitCGame( void ) {
 	// init for this gamestate
 	// use the lastExecutedServerCommand instead of the serverCommandSequence
 	// otherwise server commands sent just before a gamestate are dropped
-	VM_Call( cgvm, CG_INIT, clc.serverMessageSequence, clc.lastExecutedServerCommand, clc.clientNum );
+	serverMessageNum = clc.frozenDemoRestart ? CL_FrozenDemoMessageNum() : clc.serverMessageSequence;
+	VM_Call( cgvm, CG_INIT, serverMessageNum, clc.lastExecutedServerCommand, clc.clientNum );
 
 	// reset any CVAR_CHEAT cvars registered by cgame
 	if ( !clc.demoplaying && !cl_connectedToCheatServer )
@@ -1203,7 +1233,14 @@ void CL_SetCGameTime( void ) {
 				clc.firstDemoFrameSkipped = qtrue;
 				return;
 			}
-			CL_ReadDemoMessage();
+			// a vid_restart of a frozen demo goes on with the snapshot it
+			// holds, rather than stepping to the next one at each restart
+			if ( clc.frozenDemoRestart ) {
+				clc.frozenDemoRestart = qfalse;
+				cl.newSnapshots = qtrue;
+			} else {
+				CL_ReadDemoMessage();
+			}
 		}
 		if ( cl.newSnapshots ) {
 			cl.newSnapshots = qfalse;
