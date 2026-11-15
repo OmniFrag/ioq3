@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "server.h"
 
+#include <ctype.h>
+#include <time.h>
+
 /*
 ===============================================================================
 
@@ -694,6 +697,8 @@ static void SV_BanNum_f( void ) {
 // changes whenever the ban list does (SV_ExtBanListChanges)
 static int serverBansChanges;
 
+static void SV_LiftExpiredBans(void);
+
 /*
 ==================
 SV_RehashBans_f
@@ -758,10 +763,15 @@ static void SV_RehashBans_f(void)
 			
 			*newlinepos = '\0';
 			
+			Com_Memset(&serverBans[index], 0, sizeof(serverBans[index]));
 			if(NET_StringToAdr(curpos + 2, &serverBans[index].ip, NA_UNSPEC))
 			{
+				const char *details = strchr(maskpos, ' ');
+
 				serverBans[index].isexception = (curpos[0] != '0');
 				serverBans[index].subnet = atoi(maskpos);
+				if(details)
+					SV_ParseBanDetails(details + 1, &serverBans[index].details);
 				
 				if(serverBans[index].ip.type == NA_IP &&
 				   (serverBans[index].subnet < 1 || serverBans[index].subnet > 32))
@@ -782,6 +792,8 @@ static void SV_RehashBans_f(void)
 		
 		Z_Free(textbuf);
 	}
+	// those that ran out while the server was down go before anyone connects
+	SV_LiftExpiredBans();
 }
 
 /*
@@ -792,11 +804,32 @@ Save bans to file, the server's own (FS_ServerFile). Every change to the
 list ends here.
 ==================
 */
+// a ban's line in the ban file, into out of size: as a classic server
+// writes it, then its details, which a classic server reads past and keeps
+// the ban for good; its length
+static int SV_BanLine(const serverBan_t *curban, char *out, int size)
+{
+	char by[4 * EXT_BAN_NAME + 3], name[4 * EXT_BAN_NAME + 3], reason[4 * EXT_BAN_REASON + 3];
+	int len = Com_sprintf(out, size, "%d %s %d", curban->isexception, NET_AdrToString(curban->ip), curban->subnet);
+
+	// any details kept, an end above all: one dropped would make the ban
+	// last for good after the next restart
+	if(curban->details.recorded || curban->details.expires || curban->details.by[0] || curban->details.name[0] ||
+		curban->details.reason[0])
+	{
+		SV_BanQuote(curban->details.by, by, sizeof(by));
+		SV_BanQuote(curban->details.name, name, sizeof(name));
+		SV_BanQuote(curban->details.reason, reason, sizeof(reason));
+		len += Com_sprintf(out + len, size - len, " t=%lld e=%lld b=%s n=%s r=%s", (long long)curban->details.at,
+			(long long)curban->details.expires, by, name, reason);
+	}
+	return len + Com_sprintf(out + len, size - len, "\n");
+}
+
 static void SV_WriteBans(void)
 {
-	int index;
-	fileHandle_t writeto;
-	char filepath[MAX_OSPATH];
+	int index, len = 0, size, pass;
+	char filepath[MAX_OSPATH], *text;
 
 	serverBansChanges++;
 
@@ -805,22 +838,29 @@ static void SV_WriteBans(void)
 
 	Q_strncpyz(filepath, FS_ServerQPath(sv_banFile->string), sizeof(filepath));
 
-	if((writeto = FS_BaseDir_FOpenFileWrite_HomeState(filepath)))
+	// sized by a first pass of the lines, written in a second
+	size = 1;
+	text = NULL;
+	for(pass = 0; pass < 2; pass++)
 	{
-		char writebuf[128];
-		serverBan_t *curban;
-		
-		for(index = 0; index < serverBansCount; index++)
+		if(pass)
+			text = Z_Malloc(size);
+		for(index = len = 0; index < serverBansCount; index++)
 		{
-			curban = &serverBans[index];
-			
-			Com_sprintf(writebuf, sizeof(writebuf), "%d %s %d\n",
-				    curban->isexception, NET_AdrToString(curban->ip), curban->subnet);
-			FS_Write(writebuf, strlen(writebuf), writeto);
-		}
+			char line[NET_ADDRSTRMAXLEN + 64 + 4 * (2 * EXT_BAN_NAME + EXT_BAN_REASON) + 32];
 
-		FS_FCloseFile(writeto);
+			len += SV_BanLine(&serverBans[index], pass ? text + len : line, pass ? size - len : sizeof(line));
+		}
+		size = len + 1;
 	}
+	// replaced whole, never half written, and never as a library, program,
+	// game module or pak, as FS_FOpenFileWrite refuses
+	if(FS_IsCodeFile(filepath))
+		Com_Printf(S_COLOR_YELLOW "WARNING: the bans aren't written to %s, a code file's name\n", filepath);
+	else if(!FS_ReplaceOSFile(FS_BaseDir_BuildOSPath(Cvar_VariableString("fs_homestatepath"), filepath), text, len, qfalse) &&
+		!com_check)
+		Com_Printf(S_COLOR_YELLOW "WARNING: the bans couldn't be written to %s\n", filepath);
+	Z_Free(text);
 }
 
 /*
@@ -895,18 +935,29 @@ qboolean SV_ParseCIDRNotation(netadr_t *dest, int *mask, char *adrstr)
 ==================
 SV_AddBan
 
-Add a ban or an exception of ip/mask, unless an entry already supersedes
-it, delete the entries the new one supersedes, and save the list. Returns
+Add a ban or an exception of ip/mask, with details' who made it, when,
+who it was, why and when it runs out if given, unless an entry already
+supersedes it, delete the entries the new one supersedes, and save the
+list. Returns
 the new entry's index, or -1 with why: *covering is then the index of the
 entry that supersedes it, or -1.
 ==================
 */
 
-static int SV_AddBan(netadr_t ip, int mask, qboolean isexception, int *covering, char *why, int whySize)
+// whether a ban that runs out at ends lasts at least as long as one that
+// runs out at other, each 0 for never, so that it can stand for it
+static qboolean SV_BanOutlasts(int64_t ends, int64_t other)
+{
+	return !ends || (other && ends >= other);
+}
+
+static int SV_AddBan(netadr_t ip, int mask, qboolean isexception, const extBanDetails_t *details, int *covering,
+	char *why, int whySize)
 {
 	char addy2[NET_ADDRSTRMAXLEN];
 	int index;
 	serverBan_t *curban;
+	int64_t expires = details && !isexception ? details->expires : 0;
 
 	*covering = -1;
 
@@ -923,7 +974,9 @@ static int SV_AddBan(netadr_t ip, int mask, qboolean isexception, int *covering,
 
 		if(curban->subnet <= mask)
 		{
-			if((curban->isexception || !isexception) && NET_CompareBaseAdrMask(curban->ip, ip, curban->subnet))
+			// a ban that runs out sooner doesn't: the new one replaces it
+			if((curban->isexception || (!isexception && SV_BanOutlasts(curban->details.expires, expires))) &&
+			   NET_CompareBaseAdrMask(curban->ip, ip, curban->subnet))
 			{
 				Q_strncpyz(addy2, NET_AdrToString(ip), sizeof(addy2));
 
@@ -956,19 +1009,26 @@ static int SV_AddBan(netadr_t ip, int mask, qboolean isexception, int *covering,
 		return -1;
 	}
 
-	// now delete bans that are superseded by the new one
+	// now delete bans that are superseded by the new one: those it covers,
+	// the same range's among them, that it lasts as long as. One the
+	// checks above let through of the same range is a ban that runs out
+	// sooner
 	index = 0;
 	while(index < serverBansCount)
 	{
 		curban = &serverBans[index];
 
-		if(curban->subnet > mask && (!curban->isexception || isexception) && NET_CompareBaseAdrMask(curban->ip, ip, mask))
+		if(curban->subnet >= mask && (isexception || (!curban->isexception && SV_BanOutlasts(expires, curban->details.expires))) &&
+		   NET_CompareBaseAdrMask(curban->ip, ip, mask))
 			SV_DelBanEntryFromList(index);
 		else
 			index++;
 	}
 
 	index = serverBansCount++;
+	Com_Memset(&serverBans[index], 0, sizeof(serverBans[index]));
+	if(details)
+		serverBans[index].details = *details;
 	serverBans[index].ip = ip;
 	serverBans[index].subnet = mask;
 	serverBans[index].isexception = isexception;
@@ -991,7 +1051,9 @@ static void SV_AddBanToList(qboolean isexception)
 	char *banstring;
 	char why[MAX_STRING_CHARS];
 	netadr_t ip;
-	int argc, mask, covering;
+	int argc, mask, covering, duration = 0, i;
+	extBanDetails_t details;
+	client_t *named = NULL;
 
 	// make sure server is running
 	if ( !com_sv_running->integer ) {
@@ -1000,10 +1062,25 @@ static void SV_AddBanToList(qboolean isexception)
 	}
 
 	argc = Cmd_Argc();
-	
+
+	// a ban's length last, which no subnet looks like: "1h", "7d"
+	Com_Memset(&details, 0, sizeof(details));
+	if(!isexception && argc >= 3 && Cmd_Argv(argc - 1)[0] &&
+	   !isdigit((unsigned char)Cmd_Argv(argc - 1)[strlen(Cmd_Argv(argc - 1)) - 1]))
+	{
+		if(!(duration = SV_BanDuration(Cmd_Argv(argc - 1))))
+		{
+			Com_Printf("Error: %s isn't a ban's length: a number and s, m, h, d or w, up to %d days\n",
+				Cmd_Argv(argc - 1), SERVER_BAN_LONGEST / (24 * 60 * 60));
+			return;
+		}
+		argc--;
+	}
+
 	if(argc < 2 || argc > 3)
 	{
-		Com_Printf ("Usage: %s (ip[/subnet] | clientnum [subnet])\n", Cmd_Argv(0));
+		Com_Printf ("Usage: %s (ip[/subnet] | clientnum [subnet])%s\n", Cmd_Argv(0),
+			isexception ? "" : " [length: 1h, 1d, 7d, 30d]");
 		return;
 	}
 
@@ -1040,6 +1117,7 @@ static void SV_AddBanToList(qboolean isexception)
 		}
 		
 		ip = cl->netchan.remoteAddress;
+		named = cl;
 		
 		if(argc == 3)
 		{
@@ -1060,14 +1138,30 @@ static void SV_AddBanToList(qboolean isexception)
 			mask = (ip.type == NA_IP6) ? 128 : 32;
 	}
 
-	if(SV_AddBan(ip, mask, isexception, &covering, why, sizeof(why)) < 0)
+	// who it was: the client named, or the first one the ban covers
+	for(i = 0; !named && i < sv_maxclients->integer; i++)
+	{
+		if(svs.clients[i].state >= CS_CONNECTED && NET_CompareBaseAdrMask(svs.clients[i].netchan.remoteAddress, ip, mask))
+			named = &svs.clients[i];
+	}
+	if(!isexception)
+	{
+		details.recorded = qtrue;
+		details.at = (int64_t)time(NULL);
+		details.expires = duration ? details.at + duration : 0;
+		Q_strncpyz(details.by, Cmd_Origin() ? Cmd_Origin() : Com_IsRedirecting() ? "rcon" : "console", sizeof(details.by));
+		if(named)
+			Q_strncpyz(details.name, named->name, sizeof(details.name));
+	}
+
+	if(SV_AddBan(ip, mask, isexception, isexception ? NULL : &details, &covering, why, sizeof(why)) < 0)
 	{
 		Com_Printf("%s\n", why);
 		return;
 	}
 
-	Com_Printf("Added %s: %s/%d\n", isexception ? "ban exception" : "ban",
-		   NET_AdrToString(ip), mask);
+	Com_Printf("Added %s: %s/%d%s\n", isexception ? "ban exception" : "ban",
+		   NET_AdrToString(ip), mask, duration ? va(", for %s", Cmd_Argv(Cmd_Argc() - 1)) : "");
 }
 
 /*
@@ -1162,6 +1256,107 @@ static void SV_DelBanFromList(qboolean isexception)
 }
 
 
+// a ban's text for the console, each control character, which a ban file
+// edited by hand may hold, a space, so no line it prints looks like another
+static const char *SV_BanPrintable(const char *in, char *out, int size)
+{
+	int len = 0;
+
+	for(; *in && len < size - 1; in++)
+		out[len++] = ((unsigned char)*in < 0x20 || *in == 0x7f) ? ' ' : *in;
+	out[len] = '\0';
+	return out;
+}
+
+// a ban's time for the console; gmtime refuses some a hand-edited file may
+// name (Windows' past the year 3000)
+static void SV_BanTime(int64_t at, char *out, int size)
+{
+	time_t when = (time_t)at;
+	struct tm *tm = gmtime(&when);
+
+	if(!tm || !strftime(out, size, "%Y-%m-%d %H:%M UTC", tm))
+		Q_strncpyz(out, "an unknown time", size);
+}
+
+/*
+==================
+SV_BanDetailsText
+
+What listbans says of a ban after its address: who it was, who made it
+and when, when it runs out, and why; "" for a ban made before the file
+kept them, and its end alone for one with an end but no maker or time
+==================
+*/
+static const char *SV_BanDetailsText(const serverBan_t *ban)
+{
+	static char text[MAX_STRING_CHARS];
+	char made[32], ends[32], name[EXT_BAN_NAME], by[EXT_BAN_NAME], reason[EXT_BAN_REASON];
+
+	if(!ban->details.recorded && !ban->details.expires)
+		return "";
+	SV_BanTime(ban->details.at, made, sizeof(made));
+	SV_BanTime(ban->details.expires, ends, sizeof(ends));
+	// one whose maker and time aren't known, but whose end is (a ban
+	// file's, edited by hand): that alone
+	if(!ban->details.recorded)
+	{
+		Com_sprintf(text, sizeof(text), ", until %s", ends);
+		return text;
+	}
+	Com_sprintf(text, sizeof(text), ", %s" S_COLOR_WHITE ", by %s, %s, %s%s%s",
+		ban->details.name[0] ? SV_BanPrintable(ban->details.name, name, sizeof(name)) : "no name",
+		SV_BanPrintable(ban->details.by, by, sizeof(by)), made, ban->details.expires ? "until " : "for good", ban->details.expires ? ends : "",
+		ban->details.reason[0] ? va(": %s", SV_BanPrintable(ban->details.reason, reason, sizeof(reason))) : "");
+	return text;
+}
+
+/*
+==================
+SV_LiftExpiredBans, SV_ExpireBans
+
+The bans past their end lifted and saved, each said at the console: as
+the file's read, and each second. An exception never runs out
+==================
+*/
+static void SV_LiftExpiredBans(void)
+{
+	int64_t now = (int64_t)time(NULL);
+	int index = 0;
+	qboolean lifted = qfalse;
+
+	while(index < serverBansCount)
+	{
+		serverBan_t *ban = &serverBans[index];
+
+		if(!ban->isexception && ban->details.expires && ban->details.expires <= now)
+		{
+			char name[EXT_BAN_NAME];
+
+			Com_Printf("The ban on %s/%d%s ran out.\n", NET_AdrToString(ban->ip), ban->subnet,
+				ban->details.name[0] ? va(" (%s" S_COLOR_WHITE ")", SV_BanPrintable(ban->details.name, name, sizeof(name))) : "");
+			SV_DelBanEntryFromList(index);
+			lifted = qtrue;
+		}
+		else
+			index++;
+	}
+	if(lifted)
+		SV_WriteBans();
+}
+
+void SV_ExpireBans(void)
+{
+	static int64_t checked;
+	int64_t now = (int64_t)time(NULL);
+
+	if(now != checked)
+	{
+		checked = now;
+		SV_LiftExpiredBans();
+	}
+}
+
 /*
 ==================
 SV_ListBans_f
@@ -1189,8 +1384,8 @@ static void SV_ListBans_f(void)
 		{
 			count++;
 
-			Com_Printf("Ban #%d: %s/%d\n", count,
-				    NET_AdrToString(ban->ip), ban->subnet);
+			Com_Printf("Ban #%d: %s/%d%s\n", count,
+				    NET_AdrToString(ban->ip), ban->subnet, SV_BanDetailsText(ban));
 		}
 	}
 	// List all exceptions
@@ -1246,9 +1441,11 @@ qboolean SV_ExtGetBan( int index, extBan_t *ban ) {
 	if ( index < 0 || index >= serverBansCount ) {
 		return qfalse;
 	}
+	Com_Memset( ban, 0, sizeof( *ban ) );
 	Q_strncpyz( ban->address, NET_AdrToString( serverBans[index].ip ), sizeof( ban->address ) );
 	ban->subnet = serverBans[index].subnet;
 	ban->exception = serverBans[index].isexception;
+	ban->details = serverBans[index].details;
 	return qtrue;
 }
 
@@ -1265,11 +1462,13 @@ address, or a range in CIDR notation whose prefix is in range, which
 banaddr would widen to one address
 ==================
 */
-int SV_ExtAddBan( const char *address, qboolean exception, int *covering, char *why, int whySize ) {
+int SV_ExtAddBan( const char *address, qboolean exception, const extBanDetails_t *details, int *covering,
+	char *why, int whySize ) {
 	char		text[NET_ADDRSTRMAXLEN + 4];
 	char		*suffix;
 	netadr_t	ip;
 	int		bits, mask, index;
+	extBanDetails_t	given;
 
 	*covering = -1;
 	Q_strncpyz( text, address, sizeof( text ) );
@@ -1293,7 +1492,12 @@ int SV_ExtAddBan( const char *address, qboolean exception, int *covering, char *
 		goto invalid;
 	}
 
-	index = SV_AddBan( ip, mask, exception, covering, why, whySize );
+	if ( details && !exception ) {
+		given = *details;
+		given.recorded = qtrue;
+		given.at = details->at ? details->at : (int64_t)time( NULL );
+	}
+	index = SV_AddBan( ip, mask, exception, details && !exception ? &given : NULL, covering, why, whySize );
 	return index >= 0 ? index : EXT_BAN_REFUSED;
 
 invalid:

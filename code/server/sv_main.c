@@ -2386,6 +2386,9 @@ void SV_Frame( int msec ) {
 	// the pak index, and the content manifest built from it
 	SV_ContentFrame();
 
+	// the bans that ran out, with or without a map up
+	SV_ExpireBans();
+
 	if (!com_sv_running->integer)
 	{
 		// a map an error ended starts again (SV_RestartAfterError)

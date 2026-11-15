@@ -459,6 +459,7 @@ static qboolean SV_IsBanned(netadr_t *from, qboolean isexception)
 {
 	int index;
 	serverBan_t *curban;
+	int64_t now = (int64_t)time(NULL);
 	
 	if(!isexception)
 	{
@@ -471,7 +472,10 @@ static qboolean SV_IsBanned(netadr_t *from, qboolean isexception)
 	{
 		curban = &serverBans[index];
 		
-		if(curban->isexception == isexception)
+		// one past its end refuses nobody, though it's lifted once a second;
+		// an exception never runs out (SV_LiftExpiredBans)
+		if(curban->isexception == isexception &&
+		   (isexception || !curban->details.expires || curban->details.expires > now))
 		{
 			if(NET_CompareBaseAdrMask(curban->ip, *from, curban->subnet))
 				return qtrue;

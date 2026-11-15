@@ -837,7 +837,7 @@ module on any platform, or of a pk3, which can hold game modules. Files
 written on one platform can be copied to, or shared with, another.
 =================
 */
-static qboolean FS_IsCodeFile( const char *filename )
+qboolean FS_IsCodeFile( const char *filename )
 {
 	return FS_IsNativeFile( filename ) || COM_CompareExtension( filename, ".qvm" )
 		|| COM_CompareExtension( filename, ".wasm" ) || COM_CompareExtension( filename, ".pk3" );

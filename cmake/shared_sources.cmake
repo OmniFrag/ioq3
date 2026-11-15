@@ -77,6 +77,7 @@ set(SYSTEM_SOURCES
 set(SERVER_SOURCES
     ${SOURCE_DIR}/server/sv_bot.c
     ${SOURCE_DIR}/server/sv_client.c
+    ${SOURCE_DIR}/server/sv_banfile.c
     ${SOURCE_DIR}/server/sv_ccmds.c
     ${SOURCE_DIR}/server/sv_check.c
     ${SOURCE_DIR}/server/sv_content.c

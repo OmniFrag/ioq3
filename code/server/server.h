@@ -321,6 +321,7 @@ typedef struct {
 } serverStatic_t;
 
 #define SERVER_MAXBANS	1024
+#define SERVER_BAN_LONGEST	EXT_BAN_LONGEST
 // Structure for managing bans
 typedef struct
 {
@@ -329,6 +330,10 @@ typedef struct
 	int subnet;
 	
 	qboolean isexception;
+
+	// what the ban file keeps after the subnet, which a classic server
+	// reads past (hooks.h)
+	extBanDetails_t details;
 } serverBan_t;
 
 //=============================================================================
@@ -388,6 +393,14 @@ extern	cvar_t	*sv_trustedProxies;
 
 extern	serverBan_t serverBans[SERVER_MAXBANS];
 extern	int serverBansCount;
+// each second: the bans past their end lifted, each said at the console
+void SV_ExpireBans( void );
+// sv_banfile.c: a ban's text quoted for the ban file, and read back; the
+// details after a line's subnet; and a length typed, "1h", "7d", in seconds
+void SV_BanQuote( const char *text, char *out, int size );
+void SV_BanUnquote( const char **text, char *out, int size );
+void SV_ParseBanDetails( const char *text, extBanDetails_t *ban );
+int SV_BanDuration( const char *text );
 
 #ifdef USE_VOIP
 extern	cvar_t	*sv_voip;

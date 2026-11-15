@@ -893,10 +893,23 @@ int		SV_ExtPendingMapChanges( void );
 // The server's address bans and their exceptions (banaddr, exceptaddr),
 // which sv_banFile keeps. Indexes run from 0 to SV_ExtBanCount() - 1, and
 // move as entries come and go.
+#define EXT_BAN_NAME		64
+#define EXT_BAN_REASON		128
+#define EXT_BAN_LONGEST		( 365 * 24 * 60 * 60 )	// the longest a ban may last before it runs out, in seconds
+// what the ban file keeps of a ban after its subnet: whether who made it
+// and when are known (a ban from before the file kept them, or another
+// program's, isn't), when, by whom, the banned player's name, why, and
+// when it runs out (Unix seconds, 0 for never), each "" or 0 for none
+typedef struct {
+	qboolean	recorded;
+	int64_t		at, expires;
+	char		by[EXT_BAN_NAME], name[EXT_BAN_NAME], reason[EXT_BAN_REASON];
+} extBanDetails_t;
 typedef struct {
 	char		address[NET_ADDRSTRMAXLEN];	// without the prefix: "192.168.1.0", "fe80::"
 	int		subnet;				// the prefix's bits: 32, or 128 for IPv6, for one address
 	qboolean	exception;			// an exception to the bans, not a ban
+	extBanDetails_t	details;
 } extBan_t;
 
 int		SV_ExtBanCount( void );
@@ -907,11 +920,16 @@ int		SV_ExtBanListChanges( void );
 // Adds a ban, or an exception, as banaddr and exceptaddr do: of an IPv4
 // or IPv6 address written as numbers, or a range in CIDR notation
 // ("192.168.1.0/24"), never a host name, which would be looked up. The
-// entries it supersedes go, and the list is saved. Returns the new entry's
-// index, or one of the EXT_BAN_* below with why as banaddr prints it, and
-// *covering the index of an entry that already supersedes it, or -1.
-// Nobody connected is dropped: SV_ExtDropBanned does that
-int		SV_ExtAddBan( const char *address, qboolean exception, int *covering, char *why, int whySize );
+// entries it supersedes go, and the list is saved; a ban supersedes another
+// only if it runs out no sooner, so a ban for good stays one. Returns
+// the new entry's index, or one of the EXT_BAN_* below with why as
+// banaddr prints it, and *covering the index of an entry that already
+// supersedes it, or -1.
+// Nobody connected is dropped: SV_ExtDropBanned does that. A ban's
+// details, if given, are kept with it: by, name, reason and expires (0 for
+// never; the server lifts it once past), at now if 0
+int		SV_ExtAddBan( const char *address, qboolean exception, const extBanDetails_t *details, int *covering,
+	char *why, int whySize );
 #define EXT_BAN_INVALID		-1	// not an address, or a prefix out of range
 #define EXT_BAN_REFUSED		-2	// an entry supersedes it, the list is full, or a ban supersedes the exception
 // removes an entry, and saves the list

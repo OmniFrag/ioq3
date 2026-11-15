@@ -1255,6 +1255,9 @@ const char	*Com_KeyFingerprint( const struct identKey_s *key );
 long FS_ReadOSFile( const char *ospath, void **buffer );
 // a file outside the search path, into memory (Z_Free it), or -1
 qboolean FS_ReplaceOSFile( const char *ospath, const void *data, int length, qboolean private );
+// whether a name is a library's, program's, game module's or pak's, which
+// nothing writes
+qboolean FS_IsCodeFile( const char *filename );
 qboolean FS_AppendOSFile( const char *ospath, const void *data, int length, qboolean private );
 // writes outside the search path: whole, through a file renamed over it,
 // or added to the end; private ones readable by their user alone
