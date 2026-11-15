@@ -314,9 +314,6 @@ typedef struct {
 	int			hibernateFrom;		// when the last player left, bots aside, or the server last woke
 	hibernation_t	hibernation;
 	netadr_t	redirectAddress;			// for rcon return messages
-#ifndef STANDALONE
-	netadr_t	authorizeAddress;			// authorize server address
-#endif
 	int			masterResolveTime[MAX_MASTER_SERVERS]; // next svs.time that server should do dns lookup for master server
 } serverStatic_t;
 
