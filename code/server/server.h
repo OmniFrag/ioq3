@@ -249,6 +249,10 @@ typedef struct client_s {
 	int				pureAuthentic;
 	qboolean  gotCP; // TTimo - additional flag to distinguish between a bad pure checksum, and no cp command at all
 	netchan_t		netchan;
+	// the local address its datagrams last came to, NA_BAD where that isn't
+	// known (NET_PacketDestination), which says whether it's on the local
+	// network (NET_IsLocalNetwork)
+	netadr_t		localTo;
 	// TTimo
 	// queuing outgoing fragmented messages to send them properly, without udp packet bursts
 	// in case large fragmented messages are stacking up

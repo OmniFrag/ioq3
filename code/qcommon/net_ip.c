@@ -1888,15 +1888,19 @@ Whether a player's address is on the network this computer is on, as a
 server open to its local network alone takes (sv_visibility local):
 loopback, a private range, a subnet of one of its interfaces, or the
 shared address space 100.64/10 that overlay networks such as tailnets
-give out, where this computer has an address in it too. A player whose
-datagrams come through a proxy is judged by the address the proxy names
-when the proxy is this computer's own (the proxy socket); one through a
-relay or another proxy comes from elsewhere
+give out, when its datagrams come to this computer's own address there,
+to (NULL or NA_BAD where that isn't known, which isn't). Carrier-grade NAT
+gives its customers the same space, and another of them comes in through
+the router's forward, to a private or public address, so a shared-space
+player is judged by to alone, in an interface's subnet or not. A player whose
+datagrams come through a proxy is judged by the addresses the proxy names
+when the proxy is this computer's own (the proxy socket), its header's
+destination for to; one through a relay or another proxy comes from
+elsewhere
 ==================
 */
-qboolean NET_IsLocalNetwork( netadr_t adr ) {
+qboolean NET_IsLocalNetwork( netadr_t adr, const netadr_t *to ) {
 	const netProxyRoute_t	*route;
-	int						i;
 
 	if ( adr.type == NA_LOOPBACK ) {
 		return qtrue;
@@ -1905,19 +1909,13 @@ qboolean NET_IsLocalNetwork( netadr_t adr ) {
 	if ( route && !route->onProxySocket ) {
 		return qfalse;
 	}
-	if ( NET_LANRanges( adr ) ) {
-		return qtrue;
-	}
 	if ( adr.type != NA_IP || !NET_SharedSpace( adr.ip ) ) {
-		return qfalse;
+		return NET_LANRanges( adr );
 	}
-	for ( i = 0; i < numIP; i++ ) {
-		if ( localIP[i].type == NA_IP &&
-			NET_SharedSpace( (const byte *)&( (struct sockaddr_in *)&localIP[i].addr )->sin_addr.s_addr ) ) {
-			return qtrue;
-		}
+	if ( route ) {
+		return route->header.family == 4 && NET_SharedSpace( route->header.dst );
 	}
-	return qfalse;
+	return to && to->type == NA_IP && NET_SharedSpace( to->ip );
 }
 
 /*

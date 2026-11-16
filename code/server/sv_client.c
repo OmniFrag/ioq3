@@ -663,6 +663,7 @@ void SV_DirectConnect( netadr_t from ) {
 	int			startIndex;
 	intptr_t		denied;
 	int			count;
+	netadr_t	to;
 	char		*ip;
 	uint32_t	ofx = 0;
 	uint64_t	contentKey = 0;
@@ -770,13 +771,15 @@ void SV_DirectConnect( netadr_t from ) {
 
 	// one open to its local network alone takes no player from elsewhere,
 	// a reconnect into a slot it was just dropped from included
-	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !NET_IsLocalNetwork( from ) ) {
+	NET_PacketDestination( &to );
+	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !NET_IsLocalNetwork( from, &to ) ) {
 		SV_RefuseConnect( from, "This server is for players on its local network only.\n" );
 		return;
 	}
 
 	newcl = &temp;
 	Com_Memset (newcl, 0, sizeof(client_t));
+	newcl->localTo = to;
 
 	// a slot at this address and port with another qport is a connection
 	// that's gone: a game started again on the same port, as a player

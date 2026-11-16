@@ -1763,6 +1763,8 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 			NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
 			// make sure it is a valid, in sequence packet
 			if ( SV_Netchan_Process( cl, msg ) ) {
+				// where it came to, which SV_OutsidePlayer judges it by
+				NET_PacketDestination( &cl->localTo );
 				SV_ClientPacket( cl, msg );
 			}
 			return;
@@ -1786,6 +1788,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 				i, (unsigned short)BigShort( cl->netchan.remoteAddress.port ),
 				(unsigned short)BigShort( from.port ) );
 			cl->netchan.remoteAddress.port = from.port;
+			NET_PacketDestination( &cl->localTo );
 			// it may have come another way: through a proxy, or directly
 			// where a proxy's route was left
 			cl->proxied = NET_PacketProxied();
@@ -2307,7 +2310,7 @@ Whether a client is a player from outside the local network
 */
 static qboolean SV_OutsidePlayer( const client_t *cl ) {
 	return cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
-		!NET_IsLocalNetwork( cl->netchan.remoteAddress );
+		!NET_IsLocalNetwork( cl->netchan.remoteAddress, &cl->localTo );
 }
 
 /*
