@@ -177,6 +177,9 @@ int			NET_QueryServer( const char *address, char *summary, int size );
 int			NET_Port( void );
 int			NET_ServerPort( void );
 int			NET_OpenPort( netadrtype_t type );
+// the local address the packet just received came to; NA_BAD, and qfalse,
+// where the system didn't say, or for a SOCKS relay's
+qboolean	NET_PacketDestination( netadr_t *to );
 qboolean	NET_LoopbackOnly( int port, int port6 );
 int			NET_ReceiveBufferSize( netadrtype_t type );
 void		NET_Config( qboolean enableNetworking );

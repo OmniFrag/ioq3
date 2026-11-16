@@ -21,7 +21,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #if defined(__linux__) && !defined(__EMSCRIPTEN__) && !defined(_GNU_SOURCE)
-#define _GNU_SOURCE	// ppoll
+#define _GNU_SOURCE	// ppoll, struct in_pktinfo
+#endif
+#ifdef __APPLE__
+#define __APPLE_USE_RFC_3542	// IPV6_RECVPKTINFO, struct in6_pktinfo
 #endif
 
 #include "../qcommon/q_shared.h"
@@ -32,6 +35,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #	include <winsock2.h>
 #	include <ws2tcpip.h>
 #	include <iphlpapi.h>
+#	include <mswsock.h>
 #	if WINVER < 0x501
 #		ifdef __MINGW32__
 			// wspiapi.h isn't available on MinGW, so if it's
@@ -155,6 +159,12 @@ static netadr_t	proxy_socket_adr;
 // the packet being handled came on proxy_socket, and the one being sent
 // goes out of it
 static qboolean	netFromProxySocket, netSendOnProxySocket;
+// the local address the packet NET_GetPacket last returned came to, NA_BAD
+// where that isn't known (NET_PacketDestination)
+static netadr_t	netPacketTo;
+// whether the IPv4 and the IPv6 game socket, since each opened, have said
+// if the system reports where their datagrams come to (developer)
+static qboolean	netDestinationSaid[2];
 // counts the gateway socket's openings and secrets: a route from an earlier
 // one is retired
 static int		netProxyGeneration;
@@ -637,6 +647,206 @@ void NET_CloseConnection( netadr_t adr ) {
 
 //=============================================================================
 
+#ifdef _WIN32
+static LPFN_WSARECVMSG	netRecvMsg;
+#endif
+
+/*
+==================
+NET_RecvFrom
+
+recvfrom that also gives the local address the datagram came to, as the
+socket was asked to report it (NET_ReportDestination), in to; NA_BAD where
+the system doesn't say
+==================
+*/
+static int NET_RecvFrom( SOCKET s, void *data, int size, struct sockaddr_storage *from, socklen_t *fromlen,
+	netadr_t *to ) {
+#ifdef _WIN32
+	union {
+		WSACMSGHDR	header;
+		char		space[WSA_CMSG_SPACE( sizeof( IN6_PKTINFO ) )];
+	} control;
+	WSABUF		buffer;
+	WSAMSG		msg;
+	WSACMSGHDR	*c;
+	DWORD		received;
+
+	to->type = NA_BAD;
+	if ( !netRecvMsg ) {
+		return recvfrom( s, data, size, 0, (struct sockaddr *)from, fromlen );
+	}
+	buffer.buf = data;
+	buffer.len = size;
+	Com_Memset( &msg, 0, sizeof( msg ) );
+	msg.name = (struct sockaddr *)from;
+	msg.namelen = sizeof( *from );
+	msg.lpBuffers = &buffer;
+	msg.dwBufferCount = 1;
+	// zeroed, so a header the call didn't write reads as none
+	Com_Memset( &control, 0, sizeof( control ) );
+	msg.Control.buf = control.space;
+	msg.Control.len = sizeof( control.space );
+	if ( netRecvMsg( s, &msg, &received, NULL, NULL ) == SOCKET_ERROR ) {
+		return SOCKET_ERROR;
+	}
+	*fromlen = msg.namelen;
+	for ( c = WSA_CMSG_FIRSTHDR( &msg ); c; c = WSA_CMSG_NXTHDR( &msg, c ) ) {
+		if ( c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO &&
+			c->cmsg_len >= WSA_CMSG_LEN( sizeof( IN_PKTINFO ) ) ) {
+			IN_PKTINFO	info;
+
+			Com_Memcpy( &info, WSA_CMSG_DATA( c ), sizeof( info ) );
+			to->type = NA_IP;
+			Com_Memcpy( to->ip, &info.ipi_addr, sizeof( to->ip ) );
+		} else if ( c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO &&
+			c->cmsg_len >= WSA_CMSG_LEN( sizeof( IN6_PKTINFO ) ) ) {
+			IN6_PKTINFO	info;
+
+			Com_Memcpy( &info, WSA_CMSG_DATA( c ), sizeof( info ) );
+			to->type = NA_IP6;
+			Com_Memcpy( to->ip6, &info.ipi6_addr, sizeof( to->ip6 ) );
+		}
+	}
+	return (int)received;
+#else
+	union {
+		struct cmsghdr	header;
+		byte			space[CMSG_SPACE( sizeof( struct in6_pktinfo ) ) + CMSG_SPACE( sizeof( struct in_addr ) * 4 )];
+	} control;
+	struct iovec	iov;
+	struct msghdr	msg;
+	struct cmsghdr	*c;
+	int				ret;
+
+	to->type = NA_BAD;
+	iov.iov_base = data;
+	iov.iov_len = size;
+	Com_Memset( &msg, 0, sizeof( msg ) );
+	msg.msg_name = from;
+	msg.msg_namelen = sizeof( *from );
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = &control;
+	msg.msg_controllen = sizeof( control );
+	if ( ( ret = recvmsg( s, &msg, 0 ) ) == SOCKET_ERROR ) {
+		return ret;
+	}
+	*fromlen = msg.msg_namelen;
+	for ( c = CMSG_FIRSTHDR( &msg ); c; c = CMSG_NXTHDR( &msg, c ) ) {
+#if defined( IP_PKTINFO )
+		if ( c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO &&
+			c->cmsg_len >= CMSG_LEN( sizeof( struct in_pktinfo ) ) ) {
+			struct in_pktinfo	info;
+
+			Com_Memcpy( &info, CMSG_DATA( c ), sizeof( info ) );
+			to->type = NA_IP;
+			Com_Memcpy( to->ip, &info.ipi_addr, sizeof( to->ip ) );
+		}
+#elif defined( IP_RECVDSTADDR )
+		if ( c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_RECVDSTADDR &&
+			c->cmsg_len >= CMSG_LEN( sizeof( struct in_addr ) ) ) {
+			to->type = NA_IP;
+			Com_Memcpy( to->ip, CMSG_DATA( c ), sizeof( to->ip ) );
+		}
+#endif
+#ifdef IPV6_PKTINFO
+		if ( c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO &&
+			c->cmsg_len >= CMSG_LEN( sizeof( struct in6_pktinfo ) ) ) {
+			struct in6_pktinfo	info;
+
+			Com_Memcpy( &info, CMSG_DATA( c ), sizeof( info ) );
+			to->type = NA_IP6;
+			Com_Memcpy( to->ip6, &info.ipi6_addr, sizeof( to->ip6 ) );
+		}
+#endif
+	}
+	return ret;
+#endif
+}
+
+/*
+==================
+NET_ReportDestination
+
+Asks a socket to report each datagram's local destination address, which
+NET_RecvFrom reads; one that can't goes on without it
+==================
+*/
+static void NET_ReportDestination( SOCKET s, int family ) {
+	int		on = 1;
+	int		level = family == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP;
+	int		option = -1;
+
+	if ( family == AF_INET ) {
+#if defined( IP_PKTINFO )
+		option = IP_PKTINFO;
+#elif defined( IP_RECVDSTADDR )
+		option = IP_RECVDSTADDR;
+#endif
+	} else {
+#if defined( IPV6_RECVPKTINFO )
+		option = IPV6_RECVPKTINFO;
+#elif defined( IPV6_PKTINFO )
+		option = IPV6_PKTINFO;
+#endif
+	}
+	if ( option < 0 || setsockopt( s, level, option, (char *)&on, sizeof( on ) ) == SOCKET_ERROR ) {
+		Com_DPrintf( "WARNING: NET_ReportDestination: the datagrams' destinations won't be known\n" );
+	}
+	netDestinationSaid[family == AF_INET6] = qfalse;
+#ifdef _WIN32
+	if ( !netRecvMsg ) {
+		GUID	guid = WSAID_WSARECVMSG;
+		DWORD	got;
+
+		if ( WSAIoctl( s, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, sizeof( guid ), &netRecvMsg,
+			sizeof( netRecvMsg ), &got, NULL, NULL ) == SOCKET_ERROR ) {
+			netRecvMsg = NULL;
+		}
+	}
+#endif
+}
+
+/*
+==================
+NET_SayDestination
+
+Says once for each opening of a game socket, with developer on, whether
+the system reports where its datagrams come to, and the first one's
+destination
+==================
+*/
+static void NET_SayDestination( int v6 ) {
+	const char	*family = v6 ? "IPv6" : "IPv4";
+
+	if ( netDestinationSaid[v6] ) {
+		return;
+	}
+	netDestinationSaid[v6] = qtrue;
+	if ( netPacketTo.type == NA_BAD ) {
+		Com_DPrintf( "NET: the %s socket's datagrams don't say which local address they came to\n", family );
+	} else {
+		Com_DPrintf( "NET: the %s socket's datagrams say which local address they came to, the first %s\n", family,
+			NET_AdrToString( netPacketTo ) );
+	}
+}
+
+/*
+==================
+NET_PacketDestination
+
+The local address the packet just received came to, in to: the game
+sockets' own, as the system reports it. NA_BAD, and qfalse, where it isn't
+known: the system didn't say, the packet came through a SOCKS relay or a
+proxy, or on another socket
+==================
+*/
+qboolean NET_PacketDestination( netadr_t *to ) {
+	*to = netPacketTo;
+	return to->type != NA_BAD;
+}
+
 /*
 ==================
 NET_GetPacket
@@ -652,6 +862,7 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 	int		err;
 
 	netFromProxySocket = qfalse;
+	netPacketTo.type = NA_BAD;
 	if(proxy_socket != INVALID_SOCKET && readsocks->proxy)
 	{
 		fromlen = sizeof(from);
@@ -675,7 +886,7 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 	if(ip_socket != INVALID_SOCKET && readsocks->ip)
 	{
 		fromlen = sizeof(from);
-		ret = recvfrom( ip_socket, (void *)net_message->data, net_message->maxsize, 0, (struct sockaddr *) &from, &fromlen );
+		ret = NET_RecvFrom( ip_socket, net_message->data, net_message->maxsize, &from, &fromlen, &netPacketTo );
 		
 		if (ret == SOCKET_ERROR)
 		{
@@ -700,10 +911,13 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 				net_from->ip[3] = net_message->data[7];
 				net_from->port = *(short *)&net_message->data[8];
 				net_message->readcount = 10;
+				// the relay's, which says nothing of where the player sent it
+				netPacketTo.type = NA_BAD;
 			}
 			else {
 				SockadrToNetadr( (struct sockaddr *) &from, net_from );
 				net_message->readcount = 0;
+				NET_SayDestination( 0 );
 			}
 		
 			if( ret >= net_message->maxsize ) {
@@ -719,7 +933,7 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 	if(ip6_socket != INVALID_SOCKET && readsocks->ip6)
 	{
 		fromlen = sizeof(from);
-		ret = recvfrom(ip6_socket, (void *)net_message->data, net_message->maxsize, 0, (struct sockaddr *) &from, &fromlen);
+		ret = NET_RecvFrom( ip6_socket, net_message->data, net_message->maxsize, &from, &fromlen, &netPacketTo );
 		
 		if (ret == SOCKET_ERROR)
 		{
@@ -732,6 +946,7 @@ static qboolean NET_GetPacket(netadr_t *net_from, msg_t *net_message, netsocks_t
 		{
 			SockadrToNetadr((struct sockaddr *) &from, net_from);
 			net_message->readcount = 0;
+			NET_SayDestination( 1 );
 		
 			if(ret >= net_message->maxsize)
 			{
@@ -1289,6 +1504,9 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 	NET_ProxyKeep( &player, from, &h );
 	*from = player;
 	netPacketProxied = qtrue;
+	// where the proxy's datagram came to, which says nothing of where the
+	// player sent theirs
+	netPacketTo.type = NA_BAD;
 	// taken off, not skipped: the server reads packets again from the start
 	msg->cursize -= length;
 	memmove( msg->data, msg->data + length, msg->cursize );
@@ -1927,6 +2145,8 @@ SOCKET NET_IPSocket( char *net_interface, int port, int *err ) {
 		Com_Printf( "WARNING: NET_IPSocket: setsockopt SO_BROADCAST: %s\n", NET_ErrorString() );
 	}
 
+	NET_ReportDestination( newsocket, AF_INET );
+
 	NET_SetSocketBuffers( newsocket );
 
 	if( !net_interface || !net_interface[0]) {
@@ -2008,6 +2228,8 @@ SOCKET NET_IP6Socket( char *net_interface, int port, struct sockaddr_in6 *bindto
 		}
 	}
 #endif
+
+	NET_ReportDestination( newsocket, AF_INET6 );
 
 	NET_SetSocketBuffers( newsocket );
 
@@ -3268,6 +3490,8 @@ void NET_Shutdown( void ) {
 	NET_WaitShutdown();
 	WSACleanup();
 	winsockInitialized = qfalse;
+	// the provider's, which a later start asks for again
+	netRecvMsg = NULL;
 #endif
 }
 
