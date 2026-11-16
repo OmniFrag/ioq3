@@ -1775,23 +1775,32 @@ void Sys_PlatformStopTimer( int seconds )
 ==============
 Sys_PlatformForceStop
 
-Says why, removes the PID file if it's given one, puts the terminal back,
-and ends the process by the stop signal's default action, as if it had
-no handler, so its parent sees the signal. Safe in a signal's handler
+Says why, without waiting on the output, removes the PID file if it's
+given one, puts the terminal back, and ends the process by the stop
+signal's default action, as if it had no handler, so its parent sees the
+signal. Safe in a signal's handler
 ==============
 */
 void Sys_PlatformForceStop( int stopped, const char *message, const char *pidFile )
 {
 	sigset_t  unblocked;
+	int       flags;
 
 	if( pidFile )
 		unlink( pidFile );
 	CON_ForceStop( );
 
+	// without waiting: the output may be a pipe nobody reads any more,
+	// which is what kept the process from ending
+	flags = fcntl( STDERR_FILENO, F_GETFL, 0 );
+	if( flags >= 0 )
+		fcntl( STDERR_FILENO, F_SETFL, flags | O_NONBLOCK );
 	if( write( STDERR_FILENO, message, strlen( message ) ) < 0 )
 	{
 		// nowhere else to say it
 	}
+	if( flags >= 0 )
+		fcntl( STDERR_FILENO, F_SETFL, flags );
 
 	signal( stopped, SIG_DFL );
 

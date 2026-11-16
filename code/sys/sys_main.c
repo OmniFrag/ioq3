@@ -1164,15 +1164,27 @@ static char *Sys_StopAppend( char *p, const char *end, const char *text, int num
 	return p;
 }
 
+// the stop the watchdog waits on, and whether it's a fatal signal's
+// shutdown (Sys_SigHandler)
+static volatile sig_atomic_t	stopSignal, stopSeconds, stopFatal;
+
+// the most a fatal signal's shutdown may take: past the waits a shutdown
+// has (a child process asked to quit, then killed and reaped, about four
+// seconds)
+#define FATAL_SHUTDOWN_SECONDS	10
+
 /*
 =================
 Sys_ForceStop
 
 Ends the process without the shutdown when a stop signal isn't answered
 (Com_QueueQuit): asked again (seconds 0), or still running seconds after
-it. Like a crash, it leaves a client's PID file, for safe settings at the
-next start, and removes a dedicated server's (Sys_Exit). Safe in a
-signal's handler
+it; or when a fatal signal's shutdown didn't finish in seconds
+(Sys_SigHandler), which may wait on a lock or a write the interrupted code
+holds (a stdio lock, a full pipe), keeping that signal's exit note. Like a
+crash, it leaves a client's PID file, for safe settings at the next
+start, and removes a dedicated server's (Sys_Exit). Safe in a signal's
+handler
 =================
 */
 void Sys_ForceStop( int signal, int seconds )
@@ -1180,7 +1192,13 @@ void Sys_ForceStop( int signal, int seconds )
 	char  message[ 160 ];
 	char  *p = message, *end = message + sizeof( message ) - 1;
 
-	if( seconds > 0 )
+	if( stopFatal && seconds > 0 )
+	{
+		p = Sys_StopAppend( p, end, "The shutdown after signal ", signal );
+		p = Sys_StopAppend( p, end, " didn't end within ", seconds );
+		p = Sys_StopAppend( p, end, " seconds: ending it without the shutdown\n", -1 );
+	}
+	else if( seconds > 0 )
 	{
 		p = Sys_StopAppend( p, end, "Still running ", seconds );
 		p = Sys_StopAppend( p, end, " seconds after signal ", signal );
@@ -1193,26 +1211,29 @@ void Sys_ForceStop( int signal, int seconds )
 	}
 	*p = '\0';
 
-	// a stop not answered in time, or asked for again before the quit
-	Sys_NoteExit( seconds > 0 ? "timeout" : "again", signal, Sys_SignalName( signal ) );
+	// a stop not answered in time, or asked for again before the quit; a
+	// fatal signal's shutdown ends by that signal, whatever stop was asked
+	// for during it, so a supervisor sees the crash
+	if( stopFatal )
+		signal = stopSignal;
+	else
+		Sys_NoteExit( seconds > 0 ? "timeout" : "again", signal, Sys_SignalName( signal ) );
 	Sys_PlatformForceStop( signal, message,
 		!Com_IsClient( ) && pidFileWritten[ 0 ] ? pidFileWritten : NULL );
 }
-
-// the stop the watchdog waits on
-static volatile sig_atomic_t	stopSignal, stopSeconds;
 
 /*
 =================
 Sys_StopWatchdog
 
-Ends the process if it's still running seconds on (Com_QueueQuit). Safe in
-a signal's handler
+Ends the process if it's still running seconds on (Com_QueueQuit). Not
+during a fatal signal's shutdown, whose watchdog a stop asked for doesn't
+move (Sys_SigHandler). Safe in a signal's handler
 =================
 */
 void Sys_StopWatchdog( int signal, int seconds )
 {
-	if( seconds <= 0 )
+	if( seconds <= 0 || stopFatal )
 		return;
 
 	stopSignal = signal;
@@ -1238,7 +1259,10 @@ Sys_SigHandler
 
 A stop that was asked for is left to the main loop (Com_QueueQuit), or
 if the loop doesn't come back, to its watchdog.
-Fatal signals shut down here, as the main loop can't go on.
+Fatal signals shut down here, as the main loop can't go on, under the
+watchdog too: the shutdown isn't safe in a handler, and one that waits on
+what the interrupted code holds ends after FATAL_SHUTDOWN_SECONDS
+(Sys_ForceStop), so a supervisor can start the program again.
 =================
 */
 void Sys_SigHandler( int signal )
@@ -1263,6 +1287,12 @@ void Sys_SigHandler( int signal )
 	else
 	{
 		signalcaught = qtrue;
+		// the watchdog (Sys_StopWatchdog's), flagged first so that a stop
+		// asked for from here on leaves it be
+		stopFatal = 1;
+		stopSignal = signal;
+		stopSeconds = FATAL_SHUTDOWN_SECONDS;
+		Sys_PlatformStopTimer( FATAL_SHUTDOWN_SECONDS );
 		// first, as the shutdown below may fault again; SIGQUIT is a stop
 		// at once that someone asked for, not a crash
 #ifdef SIGQUIT
