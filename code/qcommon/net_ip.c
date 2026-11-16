@@ -1063,6 +1063,7 @@ typedef struct {
 	int				lastUsed;	// Sys_Milliseconds, odd; 0 for an empty slot
 	int				hits;		// its datagrams, up to NET_PROXY_HITS: a player's outweighs a query's
 	qboolean		onProxySocket;	// it came on the gateway's socket, which replies go out of
+	qboolean		carried;		// it came through a carried proxy (NET_SetCarriedProxy)
 	int				proxyGeneration;	// that socket's and secret's when it came (netProxyGeneration)
 } netProxyRoute_t;
 
@@ -1115,41 +1116,19 @@ static const netCarrier_t *NET_ProxyCarrier( const netadr_t *adr ) {
 	return i < 0 ? NULL : &netCarried[i].carrier;
 }
 
-// a proxy no longer trusted or carried gets no more replies; a route
-// through one still trusted stays, as the frame's replies are sent before
-// any player's next datagram could bring it back
-static void NET_ProxyForgetRoutes( void ) {
-	int		i;
-
-	netProxyRouted = qfalse;
-	for( i = 0; i < NET_PROXY_ROUTES; i++ ) {
-		if( !netProxyRoutes[i].lastUsed )
-			continue;
-		if( NET_IsTrustedProxy( &netProxyRoutes[i].via ) || NET_ProxyCarrier( &netProxyRoutes[i].via )
-			|| netProxyRoutes[i].onProxySocket )
-			netProxyRouted = qtrue;
-		else
-			Com_Memset( &netProxyRoutes[i], 0, sizeof( netProxyRoutes[i] ) );
-	}
-}
-
-// the routes kept from the gateway's socket retired: its secret changed, or
-// it closed. Each is kept, so its player's replies are dropped rather than
-// sent straight to the address the gateway named, until a new datagram
-// takes its place, its player connects directly (NET_ProxyForget), or no
-// client is at its address any more and its slot goes to another player
-// (NET_ProxyFree)
-static void NET_ProxyRetireSocketRoutes( void ) {
-	netProxyGeneration++;
-	NET_ProxyForgetRoutes();
-}
+// a route through a proxy no longer trusted or carried, or from the
+// gateway's socket once its secret changed or it closed, is retired, not
+// forgotten (NET_ProxyRetired): its player's replies are dropped rather than
+// sent straight to them, until a new datagram takes its place, its player
+// connects directly (NET_ProxyForget), or no client is at its address any
+// more and its slot goes to another player (NET_ProxyRank)
 
 /*
 ==================
 NET_SetTrustedProxies
 
 The proxies the server takes players' addresses from, as addresses and
-masks, which forgets the routes through any proxy no longer among them
+masks, which retires the routes through any proxy no longer among them
 ==================
 */
 void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
@@ -1158,7 +1137,6 @@ void NET_SetTrustedProxies( const netadr_t *adr, const int *mask, int count ) {
 		Com_Memcpy( netTrusted, adr, netTrustedCount * sizeof( netTrusted[0] ) );
 		Com_Memcpy( netTrustedMask, mask, netTrustedCount * sizeof( netTrustedMask[0] ) );
 	}
-	NET_ProxyForgetRoutes();
 }
 
 /*
@@ -1183,7 +1161,7 @@ void NET_SetProxySecret( const byte *secret, int length ) {
 		Com_Memcpy( netProxySecret, secret, length );
 	// a route from the gateway's socket came from a header checked against
 	// the old secret, or none, so it may not be this gateway's
-	NET_ProxyRetireSocketRoutes();
+	netProxyGeneration++;
 }
 
 /*
@@ -1238,7 +1216,7 @@ void NET_CloseProxySocket( void ) {
 		return;
 	closesocket( proxy_socket );
 	proxy_socket = INVALID_SOCKET;
-	NET_ProxyRetireSocketRoutes();
+	netProxyGeneration++;
 }
 
 /*
@@ -1246,7 +1224,9 @@ void NET_CloseProxySocket( void ) {
 NET_SetCarriedProxy
 
 Carry the proxy at that address and port with carrier, replacing what
-carried it before, or with NULL stop carrying it and forget its routes
+carried it before, or with NULL stop carrying it, its routes retired: its
+players' replies are dropped, never sent straight to them, until it's
+carried again or each player comes another way
 ==================
 */
 qboolean NET_SetCarriedProxy( const netadr_t *proxy, const netCarrier_t *carrier ) {
@@ -1256,7 +1236,6 @@ qboolean NET_SetCarriedProxy( const netadr_t *proxy, const netCarrier_t *carrier
 		if( i < 0 )
 			return qtrue;
 		netCarried[i] = netCarried[--netCarriedCount];
-		NET_ProxyForgetRoutes();
 		return qtrue;
 	}
 	if( i < 0 ) {
@@ -1316,11 +1295,15 @@ static netProxyRoute_t *NET_ProxyRoute( const netadr_t *player ) {
 	return NULL;
 }
 
-// a route from the gateway's socket, which has closed or has another
-// secret since: its player's replies are dropped, never sent straight to
-// the address the gateway named
+// a route through a proxy no longer carried or trusted, or from the
+// gateway's socket, which has closed or has another secret since: its
+// player's replies are dropped, never sent straight to them
 static qboolean NET_ProxyRetired( const netProxyRoute_t *r ) {
-	return r->onProxySocket && ( r->proxyGeneration != netProxyGeneration || proxy_socket == INVALID_SOCKET );
+	if( r->onProxySocket )
+		return r->proxyGeneration != netProxyGeneration || proxy_socket == INVALID_SOCKET;
+	if( r->carried )
+		return !NET_ProxyCarrier( &r->via );
+	return !NET_IsTrustedProxy( &r->via );
 }
 
 // unused for NET_PROXY_STALE
@@ -1328,26 +1311,24 @@ static qboolean NET_ProxyStale( const netProxyRoute_t *r, int now ) {
 	return now - r->lastUsed >= NET_PROXY_STALE;
 }
 
-// whether a route's slot may go to another player: empty, or unused long
-// enough. A retired one also holds while a client is at its address, as
-// its slot freed would send that client's replies straight to the address
-static qboolean NET_ProxyFree( const netProxyRoute_t *r, int now ) {
+#define NET_PROXY_FREE		0	// empty, or stale or retired while no client is at its address
+#define NET_PROXY_LIVE		1	// another address's, whose replies went out as its datagrams came
+#define NET_PROXY_HELD		2	// a client's in the game: its slot freed would send that
+								// client's replies straight to the address
+
+// how readily a route's slot goes to another player
+static int NET_ProxyRank( const netProxyRoute_t *r, int now ) {
 	if( !r->lastUsed )
-		return qtrue;
-	return NET_ProxyStale( r, now ) && !( NET_ProxyRetired( r ) && SV_ClientAt( &r->player, qfalse ) );
+		return NET_PROXY_FREE;
+	if( SV_ClientAt( &r->player, qfalse ) )
+		return NET_PROXY_HELD;
+	return NET_ProxyStale( r, now ) || NET_ProxyRetired( r ) ? NET_PROXY_FREE : NET_PROXY_LIVE;
 }
 
-// whether r may be given to another player before s: empty or stale
-// first, then the one with fewer datagrams, so a flood of one-off queries
-// gives way before a player in the game, then the one used longer ago
-static qboolean NET_ProxyBefore( const netProxyRoute_t *r, const netProxyRoute_t *s, int now ) {
-	qboolean	rFree = NET_ProxyFree( r, now );
-	qboolean	sFree = NET_ProxyFree( s, now );
-
-	if( rFree != sFree )
-		return rFree;
-	if( rFree )
-		return qfalse;
+// whether live route r may be given to another player before live route
+// s: the one with fewer datagrams, so a flood of one-off queries gives way
+// before a player connecting, then the one used longer ago
+static qboolean NET_ProxyBefore( const netProxyRoute_t *r, const netProxyRoute_t *s ) {
 	if( r->hits != s->hits )
 		return r->hits < s->hits;
 	return r->lastUsed - s->lastUsed < 0;
@@ -1358,27 +1339,31 @@ static qboolean NET_ProxyBefore( const netProxyRoute_t *r, const netProxyRoute_t
 NET_ProxyKeep
 
 The route a player's datagram just came by, for its replies: its own slot,
-else the first of its probes NET_ProxyBefore gives up. A live route moves
+else the first free one of its probes, else the live one NET_ProxyBefore
+gives up; qfalse, the datagram to be dropped, when each holds a client in
+the game, as its slot taken would send that client's replies straight to
+them. A live route moves
 to another port of the same proxy host (one that started again, or sends
 each player from a port of its own), but not to another host, or between
-the gateway's socket and the others, until it's stale: a datagram isn't
-checked here, so one spoofed to another trusted relay, or sent from
-loopback to the game port without the gateway's secret, mustn't take a
-player's replies away
+the gateway's socket and the others, until it's stale or retired: a
+datagram isn't checked here, so one spoofed to another trusted relay, or
+sent from loopback to the game port without the gateway's secret, mustn't
+take a player's replies away
 ==================
 */
-static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const proxyHeader_t *header ) {
+static qboolean NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const proxyHeader_t *header ) {
 	static qboolean	said;
 	netProxyRoute_t	*r, *slot = NULL;
 	unsigned		hash = NET_ProxyHash( player );
-	int				i, now = Sys_Milliseconds() | 1;
+	int				i, rank, slotRank, now = Sys_Milliseconds() | 1;
 
 	for( i = 0; i < NET_PROXY_PROBES; i++ ) {
 		r = NET_ProxySlot( hash, i );
 		if( r->lastUsed && NET_CompareAdr( r->player, *player ) ) {
 			// the gateway's socket is another proxy than one on loopback
 			// at the game port, though both come from 127.0.0.1
-			if( now - r->lastUsed < NET_PROXY_STALE && ( !NET_CompareBaseAdr( r->via, *via )
+			// a retired one gives way at once
+			if( now - r->lastUsed < NET_PROXY_STALE && !NET_ProxyRetired( r ) && ( !NET_CompareBaseAdr( r->via, *via )
 				|| r->onProxySocket != netFromProxySocket ) ) {
 				char	who[NET_ADDRSTRMAXLEN], came[NET_ADDRSTRMAXLEN];
 
@@ -1387,19 +1372,30 @@ static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const pr
 				Q_strncpyz( came, NET_AdrToString( *via ), sizeof( came ) );
 				Com_DPrintf( "%s: came through %s, but its route is through %s, kept\n", who, came,
 					NET_AdrToString( r->via ) );
-				return;
+				return qtrue;
 			}
 			slot = r;
 			break;
 		}
-		if( !slot || NET_ProxyBefore( r, slot, now ) )
-			slot = r;
 	}
-	if( !NET_CompareAdr( slot->player, *player ) || !slot->lastUsed ) {
-		if( !NET_ProxyFree( slot, now ) && !said ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: more players behind proxies than the server keeps routes for; "
-				"some replies go straight to the player\n" );
-			said = qtrue;
+	if( !slot ) {
+		// each probe ranked once, as a rank scans the clients
+		slotRank = NET_PROXY_HELD + 1;
+		for( i = 0; i < NET_PROXY_PROBES && slotRank != NET_PROXY_FREE; i++ ) {
+			r = NET_ProxySlot( hash, i );
+			rank = NET_ProxyRank( r, now );
+			if( rank < slotRank || ( rank == NET_PROXY_LIVE && slotRank == NET_PROXY_LIVE && NET_ProxyBefore( r, slot ) ) ) {
+				slot = r;
+				slotRank = rank;
+			}
+		}
+		if( slotRank == NET_PROXY_HELD ) {
+			if( !said ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: more players in the game behind proxies than the server keeps "
+					"routes for; a new one's datagrams are dropped until a route frees up\n" );
+				said = qtrue;
+			}
+			return qfalse;
 		}
 		slot->hits = 0;
 	}
@@ -1407,11 +1403,13 @@ static void NET_ProxyKeep( const netadr_t *player, const netadr_t *via, const pr
 	slot->via = *via;
 	slot->header = *header;
 	slot->onProxySocket = netFromProxySocket;
+	slot->carried = !netFromProxySocket && NET_ProxyCarrier( via ) != NULL;
 	slot->proxyGeneration = netProxyGeneration;
 	slot->lastUsed = now;
 	if( slot->hits < NET_PROXY_HITS )
 		slot->hits++;
 	netProxyRouted = qtrue;
+	return qtrue;
 }
 
 // a datagram straight from an address whose route is retired or stale: the
@@ -1501,7 +1499,8 @@ static qboolean NET_ProxyInbound( netadr_t *from, msg_t *msg ) {
 		Com_DPrintf( "%s: a proxy named a player in the game directly, dropped\n", NET_AdrToStringwPort( player ) );
 		return qfalse;
 	}
-	NET_ProxyKeep( &player, from, &h );
+	if( !NET_ProxyKeep( &player, from, &h ) )
+		return qfalse;
 	*from = player;
 	netPacketProxied = qtrue;
 	// where the proxy's datagram came to, which says nothing of where the
@@ -1564,19 +1563,18 @@ proxy is sent it through the proxy, with a header naming them
 qboolean Sys_SendPacket( int length, const void *data, netadr_t to ) {
 	static byte		buf[PROXY_MAX_WRITTEN + MAX_MSGLEN];
 	netProxyRoute_t		*route = NET_ProxyRoute( &to );
-	const netCarrier_t	*carrier;
 	int					header;
 
 	if( !route )
 		return Sys_SendPacketDirect( length, data, to );
-	// one from the gateway's socket, closed or with another secret since:
-	// dropped, while its slot holds it, never sent straight to the address
-	// the gateway named
+	// one through a proxy gone, or from the gateway's socket closed or
+	// with another secret since: dropped, while its slot holds it, never
+	// sent straight to the player
 	if( NET_ProxyRetired( route ) )
 		return qtrue;
-	// one from the gateway's socket goes back out of it, as it came
-	if( !route->onProxySocket && ( carrier = NET_ProxyCarrier( &route->via ) ) != NULL )
-		return carrier->send( &route->via, &route->header, data, length );
+	// a carried one's carrier writes it, which NET_ProxyRetired found
+	if( route->carried )
+		return NET_ProxyCarrier( &route->via )->send( &route->via, &route->header, data, length );
 	// the route's header names this player already: its src is to
 	header = NET_ProxyWrite( buf, sizeof( buf ), &route->header );
 	if( length > (int)sizeof( buf ) - header )

@@ -482,8 +482,8 @@ mods built on its code share, in the order of the game modules' gametype_t
 */
 static const char *SV_GametypeName( int gametype ) {
 	static const char * const names[] = {
-		"free for all", "tournament", "single player", "team deathmatch", "capture the flag",
-		"one flag", "overload", "harvester"
+		"Free For All", "Tournament", "Single Player", "Team Deathmatch", "Capture the Flag",
+		"One Flag CTF", "Overload", "Harvester"
 	};
 
 	if ( gametype >= 0 && gametype < ARRAY_LEN( names ) ) {
