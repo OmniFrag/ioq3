@@ -859,6 +859,8 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		SCR_DrawUI( qfalse, qfalse );
 	}
 	SCR_DrawExtensions( EXT_DRAW_MENU, stereoFrame );
+	// a reconnect's wait, over the menu or the connect screen
+	CL_ReconnectDraw();
 
 	// console draws next
 	Con_DrawConsole ();

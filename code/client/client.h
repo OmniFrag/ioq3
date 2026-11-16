@@ -466,6 +466,24 @@ typedef struct {
 	netadr_t	ownVersionsServer;
 	char		ownVersionsNote[MAX_STRING_CHARS];
 
+	// how the connect began, when an extension's command did and goes back
+	// to the server as reconnect can't (CL_ExtSetRejoin); "" otherwise
+	char		rejoin[MAX_STRING_CHARS];
+	// the reconnect the client makes by itself, for a server that said it's
+	// restarting (CL_ReconnectAsked)
+	struct {
+		qboolean	active;
+		qboolean	shown;			// the menu's message is its own
+		qboolean	trying;			// its way back was started
+		qboolean	left;			// and connected or joined since
+		int			startTime;		// cls.realtime, when the server left
+		int			nextTime;		// when the server's asked again, or a way back given up
+		netadr_t	server;			// asked with getinfo; NA_BAD to join again
+		char		command[MAX_STRING_CHARS];	// the way back
+		char		reason[MAX_STRING_CHARS];	// the server's, without the asking
+		char		message[MAX_STRING_CHARS];	// the menu's meanwhile
+	} reconnect;
+
 	// rendering info
 	glconfig_t	glconfig;
 	qhandle_t	charSetShader;
@@ -539,6 +557,7 @@ extern	cvar_t	*cl_aviMotionJpeg;
 extern	cvar_t	*cl_activeAction;
 
 extern	cvar_t	*cl_allowDownload;
+extern	cvar_t	*cl_autoReconnect;
 extern  cvar_t  *cl_downloadMethod;
 extern	cvar_t	*cl_conXOffset;
 extern	cvar_t	*cl_inGameVideo;
@@ -588,6 +607,10 @@ void CL_AddReliableCommand(const char *cmd, qboolean isDisconnectCmd);
 void CL_StartHunkUsers( qboolean rendererOnly );
 
 void CL_Disconnect_f (void);
+void CL_ReconnectAsked( const char *reason );
+void CL_ReconnectStop( void );
+qboolean CL_ReconnectKey( int key );
+void CL_ReconnectDraw( void );
 void CL_GetChallengePacket (void);
 void CL_Vid_Restart_f( void );
 void CL_Snd_Restart_f (void);
@@ -808,6 +831,8 @@ void	SCR_DrawNamedPic( float x, float y, float width, float height, const char *
 
 void	SCR_DrawBigString( int x, int y, const char *s, float alpha, qboolean noColorEscape );			// draws a string with embedded color control characters with fade
 void	SCR_DrawBigStringColor( int x, int y, const char *s, vec4_t color, qboolean noColorEscape );	// ignores embedded color control characters
+void	SCR_DrawStringExt( int x, int y, float size, const char *string, float *setColor, qboolean forceColor,
+		qboolean noColorEscape );
 void	SCR_DrawSmallStringExt( int x, int y, const char *string, float *setColor, qboolean forceColor, qboolean noColorEscape );
 void	SCR_DrawSmallChar( int x, int y, int ch );
 void	SCR_ResetModule2D( module2D_t *m );

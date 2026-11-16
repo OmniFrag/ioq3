@@ -122,6 +122,7 @@ cvar_t	*cl_activeAction;
 cvar_t	*cl_motdString;
 
 cvar_t	*cl_allowDownload;
+cvar_t	*cl_autoReconnect;
 cvar_t	*cl_conXOffset;
 cvar_t	*cl_inGameVideo;
 
@@ -141,6 +142,8 @@ clientStatic_t		cls;
 vm_t				*cgvm;
 
 char				cl_reconnectArgs[MAX_OSPATH];
+// connects begun and stopped (CL_ExtConnectGeneration)
+static int			cl_connectGeneration;
 char				cl_oldGame[MAX_QPATH];
 qboolean			cl_oldGameSet;
 
@@ -1119,7 +1122,8 @@ void CL_PlayDemo_f( void ) {
 
 	// open the demo file
 	Q_strncpyz( arg, Cmd_Argv(1), sizeof( arg ) );
-	
+
+	cls.reconnect.active = qfalse;
 	CL_Disconnect( qtrue );
 
 	// make sure a local server is killed now, before the demo's gamestate
@@ -1416,6 +1420,9 @@ void CL_MapLoading( void ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+	// a local game goes back to no server a join found
+	cls.rejoin[0] = '\0';
 
 	Con_Close();
 	Key_SetCatcher( 0 );
@@ -1825,6 +1832,10 @@ CL_Disconnect_f
 void CL_Disconnect_f( void ) {
 	SCR_StopCinematic();
 	Cvar_Set("ui_singlePlayerActive", "0");
+	// the player's own disconnect, as Escape is while connecting, ends a
+	// wait for a server to come back, and a join under way
+	CL_ReconnectStop( );
+	cl_connectGeneration++;
 	if ( clc.state != CA_DISCONNECTED && clc.state != CA_CINEMATIC ) {
 		Com_Error (ERR_DISCONNECT, "Disconnected from server");
 	}
@@ -1844,6 +1855,202 @@ void CL_Reconnect_f( void ) {
 	Cbuf_AddText( va("connect %s\n", cl_reconnectArgs ) );
 }
 
+// a server's goodbye that asks its players to reconnect, as one that's
+// restarting ends it, and how long the client waits for it to come back
+#define RECONNECT_ASKED		" Type /reconnect in a few seconds."
+#define RECONNECT_MSEC		60000
+#define RECONNECT_ASK_MSEC	2000	// between getinfos to its address
+#define RECONNECT_JOIN_MSEC	5000	// between joins again
+#define RECONNECT_CHAR		12		// the wait's line's characters, in 640x480's units
+
+// a reconnect's wait, ended by the player
+void CL_ReconnectStop( void ) {
+	if ( !cls.reconnect.active ) {
+		return;
+	}
+	cls.reconnect.active = qfalse;
+	// a join it started ends too (CL_ExtConnectGeneration)
+	cl_connectGeneration++;
+	Com_Printf( "Not reconnecting to the server.\n" );
+	// a message still saying it's reconnecting gets the server's own words
+	// back, the menu that shows it opened again to read them
+	if ( !strcmp( Cvar_VariableString( "com_errorMessage" ), cls.reconnect.message ) ) {
+		Cvar_Set( "com_errorMessage", va( "Server disconnected - %s%s", cls.reconnect.reason, RECONNECT_ASKED ) );
+		if ( uivm && clc.state == CA_DISCONNECTED && ( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
+			VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		}
+	}
+}
+
+/*
+=================
+CL_ReconnectKey
+
+A key or a click on the menu while a reconnect waits ends the wait, as
+the keys that close its message: the classic menus' Enter, Escape and
+click, and Team Arena's Escape and its button. A join under way, which
+leaves the client at the menu, ends too. qtrue when it ended it: the key
+is taken, as the menu reopened under it (CL_ReconnectStop) would take it
+a step further, Team Arena's Escape from the message to its main menu's
+quit
+=================
+*/
+qboolean CL_ReconnectKey( int key ) {
+	if ( !cls.reconnect.active || clc.state != CA_DISCONNECTED ||
+		( Key_GetCatcher( ) & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) ) != KEYCATCH_UI ) {
+		return qfalse;
+	}
+	switch ( key ) {
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ESCAPE:
+	case K_MOUSE1:
+		CL_ReconnectStop( );
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
+/*
+=================
+CL_ReconnectAsked
+
+A server's disconnect, run by cgame in the game or as it enters it: when its
+reason ends as a restarting server's does (RECONNECT_ASKED), the client
+reconnects by itself, unless cl_autoReconnect is off, a demo plays, one is
+under way already, or nothing goes back (a web connection, a listen
+server's). Its way back: an extension's command, as a join by code goes
+(CL_ExtSetRejoin), or reconnect, once the server's address answers a
+getinfo. The menu shows the goodbye meanwhile (CL_ReconnectFrame)
+=================
+*/
+void CL_ReconnectAsked( const char *reason ) {
+	size_t	length = strlen( reason ), asked = strlen( RECONNECT_ASKED );
+
+	if ( !cl_autoReconnect->integer || clc.demoplaying || clc.state < CA_PRIMED || cls.reconnect.active ||
+		length < asked || strcmp( reason + length - asked, RECONNECT_ASKED ) ) {
+		return;
+	}
+	Com_Memset( &cls.reconnect, 0, sizeof( cls.reconnect ) );
+	if ( cls.rejoin[0] ) {
+		Q_strncpyz( cls.reconnect.command, cls.rejoin, sizeof( cls.reconnect.command ) );
+		cls.reconnect.server.type = NA_BAD;
+	} else if ( cl_reconnectArgs[0] && ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) ) {
+		Q_strncpyz( cls.reconnect.command, "reconnect", sizeof( cls.reconnect.command ) );
+		cls.reconnect.server = clc.serverAddress;
+	} else {
+		return;
+	}
+	Q_strncpyz( cls.reconnect.reason, reason, MIN( sizeof( cls.reconnect.reason ), length - asked + 1 ) );
+	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ), "Server disconnected - %s Reconnecting when "
+		"it's back.", cls.reconnect.reason );
+	cls.reconnect.active = qtrue;
+	cls.reconnect.startTime = cls.realtime;
+	// the server is only now going down
+	cls.reconnect.nextTime = cls.realtime +
+		( cls.reconnect.server.type == NA_BAD ? RECONNECT_JOIN_MSEC : RECONNECT_ASK_MSEC );
+}
+
+// the way back, from the console as the player's command would run
+static void CL_ReconnectTry( void ) {
+	cls.reconnect.trying = qtrue;
+	cls.reconnect.left = qfalse;
+	// a join that found nothing leaves the client at the menu, which
+	// waits this long for one that did
+	cls.reconnect.nextTime = cls.realtime + RECONNECT_JOIN_MSEC;
+	Com_Printf( "The server is back; reconnecting.\n" );
+	Cbuf_AddText( va( "%s\n", cls.reconnect.command ) );
+}
+
+/*
+=================
+CL_ReconnectFrame
+
+The reconnect under way, each frame before the menu comes up: the menu's
+message says the client is waiting, closing it stops the wait, the server
+is asked again, and the wait ends after RECONNECT_MSEC, saying so. A way
+back that ended without the server answering, a join that found nothing
+or a connect that gave up, gives the menu its message back
+=================
+*/
+static void CL_ReconnectFrame( void ) {
+	if ( !cls.reconnect.active ) {
+		return;
+	}
+	// a game begun meanwhile without a challenge, as a local server's (map)
+	if ( clc.state >= CA_CONNECTED && clc.state <= CA_ACTIVE ) {
+		cls.reconnect.active = qfalse;
+		return;
+	}
+	if ( cls.realtime - cls.reconnect.startTime >= RECONNECT_MSEC ) {
+		cls.reconnect.active = qfalse;
+		Com_Error( ERR_DROP, "Server disconnected - %s It didn't come back within a minute. Type /reconnect to try "
+			"again.", cls.reconnect.reason );
+	}
+	if ( clc.state != CA_DISCONNECTED ) {
+		cls.reconnect.left |= cls.reconnect.trying;
+		return;
+	}
+	if ( cls.reconnect.trying ) {
+		if ( cls.reconnect.left ) {
+			// a connect that gave up: its error replaced the message
+			cls.reconnect.trying = qfalse;
+			cls.reconnect.shown = qfalse;
+		} else if ( cls.realtime - cls.reconnect.nextTime >= 0 ) {
+			// a join that found nothing, the message still the menu's
+			cls.reconnect.trying = qfalse;
+		}
+	}
+	if ( !cls.reconnect.shown ) {
+		cls.reconnect.shown = qtrue;
+		Cvar_Set( "com_errorMessage", cls.reconnect.message );
+	} else if ( strcmp( Cvar_VariableString( "com_errorMessage" ), cls.reconnect.message ) ) {
+		// the player closed it
+		CL_ReconnectStop( );
+		return;
+	}
+	if ( cls.realtime - cls.reconnect.nextTime < 0 ) {
+		return;
+	}
+	if ( cls.reconnect.server.type == NA_BAD ) {
+		CL_ReconnectTry();
+	} else {
+		cls.reconnect.nextTime = cls.realtime + RECONNECT_ASK_MSEC;
+		NET_OutOfBandPrint( NS_CLIENT, cls.reconnect.server, "getinfo reconnect" );
+	}
+}
+
+/*
+=================
+CL_ReconnectDraw
+
+The wait's line, under whatever menu or connect screen shows
+=================
+*/
+void CL_ReconnectDraw( void ) {
+	const char	*s;
+	int			left;
+
+	if ( !cls.reconnect.active ) {
+		return;
+	}
+	left = ( RECONNECT_MSEC - ( cls.realtime - cls.reconnect.startTime ) + 999 ) / 1000;
+	s = va( "Reconnecting... %d", MAX( left, 0 ) );
+	// between the classic menus' message and their prompt, in characters
+	// small enough to sit inside Team Arena's narrower message panel too
+	SCR_DrawStringExt( ( SCREEN_WIDTH - RECONNECT_CHAR * (int)strlen( s ) ) / 2, SCREEN_HEIGHT - 150, RECONNECT_CHAR, s,
+		colorWhite, qtrue, qtrue );
+}
+
+int CL_ExtConnectGeneration( void ) {
+	return cl_connectGeneration;
+}
+
+void CL_ExtSetRejoin( const char *command ) {
+	Q_strncpyz( cls.rejoin, command ? command : "", sizeof( cls.rejoin ) );
+}
+
 /*
 ==================
 CL_ConnectBegin, CL_ConnectSend
@@ -1855,6 +2062,13 @@ challenge requests go out from
 */
 static void CL_ConnectBegin( const char *server ) {
 	Cvar_Set("ui_singlePlayerActive", "0");
+
+	cl_connectGeneration++;
+	// a connect the player began ends the wait for a server to come back
+	if ( !cls.reconnect.trying ) {
+		cls.reconnect.active = qfalse;
+	}
+	cls.rejoin[0] = '\0';
 
 	// fire a message off to the motd server
 	CL_RequestMotd();
@@ -4002,6 +4216,12 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		clc.fragmentSize = CL_ServerFragmentSize();
 		CL_ChallengeTag();
 
+		// the server is back: what follows is a connect like any other
+		if ( cls.reconnect.active ) {
+			cls.reconnect.active = qfalse;
+			Cvar_Set( "com_errorMessage", "" );
+		}
+
 		// start sending challenge response instead of challenge request packets
 		clc.challenge = atoi(Cmd_Argv(1));
 		clc.state = CA_CHALLENGING;
@@ -4103,6 +4323,12 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 	// server responding to an info broadcast
 	if ( !Q_stricmp(c, "infoResponse") ) {
+		// a server that left saying it's restarting, back
+		if ( cls.reconnect.active && !cls.reconnect.trying && clc.state == CA_DISCONNECTED &&
+			NET_CompareAdr( from, cls.reconnect.server ) ) {
+			CL_ReconnectTry();
+			return;
+		}
 		CL_ServerInfoPacket( from, msg );
 		return;
 	}
@@ -4478,6 +4704,9 @@ void CL_Frame ( int msec ) {
 	if ( demoErrorPending ) {
 		CL_ContinueDemos( );
 	}
+
+	// before the menu comes up, which reads its message
+	CL_ReconnectFrame( );
 
 	if ( cls.cddialog ) {
 		// bring up the cd error dialog if needed
@@ -5251,6 +5480,14 @@ void CL_Init( void ) {
 		"2 = no web, added to 1: only from the server itself\n"
 		"4 = no direct, added to 1: only from sv_dlURL\n"
 		"16 = no fast download, added to 1: from sv_dlURL or the classic way" );
+	cl_autoReconnect = Cvar_Get( "cl_autoReconnect", "1", CVAR_ARCHIVE_ND );
+	Cvar_SetDescription( cl_autoReconnect,
+		"Whether to reconnect by itself when a server says it's restarting\n"
+		"The server's goodbye ends \"Type /reconnect in a few seconds.\" The client waits for it to "
+		"come back, for up to a minute, and joins it again; closing the message stops it. 0 leaves you "
+		"at the menu with the message, as other clients do.\n"
+		"0 = off\n"
+		"1 = on" );
 	// what the client reports, which the menus read and only it writes
 	Cvar_Get( "cl_downloadName", "", CVAR_ROM );
 	Cvar_Get( "cl_downloadSize", "0", CVAR_ROM );

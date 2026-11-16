@@ -1509,6 +1509,13 @@ void CL_KeyDownEvent( int key, unsigned time )
 		return;
 	}
 
+	// a key or click on the menu ends a reconnect's wait, and goes no
+	// further: the menu it reopens shows the server's own words for the
+	// next key to close, rather than taking this one a step further
+	if ( keys[key].repeats == 1 && CL_ReconnectKey( key ) ) {
+		return;
+	}
+
 	// an engine extension's, if one takes it, with no bind run
 	if ( keyTaker[key] ) {
 		Hooks_KeyTo( keyTaker[key], key, qtrue, time );

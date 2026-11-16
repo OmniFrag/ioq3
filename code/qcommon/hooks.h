@@ -487,6 +487,14 @@ const char	*CL_ExtServerAddress( void );
 // connect is shown as
 void		CL_ExtConnect( const char *name, const netadr_t *candidates, const int *delays, int count, int fastMsec,
 				int giveUpMsec, const char *expectedFingerprint );
+// the command that makes the connect just begun again, for a reconnect
+// that goes back the way the player came (a join by its code); a connect
+// begun since forgets it
+void		CL_ExtSetRejoin( const char *command );
+// grows with each connect begun, and each one the player stopped: a
+// disconnect, a reconnect's wait ended. A join that sees it change before
+// its own connect was overtaken
+int			CL_ExtConnectGeneration( void );
 // the server's info as the gamestate gave it (CS_SERVERINFO: mapname,
 // sv_hostname, sv_maxclients and the game's keys, such as g_needpass);
 // a demo's, as it was recorded; "" before a gamestate, and for one too

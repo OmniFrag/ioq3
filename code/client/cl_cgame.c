@@ -290,9 +290,11 @@ rescan:
 	if ( !strcmp( cmd, "disconnect" ) ) {
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=552
 		// allow server to indicate why they were disconnected
-		if ( argc >= 2 )
+		if ( argc >= 2 ) {
+			// a server that's restarting, which the client may go back to
+			CL_ReconnectAsked( Cmd_Argv( 1 ) );
 			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected - %s", Cmd_Argv( 1 ) );
-		else
+		} else
 			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected" );
 	}
 
