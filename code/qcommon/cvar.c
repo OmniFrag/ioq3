@@ -895,6 +895,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->serverString = var->userString = var->userOrigin = var->savedString = NULL;
 	var->lockOrigin = var->lockString = NULL;
 	var->startString = var->startOrigin = NULL;
+	var->startDecided = qfalse;
 	Com_Memset( var->layerStrings, 0, sizeof( var->layerStrings ) );
 	Com_Memset( var->layerOrigins, 0, sizeof( var->layerOrigins ) );
 	var->userSource = CVAR_SOURCE_DEFAULT;
@@ -2152,9 +2153,11 @@ default, and nothing else, whatever ran before it registered. A config
 that runs before, as default.cfg does, can create the cvar and set it, and
 Cvar_Get would keep that; this drops it, so the order things run in never
 decides what the cvar holds. Once registered, CVAR_INIT refuses every set.
-The value is decided once, at the first registration: a later one, as code
-that registers again at each start makes, is Cvar_Get's, so the engine's
-own forced set since (a value found unusable and cleared) stands
+The value is decided once, at the first Cvar_GetStart: a later one, as
+code that registers again at each start makes, is Cvar_Get's, so the
+engine's own forced set since (a value found unusable and cleared) stands.
+Which call was first is its own mark (startDecided), not CVAR_INIT, which a
+plain Cvar_Get before it would give a config's value too
 ============
 */
 cvar_t *Cvar_GetStart( const char *var_name, const char *var_value, int flags ) {
@@ -2162,11 +2165,11 @@ cvar_t *Cvar_GetStart( const char *var_name, const char *var_value, int flags ) 
 	const char	*leftOut[1 + CVAR_SERVER_LAYERS];
 	int		i, count = 0;
 
-	if ( var && ( var->flags & CVAR_INIT ) &&
-		!( var->flags & ( CVAR_USER_CREATED | CVAR_VM_CREATED | CVAR_SERVER_CREATED ) ) ) {
+	if ( var && var->startDecided ) {
 		return Cvar_Get( var_name, var_value, flags | CVAR_INIT );
 	}
 	var = Cvar_Get( var_name, var_value, flags | CVAR_INIT );
+	var->startDecided = qtrue;
 
 	// what set it before it registered, said: a config's, and a server's
 	// file's, mode's or pool entry's

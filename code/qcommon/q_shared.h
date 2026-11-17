@@ -1027,6 +1027,7 @@ struct cvar_s {
 	// (Cvar_SetStart, Cvar_GetStart)
 	char		*startString;
 	char		*startOrigin;
+	qboolean	startDecided;	// Cvar_GetStart decided its value, which later registrations keep
 	char		*gameString;	// a CVAR_MAPVALUE cvar's: game code's, the map's own, or NULL
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1
