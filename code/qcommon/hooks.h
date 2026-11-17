@@ -648,6 +648,10 @@ qboolean	SV_ExtClientIsBot( int clientNum );
 // the device key the client proved on connect (identity.h), into key;
 // qfalse for an unproven one, a stock client's, or none
 qboolean	SV_ExtClientIdentity( int clientNum, byte key[32] );
+// whether it plays from a browser, its packets coming through the gateway's
+// own socket (NET_PacketFromGateway); qfalse for a native client, a bot or
+// none
+qboolean	SV_ExtClientBrowser( int clientNum );
 // prints text on a client's console only, as print does; nothing for none
 void	SV_ExtClientPrint( int clientNum, const char *text );
 // a line to every player, as the server's own: in the middle of their

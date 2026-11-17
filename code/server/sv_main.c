@@ -2091,6 +2091,12 @@ qboolean SV_ExtClientIdentity( int clientNum, byte key[32] ) {
 	return qtrue;
 }
 
+qboolean SV_ExtClientBrowser( int clientNum ) {
+	client_t	*cl = SV_ExtClient( clientNum );
+
+	return cl && cl->browser;
+}
+
 /*
 ==================
 SV_ExtBroadcast
