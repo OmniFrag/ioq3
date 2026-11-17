@@ -475,18 +475,24 @@ typedef struct {
 	// to the server as reconnect can't (CL_ExtSetRejoin); "" otherwise
 	char		rejoin[MAX_STRING_CHARS];
 	// the reconnect the client makes by itself, for a server that said it's
-	// restarting (CL_ReconnectAsked)
+	// restarting (CL_ReconnectAsked), or a connection its transport lost
+	// (CL_ReconnectLost)
 	struct {
 		qboolean	active;
 		qboolean	shown;			// the menu's message is its own
 		qboolean	trying;			// its way back was started
+		qboolean	own;			// and the next connect begun is that way back's
 		qboolean	left;			// and connected or joined since
-		int			startTime;		// cls.realtime, when the server left
+		qboolean	lost;			// a connection the transport lost, not a server's goodbye
+		int			startTime;		// cls.realtime, when the server left, moved on by the time the client couldn't run
+		int			lastTime;		// cls.realtime of the wait's last frame
 		int			nextTime;		// when the server's asked again, or a way back given up
 		netadr_t	server;			// asked with getinfo; NA_BAD to join again
 		char		command[MAX_STRING_CHARS];	// the way back
 		char		reason[MAX_STRING_CHARS];	// the server's, without the asking
 		char		message[MAX_STRING_CHARS];	// the menu's meanwhile
+		char		stopped[MAX_STRING_CHARS];	// and once the player stops the wait
+		char		gaveUp[MAX_STRING_CHARS];	// or it gives up
 	} reconnect;
 
 	// rendering info
@@ -613,6 +619,7 @@ void CL_StartHunkUsers( qboolean rendererOnly );
 
 void CL_Disconnect_f (void);
 void CL_ReconnectAsked( const char *reason );
+const char *CL_ReconnectDropped( const char *reason );
 void CL_ReconnectStop( void );
 qboolean CL_ReconnectKey( int key );
 void CL_ReconnectDraw( void );

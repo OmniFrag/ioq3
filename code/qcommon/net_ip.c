@@ -630,10 +630,12 @@ qboolean	NET_IsLocalAddress( netadr_t adr ) {
 	return adr.type == NA_LOOPBACK;
 }
 
-const char *NET_ConnectionFailure( netadr_t adr ) {
+const char *NET_ConnectionFailure( netadr_t adr, netLoss_t *loss ) {
+	if ( loss )
+		*loss = NET_LOST;
 #ifdef __EMSCRIPTEN__
 	if ( adr.type == NA_WEB )
-		return NET_WebFailure( adr );
+		return NET_WebFailure( adr, loss );
 #endif
 	return NULL;
 }

@@ -15,6 +15,18 @@
 // Packets the engine sends before both channels open wait, a few, and go
 // then. Received ones wait in one queue for the engine's next frame; past
 // its length the newest are dropped, as a socket's buffer would.
+//
+// A gateway that lets a connection go says why first, in one message on
+// oob, "\xff\xff\xff\xffomnifrag-close <word>", then closes it: idle when
+// the page was silent too long, as a hidden tab's is, shutdown when the
+// gateway stops, and replaced when another connection took its place; any
+// other word, or none (ICE failing, the network gone, the computer
+// asleep), is a plain loss. The engine never sees the message: the
+// connection counts as lost from it on. One lost as idle, while the page
+// was hidden, or within AWAY_MS of the page being shown again after
+// HIDDEN_MS or more hidden while it was open, was lost while the player
+// was away, which the engine words as such and rejoins; a replaced one it
+// doesn't rejoin.
 
 addToLibrary({
   $NetWeb: {
@@ -35,6 +47,21 @@ addToLibrary({
     // to open once the answer is in
     GATHER_MS: 3000,
     OPEN_MS: 10000,
+    // a loss this soon after the page was shown again, hidden at least
+    // HIDDEN_MS while the connection was open, was the hidden time's: a
+    // gateway lets a silent connection go after 30 seconds, and the
+    // browser may take as long again to say the connection failed
+    AWAY_MS: 60000,
+    HIDDEN_MS: 10000,
+    watching: false,
+    // the close message's start, and each word's words and how it was
+    // lost: 1 more than a netLoss_t, lost (1), away (2) or for good (3)
+    CLOSE: '\xff\xff\xff\xffomnifrag-close ',
+    CLOSED: {
+      idle: { why: 'The server let the connection go while the game was hidden.', loss: 2 },
+      shutdown: { why: 'The server\'s gateway stopped.', loss: 1 },
+      replaced: { why: 'The game connected to the server again from elsewhere.', loss: 3 },
+    },
 
     // A connection whose offer goes to signal, a function of the offer's
     // fields that resolves to the answer's, or to { refused: why }. Its
@@ -46,7 +73,12 @@ addToLibrary({
     // WebRTC
     openWith: function(signal, oobAbove, iceServers) {
       if (typeof RTCPeerConnection != 'function' || NetWeb.next > 65535) return 0;
-      var peer = { id: NetWeb.next++, oobAbove: oobAbove, pending: [], open: false, failure: '', closed: false };
+      if (!NetWeb.watching) {
+        NetWeb.watching = true;
+        document.addEventListener('visibilitychange', NetWeb.visibility);
+      }
+      var peer = { id: NetWeb.next++, oobAbove: oobAbove, pending: [], open: false, failure: '', closed: false,
+        loss: 1, reason: '', hiddenAt: document.hidden ? Date.now() : 0, awayUntil: 0 };
       NetWeb.peers[peer.id] = peer;
       NetWeb.start(peer, signal, iceServers || []).catch(function(e) {
         NetWeb.fail(peer, e && e.plain ? e.message : 'The connection to the server failed: ' + (e && e.message || e) + '.');
@@ -54,15 +86,20 @@ addToLibrary({
       return peer.id;
     },
 
-    // a message from the server, queued for the engine while there's room;
-    // one longer than the engine reads isn't kept, or a server could fill
-    // the queue with the largest messages SCTP takes, and nor is a text
-    // one, whose length a string's isn't
-    take: function(peer, data) {
+    // a message from the server, queued for the engine; one longer than
+    // the engine reads isn't kept, or a server could fill the queue with
+    // the largest messages SCTP takes, and nor is a text one, whose length
+    // a string's isn't. The close word is read on oob alone, as the gateway
+    // writes it; on q3 the same bytes are a packet. A full queue drops its
+    // oldest: a hidden page reads nothing, and the newest carry what the
+    // server said last, a kick's disconnect among them, as every packet
+    // carries the reliable commands not acknowledged yet. An older one
+    // lost is a packet the netchan counts as dropped
+    take: function(peer, data, oob) {
       if (!(data instanceof ArrayBuffer) || data.byteLength > NetWeb.MAX_MESSAGE) return;
-      if (NetWeb.received.length - NetWeb.head < NetWeb.MAX_RECEIVED) {
-        NetWeb.received.push({ id: peer.id, data: new Uint8Array(data) });
-      }
+      if (oob && NetWeb.closing(peer, new Uint8Array(data))) return;
+      if (NetWeb.received.length - NetWeb.head >= NetWeb.MAX_RECEIVED) NetWeb.received.splice(NetWeb.head, 1);
+      NetWeb.received.push({ id: peer.id, data: new Uint8Array(data) });
     },
 
     // A POST of body to url, on the page's own server, within OPEN_MS: its
@@ -103,7 +140,7 @@ addToLibrary({
       peer.oob = pc.createDataChannel('oob', { negotiated: true, id: 1 });
       [peer.q3, peer.oob].forEach(function(channel) {
         channel.binaryType = 'arraybuffer';
-        channel.onmessage = function(e) { NetWeb.take(peer, e.data); };
+        channel.onmessage = function(e) { NetWeb.take(peer, e.data, channel === peer.oob); };
         channel.onopen = function() { NetWeb.opened(peer); };
         channel.onclose = function() { NetWeb.fail(peer, 'The server closed the connection.'); };
       });
@@ -236,9 +273,37 @@ addToLibrary({
       }
     },
 
+    // each open connection's hidden stretch, and the time after it that a
+    // loss still counts as the player's being away
+    visibility: function() {
+      var now = Date.now();
+      Object.values(NetWeb.peers).forEach(function(peer) {
+        if (document.hidden) {
+          peer.hiddenAt = now;
+        } else if (peer.hiddenAt) {
+          if (now - peer.hiddenAt >= NetWeb.HIDDEN_MS) peer.awayUntil = now + NetWeb.AWAY_MS;
+          peer.hiddenAt = 0;
+        }
+      });
+    },
+
+    // the gateway's word on why it lets the connection go, which ends it
+    // here at once, so a server's disconnect just after finds it lost
+    closing: function(peer, bytes) {
+      var head = NetWeb.CLOSE.length;
+      if (bytes.length <= head || bytes.length > head + 32) return false;
+      for (var i = 0; i < head; i++) if (bytes[i] != NetWeb.CLOSE.charCodeAt(i)) return false;
+      peer.reason = String.fromCharCode.apply(null, bytes.subarray(head)).trim();
+      NetWeb.fail(peer, 'The server closed the connection.');
+      return true;
+    },
+
     fail: function(peer, why) {
       if (peer.failure || peer.closed) return;
-      peer.failure = why;
+      var closed = Object.hasOwn(NetWeb.CLOSED, peer.reason) ? NetWeb.CLOSED[peer.reason] : null;
+      peer.failure = closed ? closed.why : why;
+      peer.loss = closed && closed.loss != 1 ? closed.loss :
+        document.hidden || Date.now() < peer.awayUntil ? 2 : 1;
       if (peer.pc) peer.pc.close();
     },
 
@@ -285,7 +350,7 @@ addToLibrary({
     var failure = peer ? peer.failure : 'The connection to the server is closed.';
     if (!failure) return 0;
     stringToUTF8(failure, buffer, size);
-    return 1;
+    return peer ? peer.loss : 1;
   },
 
   NetWeb_Busy__deps: ['$NetWeb'],

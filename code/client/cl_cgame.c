@@ -291,8 +291,14 @@ rescan:
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=552
 		// allow server to indicate why they were disconnected
 		if ( argc >= 2 ) {
-			// a server that's restarting, which the client may go back to
+			// a server that's restarting, which the client may go back to,
+			// or one that dropped a lost web connection
+			const char	*gaveUp;
+
 			CL_ReconnectAsked( Cmd_Argv( 1 ) );
+			if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 1 ) ) ) != NULL ) {
+				Com_Error( ERR_SERVERDISCONNECT, "%s", gaveUp );
+			}
 			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected - %s", Cmd_Argv( 1 ) );
 		} else
 			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected" );

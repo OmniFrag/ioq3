@@ -2321,6 +2321,10 @@ qboolean	Com_VBlankCounted( const int64_t *times, const int64_t *counts, int cou
 		int64_t *vblank, int64_t *period );
 
 qboolean Sys_RandomBytes( byte *string, int len );
+// Whether nobody can see the program now, as in a browser's hidden tab, so
+// a wait for a server doesn't try or count the time; a native window never
+// says
+qboolean	Sys_Hidden( void );
 
 // the system console is shown when a dedicated server is running
 void	Sys_DisplaySystemConsole( qboolean show );
@@ -2365,10 +2369,18 @@ qboolean	NET_PacketFromGateway( void );
 // channel, as the gateway does its replies (OOB_REPLY)
 #define NET_WEB_FRAGMENT_SIZE	1024
 
+// how a connection was lost, as its transport knows
+typedef enum {
+	NET_LOST,		// it failed or closed: the network, the server's end
+	NET_LOST_AWAY,	// while the player was away: the server let it go as idle, or the page was hidden then or shortly before
+	NET_LOST_FINAL	// another connection took its place, so going back would take that one's
+} netLoss_t;
+
 // Why the connection to a server at the address failed or closed, as its
-// transport knows, or NULL while it may still work: a UDP socket never
-// knows, so only a web client's connections say
-const char	*NET_ConnectionFailure( netadr_t adr );
+// transport knows, and how (loss, when not NULL), or NULL while it may
+// still work: a UDP socket never knows, so only a web client's
+// connections say
+const char	*NET_ConnectionFailure( netadr_t adr, netLoss_t *loss );
 // Ends the connection to a server at the address, for a transport that
 // keeps one
 void		NET_CloseConnection( netadr_t adr );
@@ -2388,8 +2400,9 @@ void		NET_ConnectionBusy( netadr_t adr, int seconds );
 // fields); qfalse when the browser has no WebRTC. The connection carries
 // packets once open, and those sent before are kept for then, a few
 qboolean	NET_WebOpen( const char *signal, netadr_t *adr );
-// why a connection failed or closed, or NULL while it's opening or open
-const char	*NET_WebFailure( netadr_t adr );
+// why a connection failed or closed, and how, or NULL while it's opening
+// or open
+const char	*NET_WebFailure( netadr_t adr, netLoss_t *loss );
 // closes it once what was sent has had a moment to go
 void		NET_WebClose( netadr_t adr );
 // sends a packet: qfalse when the connection can't take it now

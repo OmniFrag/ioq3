@@ -144,6 +144,8 @@ vm_t				*cgvm;
 char				cl_reconnectArgs[MAX_OSPATH];
 // connects begun and stopped (CL_ExtConnectGeneration)
 static int			cl_connectGeneration;
+// cls.realtime as the last connect began
+static int			cl_connectedAt;
 char				cl_oldGame[MAX_QPATH];
 qboolean			cl_oldGameSet;
 
@@ -1849,10 +1851,14 @@ CL_Reconnect_f
 ================
 */
 void CL_Reconnect_f( void ) {
-	if ( !strlen( cl_reconnectArgs ) )
+	// a connection with no address to go back to, as a web client's, joins
+	// again as it was joined (CL_ExtSetRejoin)
+	const char	*command = cl_reconnectArgs[0] ? va( "connect %s", cl_reconnectArgs ) : cls.rejoin;
+
+	if ( !command[0] )
 		return;
 	Cvar_Set("ui_singlePlayerActive", "0");
-	Cbuf_AddText( va("connect %s\n", cl_reconnectArgs ) );
+	Cbuf_AddText( va( "%s\n", command ) );
 }
 
 // a server's goodbye that asks its players to reconnect, as one that's
@@ -1862,6 +1868,25 @@ void CL_Reconnect_f( void ) {
 #define RECONNECT_ASK_MSEC	2000	// between getinfos to its address
 #define RECONNECT_JOIN_MSEC	5000	// between joins again
 #define RECONNECT_CHAR		12		// the wait's line's characters, in 640x480's units
+#define RECONNECT_LOST_MSEC	1000	// before the first join again after a connection was lost,
+#define RECONNECT_LOST_SPREAD	8000	// and up to this much more, so a gateway's players don't all come at once
+#define RECONNECT_JOIN_SPREAD	2500	// each join again RECONNECT_JOIN_MSEC this much early or late, for the same
+// rejoins a lost connection began within RECONNECT_LOSSES_MSEC, past which
+// the next loss gives up: a server that drops its players as lost after
+// every join can't keep them joining. Only a connection lost within
+// RECONNECT_SHORT_MSEC of its connect counts: an admin's restart of the
+// gateway, which the server tells its players as a lost connection before
+// the gateway's word comes, ends connections that played a while
+#define RECONNECT_LOSSES		3
+#define RECONNECT_LOSSES_MSEC	120000
+#define RECONNECT_SHORT_MSEC	20000
+// cls.realtime of the last rejoins a short connection's loss began
+// (CL_ReconnectLost), 0 for none: the player's own connect clears them, as
+// one to another server would
+static int	cl_losses[RECONNECT_LOSSES];
+// a frame this long after the last means the client couldn't run, as in a
+// hidden tab or while the computer slept: the time doesn't count
+#define RECONNECT_GAP_MSEC	2000
 
 // a reconnect's wait, ended by the player
 void CL_ReconnectStop( void ) {
@@ -1875,7 +1900,7 @@ void CL_ReconnectStop( void ) {
 	// a message still saying it's reconnecting gets the server's own words
 	// back, the menu that shows it opened again to read them
 	if ( !strcmp( Cvar_VariableString( "com_errorMessage" ), cls.reconnect.message ) ) {
-		Cvar_Set( "com_errorMessage", va( "Server disconnected - %s%s", cls.reconnect.reason, RECONNECT_ASKED ) );
+		Cvar_Set( "com_errorMessage", cls.reconnect.stopped );
 		if ( uivm && clc.state == CA_DISCONNECTED && ( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
 			VM_Call( uivm, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
 		}
@@ -1912,6 +1937,30 @@ qboolean CL_ReconnectKey( int key ) {
 	}
 }
 
+// a delay msec, spread msec early or late at random (each client its
+// own: rand's seed is the second the program started)
+static int CL_ReconnectSpread( int msec, int spread ) {
+	unsigned	r;
+
+	Com_RandomBytes( (byte *)&r, sizeof( r ) );
+	return msec - spread + (int)( r % (unsigned)( 2 * spread + 1 ) );
+}
+
+// a wait begun, its way back command, asking server's address first, or
+// joining again with no address (NULL), and its first try delay msec on:
+// its words are the caller's
+static void CL_ReconnectBegin( const char *command, const netadr_t *server, int delay ) {
+	Com_Memset( &cls.reconnect, 0, sizeof( cls.reconnect ) );
+	Q_strncpyz( cls.reconnect.command, command, sizeof( cls.reconnect.command ) );
+	cls.reconnect.server.type = NA_BAD;
+	if ( server ) {
+		cls.reconnect.server = *server;
+	}
+	cls.reconnect.active = qtrue;
+	cls.reconnect.startTime = cls.reconnect.lastTime = cls.realtime;
+	cls.reconnect.nextTime = cls.realtime + delay;
+}
+
 /*
 =================
 CL_ReconnectAsked
@@ -1932,24 +1981,128 @@ void CL_ReconnectAsked( const char *reason ) {
 		length < asked || strcmp( reason + length - asked, RECONNECT_ASKED ) ) {
 		return;
 	}
-	Com_Memset( &cls.reconnect, 0, sizeof( cls.reconnect ) );
+	// the server is only now going down: a first try that comes before it's
+	// back finds nothing and the next tries again
 	if ( cls.rejoin[0] ) {
-		Q_strncpyz( cls.reconnect.command, cls.rejoin, sizeof( cls.reconnect.command ) );
-		cls.reconnect.server.type = NA_BAD;
+		// every player of a restarting server's gateway joins again, so not
+		// all at once
+		CL_ReconnectBegin( cls.rejoin, NULL, CL_ReconnectSpread( RECONNECT_JOIN_MSEC, RECONNECT_JOIN_SPREAD ) );
 	} else if ( cl_reconnectArgs[0] && ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) ) {
-		Q_strncpyz( cls.reconnect.command, "reconnect", sizeof( cls.reconnect.command ) );
-		cls.reconnect.server = clc.serverAddress;
+		CL_ReconnectBegin( "reconnect", &clc.serverAddress, RECONNECT_ASK_MSEC );
 	} else {
 		return;
 	}
 	Q_strncpyz( cls.reconnect.reason, reason, MIN( sizeof( cls.reconnect.reason ), length - asked + 1 ) );
 	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ), "Server disconnected - %s Reconnecting when "
 		"it's back.", cls.reconnect.reason );
-	cls.reconnect.active = qtrue;
-	cls.reconnect.startTime = cls.realtime;
-	// the server is only now going down
-	cls.reconnect.nextTime = cls.realtime +
-		( cls.reconnect.server.type == NA_BAD ? RECONNECT_JOIN_MSEC : RECONNECT_ASK_MSEC );
+	Com_sprintf( cls.reconnect.stopped, sizeof( cls.reconnect.stopped ), "Server disconnected - %s%s",
+		cls.reconnect.reason, RECONNECT_ASKED );
+	Com_sprintf( cls.reconnect.gaveUp, sizeof( cls.reconnect.gaveUp ), "Server disconnected - %s It didn't come back "
+		"within a minute. Type /reconnect to try again.", cls.reconnect.reason );
+}
+
+/*
+=================
+CL_ReconnectLost
+
+A connection its transport lost, in the game or as it entered it, rather
+than one the player or the server ended: the client joins again by itself,
+as it was joined (CL_ExtSetRejoin), unless cl_autoReconnect is off, a demo
+plays, a wait is under way already, nothing goes back, or another
+connection took its place. The menu says why meanwhile: the player was
+away, or the connection was lost; the drop that follows shows it
+(CL_ReconnectFrame). Its first try comes 1 to 9 s on, at random, so a
+gateway's players don't all come back at once. A fourth loss within two
+minutes of the first of the last three rejoins gives up, counting only
+connections lost within RECONNECT_SHORT_MSEC of their connect. Returns
+the drop's words: failure, or why it gave up
+=================
+*/
+static const char *CL_ReconnectLost( const char *failure, netLoss_t loss ) {
+	static char	gaveUp[MAX_STRING_CHARS];
+	int			*losses = cl_losses;
+	const char	*why = loss == NET_LOST_AWAY ? "You were away." : "Connection lost.";
+	int			i, oldest = 0;
+
+	if ( !cl_autoReconnect->integer || clc.demoplaying || clc.state < CA_PRIMED || cls.reconnect.active ||
+		!cls.rejoin[0] || loss == NET_LOST_FINAL ) {
+		return failure;
+	}
+	if ( cls.realtime - cl_connectedAt < RECONNECT_SHORT_MSEC ) {
+		for ( i = 1; i < RECONNECT_LOSSES; i++ ) {
+			if ( losses[i] - losses[oldest] < 0 ) {
+				oldest = i;
+			}
+		}
+		if ( losses[oldest] && cls.realtime - losses[oldest] < RECONNECT_LOSSES_MSEC ) {
+			Com_sprintf( gaveUp, sizeof( gaveUp ), "%s It lost the connection %d times in two minutes, so it stopped "
+				"rejoining. Type /reconnect to try again.", failure, RECONNECT_LOSSES + 1 );
+			return gaveUp;
+		}
+		losses[oldest] = cls.realtime ? cls.realtime : 1;
+	}
+	// every player of a gateway that stopped comes back, so not all at once
+	CL_ReconnectBegin( cls.rejoin, NULL, RECONNECT_LOST_MSEC + CL_ReconnectSpread( RECONNECT_LOST_SPREAD / 2,
+		RECONNECT_LOST_SPREAD / 2 ) );
+	cls.reconnect.lost = qtrue;
+	Q_strncpyz( cls.reconnect.reason, failure, sizeof( cls.reconnect.reason ) );
+	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ), "%s Rejoining...", why );
+	Com_sprintf( cls.reconnect.stopped, sizeof( cls.reconnect.stopped ), "%s Type /reconnect to rejoin.", failure );
+	Com_sprintf( cls.reconnect.gaveUp, sizeof( cls.reconnect.gaveUp ), "%s It couldn't rejoin within a minute. Type "
+		"/reconnect to try again.", why );
+	Com_Printf( "%s %s Rejoining by itself.\n", why, failure );
+	return failure;
+}
+
+/*
+=================
+CL_ReconnectDropped
+
+A server's disconnect, as for CL_ReconnectAsked: on a web connection, the
+server drops a player its gateway let go (rtc_left idle or shutdown)
+saying so in hosting's words (RECONNECT_AWAY, RECONNECT_LOST). That's a
+lost connection, joined again by itself as CL_ReconnectLost joins one,
+worded as the transport says when it already knows, else by the server's
+words. Any other reason, as a kick's, is the server's own end of the
+game, even when the connection is gone already. Returns the drop's words
+when it gave up rejoining (CL_ReconnectLost), else NULL for the server's
+own
+
+The words are matched because nothing else tells these apart: the gateway
+tells the server at once and writes its close word a quarter of a second
+later, so the server's disconnect reaches the game first, at every idle
+and shutdown, and the connection is ended before its word comes. And a
+kick a hidden page hasn't run yet comes with the gateway's idle, which
+mustn't join a kicked player again. They're display text, which a
+translation of hosting's would have to keep, until the server's
+disconnect carries the gateway's word itself
+=================
+*/
+#define RECONNECT_AWAY	"was away too long"
+#define RECONNECT_LOST	"lost the connection"
+const char *CL_ReconnectDropped( const char *reason ) {
+	netLoss_t	loss, known;
+	const char	*failure, *transport, *said;
+
+	if ( clc.serverAddress.type != NA_WEB ) {
+		return NULL;
+	}
+	if ( !Q_stricmp( reason, RECONNECT_AWAY ) ) {
+		failure = "The server let the connection go while the game was hidden.";
+		loss = NET_LOST_AWAY;
+	} else if ( !Q_stricmp( reason, RECONNECT_LOST ) ) {
+		failure = "The server lost the connection.";
+		loss = NET_LOST;
+	} else {
+		return NULL;
+	}
+	transport = NET_ConnectionFailure( clc.serverAddress, &known );
+	if ( transport ) {
+		failure = transport;
+		loss = known;
+	}
+	said = CL_ReconnectLost( failure, loss );
+	return said != failure ? said : NULL;
 }
 
 // the way back, from the console as the player's command would run
@@ -1958,7 +2111,8 @@ static void CL_ReconnectTry( void ) {
 	cls.reconnect.left = qfalse;
 	// a join that found nothing leaves the client at the menu, which
 	// waits this long for one that did
-	cls.reconnect.nextTime = cls.realtime + RECONNECT_JOIN_MSEC;
+	cls.reconnect.nextTime = cls.realtime + CL_ReconnectSpread( RECONNECT_JOIN_MSEC, RECONNECT_JOIN_SPREAD );
+	cls.reconnect.own = qtrue;
 	Com_Printf( "The server is back; reconnecting.\n" );
 	Cbuf_AddText( va( "%s\n", cls.reconnect.command ) );
 }
@@ -1975,6 +2129,9 @@ or a connect that gave up, gives the menu its message back
 =================
 */
 static void CL_ReconnectFrame( void ) {
+	qboolean	hidden;
+	int			gap;
+
 	if ( !cls.reconnect.active ) {
 		return;
 	}
@@ -1983,10 +2140,21 @@ static void CL_ReconnectFrame( void ) {
 		cls.reconnect.active = qfalse;
 		return;
 	}
+	// the minute is the client's own: time it couldn't run, or that nobody
+	// could see it, doesn't count, and it tries again once it's seen
+	hidden = Sys_Hidden( );
+	gap = cls.realtime - cls.reconnect.lastTime;
+	cls.reconnect.lastTime = cls.realtime;
+	if ( hidden || gap > RECONNECT_GAP_MSEC ) {
+		cls.reconnect.startTime += gap;
+		cls.reconnect.nextTime = MAX( cls.reconnect.nextTime + gap, cls.realtime );
+	}
+	if ( hidden ) {
+		return;
+	}
 	if ( cls.realtime - cls.reconnect.startTime >= RECONNECT_MSEC ) {
 		cls.reconnect.active = qfalse;
-		Com_Error( ERR_DROP, "Server disconnected - %s It didn't come back within a minute. Type /reconnect to try "
-			"again.", cls.reconnect.reason );
+		Com_Error( ERR_DROP, "%s", cls.reconnect.gaveUp );
 	}
 	if ( clc.state != CA_DISCONNECTED ) {
 		cls.reconnect.left |= cls.reconnect.trying;
@@ -2036,11 +2204,15 @@ void CL_ReconnectDraw( void ) {
 		return;
 	}
 	left = ( RECONNECT_MSEC - ( cls.realtime - cls.reconnect.startTime ) + 999 ) / 1000;
-	s = va( "Reconnecting... %d", MAX( left, 0 ) );
+	s = va( "%s %d", cls.reconnect.lost ? "Rejoining..." : "Reconnecting...", MAX( left, 0 ) );
 	// between the classic menus' message and their prompt, in characters
-	// small enough to sit inside Team Arena's narrower message panel too
+	// small enough to sit inside Team Arena's narrower message panel too;
+	// in the menus' centered 640x480, which a tall window, a phone's in
+	// portrait, doesn't stretch
+	SCR_SetPlacement( PLACE_CENTER, PLACE_CENTER );
 	SCR_DrawStringExt( ( SCREEN_WIDTH - RECONNECT_CHAR * (int)strlen( s ) ) / 2, SCREEN_HEIGHT - 150, RECONNECT_CHAR, s,
 		colorWhite, qtrue, qtrue );
+	SCR_SetPlacement( PLACE_STRETCH, PLACE_STRETCH );
 }
 
 int CL_ExtConnectGeneration( void ) {
@@ -2064,10 +2236,15 @@ static void CL_ConnectBegin( const char *server ) {
 	Cvar_Set("ui_singlePlayerActive", "0");
 
 	cl_connectGeneration++;
-	// a connect the player began ends the wait for a server to come back
-	if ( !cls.reconnect.trying ) {
+	// a connect the player began ends the wait for a server to come back:
+	// any but the first after the wait's own try, which is that try's
+	if ( !cls.reconnect.trying || !cls.reconnect.own ) {
 		cls.reconnect.active = qfalse;
+		// and starts the count of losses again, to this server or another
+		Com_Memset( cl_losses, 0, sizeof( cl_losses ) );
 	}
+	cls.reconnect.own = qfalse;
+	cl_connectedAt = cls.realtime;
 	cls.rejoin[0] = '\0';
 
 	// fire a message off to the motd server
@@ -4246,8 +4423,12 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			clc.numCandidates = 0;
 			clc.fastUntil = clc.giveUpAt = 0;
 			CL_ConnectTarget();
-			Q_strncpyz( cl_reconnectArgs, NET_AdrToStringwPort( from ), sizeof( cl_reconnectArgs ) );
-			Cvar_Set( "cl_currentServerAddress", cl_reconnectArgs );
+			Cvar_Set( "cl_currentServerAddress", NET_AdrToStringwPort( from ) );
+			// a web connection's id can't be connected to again: reconnect
+			// joins again instead (CL_Reconnect_f)
+			if ( from.type != NA_WEB ) {
+				Q_strncpyz( cl_reconnectArgs, NET_AdrToStringwPort( from ), sizeof( cl_reconnectArgs ) );
+			}
 		}
 		Com_DPrintf ("challengeResponse: %d\n", clc.challenge);
 		return;
@@ -4514,18 +4695,49 @@ CL_CheckConnection
 
 A connection its transport knows failed or closed, as a web client's
 does, ends the connect, or the game, at once and says why, rather than at
-a timeout
+a timeout; one lost in the game is joined again by itself
+(CL_ReconnectLost)
 ==================
 */
+// whether a server command the game hasn't run yet is the server's
+// disconnect: its reason, a kick's say, comes before the transport's
+static qboolean CL_DisconnectQueued( void ) {
+	int		i;
+
+	for ( i = clc.lastExecutedServerCommand + 1; i <= clc.serverCommandSequence; i++ ) {
+		if ( !Q_strncmp( clc.serverCommands[i & ( MAX_RELIABLE_COMMANDS - 1 )], "disconnect", 10 ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static void CL_CheckConnection( void ) {
+	static int	deferredAt;		// when a failure first waited for a queued disconnect, 0 for none
 	const char	*failure;
+	netLoss_t	loss;
 
 	if ( clc.state < CA_CONNECTING || clc.state == CA_CINEMATIC ) {
+		deferredAt = 0;
 		return;
 	}
-	failure = NET_ConnectionFailure( clc.serverAddress );
+	failure = NET_ConnectionFailure( clc.serverAddress, &loss );
+	// the game runs the server's disconnect this frame, and its reason
+	// decides: a kicked player isn't joined again (CL_ReconnectDropped).
+	// For a second at most, should the game not run it
+	if ( failure && clc.state == CA_ACTIVE && CL_DisconnectQueued( ) ) {
+		if ( !deferredAt ) {
+			deferredAt = cls.realtime;
+		}
+		if ( cls.realtime - deferredAt < 1000 ) {
+			return;
+		}
+	}
+	deferredAt = 0;
 	if ( failure ) {
-		Com_Error( ERR_DROP, "%s", failure );
+		// joining again by itself, the menu saying so in place of the
+		// error, or not again, the error saying why
+		Com_Error( ERR_DROP, "%s", CL_ReconnectLost( failure, loss ) );
 	}
 }
 

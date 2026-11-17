@@ -393,6 +393,20 @@ static qboolean sysExited = qfalse;
 
 /*
 =================
+Sys_Hidden
+=================
+*/
+qboolean Sys_Hidden( void )
+{
+#ifdef __EMSCRIPTEN__
+	return EM_ASM_INT( { return document.hidden ? 1 : 0; } ) ? qtrue : qfalse;
+#else
+	return qfalse;
+#endif
+}
+
+/*
+=================
 Sys_Exit
 
 Single exit point (regular exit or in case of error)
@@ -402,6 +416,10 @@ static Q_NO_RETURN void Sys_Exit( int exitCode )
 {
 #ifdef __EMSCRIPTEN__
 	sysExited = qtrue;
+	// the page's own word for the end, with the status: the browser keeps
+	// the runtime alive past exit() for the main loop, so Emscripten never
+	// calls onExit itself
+	EM_ASM( { if ( Module.onExit ) Module.onExit( $0 ); }, exitCode );
 #endif
 
 	// the server, not --status or --help before it starts, nor a client

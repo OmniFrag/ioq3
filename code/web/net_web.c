@@ -71,10 +71,15 @@ qboolean NET_WebOpen( const char *signal, netadr_t *adr ) {
 NET_WebFailure
 ==================
 */
-const char *NET_WebFailure( netadr_t adr ) {
+const char *NET_WebFailure( netadr_t adr, netLoss_t *loss ) {
 	static char	failure[256];
+	// 0 while it may work, else 1 more than its netLoss_t
+	int			lost = NetWeb_Failure( adr.port, failure, sizeof( failure ) );
 
-	return NetWeb_Failure( adr.port, failure, sizeof( failure ) ) ? failure : NULL;
+	if ( loss && lost ) {
+		*loss = (netLoss_t)( lost - 1 );
+	}
+	return lost ? failure : NULL;
 }
 
 /*

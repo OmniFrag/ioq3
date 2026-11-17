@@ -47,6 +47,12 @@ canvas:focus { outline: none; }
 #ask pre { white-space: pre-wrap; text-align: left; max-height: 55dvh; overflow: auto; font: 13px/1.4 ui-monospace, monospace; background: rgba(255, 255, 255, 0.06); padding: 8px; }
 #ask button, #ask label { font: inherit; margin: 8px 8px 0 0; padding: 6px 16px; border-radius: 6px; border: 1px solid rgb(120, 120, 120); background: rgb(40, 40, 40); color: inherit; cursor: pointer; display: inline-block; }
 #ask input[type=file] { display: none; }
+/* What's left once the player quits: the page's own plain screen in place
+   of the game's last frame, and a way to play again */
+#left { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(16, 16, 16); font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
+#left[hidden] { display: none; }
+#left p { margin: 0 0 16px; }
+#left button { font: inherit; padding: 10px 24px; border-radius: 6px; border: 1px solid rgb(120, 120, 120); background: rgb(40, 40, 40); color: inherit; cursor: pointer; }
 #leaving .fill { stroke: rgb(235, 235, 235); stroke-width: 4; stroke-dasharray: 1; stroke-dashoffset: 1; }
 #leaving.holding .fill { animation: leaving-fill var(--ring-fill) linear var(--ring-after) forwards; }
 @keyframes leaving-fill { to { stroke-dashoffset: 0; } }
@@ -59,6 +65,7 @@ canvas:focus { outline: none; }
 <div id=status hidden><div><span></span><progress hidden></progress></div></div>
 <div id=hints><div id=hint class=hint></div><div id=play class=hint></div></div>
 <div id=ask hidden></div>
+<div id=left hidden><div><p>You left the game.</p><button type=button>Play again</button></div></div>
 <div id=leaving><svg viewBox="0 0 48 48"><circle class=track cx=24 cy=24 r=20 /><circle class=fill cx=24 cy=24 r=20 pathLength=1 /></svg><span>Leaving fullscreen</span></div>
 
 <script type=module>
@@ -1763,8 +1770,19 @@ ioquake3({
         showStatus('Starting…');
         module.removeRunDependency('setup-ioq3-filesystem');
     }],
-    // a player who quit isn't asked before closing the page
-    onExit: () => setPlaying(false),
+    // a player who quit isn't asked before closing the page, and sees the
+    // page's own screen rather than the game's last frame: an error's exit
+    // keeps its words on show
+    onExit: (status) => {
+        setPlaying(false);
+        if (status) return;
+        if (document.pointerLockElement) document.exitPointerLock();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        const left = document.getElementById('left'), again = left.querySelector('button');
+        again.onclick = () => location.reload();
+        left.hidden = false;
+        again.focus();
+    },
     // the engine has started, and draws from here on
     postRun: [(module) => {
         runningEngine = module;
