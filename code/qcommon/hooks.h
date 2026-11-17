@@ -644,6 +644,10 @@ const char	*SV_ExtClientName( int clientNum );
 // machine, "bot" for a bot, "" for none; NET_AdrToString's buffer, which
 // its next call, this one's too, overwrites
 const char	*SV_ExtClientAddress( int clientNum );
+// the same with its port, as NET_AdrToStringwPort gives it: "1.2.3.4:27960",
+// "[::1]:27960"; "localhost", "bot" and "" as above, and the same buffer
+// rule, NET_AdrToStringwPort's own buffer
+const char	*SV_ExtClientAddressPort( int clientNum );
 qboolean	SV_ExtClientIsBot( int clientNum );
 // the device key the client proved on connect (identity.h), into key;
 // qfalse for an unproven one, a stock client's, or none

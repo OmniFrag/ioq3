@@ -2061,18 +2061,26 @@ const char *SV_ExtClientName( int clientNum ) {
 	return cl ? cl->name : "";
 }
 
-const char *SV_ExtClientAddress( int clientNum ) {
+// a client's address, with its port or, as the userinfo's ip key has it
+// (SV_UserinfoChanged), without; NET_AdrToString gives "bot" for a bot
+static const char *SV_ExtClientAdr( int clientNum, qboolean port ) {
 	client_t	*cl = SV_ExtClient( clientNum );
 
 	if ( !cl ) {
 		return "";
 	}
-	// as the userinfo's ip key has it (SV_UserinfoChanged); NET_AdrToString
-	// gives "bot" for a bot
 	if ( NET_IsLocalAddress( cl->netchan.remoteAddress ) ) {
 		return "localhost";
 	}
-	return NET_AdrToString( cl->netchan.remoteAddress );
+	return port ? NET_AdrToStringwPort( cl->netchan.remoteAddress ) : NET_AdrToString( cl->netchan.remoteAddress );
+}
+
+const char *SV_ExtClientAddress( int clientNum ) {
+	return SV_ExtClientAdr( clientNum, qfalse );
+}
+
+const char *SV_ExtClientAddressPort( int clientNum ) {
+	return SV_ExtClientAdr( clientNum, qtrue );
 }
 
 qboolean SV_ExtClientIsBot( int clientNum ) {
