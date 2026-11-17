@@ -108,24 +108,83 @@ if (!webgl)
     fail(`This browser can't run the game: it needs WebGL${MIN_WEBGL_VERSION < 2 ? '' : ' 2'}, which is missing or turned off.`);
 
 // First set up the command line arguments and the Emscripten filesystem.
+//
+// What a link may carry, in its query (nothing is read from its fragment
+// here; joining by a code's link reads the key's fingerprint there): the
+// page's own options, a game directory by a plain name, a name for this
+// visit, and console commands (args) only where the page's config says it
+// takes them (consoleArgs), as the tests' and a developer's server does;
+// never the build's own config, which a server's gateway serves. Anyone
+// can post a link to a server's page, even one at localhost, and a
+// command from it would run with the console's rights in every visitor's
+// game, its binds, settings and written files kept in the browser.
+// Anything else is left out, each field named once in the console, and so
+// is a field the link names twice, which reads one way here and maybe
+// another wherever else the link is read.
+// a link's name's most characters, as the game's MAX_NAME_LENGTH
+const MAX_LINK_NAME = 32;
 const urlParams = new URLSearchParams(window.location.search);
+const LINK_FIELDS = ['com_basegame', 'fs_basegame', 'fs_game', 'fullscreen', 'maxPixelRatio', 'rawMouse',
+    'desynchronized', 'name', 'args'];
+const leftOut = (field, why) => console.warn(`The link's ${field} was left out: ${why}.`);
+const twice = new Set([...urlParams.keys()].filter((field, i, all) => all.indexOf(field) !== i));
+for (const field of new Set(urlParams.keys()))
+    if (!LINK_FIELDS.includes(field)) leftOut(field, 'the page takes no such field');
+    else if (twice.has(field)) leftOut(field, 'the link names it more than once');
+const linkField = (field) => twice.has(field) ? null : urlParams.get(field);
+// a game directory's name: letters, digits, - and _, and a . inside
+// (cpma-1.52), never two together, so it can't end the quotes it's set in
+// nor leave the home; and one the config lists files for, checked once
+// it's in (listedDir)
+const gameDir = (field) => {
+    const dir = linkField(field) || '';
+    if (dir && (!/^[A-Za-z0-9_-]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?$/.test(dir) || dir.includes('..'))) {
+        leftOut(field, 'a game directory is named with letters, digits, - and _, and a . inside');
+        return '';
+    }
+    return dir;
+};
 // The URL's game directory, or the config's (P358: a server's own page
 // names the one it plays), or BASEGAME; set once the config is in
-const urlBasegame = urlParams.get('com_basegame');
-let com_basegame = urlBasegame || BASEGAME;
-const fs_basegame = urlParams.get('fs_basegame') || '';
-const fs_game = urlParams.get('fs_game') || '';
+let urlBasegame = gameDir('com_basegame');
+let com_basegame;
+let fs_basegame = gameDir('fs_basegame');
+let fs_game = gameDir('fs_game');
+// A name for this visit, set as the command line sets one, so it's never
+// saved, cleaned as the game cleans a typed one: no control characters,
+// spaces at most two together and none leading, no black, and something
+// left to read. No quote, backslash, semicolon or percent sign, which
+// would end its quotes or its userinfo
+const visitName = (() => {
+    const raw = linkField('name');
+    if (raw === null) return '';
+    let name = raw.replace(/[\x00-\x1f\x7f"\\;%]/g, '');
+    // until none is left: taking ^0 out of ^^00 leaves one
+    while (/\^[08]/.test(name)) name = name.replace(/\^[08]/g, '');
+    name = name.replace(/ {3,}/g, '  ').trim();
+    // a color code counts nothing toward what's left to read
+    if (!name.replace(/\^./g, '').length || name.length > MAX_LINK_NAME) {
+        leftOut('name', `a name has 1 to ${MAX_LINK_NAME} characters, some of them not a color code`);
+        return '';
+    }
+    return name;
+})();
 // Set for this visit only. The web's defaults, and a touch device's, are the
-// engine's; the canvas has its CSS box's size, and r_mode isn't used
-let generatedArguments = '';
-if (fs_basegame) generatedArguments += ` +set fs_basegame "${fs_basegame}" `;
-if (fs_game) generatedArguments += ` +set fs_game "${fs_game}" `;
+// engine's; the canvas has its CSS box's size, and r_mode isn't used.
+// The engine's arguments, each value one, in its quotes: the engine joins
+// them with spaces, and quotes one with a + of its own, so a value split
+// at its spaces, as "a b+quit c", would end its quotes at b+quit and start
+// a command there
+const generatedArguments = [];
+const setArgument = (cvar, value) => generatedArguments.push('+set', cvar, `"${value}"`);
 // ?fullscreen=0 plays this visit in the page's window, and 1 fullscreen
-if (urlParams.has('fullscreen')) generatedArguments += ` +set r_fullscreen ${urlParams.get('fullscreen') === '0' ? 0 : 1} `;
-// A player's own ?args come after, and win
-// Note that unfortunately "+" needs to be encoded as "%2b" in URL query strings or it will be stripped by the browser.
-const queryArgs = urlParams.get('args');
-if (queryArgs) generatedArguments += ` ${queryArgs} `;
+const fullscreenField = linkField('fullscreen');
+if (fullscreenField !== null) setArgument('r_fullscreen', fullscreenField === '0' ? 0 : 1);
+if (visitName) setArgument('name', visitName);
+// Console commands come after, and win, once the config says the page
+// takes them (consoleArgs). Note that unfortunately "+" needs to be encoded
+// as "%2b" in URL query strings or it will be stripped by the browser.
+const queryArgs = linkField('args');
 
 const dataURL = new URL(dataPath, location.origin + location.pathname);
 
@@ -139,7 +198,7 @@ canvas.focus();
 
 // Cap the device pixel ratio SDL3 sizes the canvas by at 2 (?maxPixelRatio=):
 // a phone at 3 would draw 2.25 times the pixels. It still follows zoom and displays.
-const requestedPixelRatio = Number(urlParams.get('maxPixelRatio'));
+const requestedPixelRatio = Number(linkField('maxPixelRatio'));
 const maxPixelRatio = requestedPixelRatio > 0 ? requestedPixelRatio : 2;
 const pixelRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
     ?? Object.getOwnPropertyDescriptor(Window.prototype, 'devicePixelRatio');
@@ -175,7 +234,8 @@ watchPixelRatio();
 // browser has answered; a lock granted after the game stopped wanting it is
 // let go. A request that throws rather than rejects is a refusal too, so the
 // click's fullscreen request after it still goes out.
-const rawMouse = urlParams.has('rawMouse') ? urlParams.get('rawMouse') !== '0' : /Windows/.test(navigator.userAgent);
+const rawMouseField = linkField('rawMouse');
+const rawMouse = rawMouseField !== null ? rawMouseField !== '0' : /Windows/.test(navigator.userAgent);
 let rawLock = rawMouse, lockRequest = null;
 const lockPointer = () => lockRequest ??= new Promise((resolve) => resolve(canvas.requestPointerLock(rawLock ? { unadjustedMovement: true } : undefined)))
     .catch((e) => {
@@ -195,7 +255,7 @@ const locked = () => document.pointerLockElement === canvas;
 // rather than through the page's compositor, a frame sooner, where the
 // browser can (it may tear, or ignore it).
 const getContext = HTMLCanvasElement.prototype.getContext;
-const desynchronized = urlParams.has('desynchronized');
+const desynchronized = linkField('desynchronized') !== null;
 HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     if (type === 'webgl' || type === 'webgl2')
         attributes = { ...attributes, alpha: false, powerPreference: 'high-performance', ...(desynchronized && { desynchronized }) };
@@ -1640,8 +1700,24 @@ const downloadGame = async (FS) => {
 
 const engine = import(enginePath + `@CLIENT_BINARY@.js`);
 const startConfig = await configPromise;
-if (!urlBasegame && typeof startConfig.basegame == 'string' && /^[\w.-]+$/.test(startConfig.basegame))
-    com_basegame = startConfig.basegame;
+// A link's game directory plays only where the config lists files for it,
+// as a server's own page lists the ones it plays: another would play an
+// empty folder of the player's home, or none of the server's paks
+const listedDir = (field, dir) => {
+    if (!dir || (Object.hasOwn(startConfig, dir) && Array.isArray(startConfig[dir]?.files))) return dir;
+    leftOut(field, `the page's config lists no files for ${dir}`);
+    return '';
+};
+urlBasegame = listedDir('com_basegame', urlBasegame);
+// and a server's own page plays the one it names, not another a link names
+const ownBasegame = typeof startConfig.basegame == 'string' && /^[\w.-]+$/.test(startConfig.basegame) ? startConfig.basegame : '';
+if (urlBasegame && ownBasegame && urlBasegame !== ownBasegame) {
+    leftOut('com_basegame', `this page plays ${ownBasegame}`);
+    urlBasegame = '';
+}
+fs_basegame = listedDir('fs_basegame', fs_basegame);
+fs_game = listedDir('fs_game', fs_game);
+com_basegame = urlBasegame || ownBasegame || BASEGAME;
 // paks stored already, as the store lists them: to the isolated form before
 // the engine loads here
 isolation = isolationOf(startConfig);
@@ -1652,7 +1728,11 @@ if (isolation.form && startOwn.length) {
     if ((await (ownStoreEarly = ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
 }
 const ioquake3 = (await engine).default;
-generatedArguments = ` +set com_basegame "${com_basegame}" ${generatedArguments}`;
+generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
+    ...(fs_basegame ? ['+set', 'fs_basegame', `"${fs_basegame}"`] : []), ...(fs_game ? ['+set', 'fs_game', `"${fs_game}"`] : []));
+if (queryArgs && startConfig.consoleArgs === true) generatedArguments.push(...queryArgs.split(/\s+/).filter(Boolean));
+else if (queryArgs) console.warn("This page's link carried console commands (args), which this page doesn't take; "
+    + 'they were left out.');
 ioquake3({
     canvas: canvas,
     present,
@@ -1661,7 +1741,7 @@ ioquake3({
     setPlaying,
     saveFile,
     configWritten,
-    arguments: generatedArguments.trim().split(/\s+/),
+    arguments: generatedArguments,
     locateFile: (file) => enginePath + file,
     preRun: [(module) => {
         module.FS.mount(module.FS.filesystems.IDBFS, {}, HOME);

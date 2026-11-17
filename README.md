@@ -142,6 +142,12 @@ For Emscripten,
      is an easy default that you may already have installed.
   5. Open `http://localhost:8000/build/Release/ioquake3.html`
      in a web browser. Open the developer console to see errors and warnings.
+     The page takes console commands from its link (`?args=+map q3dm17`) only
+     when `client-config.json` says `"consoleArgs": true`, as a developer's
+     copy may: anyone can post a link to a page, and its commands would run
+     with the console's rights in every visitor's game. A preload build
+     (`EMSCRIPTEN_PRELOAD_FILE`), which reads no config, never takes them:
+     one hosted as a single file is open to the same links.
   6. Debugging the C code is possible using a Chrome extension. For details
      see https://developer.chrome.com/blog/wasm-debugging-2020
 
