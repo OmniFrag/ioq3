@@ -1022,6 +1022,11 @@ struct cvar_s {
 	char		*layerOrigins[CVAR_SERVER_LAYERS];
 	char		*lockOrigin;
 	char		*lockString;	// the value it locked, which settings_revert goes back to
+	// what the command line or the environment gave it for this run, and
+	// which of them did, or NULL: all a cvar only the start sets can take
+	// (Cvar_SetStart, Cvar_GetStart)
+	char		*startString;
+	char		*startOrigin;
 	char		*gameString;	// a CVAR_MAPVALUE cvar's: game code's, the map's own, or NULL
 	qboolean	serverStale;	// not in the server's latest systeminfo (Cvar_EndServerValues)
 	int		declaredScope;	// its declaration's cvarScope_t (qcommon.h), or -1

@@ -1185,6 +1185,7 @@ static void Com_EnvironmentVariables( const char *match, int skipFlags ) {
 		}
 		var = Cvar_SetFromOrigin( name, value, CVAR_SOURCE_SESSION, variable );
 		if ( var ) {
+			Cvar_SetStart( var, value, variable );
 			Cvar_Lock( var, variable );
 		}
 		if ( fromFile ) {
@@ -1220,6 +1221,7 @@ static void Com_StartupVariables( const char *match, int skipFlags ) {
 			cvar_t	*var = Cvar_SetFromOrigin( s, Cmd_ArgsFrom( 2 ), CVAR_SOURCE_SESSION, CMD_ORIGIN_COMMAND_LINE );
 
 			if ( var ) {
+				Cvar_SetStart( var, Cmd_ArgsFrom( 2 ), CMD_ORIGIN_COMMAND_LINE );
 				// a dedicated server's tools can't change it
 				if ( !Com_IsClient() ) {
 					Cvar_Lock( var, CMD_ORIGIN_COMMAND_LINE );
@@ -4587,8 +4589,9 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 
 	// a fixed seed, and fixedtime, make a server's matches repeat exactly
 	// under the same commands, which tests compare
-	com_randomSeed = Cvar_Get( "com_randomSeed", "0", CVAR_INIT | CVAR_PROTECTED );
-	Cvar_SetDescription( com_randomSeed, "Seed random numbers with this rather than the time, so matches repeat (for tests); 0 for the time" );
+	com_randomSeed = Cvar_GetStart( "com_randomSeed", "0", CVAR_PROTECTED );
+	Cvar_SetDescription( com_randomSeed, "Seed random numbers with this rather than the time, so matches repeat (for tests); 0 for the time\n"
+		"Set on the command line, or a server's environment (OMNIFRAG_COM_RANDOMSEED), never in a file." );
 	if ( com_randomSeed->integer ) {
 		srand( com_randomSeed->integer );
 	}

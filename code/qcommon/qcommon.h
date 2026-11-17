@@ -987,6 +987,11 @@ qboolean	Cvar_SetGameValue( const char *name, const char *value );
 void	Cvar_Lock( cvar_t *var, const char *origin );
 // locks a cvar at the value the command line or the environment set
 // (cvar_t's lockOrigin and lockString)
+void	Cvar_SetStart( cvar_t *var, const char *value, const char *origin );
+// notes what the command line or the environment gave a cvar this run
+cvar_t	*Cvar_GetStart( const char *var_name, const char *var_value, int flags );
+// Cvar_Get for a cvar only the start sets (CVAR_INIT): it takes the command
+// line's or the environment's value, or its default, whatever ran before
 const char	*Cvar_LockedBy( const char *var_name );
 // what locked a cvar, "the command line" or "OMNIFRAG_SV_HOSTNAME", or NULL:
 // a tool's set is refused, the console's lasts for the run

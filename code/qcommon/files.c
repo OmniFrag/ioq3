@@ -9318,7 +9318,7 @@ const char *FS_ServerDir( void )
 		return "";
 	}
 	if ( !dir[0] ) {
-		instance = Cvar_Get( "sv_instance", "", CVAR_INIT | CVAR_PROTECTED );
+		instance = Cvar_GetStart( "sv_instance", "", CVAR_PROTECTED );
 		Cvar_SetDescription( instance, "Name of this server among those sharing a home\n"
 			"Its folder is servers/<name> in the game directory, and its Omniwire instance server-<name>; "
 			"empty uses the port, servers/27960, as before. Letters, digits, - and _, up to 32, set on the "

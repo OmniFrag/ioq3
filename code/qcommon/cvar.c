@@ -455,6 +455,25 @@ static void Cvar_ForgetUser( cvar_t *var ) {
 
 /*
 ============
+Cvar_DropLayers
+
+Drops every value above the default but the player's: the server's, a
+dedicated server's layers and game code's
+============
+*/
+static void Cvar_DropLayers( cvar_t *var ) {
+	int	i;
+
+	Cvar_SetLayer( &var->serverString, NULL );
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		Cvar_SetLayer( &var->layerStrings[i], NULL );
+		Cvar_SetLayer( &var->layerOrigins[i], NULL );
+	}
+	Cvar_SetLayer( &var->gameString, NULL );
+}
+
+/*
+============
 Cvar_SameString
 
 Whether two of a cvar's strings, either of which may be NULL, are the same
@@ -875,6 +894,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->resetString = CopyString( var_value );
 	var->serverString = var->userString = var->userOrigin = var->savedString = NULL;
 	var->lockOrigin = var->lockString = NULL;
+	var->startString = var->startOrigin = NULL;
 	Com_Memset( var->layerStrings, 0, sizeof( var->layerStrings ) );
 	Com_Memset( var->layerOrigins, 0, sizeof( var->layerOrigins ) );
 	var->userSource = CVAR_SOURCE_DEFAULT;
@@ -2106,6 +2126,71 @@ Cvar_Lock
 void Cvar_Lock( cvar_t *var, const char *origin ) {
 	Cvar_SetLayer( &var->lockOrigin, origin );
 	Cvar_SetLayer( &var->lockString, var->userString );
+}
+
+/*
+============
+Cvar_SetStart
+
+Notes value as what the start, the command line or the environment
+(origin), gave var for this run, whether or not the set took, so a cvar
+only the start sets has it when it registers (Cvar_GetStart)
+============
+*/
+void Cvar_SetStart( cvar_t *var, const char *value, const char *origin ) {
+	Cvar_SetLayer( &var->startString, value );
+	Cvar_SetLayer( &var->startOrigin, origin );
+}
+
+/*
+============
+Cvar_GetStart
+
+Cvar_Get for a cvar only the start sets, CVAR_INIT: it takes what the
+command line or the environment gave it (Cvar_SetStart), or else its
+default, and nothing else, whatever ran before it registered. A config
+that runs before, as default.cfg does, can create the cvar and set it, and
+Cvar_Get would keep that; this drops it, so the order things run in never
+decides what the cvar holds. Once registered, CVAR_INIT refuses every set.
+The value is decided once, at the first registration: a later one, as code
+that registers again at each start makes, is Cvar_Get's, so the engine's
+own forced set since (a value found unusable and cleared) stands
+============
+*/
+cvar_t *Cvar_GetStart( const char *var_name, const char *var_value, int flags ) {
+	cvar_t		*var = Cvar_FindVar( var_name );
+	const char	*leftOut[1 + CVAR_SERVER_LAYERS];
+	int		i, count = 0;
+
+	if ( var && ( var->flags & CVAR_INIT ) &&
+		!( var->flags & ( CVAR_USER_CREATED | CVAR_VM_CREATED | CVAR_SERVER_CREATED ) ) ) {
+		return Cvar_Get( var_name, var_value, flags | CVAR_INIT );
+	}
+	var = Cvar_Get( var_name, var_value, flags | CVAR_INIT );
+
+	// what set it before it registered, said: a config's, and a server's
+	// file's, mode's or pool entry's
+	if ( var->userString && !Cvar_SameString( var->userString, var->startString ) ) {
+		leftOut[count++] = var->userOrigin ? var->userOrigin : "a config";
+	}
+	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
+		if ( var->layerStrings[i] ) {
+			leftOut[count++] = var->layerOrigins[i] ? var->layerOrigins[i] : cvar_serverLayers[i].unnamed;
+		}
+	}
+	for ( i = 0; i < count; i++ ) {
+		Com_Printf( "%s is only set on the start command or in the environment: %s's value is left out.\n",
+			var->name, leftOut[i] );
+	}
+	Cvar_DropLayers( var );
+	Cvar_ForgetUser( var );
+	var->untrusted = qfalse;
+	if ( var->startString ) {
+		Cvar_SetLayer( &var->userString, var->startString );
+		Cvar_SetLayer( &var->userOrigin, var->startOrigin );
+		var->userSource = CVAR_SOURCE_SESSION;
+	}
+	return Cvar_Apply( var, qtrue );
 }
 
 /*
@@ -3485,7 +3570,6 @@ Unsets a cvar
 cvar_t *Cvar_Unset(cvar_t *cv)
 {
 	cvar_t *next = cv->next;
-	int i;
 
 	// note what types of cvars have been modified (userinfo, archive, serverinfo, systeminfo)
 	cvar_modifiedFlags |= cv->flags;
@@ -3501,16 +3585,13 @@ cvar_t *Cvar_Unset(cvar_t *cv)
 	if(cv->description)
 		Z_Free(cv->description);
 	Cvar_ForgetModules( cv );
-	Cvar_SetLayer( &cv->serverString, NULL );
+	Cvar_DropLayers( cv );
 	Cvar_ClearUser( cv );
 	Cvar_SetLayer( &cv->savedString, NULL );
-	for ( i = 0; i < CVAR_SERVER_LAYERS; i++ ) {
-		Cvar_SetLayer( &cv->layerStrings[i], NULL );
-		Cvar_SetLayer( &cv->layerOrigins[i], NULL );
-	}
 	Cvar_SetLayer( &cv->lockOrigin, NULL );
 	Cvar_SetLayer( &cv->lockString, NULL );
-	Cvar_SetLayer( &cv->gameString, NULL );
+	Cvar_SetLayer( &cv->startString, NULL );
+	Cvar_SetLayer( &cv->startOrigin, NULL );
 	Cvar_SetLayer( &cv->reason, NULL );
 
 	if(cv->prev)

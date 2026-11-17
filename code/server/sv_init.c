@@ -278,7 +278,7 @@ static void SV_Startup( void ) {
 	SV_BoundMaxClients( 1 );
 	// OmniFrag's tests start the clock near where it would wrap; otherwise
 	// it starts at 0
-	svs.time = MAX( 0, Cvar_Get( "sv_timeStart", "0", CVAR_INIT )->integer );
+	svs.time = MAX( 0, Cvar_GetStart( "sv_timeStart", "0", 0 )->integer );
 
 	svs.maxclients = sv_maxclients->integer;
 	svs.clients = Z_Malloc (sizeof(client_t) * svs.maxclients );
@@ -1015,7 +1015,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	svs.snapshotEntities = Hunk_Alloc( sizeof(entityState_t)*svs.numSnapshotEntities, h_high );
 	// OmniFrag's tests start the index near its limit, to test that
 	// SV_BuildClientSnapshot lowers it; otherwise it starts at 0
-	svs.nextSnapshotEntities = Cvar_Get( "sv_snapshotEntitiesStart", "0", CVAR_INIT )->integer;
+	svs.nextSnapshotEntities = Cvar_GetStart( "sv_snapshotEntitiesStart", "0", 0 )->integer;
 	if ( svs.nextSnapshotEntities < 0 ) {
 		svs.nextSnapshotEntities = 0;
 	}
@@ -1549,16 +1549,16 @@ void SV_Init (void)
 		"SHA-256>.pk3. Write it without a trailing slash, such as http://example.com/q3. OmniFrag players "
 		"download from it and the game server at once and stay connected; others reconnect when they're "
 		"done unless sv_allowDownload includes 8." );
-	// set on the command line alone, so rcon, a config or a pak can't move
-	// what the content command reaches
-	sv_contentDir = Cvar_Get( "sv_contentDir",
-		va( "%s%ccontent", Cvar_VariableString( "fs_homedatapath" ), PATH_SEP ), CVAR_INIT | CVAR_PROTECTED );
+	// set on the command line or in the environment alone, so rcon, a
+	// config or a pak can't move what the content command reaches
+	sv_contentDir = Cvar_GetStart( "sv_contentDir",
+		va( "%s%ccontent", Cvar_VariableString( "fs_homedatapath" ), PATH_SEP ), CVAR_PROTECTED );
 	Cvar_SetDescription( sv_contentDir,
 		"Folder content export writes to and content add reads from\n"
 		"content export puts pak files in its www folder, or another of its folders, for sv_dlURL's web "
 		"server, and content add takes paks from its incoming folder; neither follows a path or link out "
-		"of it, so rcon may run both. Set it at startup, on the command line or in autoexec.cfg, as a "
-		"whole path, and let only the server's user write in it. By default it's the content folder in "
+		"of it, so rcon may run both. Set it on the command line or in the environment, "
+		"never a file, as a whole path, and let only the server's user write in it. By default it's the content folder in "
 		"the server's home." );
 	
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
