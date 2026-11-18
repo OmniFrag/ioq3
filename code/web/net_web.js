@@ -218,6 +218,24 @@ addToLibrary({
       return 1;
     },
 
+    // a note to the gateway that the page won't send for a while, seconds
+    // at most: the busy note, on oob as a connectionless packet's bytes
+    // start, which the gateway takes itself and never forwards; nothing for
+    // a connection not open
+    busy: function(id, seconds) {
+      var peer = NetWeb.peers[id];
+      if (!peer || !peer.open || peer.failure || peer.oob.readyState != 'open') return;
+      var text = 'omnifrag-busy ' + seconds;
+      var data = new Uint8Array(4 + text.length);
+      data.set([255, 255, 255, 255]);
+      for (var i = 0; i < text.length; i++) data[4 + i] = text.charCodeAt(i);
+      try {
+        peer.oob.send(data);
+      } catch (e) {
+        // closing: its onclose says so
+      }
+    },
+
     fail: function(peer, why) {
       if (peer.failure || peer.closed) return;
       peer.failure = why;
@@ -268,6 +286,11 @@ addToLibrary({
     if (!failure) return 0;
     stringToUTF8(failure, buffer, size);
     return 1;
+  },
+
+  NetWeb_Busy__deps: ['$NetWeb'],
+  NetWeb_Busy: function(id, seconds) {
+    NetWeb.busy(id, seconds);
   },
 
   NetWeb_Close__deps: ['$NetWeb'],

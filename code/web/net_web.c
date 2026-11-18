@@ -46,6 +46,7 @@ extern int	NetWeb_Send( int id, const void *data, int length );
 extern int	NetWeb_Receive( void *buffer, int size, int *id );
 extern int	NetWeb_Failure( int id, char *buffer, int size );
 extern void	NetWeb_Close( int id );
+extern void	NetWeb_Busy( int id, int seconds );
 
 /*
 ==================
@@ -83,6 +84,15 @@ NET_WebClose
 */
 void NET_WebClose( netadr_t adr ) {
 	NetWeb_Close( adr.port );
+}
+
+/*
+==================
+NET_WebBusy
+==================
+*/
+void NET_WebBusy( netadr_t adr, int seconds ) {
+	NetWeb_Busy( adr.port, seconds );
 }
 
 /*

@@ -2421,6 +2421,10 @@ void CL_Vid_Restart_f( void ) {
 		CL_CloseAVI( );
 	}
 
+	// the restart, and cgame's load again, is one long frame with nothing
+	// sent: a connection that would take it as gone is told first
+	NET_ConnectionBusy( clc.serverAddress, CL_LOAD_BUSY_SECONDS );
+
 	if(clc.demorecording)
 		CL_StopRecord_f();
 
@@ -2630,6 +2634,11 @@ Called when all downloading has been completed
 */
 void CL_DownloadsComplete( void ) {
 	CL_ContentClearProgress();
+
+	// what follows, the filesystem's and renderer's restarts and the map's
+	// load, is one long frame with nothing sent: a connection that would
+	// take it as gone is told first
+	NET_ConnectionBusy( clc.serverAddress, CL_LOAD_BUSY_SECONDS );
 
 	// a pak the server uses is still missing: say which, and why, all at
 	// once, keeping the ones that did arrive for the next connect. A title,

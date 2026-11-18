@@ -44,6 +44,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define QKEY_FILE "qkey"
 #define QKEY_SIZE 2048
 
+// the longest a map's load, one frame with nothing sent, may keep a
+// connection quiet (NET_ConnectionBusy): a browser's gateway caps its hold
+// at the same
+#define	CL_LOAD_BUSY_SECONDS	90
+
 #define	RETRANSMIT_TIMEOUT	3000	// time between connection packet retransmits
 #define	FAST_RETRANSMIT		200		// the same in a connect's fast window (CL_ExtConnect)
 #define	MAX_CONNECT_CANDIDATES	8

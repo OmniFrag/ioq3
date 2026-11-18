@@ -2372,6 +2372,10 @@ const char	*NET_ConnectionFailure( netadr_t adr );
 // Ends the connection to a server at the address, for a transport that
 // keeps one
 void		NET_CloseConnection( netadr_t adr );
+// tells a connection's other end that nothing is sent for up to seconds,
+// as a map loads in one long frame, where it would take the quiet as the
+// end (a browser's gateway); nothing for a plain address
+void		NET_ConnectionBusy( netadr_t adr, int seconds );
 
 #ifdef __EMSCRIPTEN__
 // A web client's connections to servers through the browser (NA_WEB,
@@ -2392,6 +2396,9 @@ void		NET_WebClose( netadr_t adr );
 qboolean	NET_WebSend( netadr_t to, const void *data, int length );
 // hands the client every packet the connections received
 void		NET_WebEvent( void );
+// tells the other end that this page sends nothing for up to seconds, as
+// a map loads in one long frame: its gateway holds off its idle limit
+void		NET_WebBusy( netadr_t adr, int seconds );
 #endif
 // A proxy whose datagrams an extension carries, framing them as it and the
 // proxy agree, such as a relay's tunnel. The engine keeps each player's

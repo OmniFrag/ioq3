@@ -645,6 +645,13 @@ void NET_CloseConnection( netadr_t adr ) {
 #endif
 }
 
+void NET_ConnectionBusy( netadr_t adr, int seconds ) {
+#ifdef __EMSCRIPTEN__
+	if ( adr.type == NA_WEB )
+		NET_WebBusy( adr, seconds );
+#endif
+}
+
 //=============================================================================
 
 #ifdef _WIN32
