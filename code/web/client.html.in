@@ -256,7 +256,9 @@ const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {fi
 // questions as they open and close (onAsk, askAgain), what it's doing
 // meanwhile, such as reading the player's files in (onStatus: its words,
 // its kind, how far along and its bytes where it counts them, or '' once
-// done), and the download's
+// done), the client's join as it goes, in the same way (onStatus's
+// 'joining' the server, 'getting' its files, by bytes, and 'entering' its
+// map, '' once in or stopped), which cancelJoin stops, and the download's
 // progress (onProgress: the bytes in and
 // the total, 0 when the server doesn't say), in place of the page's own
 // words, which show only its errors; and whether this browser can run the
@@ -274,7 +276,7 @@ const engineScript = enginePath + `@CLIENT_BINARY@.js`;
 // the engine script's ETag as this page has it, once the game has loaded,
 // from the browser's cache
 let engineTag = null;
-let startGame, pageJoins = FRONT ? 0 : 1;
+let startGame, pageJoins = FRONT ? 0 : 1, joinCancels = 0;
 // what the front's play gave the next join: a name, cleaned as a link's is,
 // and a password, which is never stored and goes once it's taken
 const joinFields = { name: '', password: '' };
@@ -377,6 +379,10 @@ if (FRONT) {
             // what userinfo can hold, as Info_SetValueForKey takes it
             joinFields.password = String(password).replace(/[\x00-\x1f\x7f"\\;]/g, '').slice(0, 64);
             pageJoins++;
+        },
+        // the join under way, the page's own or the client's rejoin, stopped
+        cancelJoin: () => {
+            joinCancels++;
         },
         agreement: frontAgreement,
         accept: async () => {
@@ -1975,6 +1981,14 @@ ioquake3({
     // the page has asked for its own join, 0 while it holds it
     left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
     pageJoins: () => pageJoins,
+    // and how many times it has canceled the join under way
+    pageJoinCancels: () => joinCancels,
+    // the client's join as it goes (the join extension's), to a front as a
+    // status of its own: 'joining', 'getting' with its bytes of total, or
+    // 'entering', '' once in or stopped
+    joinStatus: (kind, bytes, total) => {
+        if (frontOn) tellFront(frontListeners.status, { text: '', kind, bytes, total });
+    },
     // a field the front's play gave the join it asked for, read once
     pageJoinField: (field) => {
         // a page without a front gives the join nothing, and the game's own
