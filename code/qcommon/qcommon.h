@@ -2069,6 +2069,9 @@ void CL_Init( void );
 void CL_Disconnect( qboolean showMainMenu );
 // called as an error drops the client, before it disconnects
 void CL_NextDemoAfterError( int code );
+// and why it left, for the leave's report (hooks.h's clientLeft), unless
+// the client already said
+void CL_ErrorLeaving( int code );
 void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit);
 void CL_Frame( int msec );
 

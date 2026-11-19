@@ -295,6 +295,9 @@ rescan:
 			// or one that dropped a lost web connection
 			const char	*gaveUp;
 
+			// the kind of drop the server names after the reason, a word
+			// of its own choosing, never the reason's (SV_DropClientAs)
+			CL_DisconnectKind( Cmd_Argv( 2 ) );
 			CL_ReconnectAsked( Cmd_Argv( 1 ) );
 			if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 1 ) ) ) != NULL ) {
 				Com_Error( ERR_SERVERDISCONNECT, "%s", gaveUp );

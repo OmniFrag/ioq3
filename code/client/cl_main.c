@@ -1514,6 +1514,53 @@ void CL_ClearDownloadName( void ) {
 
 /*
 =====================
+CL_Leaving, CL_ErrorLeaving
+
+Why the client is about to leave the server it's on, the first to say it
+deciding: the code that ends the game (a refusal, a lost connection, a
+wait that gave up or was ended), else the error's kind. The leave is
+reported in the next frame, once nothing follows it (CL_ReportLeft)
+=====================
+*/
+static int	cl_leaving = -1;	// extLeft_t, or -1 until something says
+static struct {
+	qboolean	pending;
+	extLeft_t	kind;
+	char		reason[MAX_STRING_CHARS];
+} cl_left;
+
+static void CL_Leaving( extLeft_t kind ) {
+	if ( cl_leaving < 0 ) {
+		cl_leaving = kind;
+	}
+}
+
+void CL_ErrorLeaving( int code ) {
+	CL_Leaving( code == ERR_DISCONNECT ? EXT_LEFT_OWN : code == ERR_SERVERDISCONNECT ? EXT_LEFT_DROPPED : EXT_LEFT_ERROR );
+}
+
+// the kinds a server's disconnect may name, by the names the page gets too
+void CL_DisconnectKind( const char *kind ) {
+	static const extLeft_t	named[] = { EXT_LEFT_KICKED, EXT_LEFT_BANNED, EXT_LEFT_SHUTDOWN };
+	int						i;
+
+	for ( i = 0; i < ARRAY_LEN( named ); i++ ) {
+		if ( !strcmp( kind, extLeftNames[named[i]] ) ) {
+			CL_Leaving( named[i] );
+			break;
+		}
+	}
+}
+
+// a leave now, with the menu's words
+static void CL_Left( extLeft_t kind, const char *reason ) {
+	cl_left.pending = qtrue;
+	cl_left.kind = kind;
+	Q_strncpyz( cl_left.reason, reason, sizeof( cl_left.reason ) );
+}
+
+/*
+=====================
 CL_Disconnect
 
 Called when a connection, demo, or cinematic is being terminated.
@@ -1526,6 +1573,20 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	if ( !com_cl_running || !com_cl_running->integer ) {
 		return;
 	}
+
+	// a server left, or a wait to go back to one ended, or a leave this
+	// frame already took (a listen server's shutdown) given its error's
+	// kind; never an error at the menu, in a demo or in a cinematic
+	if ( ( clc.state >= CA_CONNECTING && clc.state != CA_CINEMATIC && !clc.demoplaying ) ||
+		( cl_leaving >= 0 && ( cl_left.pending || cl_leaving == EXT_LEFT_CANCELED ||
+		cl_leaving == EXT_LEFT_GAVE_UP_LOST || cl_leaving == EXT_LEFT_GAVE_UP_AWAY ||
+		cl_leaving == EXT_LEFT_GAVE_UP_BACK ) ) ) {
+		extLeft_t	kind = cl_leaving >= 0 ? (extLeft_t)cl_leaving : EXT_LEFT_OWN;
+
+		CL_Left( kind, kind == EXT_LEFT_OWN ? "" : kind == EXT_LEFT_CANCELED ? cls.reconnect.stopped :
+			Cvar_VariableString( "com_errorMessage" ) );
+	}
+	cl_leaving = -1;
 
 	// shutting down the client so enter full screen ui mode
 	Cvar_Set("r_uiFullScreen", "1");
@@ -1897,6 +1958,11 @@ void CL_ReconnectStop( void ) {
 	// a join it started ends too (CL_ExtConnectGeneration)
 	cl_connectGeneration++;
 	Com_Printf( "Not reconnecting to the server.\n" );
+	// the player ended it: at the menu now, or as the connect it began ends
+	CL_Leaving( EXT_LEFT_CANCELED );
+	if ( clc.state == CA_DISCONNECTED ) {
+		CL_Left( EXT_LEFT_CANCELED, cls.reconnect.stopped );
+	}
 	// a message still saying it's reconnecting gets the server's own words
 	// back, the menu that shows it opened again to read them
 	if ( !strcmp( Cvar_VariableString( "com_errorMessage" ), cls.reconnect.message ) ) {
@@ -2026,6 +2092,10 @@ static const char *CL_ReconnectLost( const char *failure, netLoss_t loss ) {
 
 	if ( !cl_autoReconnect->integer || clc.demoplaying || clc.state < CA_PRIMED || cls.reconnect.active ||
 		!cls.rejoin[0] || loss == NET_LOST_FINAL ) {
+		// a connection the server never answered, not even its challenge,
+		// wasn't lost: it never reached the server
+		CL_Leaving( loss == NET_LOST_FINAL ? EXT_LEFT_REPLACED : clc.state < CA_CHALLENGING ? EXT_LEFT_UNREACHED :
+			EXT_LEFT_LOST );
 		return failure;
 	}
 	if ( cls.realtime - cl_connectedAt < RECONNECT_SHORT_MSEC ) {
@@ -2037,6 +2107,7 @@ static const char *CL_ReconnectLost( const char *failure, netLoss_t loss ) {
 		if ( losses[oldest] && cls.realtime - losses[oldest] < RECONNECT_LOSSES_MSEC ) {
 			Com_sprintf( gaveUp, sizeof( gaveUp ), "%s It lost the connection %d times in two minutes, so it stopped "
 				"rejoining. Type /reconnect to try again.", failure, RECONNECT_LOSSES + 1 );
+			CL_Leaving( loss == NET_LOST_AWAY ? EXT_LEFT_GAVE_UP_AWAY : EXT_LEFT_GAVE_UP_LOST );
 			return gaveUp;
 		}
 		losses[oldest] = cls.realtime ? cls.realtime : 1;
@@ -2045,6 +2116,7 @@ static const char *CL_ReconnectLost( const char *failure, netLoss_t loss ) {
 	CL_ReconnectBegin( cls.rejoin, NULL, RECONNECT_LOST_MSEC + CL_ReconnectSpread( RECONNECT_LOST_SPREAD / 2,
 		RECONNECT_LOST_SPREAD / 2 ) );
 	cls.reconnect.lost = qtrue;
+	cls.reconnect.away = loss == NET_LOST_AWAY;
 	Q_strncpyz( cls.reconnect.reason, failure, sizeof( cls.reconnect.reason ) );
 	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ), "%s Rejoining...", why );
 	Com_sprintf( cls.reconnect.stopped, sizeof( cls.reconnect.stopped ), "%s Type /reconnect to rejoin.", failure );
@@ -2154,6 +2226,8 @@ static void CL_ReconnectFrame( void ) {
 	}
 	if ( cls.realtime - cls.reconnect.startTime >= RECONNECT_MSEC ) {
 		cls.reconnect.active = qfalse;
+		CL_Leaving( !cls.reconnect.lost ? EXT_LEFT_GAVE_UP_BACK : cls.reconnect.away ? EXT_LEFT_GAVE_UP_AWAY :
+			EXT_LEFT_GAVE_UP_LOST );
 		Com_Error( ERR_DROP, "%s", cls.reconnect.gaveUp );
 	}
 	if ( clc.state != CA_DISCONNECTED ) {
@@ -2217,6 +2291,12 @@ void CL_ReconnectDraw( void ) {
 
 int CL_ExtConnectGeneration( void ) {
 	return cl_connectGeneration;
+}
+
+void CL_ExtLeft( extLeft_t kind, const char *reason ) {
+	if ( kind >= 0 && kind < EXT_LEFT_KINDS ) {
+		CL_Left( kind, reason ? reason : "" );
+	}
 }
 
 void CL_ExtSetRejoin( const char *command ) {
@@ -3713,6 +3793,7 @@ void CL_CheckForResend( void ) {
 
 	// a candidate connect's end, with no answer
 	if ( clc.giveUpAt && clc.state == CA_CONNECTING && cls.realtime - clc.giveUpAt >= 0 ) {
+		CL_Leaving( EXT_LEFT_UNREACHED );
 		Com_Error( ERR_DROP, "No address answered, so the connect stopped." );
 	}
 	// and its fast window, while its routers open; a candidate come due
@@ -4565,6 +4646,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			}
 
 			if ( CL_RefusalEnds( from, clc.serverMessage ) ) {
+				CL_Leaving( EXT_LEFT_REFUSED );
 				Com_Error( ERR_DROP, "Refused by the server: %s",
 					clc.serverMessage[0] ? clc.serverMessage : "no reason given" );
 			}
@@ -4682,6 +4764,8 @@ void CL_CheckTimeout( void ) {
 		if (++cl.timeoutcount > 5) {	// timeoutcount saves debugger
 			Com_Printf ("\nServer connection timed out.\n");
 			CL_Disconnect( qtrue );
+			// the connection lost, not the player's own disconnect
+			CL_Left( EXT_LEFT_LOST, "Server connection timed out." );
 			return;
 		}
 	} else {
@@ -4788,7 +4872,9 @@ void CL_CheckUserinfo( void ) {
 CL_ReportState
 
 Tells the engine extensions (hooks.h) what changed since the last frame:
-whether a demo plays, then the connection's state
+whether a demo plays, then the connection's state, then a leave of a
+server that nothing followed, neither a wait to go back nor a connect
+elsewhere
 ==================
 */
 static void CL_ReportState( void ) {
@@ -4803,6 +4889,16 @@ static void CL_ReportState( void ) {
 		reportedState = clc.state;
 		Hooks_ClientStateChanged( reportedState );
 	}
+	if ( cl_left.pending ) {
+		cl_left.pending = qfalse;
+		// at the menu, or under a cinematic, as the logo plays as a page
+		// opens: no server either way
+		if ( ( clc.state == CA_DISCONNECTED || clc.state == CA_CINEMATIC ) && !cls.reconnect.active && !clc.demoplaying ) {
+			Hooks_ClientLeft( cl_left.kind, cl_left.reason );
+		}
+	}
+	// a kind said in a frame whose leave didn't come is no later leave's
+	cl_leaving = -1;
 }
 
 connstate_t CL_ExtState( void ) {

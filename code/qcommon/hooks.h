@@ -89,6 +89,29 @@ typedef struct {
 	int		modules;	// EXT_MODULE_BIT()s
 } extModuleCall_t;
 
+// why the client left the server it was on (clientLeft), as the client
+// knows: only a leave that ends at the menu with no wait to go back
+typedef enum {
+	EXT_LEFT_OWN,			// the player's own disconnect
+	EXT_LEFT_DROPPED,		// the server's disconnect, for its reason
+	EXT_LEFT_KICKED,		// the server's disconnect, which it said was a kick
+	EXT_LEFT_BANNED,		// the same, a ban
+	EXT_LEFT_SHUTDOWN,		// the same, the server stopping
+	EXT_LEFT_REFUSED,		// the server turned the connect down
+	EXT_LEFT_LOST,			// the transport lost the connection, with nothing to go back by
+	EXT_LEFT_UNREACHED,		// a connect the server never answered ended: it never connected
+	EXT_LEFT_REPLACED,		// another connection took its place
+	EXT_LEFT_GAVE_UP_LOST,	// the wait to rejoin after a lost connection gave up
+	EXT_LEFT_GAVE_UP_AWAY,	// the same, the connection lost while the player was away
+	EXT_LEFT_GAVE_UP_BACK,	// the wait for a restarting server to come back gave up
+	EXT_LEFT_CANCELED,		// the player ended a wait to rejoin or for the server to come back
+	EXT_LEFT_ERROR,			// any other error that ended the game
+	EXT_LEFT_KINDS
+} extLeft_t;
+
+// the kinds by name, as the web page gets them
+extern const char	*extLeftNames[EXT_LEFT_KINDS];
+
 // a client command an extension runs rather than the game (clientCommands)
 #define EXT_COMMAND_SECRET	1	// its words after its own are a secret: no log, echo or chat line holds them
 #define EXT_COMMAND_LIMITED	2	// 5 a minute for each client and 30 for every client, as guessing a secret needs
@@ -300,6 +323,13 @@ typedef struct {
 	// A demo started playing (qtrue) or stopped (qfalse): called before
 	// clientStateChanged when both changed
 	void		(*demoPlayback)( qboolean playing );
+	// The client left a server and stays at the menu, nothing waiting to
+	// go back: why, and the words the menu shows (com_errorMessage), ""
+	// for the player's own. A leave a wait follows, to rejoin or for a
+	// restarting server, reports only when the wait gives up or the player
+	// ends it, and one a connect elsewhere follows reports nothing. Called
+	// after clientStateChanged, in the frame after the leave
+	void		(*clientLeft)( extLeft_t kind, const char *reason );
 
 	// The client's renderer, frame and input, in a client build only. The
 	// renderer's table and window are client/cl_ext.h's CL_ExtRenderer and
@@ -427,6 +457,7 @@ qboolean	Hooks_ClientConnectionless( const netadr_t *from, qboolean proxied );
 void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );
+void	Hooks_ClientLeft( extLeft_t kind, const char *reason );
 void	Hooks_RendererStarted( void );
 void	Hooks_RendererStopping( qboolean destroyWindow );
 void	Hooks_Draw( extDrawPoint_t point, int stereo );
@@ -491,6 +522,10 @@ void		CL_ExtConnect( const char *name, const netadr_t *candidates, const int *de
 // that goes back the way the player came (a join by its code); a connect
 // begun since forgets it
 void		CL_ExtSetRejoin( const char *command );
+// a leave an extension reports itself, as clientLeft and a web page get
+// it: a join it began for the page that failed before any connect, so
+// the page hears of it as of the client's own leaves
+void		CL_ExtLeft( extLeft_t kind, const char *reason );
 // grows with each connect begun, and each one the player stopped: a
 // disconnect, a reconnect's wait ended. A join that sees it change before
 // its own connect was overtaken

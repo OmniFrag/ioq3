@@ -484,6 +484,7 @@ typedef struct {
 		qboolean	own;			// and the next connect begun is that way back's
 		qboolean	left;			// and connected or joined since
 		qboolean	lost;			// a connection the transport lost, not a server's goodbye
+		qboolean	away;			// and while the player was away
 		int			startTime;		// cls.realtime, when the server left, moved on by the time the client couldn't run
 		int			lastTime;		// cls.realtime of the wait's last frame
 		int			nextTime;		// when the server's asked again, or a way back given up
@@ -618,6 +619,9 @@ void CL_AddReliableCommand(const char *cmd, qboolean isDisconnectCmd);
 void CL_StartHunkUsers( qboolean rendererOnly );
 
 void CL_Disconnect_f (void);
+// the kind of drop a server's disconnect names after its reason, which the
+// leave's report takes (hooks.h's clientLeft); "" or another for none
+void CL_DisconnectKind( const char *kind );
 void CL_ReconnectAsked( const char *reason );
 const char *CL_ReconnectDropped( const char *reason );
 void CL_ReconnectStop( void );

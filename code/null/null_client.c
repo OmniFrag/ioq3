@@ -66,6 +66,9 @@ void CL_Disconnect( qboolean showMainMenu ) {
 void CL_NextDemoAfterError( int code ) {
 }
 
+void CL_ErrorLeaving( int code ) {
+}
+
 void CL_MapLoading( void ) {
 }
 

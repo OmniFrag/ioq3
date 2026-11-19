@@ -460,6 +460,15 @@ void Hooks_DemoPlayback( qboolean playing ) {
 	HOOKS_CALL( demoPlayback, ( playing ) );
 }
 
+const char	*extLeftNames[EXT_LEFT_KINDS] = {
+	"own", "dropped", "kicked", "banned", "shutdown", "refused", "lost", "unreached", "replaced", "gave-up-lost",
+	"gave-up-away", "gave-up-back", "canceled", "error"
+};
+
+void Hooks_ClientLeft( extLeft_t kind, const char *reason ) {
+	HOOKS_CALL( clientLeft, ( kind, reason ) );
+}
+
 // not what a print hook prints, which would call it again
 void Hooks_Print( const char *text ) {
 	if ( hooks_activeCount && !hooks_printing ) {
