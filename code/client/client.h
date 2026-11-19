@@ -241,6 +241,7 @@ typedef struct {
 	int			serverCommandSequence;
 	int			lastExecutedServerCommand;		// last server command grabbed or executed with CL_GetServerCommand
 	char		serverCommands[MAX_RELIABLE_COMMANDS][MAX_STRING_CHARS];
+	int			earlyDisconnect;	// a disconnect's sequence the message being parsed brought before the first snapshot, 0 for none
 
 	// file transfer from server
 	fileHandle_t download;

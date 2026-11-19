@@ -954,21 +954,47 @@ void CL_ParseCommandString( msg_t *msg ) {
 
 	// the cgame asks for commands only as snapshots come, and none comes
 	// after the server drops the client: a disconnect before the first,
-	// such as a drop while the client loads, is taken now, rather than
-	// left until cl_timeout says the connection was lost. Not while the
-	// client has disconnected for a web download itself: the server's
-	// disconnect answers its own, and the client goes on downloading and
-	// connects again after
-	if ( clc.state < CA_ACTIVE && !clc.demoplaying
+	// such as a drop while the client loads, is taken as the message ends
+	// (CL_ParseServerMessage), rather than left until cl_timeout says the
+	// connection was lost. Not while the client has disconnected for a web
+	// download itself: the server's disconnect answers its own, and the
+	// client goes on downloading and connects again after
+	if ( clc.state < CA_ACTIVE && !clc.demoplaying && !clc.earlyDisconnect
 #ifdef USE_HTTP
 		&& !clc.disconnectedForHttpDownload
 #endif
 		) {
 		Cmd_TokenizeString( s );
 		if ( !strcmp( Cmd_Argv( 0 ), "disconnect" ) ) {
-			CL_ServerDisconnect();
+			clc.earlyDisconnect = seq;
 		}
 	}
+}
+
+/*
+=====================
+CL_ParseEarlyDisconnect
+
+The disconnect a message brought before the first snapshot
+(CL_ParseCommandString), as the message ends. A snapshot in the same
+message that makes a primed client active (CL_FirstSnapshot, its next
+frame) leaves it to the cgame, which runs the commands before it first,
+as it always did: a stock server's goodbye prints why ("Server quit")
+before its disconnect, and sends a snapshot with them
+=====================
+*/
+static void CL_ParseEarlyDisconnect( void ) {
+	int		seq = clc.earlyDisconnect;
+
+	if ( !seq ) {
+		return;
+	}
+	clc.earlyDisconnect = 0;
+	if ( clc.state == CA_PRIMED && cl.newSnapshots && !( cl.snap.snapFlags & SNAPFLAG_NOT_ACTIVE ) ) {
+		return;
+	}
+	Cmd_TokenizeString( clc.serverCommands[ seq & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
+	CL_ServerDisconnect();
 }
 
 
@@ -987,6 +1013,8 @@ void CL_ParseServerMessage( msg_t *msg ) {
 	}
 
 	MSG_Bitstream(msg);
+
+	clc.earlyDisconnect = 0;
 
 	// get the reliable sequence acknowledge number
 	clc.reliableAcknowledge = MSG_ReadLong( msg );
@@ -1052,6 +1080,8 @@ void CL_ParseServerMessage( msg_t *msg ) {
 			break;
 		}
 	}
+
+	CL_ParseEarlyDisconnect();
 }
 
 
