@@ -2297,6 +2297,34 @@ int CL_ExtConnectGeneration( void ) {
 	return cl_connectGeneration;
 }
 
+qboolean CL_ExtCancel( void ) {
+	qboolean	waiting;
+
+	if ( clc.demoplaying || clc.state == CA_ACTIVE || clc.state == CA_CINEMATIC ) {
+		return qfalse;
+	}
+	waiting = cls.reconnect.active;
+	// a wait to rejoin: at the menu, told as canceled there; or the connect
+	// its try began, which ends below with the wait's words
+	if ( waiting ) {
+		CL_ReconnectStop();
+		if ( clc.state <= CA_DISCONNECTED ) {
+			return qtrue;
+		}
+	}
+	if ( clc.state <= CA_DISCONNECTED ) {
+		return qfalse;
+	}
+	CL_Leaving( EXT_LEFT_CANCELED );
+	// a connect of its own, which no wait's words describe
+	if ( !waiting ) {
+		cls.reconnect.stopped[0] = '\0';
+	}
+	cl_connectGeneration++;
+	Com_Error( ERR_DISCONNECT, "Disconnected from server" );
+	return qtrue;
+}
+
 void CL_ExtLeft( extLeft_t kind, const char *reason ) {
 	if ( kind >= 0 && kind < EXT_LEFT_KINDS ) {
 		CL_Left( kind, reason ? reason : "" );

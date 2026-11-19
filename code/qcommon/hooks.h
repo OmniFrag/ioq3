@@ -532,6 +532,12 @@ void		CL_ExtSetRejoin( const char *command );
 // it: a join it began for the page that failed before any connect, so
 // the page hears of it as of the client's own leaves
 void		CL_ExtLeft( extLeft_t kind, const char *reason );
+// the connect under way, or a wait to rejoin a server, ended as the
+// player's own Escape would end it, but told as canceled: at once, from the
+// state the client is in now; nothing in a match, a demo or at the menu
+// with no wait. qtrue when it ended one. A connect still connecting ends
+// in the error that ends the frame (ERR_DISCONNECT), so call it last
+qboolean	CL_ExtCancel( void );
 // grows with each connect begun, and each one the player stopped: a
 // disconnect, a reconnect's wait ended. A join that sees it change before
 // its own connect was overtaken
