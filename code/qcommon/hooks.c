@@ -253,6 +253,10 @@ void Hooks_ClientUserinfoChanged( int clientNum ) {
 	}
 }
 
+void Hooks_ClientMuted( int clientNum, qboolean muted ) {
+	HOOKS_CALL( clientMuted, ( clientNum, muted ) );
+}
+
 // not for a slot nobody holds: a client still connecting was never
 // reported connected, and one the game dropped has gone already
 void Hooks_ClientDropped( int clientNum, const char *reason ) {

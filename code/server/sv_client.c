@@ -2282,6 +2282,7 @@ qboolean SV_MuteClient( client_t *cl, qboolean mute, int seconds ) {
 	Com_Printf( "%s" S_COLOR_WHITE " %s\n", cl->name, mute ? "is muted" : "is no longer muted" );
 	SV_SendServerCommand( cl, "print \"%s\n\"", mute ?
 		"You have been muted: other players won't see your chat or hear your voice." : "You are no longer muted." );
+	Hooks_ClientMuted( cl - svs.clients, mute );
 	return qtrue;
 }
 

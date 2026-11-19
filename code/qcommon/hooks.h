@@ -230,6 +230,11 @@ typedef struct {
 	// new connection from the same address takes its slot, and "refused
 	// by the game" for a bot the game added but then freed
 	void		(*clientDropped)( int clientNum, const char *reason );
+	// A client's chat and voice were muted, or the mute lifted, as the
+	// client is told: by a command (clientmute, an extension's
+	// SV_ExtMuteClient), whose Cmd_Origin and Cmd_IsConsole say whose it
+	// is, or as a timed mute ran out, with no command running
+	void		(*clientMuted)( int clientNum, qboolean muted );
 
 	// A map is about to load: the last map's game has shut down and this
 	// one's hasn't started, so what's set now (a mode's game type, which
@@ -440,6 +445,7 @@ void	Hooks_ClientConnected( int clientNum );
 void	Hooks_ClientBegin( int clientNum );
 void	Hooks_ClientUserinfoChanged( int clientNum );
 void	Hooks_ClientDropped( int clientNum, const char *reason );
+void	Hooks_ClientMuted( int clientNum, qboolean muted );
 void	Hooks_MapLoading( const char *map );
 void	Hooks_MapSpawned( void );
 void	Hooks_MapRestarted( void );
