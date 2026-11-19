@@ -622,6 +622,7 @@ void CL_Disconnect_f (void);
 // the kind of drop a server's disconnect names after its reason, which the
 // leave's report takes (hooks.h's clientLeft); "" or another for none
 void CL_DisconnectKind( const char *kind );
+void CL_ServerDisconnect( void );
 void CL_ReconnectAsked( const char *reason );
 const char *CL_ReconnectDropped( const char *reason );
 void CL_ReconnectStop( void );

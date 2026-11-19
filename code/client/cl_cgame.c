@@ -251,6 +251,34 @@ void CL_ConfigstringModified( void ) {
 
 /*
 ===================
+CL_ServerDisconnect
+
+The server's disconnect command, tokenized: the client leaves, for the
+reason the server gives
+===================
+*/
+void CL_ServerDisconnect( void ) {
+	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=552
+	// allow server to indicate why they were disconnected
+	if ( Cmd_Argc() >= 2 ) {
+		// a server that's restarting, which the client may go back to,
+		// or one that dropped a lost web connection
+		const char	*gaveUp;
+
+		// the kind of drop the server names after the reason, a word
+		// of its own choosing, never the reason's (SV_DropClientAs)
+		CL_DisconnectKind( Cmd_Argv( 2 ) );
+		CL_ReconnectAsked( Cmd_Argv( 1 ) );
+		if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 1 ) ) ) != NULL ) {
+			Com_Error( ERR_SERVERDISCONNECT, "%s", gaveUp );
+		}
+		Com_Error( ERR_SERVERDISCONNECT, "Server disconnected - %s", Cmd_Argv( 1 ) );
+	} else
+		Com_Error( ERR_SERVERDISCONNECT, "Server disconnected" );
+}
+
+/*
+===================
 CL_GetServerCommand
 
 Set up argc/argv for the given command
@@ -260,7 +288,6 @@ qboolean CL_GetServerCommand( int serverCommandNumber ) {
 	char	*s;
 	char	*cmd;
 	static char bigConfigString[BIG_INFO_STRING];
-	int argc;
 
 	// if we have irretrievably lost a reliable command, drop the connection
 	if ( serverCommandNumber <= clc.serverCommandSequence - MAX_RELIABLE_COMMANDS ) {
@@ -285,26 +312,9 @@ qboolean CL_GetServerCommand( int serverCommandNumber ) {
 rescan:
 	Cmd_TokenizeString( s );
 	cmd = Cmd_Argv(0);
-	argc = Cmd_Argc();
 
 	if ( !strcmp( cmd, "disconnect" ) ) {
-		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=552
-		// allow server to indicate why they were disconnected
-		if ( argc >= 2 ) {
-			// a server that's restarting, which the client may go back to,
-			// or one that dropped a lost web connection
-			const char	*gaveUp;
-
-			// the kind of drop the server names after the reason, a word
-			// of its own choosing, never the reason's (SV_DropClientAs)
-			CL_DisconnectKind( Cmd_Argv( 2 ) );
-			CL_ReconnectAsked( Cmd_Argv( 1 ) );
-			if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 1 ) ) ) != NULL ) {
-				Com_Error( ERR_SERVERDISCONNECT, "%s", gaveUp );
-			}
-			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected - %s", Cmd_Argv( 1 ) );
-		} else
-			Com_Error( ERR_SERVERDISCONNECT, "Server disconnected" );
+		CL_ServerDisconnect();
 	}
 
 	if ( !strcmp( cmd, "bcs0" ) ) {

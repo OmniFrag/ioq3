@@ -951,6 +951,17 @@ void CL_ParseCommandString( msg_t *msg ) {
 
 	index = seq & (MAX_RELIABLE_COMMANDS-1);
 	Q_strncpyz( clc.serverCommands[ index ], s, sizeof( clc.serverCommands[ index ] ) );
+
+	// the cgame asks for commands only as snapshots come, and none comes
+	// after the server drops the client: a disconnect before the first,
+	// such as a drop while the client loads, is taken now, rather than
+	// left until cl_timeout says the connection was lost
+	if ( clc.state < CA_ACTIVE && !clc.demoplaying ) {
+		Cmd_TokenizeString( s );
+		if ( !strcmp( Cmd_Argv( 0 ), "disconnect" ) ) {
+			CL_ServerDisconnect();
+		}
+	}
 }
 
 
