@@ -1441,6 +1441,10 @@ void CL_MapLoading( void ) {
 		// clear nextmap so the cinematic shutdown doesn't execute it
 		Cvar_Set( "nextmap", "" );
 		CL_Disconnect( qtrue );
+		// a connect to this listen server, whose connect goes out below,
+		// in this command: begun as any other's (CL_ConnectBegin)
+		cl_connectGeneration++;
+		Hooks_ClientConnecting();
 		Q_strncpyz( clc.servername, "localhost", sizeof(clc.servername) );
 		clc.state = CA_CHALLENGING;		// so the connect screen is drawn
 		Key_SetCatcher( 0 );
@@ -2316,6 +2320,7 @@ static void CL_ConnectBegin( const char *server ) {
 	Cvar_Set("ui_singlePlayerActive", "0");
 
 	cl_connectGeneration++;
+	Hooks_ClientConnecting();
 	// a connect the player began ends the wait for a server to come back:
 	// any but the first after the wait's own try, which is that try's
 	if ( !cls.reconnect.trying || !cls.reconnect.own ) {

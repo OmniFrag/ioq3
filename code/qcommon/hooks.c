@@ -469,6 +469,10 @@ void Hooks_ClientLeft( extLeft_t kind, const char *reason ) {
 	HOOKS_CALL( clientLeft, ( kind, reason ) );
 }
 
+void Hooks_ClientConnecting( void ) {
+	HOOKS_CALL( clientConnecting, () );
+}
+
 // not what a print hook prints, which would call it again
 void Hooks_Print( const char *text ) {
 	if ( hooks_activeCount && !hooks_printing ) {

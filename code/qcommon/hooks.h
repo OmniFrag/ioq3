@@ -330,6 +330,11 @@ typedef struct {
 	// ends it, and one a connect elsewhere follows reports nothing. Called
 	// after clientStateChanged, in the frame after the leave
 	void		(*clientLeft)( extLeft_t kind, const char *reason );
+	// The client begins a connect, to a server or to its own listen
+	// server: called as it starts, before any of it is sent, so an
+	// extension can take back what the connect would carry, such as a
+	// password meant for another server. CL_ExtConnect's own calls it too
+	void		(*clientConnecting)( void );
 
 	// The client's renderer, frame and input, in a client build only. The
 	// renderer's table and window are client/cl_ext.h's CL_ExtRenderer and
@@ -458,6 +463,7 @@ void	Hooks_Print( const char *text );
 void	Hooks_ClientStateChanged( connstate_t state );
 void	Hooks_DemoPlayback( qboolean playing );
 void	Hooks_ClientLeft( extLeft_t kind, const char *reason );
+void	Hooks_ClientConnecting( void );
 void	Hooks_RendererStarted( void );
 void	Hooks_RendererStopping( qboolean destroyWindow );
 void	Hooks_Draw( extDrawPoint_t point, int stereo );
