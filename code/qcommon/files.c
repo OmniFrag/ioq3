@@ -7675,6 +7675,7 @@ static void FS_Startup( const char *gameName )
 	const char *dataPath = Sys_DefaultHomeDataPath();
 	const char *statePath = Sys_DefaultHomeStatePath();
 	const char *predConfigPath = "", *predDataPath = "";
+	const char *indexCheck;
 
 	// what this start leaves out, said again by each
 	fs_leftOutPaks = 0;
@@ -7699,8 +7700,9 @@ static void FS_Startup( const char *gameName )
 	Cvar_SetDescription( fs_indexCheck,
 		"Whether each indexed file lookup is checked against asking every pak in turn: 0, 1 to say where they differ, 2 to stop at the first" );
 	// the tests turn it on for a whole run
-	if ( getenv( "OMNIFRAG_TEST_FS_INDEX_CHECK" ) ) {
-		Cvar_Set( "fs_indexCheck", getenv( "OMNIFRAG_TEST_FS_INDEX_CHECK" ) );
+	indexCheck = Com_TestEnv( "OMNIFRAG_TEST_FS_INDEX_CHECK" );
+	if ( indexCheck ) {
+		Cvar_Set( "fs_indexCheck", indexCheck );
 	}
 	fs_mapPakScope = Cvar_Get( "fs_mapPakScope", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( fs_mapPakScope, 0, 1, qtrue );
@@ -8957,7 +8959,7 @@ is resetting due to a game change
 ================
 */
 void FS_InitFilesystem( void ) {
-	const char	*refusedTest = getenv( "OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM" );
+	const char	*refusedTest = Com_TestEnv( "OMNIFRAG_TEST_REFUSED_PAK_CHECKSUM" );
 
 	// read once, so setenv can't change it later; signed, as
 	// sv_referencedPaks lists it

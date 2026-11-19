@@ -1733,11 +1733,15 @@ int Sys_SendPackets( int count, int size, int length, const void *data, netadr_t
 		socklen_t	valueLength = sizeof(value);
 
 		checked = qtrue;
-		if( getenv( "OMNIFRAG_TEST_UNSEGMENTED" ) ) {
+		// not Com_TestEnv alone: the message names the variable, which a
+		// release's binary holds no name of
+#ifdef OMNIFRAG_TEST_BUILD
+		if( Com_TestEnv( "OMNIFRAG_TEST_UNSEGMENTED" ) ) {
 			Com_Printf( "No UDP segmentation (OMNIFRAG_TEST_UNSEGMENTED), so datagrams go one at a time\n" );
 			unsegmented = qtrue;
 			return -1;
 		}
+#endif
 		if( getsockopt( sock, IPPROTO_UDP, UDP_SEGMENT, &value, &valueLength ) == SOCKET_ERROR ) {
 			Com_Printf( "No UDP segmentation (%s), so datagrams go one at a time\n", NET_ErrorString() );
 			unsegmented = qtrue;

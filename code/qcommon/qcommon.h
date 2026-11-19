@@ -1885,6 +1885,15 @@ void		Com_QueueQuit( int signal );
 // a stop signal's: the next frame quits, safe to call from a signal handler
 
 int			Com_Milliseconds( void );	// will be journaled properly
+// a test's setting from the environment (OMNIFRAG_TEST_...), read only by
+// a build with the test extensions, whose build defines
+// OMNIFRAG_TEST_BUILD: elsewhere NULL, and the name left out of the
+// binary, so no shipped program's environment changes what it does
+#ifdef OMNIFRAG_TEST_BUILD
+#define Com_TestEnv( name )	getenv( name )
+#else
+#define Com_TestEnv( name )	( (void)sizeof( name ), (const char *)NULL )
+#endif
 unsigned	Com_BlockChecksum( const void *buffer, int length );
 char		*Com_MD5File(const char *filename, int length, const char *prefix, int prefix_len);
 
