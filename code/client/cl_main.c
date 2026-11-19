@@ -4874,7 +4874,7 @@ CL_ReportState
 Tells the engine extensions (hooks.h) what changed since the last frame:
 whether a demo plays, then the connection's state, then a leave of a
 server that nothing followed, neither a wait to go back nor a connect
-elsewhere
+elsewhere; and a web page the same leave (Module.left)
 ==================
 */
 static void CL_ReportState( void ) {
@@ -4895,6 +4895,10 @@ static void CL_ReportState( void ) {
 		// opens: no server either way
 		if ( ( clc.state == CA_DISCONNECTED || clc.state == CA_CINEMATIC ) && !cls.reconnect.active && !clc.demoplaying ) {
 			Hooks_ClientLeft( cl_left.kind, cl_left.reason );
+#ifdef __EMSCRIPTEN__
+			MAIN_THREAD_EM_ASM( { Module.left?.( UTF8ToString( $0 ), UTF8ToString( $1 ) ); }, extLeftNames[cl_left.kind],
+				cl_left.reason );
+#endif
 		}
 	}
 	// a kind said in a frame whose leave didn't come is no later leave's

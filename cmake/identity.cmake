@@ -33,6 +33,13 @@ endif()
 # The client's icon as a PNG, for the web page and its web app manifest,
 # and for Linux desktops
 set_identity(PNG_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/quake3-tango.png)
+# The web page's icon as an SVG too, which browsers take before the PNG
+# where they can; none by default
+set_identity(WEB_PAGE_SVG_ICON_PATH "")
+# A page in front of the web client's game, a JavaScript module's file name
+# beside the page, which the parent project puts there (client.html.in's
+# FRONT): it decides when the game loads and joins; none by default
+set_identity(WEB_PAGE_FRONT "")
 
 set(BASEGAME baseq3)
 

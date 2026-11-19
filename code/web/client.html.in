@@ -1,6 +1,6 @@
 <!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>@WEB_PAGE_TITLE@</title>
-<link rel=icon href="@CLIENT_NAME@.png">
+@WEB_PAGE_SVG_ICON_LINK@<link rel=icon href="@CLIENT_NAME@.png">
 <link rel=manifest href="@CLIENT_NAME@.webmanifest">
 <style>
 html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: rgb(0, 0, 0); }
@@ -84,13 +84,39 @@ let configFilename = `./${CLIENT_NAME}-config.json`;
 
 if (window.location.protocol === 'file:') throw new Error(`Unfortunately browser security restrictions prevent loading wasm from a file: URL. This file must be loaded from a web server. The easiest way to do this is probably to use Python\'s built-in web server by running \`python3 -m http.server\` in the top level source directory and then navigate to http://localhost:8000/build/debug-emscripten-wasm32/${CLIENT_NAME}.html`);
 
+// The front page's listeners (FRONT, below), here as the download's
+// progress goes to them
+const FRONT = '@WEB_PAGE_FRONT@';
+// the front shows, until it fails to load
+let frontOn = !!FRONT;
+const frontListeners = { started: [], progress: [], status: [], ask: [], playing: [], left: [], quit: [], crash: [] };
+// the front's listeners told, one that throws kept from the engine's frame,
+// which calls them (Module.left), and from the others
+const tellFront = (listeners, ...args) => listeners.forEach((listener) => {
+    try {
+        listener(...args);
+    } catch (error) {
+        console.error('The front page failed in a listener:', error);
+    }
+});
+
 // What the page says over the game: the download's progress, with a bar
-// for a fraction, or an error; nothing hides it. An error stays.
+// for a fraction, or an error; nothing hides it. An error stays. A front
+// page is told the rest (onStatus) and shows it itself; the page shows
+// only errors
 const statusBox = document.getElementById('status');
 const statusText = statusBox.querySelector('span');
 const statusBar = statusBox.querySelector('progress');
-const showStatus = (text, fraction) => {
+// what = { kind, bytes, total }: what it is, for a front's own words
+// ('reading' the player's files, 'starting', 'download'), and how many
+// bytes of how many where it counts them
+const showStatus = (text, fraction, error = false, what = {}) => {
     if (statusBox.classList.contains('error')) return;
+    // a front shows what the page is doing in its own words (onStatus)
+    if (frontOn && !error) {
+        tellFront(frontListeners.status, { text: text ?? '', fraction, kind: text ? what.kind ?? '' : '', bytes: what.bytes, total: what.total });
+        return;
+    }
     statusBox.hidden = !text;
     statusText.textContent = text ?? '';
     statusBar.hidden = fraction === undefined;
@@ -98,7 +124,7 @@ const showStatus = (text, fraction) => {
 };
 // An error the game can't start after: the page goes no further
 const fail = (text) => {
-    showStatus(text);
+    showStatus(text, undefined, true);
     statusBox.classList.add('error');
     throw new Error(text);
 };
@@ -111,15 +137,18 @@ const failDownload = (name, response) =>
 const probe = document.createElement('canvas');
 const webgl = probe.getContext('webgl2') ?? (MIN_WEBGL_VERSION < 2 ? probe.getContext('webgl') : null);
 webgl?.getExtension('WEBGL_lose_context')?.loseContext();
-if (!webgl)
-    fail(`This browser can't run the game: it needs WebGL${MIN_WEBGL_VERSION < 2 ? '' : ' 2'}, which is missing or turned off.`);
+// a front page says so in its own words (canRun), and the game never starts
+const noWebGL = `This browser can't run the game: it needs WebGL${MIN_WEBGL_VERSION < 2 ? '' : ' 2'}, which is missing or turned off.`;
+if (!webgl && !FRONT)
+    fail(noWebGL);
 
 // First set up the command line arguments and the Emscripten filesystem.
 //
 // What a link may carry, in its query (nothing is read from its fragment
 // here; joining by a code's link reads the key's fingerprint there): the
 // page's own options, a game directory by a plain name, a name for this
-// visit, and console commands (args) only where the page's config says it
+// visit, play for the front page (FRONT, below), which goes into the game
+// at once, and console commands (args) only where the page's config says it
 // takes them (consoleArgs), as the tests' and a developer's server does;
 // never the build's own config, which a server's gateway serves. Anyone
 // can post a link to a server's page, even one at localhost, and a
@@ -132,13 +161,22 @@ if (!webgl)
 const MAX_LINK_NAME = 32;
 const urlParams = new URLSearchParams(window.location.search);
 const LINK_FIELDS = ['com_basegame', 'fs_basegame', 'fs_game', 'fullscreen', 'maxPixelRatio', 'rawMouse',
-    'desynchronized', 'name', 'args'];
+    'desynchronized', 'name', 'play', 'args'];
 const leftOut = (field, why) => console.warn(`The link's ${field} was left out: ${why}.`);
 const twice = new Set([...urlParams.keys()].filter((field, i, all) => all.indexOf(field) !== i));
 for (const field of new Set(urlParams.keys()))
     if (!LINK_FIELDS.includes(field)) leftOut(field, 'the page takes no such field');
     else if (twice.has(field)) leftOut(field, 'the link names it more than once');
 const linkField = (field) => twice.has(field) ? null : urlParams.get(field);
+// ?play=1, read once as the page opens and taken out of the address, so a
+// reload, a step back, a bookmark or a copied link doesn't play again; the
+// page's own move to its isolated form writes it for a Play just pressed
+const linkPlay = linkField('play') === '1';
+if (urlParams.has('play')) {
+    const url = new URL(location.href);
+    url.searchParams.delete('play');
+    history.replaceState(history.state, '', url);
+}
 // a game directory's name: letters, digits, - and _, and a . inside
 // (cpma-1.52), never two together, so it can't end the quotes it's set in
 // nor leave the home; and one the config lists files for, checked once
@@ -162,18 +200,19 @@ let fs_game = gameDir('fs_game');
 // spaces at most two together and none leading, no black, and something
 // left to read. No quote, backslash, semicolon or percent sign, which
 // would end its quotes or its userinfo
-const visitName = (() => {
-    const raw = linkField('name');
-    if (raw === null) return '';
+const cleanName = (raw) => {
     let name = raw.replace(/[\x00-\x1f\x7f"\\;%]/g, '');
     // until none is left: taking ^0 out of ^^00 leaves one
     while (/\^[08]/.test(name)) name = name.replace(/\^[08]/g, '');
     name = name.replace(/ {3,}/g, '  ').trim();
     // a color code counts nothing toward what's left to read
-    if (!name.replace(/\^./g, '').length || name.length > MAX_LINK_NAME) {
-        leftOut('name', `a name has 1 to ${MAX_LINK_NAME} characters, some of them not a color code`);
-        return '';
-    }
+    return name.replace(/\^./g, '').length && name.length <= MAX_LINK_NAME ? name : '';
+};
+const visitName = (() => {
+    const raw = linkField('name');
+    if (raw === null) return '';
+    const name = cleanName(raw);
+    if (!name) leftOut('name', `a name has 1 to ${MAX_LINK_NAME} characters, some of them not a color code`);
     return name;
 })();
 // Set for this visit only. The web's defaults, and a touch device's, are the
@@ -199,6 +238,182 @@ const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {fi
   : fetch(configFilename).catch(() => null).then((r) => r?.ok
       ? r.json().catch(() => fail(`Couldn't read ${configFilename}: it isn't valid JSON.`))
       : failDownload(configFilename, r));
+
+// A page of the build's own in front of the game (WEB_PAGE_FRONT), a module
+// the parent project puts beside this one, whose default export is called
+// with the page's side of it. It's shown first and decides when the game
+// loads (start: a first visit's player chooses to, a return visit's page
+// may at once; start({ play: true }) for a Play, which goes on into the
+// match after the page moves to its isolated form for the player's own
+// files), and when the page's own join goes, and goes again after a
+// leave (play: each counts one more in pageJoins, which an extension's join
+// as the page opens, such as by its link, follows, joining once for each,
+// with the name and password play gave it, pageJoinField).
+// It shows the agreement the game's files come with, when one needs
+// accepting (agreement, then accept, which the page's own question then
+// finds kept), what a first visit downloads (download) and whether the
+// player's own files are wanted and not kept yet (ownFiles), the page's own
+// questions as they open and close (onAsk, askAgain), what it's doing
+// meanwhile, such as reading the player's files in (onStatus: its words,
+// its kind, how far along and its bytes where it counts them, or '' once
+// done), and the download's
+// progress (onProgress: the bytes in and
+// the total, 0 when the server doesn't say), in place of the page's own
+// words, which show only its errors; and whether this browser can run the
+// game at all (canRun), which start then never does. It's told when the game has
+// started (onStarted), when the player is in a match or no longer
+// (onPlaying), when the client leaves
+// a server and stays at the menu (onLeft, with the kind's name, hooks.h's
+// extLeftNames, and the menu's words), and when the player quits (onQuit),
+// in place of the page's own screen, and when the game crashed (onCrash: an
+// error's exit or an abort); and it can ask whether the server now
+// serves another build of the game than the one playing (updated, by the
+// engine script's ETag). Without one, or one that fails to load, the game
+// loads and joins at once.
+const engineScript = enginePath + `@CLIENT_BINARY@.js`;
+// the engine script's ETag as this page has it, once the game has loaded,
+// from the browser's cache
+let engineTag = null;
+let startGame, pageJoins = FRONT ? 0 : 1;
+// what the front's play gave the next join: a name, cleaned as a link's is,
+// and a password, which is never stored and goes once it's taken
+const joinFields = { name: '', password: '' };
+const gameStarted = new Promise((resolve) => { startGame = resolve; });
+const noFront = (why) => {
+    if (why) console.error(`The front page didn't load, so the game starts at once: ${why}`);
+    for (const listeners of Object.values(frontListeners)) listeners.length = 0;
+    frontOn = false;
+    pageJoins = Math.max(pageJoins, 1);
+    if (!webgl) fail(noWebGL);
+    startGame();
+};
+// A link's game directories as the config allows them: one plays only
+// where the config lists files for it, as a server's own page lists the
+// ones it plays (another would play an empty folder of the player's home,
+// or none of the server's paks), and a server's own page plays the one it
+// names, not another a link names; each left out told to say(field, why)
+const gameDirsOf = (config, say = () => {}) => {
+    const listedDir = (field, dir) => {
+        if (!dir || (Object.hasOwn(config, dir) && Array.isArray(config[dir]?.files))) return dir;
+        say(field, `the page's config lists no files for ${dir}`);
+        return '';
+    };
+    let base = listedDir('com_basegame', urlBasegame);
+    const own = typeof config.basegame == 'string' && /^[\w.-]+$/.test(config.basegame) ? config.basegame : '';
+    if (base && own && base !== own) {
+        say('com_basegame', `this page plays ${own}`);
+        base = '';
+    }
+    return { urlBasegame: base, fs_basegame: listedDir('fs_basegame', fs_basegame), fs_game: listedDir('fs_game', fs_game),
+        com_basegame: base || own || BASEGAME };
+};
+// the game directories the config gives this visit
+const frontDirs = async () => {
+    const config = await configPromise;
+    const chosen = gameDirsOf(config);
+    return { config, dirs: [chosen.com_basegame, chosen.fs_basegame, chosen.fs_game].filter(Boolean) };
+};
+// the agreement a first download needs accepted, as agree() below asks it:
+// { text, for, key }, or null for none or one accepted already
+let frontAgreementAsked;
+const frontAgreementOf = async () => {
+    const { config, dirs } = await frontDirs();
+    if (!config.agreement?.src || !dirs.some((dir) => config[dir]?.files?.some?.((file) => file.agreement))) return null;
+    const response = await fetch(new URL(config.agreement.src, dataURL)).catch(() => null);
+    if (!response?.ok) return null;
+    const text = await response.text();
+    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    return stored(key) ? null : { text, for: typeof config.agreement.for == 'string' ? config.agreement.for : '', key };
+};
+const frontAgreement = () => (frontAgreementAsked ??= frontAgreementOf());
+// what a first visit downloads: how many files, and their bytes where the
+// config gives every file's size, else null
+const frontDownload = async () => {
+    const { config, dirs } = await frontDirs();
+    const files = dirs.flatMap((dir) => (Array.isArray(config[dir]?.files) ? config[dir].files : []));
+    const sized = files.every((file) => Number.isFinite(file?.size));
+    return { files: files.length, bytes: sized ? files.reduce((sum, file) => sum + file.size, 0) : null };
+};
+// whether the player's own files the config asks for (own) aren't all kept
+// in this browser yet, in its private files or IndexedDB, as bring() keeps
+// them; the page's own check, with each file's checksum, comes as it starts
+const frontOwnFiles = async () => {
+    const { config, dirs } = await frontDirs();
+    const own = dirs.flatMap((dir) => (Array.isArray(config[dir]?.own) ? config[dir].own : []));
+    if (!own.length) return { needed: false };
+    const store = await (ownStoreEarly ??= ownStore()).catch(() => ({}));
+    const kept = new Set((store.files ?? []).map(({ src }) => src));
+    const databases = await indexedDB.databases?.().catch(() => undefined);
+    if (!databases || databases.some(({ name }) => name === OWN_DATABASE)) {
+        const db = await ownDatabase();
+        for (const key of await ownRequest(db, 'readonly', (records) => records.getAllKeys()) ?? []) kept.add(key);
+        db?.close();
+    }
+    return { needed: own.some((file) => !kept.has(String(file.src).toLowerCase())) };
+};
+// the front started the game for the player's Play (start)
+let frontPlays = false;
+if (FRONT) {
+    // the default export's own promise, if any, is the front's: one that
+    // rejects later isn't a front that failed to load
+    import(new URL(FRONT, location.href).href).then((module) => { module.default({
+        canvas,
+        config: configPromise,
+        // ?play=1: what the front's own play does, at once; and the link's
+        // name, which a play that gives it back keeps for the visit alone
+        link: { play: linkPlay, name: visitName },
+        canRun: !!webgl,
+        // { play }: started for the player's Play, or a Play after a quiet
+        // start, which a page that moves to its isolated form for the
+        // player's own files carries there
+        start: ({ play = false } = {}) => {
+            frontPlays ||= play;
+            return webgl ? startGame() : fail(noWebGL);
+        },
+        play: ({ name = '', password = '' } = {}) => {
+            // a link's name is set for the visit already (P448), never saved
+            const cleaned = cleanName(String(name));
+            joinFields.name = cleaned === visitName ? '' : cleaned;
+            // what userinfo can hold, as Info_SetValueForKey takes it
+            joinFields.password = String(password).replace(/[\x00-\x1f\x7f"\\;]/g, '').slice(0, 64);
+            pageJoins++;
+        },
+        agreement: frontAgreement,
+        accept: async () => {
+            const agreement = await frontAgreement();
+            if (agreement) store(agreement.key, '1');
+            frontAgreementAsked = Promise.resolve(null);
+        },
+        onProgress: (listener) => frontListeners.progress.push(listener),
+        onStatus: (listener) => frontListeners.status.push(listener),
+        onAsk: (listener) => frontListeners.ask.push(listener),
+        askAgain: () => {
+            if (!askBox.firstChild) return false;
+            askBox.hidden = false;
+            tellFront(frontListeners.ask, 'open');
+            return true;
+        },
+        download: frontDownload,
+        ownFiles: frontOwnFiles,
+        onStarted: (listener) => frontListeners.started.push(listener),
+        onPlaying: (listener) => frontListeners.playing.push(listener),
+        onLeft: (listener) => frontListeners.left.push(listener),
+        onQuit: (listener) => frontListeners.quit.push(listener),
+        onCrash: (listener) => frontListeners.crash.push(listener),
+        updated: async () => {
+            const tag = await engineTag;
+            if (!tag) return false;
+            const response = await fetch(engineScript, { cache: 'no-store', headers: { 'If-None-Match': tag } })
+                .catch(() => null);
+            // the headers decide: not the script itself, which another build's is
+            response?.body?.cancel().catch(() => {});
+            const now = response?.headers.get('ETag');
+            return response?.status === 200 && !!now && now !== tag;
+        },
+    }); }).catch(noFront);
+} else {
+    noFront();
+}
 
 // The game takes keys while its canvas has focus; start with it there
 canvas.focus();
@@ -910,6 +1125,7 @@ const setPlaying = (inMatch) => {
     if (playing) addEventListener('beforeunload', confirmLeave);
     else removeEventListener('beforeunload', confirmLeave);
     showPlay();
+    tellFront(frontListeners.playing, playing);
     if (playing && paksToSay) {
         const { reads, roundTrips, hits, misses, direct, spinMs } = paksToSay.stats();
         console.log(`Pak reader: in the match, ${reads} reads, ${roundTrips} round trips (${hits} block hits, ${misses} misses, `
@@ -1068,7 +1284,9 @@ addEventListener('pagehide', (event) => {
 });
 
 // What the page asks the player, over the game: build(box, done) fills the
-// box, and calls done once it has its answer
+// box, and calls done once it has its answer. With a front page, the
+// player may put it off (Not now), and the front asks it again (askAgain);
+// the front hears it open, closed and done (onAsk)
 const askBox = document.getElementById('ask');
 const ask = (build) => new Promise((resolve) => {
     const box = document.createElement('div');
@@ -1076,10 +1294,19 @@ const ask = (build) => new Promise((resolve) => {
     build(box, () => {
         askBox.hidden = true;
         askBox.replaceChildren();
+        tellFront(frontListeners.ask, 'done');
         resolve();
     });
+    if (frontOn) {
+        const later = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Not now' }));
+        later.addEventListener('click', () => {
+            askBox.hidden = true;
+            tellFront(frontListeners.ask, 'closed');
+        });
+    }
     showStatus();
     askBox.hidden = false;
+    tellFront(frontListeners.ask, 'open');
 });
 const paragraph = (box, text) => box.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
@@ -1318,7 +1545,12 @@ const moveIsolated = async (form, how) => {
         return;
     }
     console.log(`Own files: to the page's isolated form at ${form.pathname}, as the paks are stored`);
-    location.replace(form);
+    // a front's Play goes on there, as the play link's does; a front is
+    // told the page is moving, so a Play pressed now waits for the new page
+    const to = new URL(form);
+    if (frontPlays) to.searchParams.set('play', '1');
+    tellFront(frontListeners.status, { text: '', kind: 'moving' });
+    location.replace(to);
     return new Promise(() => {});
 };
 // ownStore's answer, asked for before the engine loads on a page that may
@@ -1452,7 +1684,8 @@ const bring = async (own) => {
                 const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum, stamp },
                     (bytes) => {
                         askBox.dataset.copied = from + bytes;
-                        if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100);
+                        if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100, false,
+                            { kind: 'reading', bytes: from + bytes, total: toCopy });
                     });
                 if (busy) {
                     storedAll = false;
@@ -1558,7 +1791,7 @@ const bring = async (own) => {
     // reads them into memory. The page moved to asks the browser to keep
     // them, as this one would have.
     if (toIsolate) {
-        showStatus('Reading your files…');
+        showStatus('Reading your files…', undefined, false, { kind: 'reading' });
         await copies;
         if (storedAll) await moveIsolated(isolation.form, toCopy ? 'stored' : 'kept');
     }
@@ -1667,7 +1900,8 @@ const downloadGame = async (FS) => {
         const fraction = sized ? Math.floor(100 * bytes / total) / 100 : undefined;
         if (`${text} ${fraction}` === shown) return;
         shown = `${text} ${fraction}`;
-        showStatus(text, fraction);
+        tellFront(frontListeners.progress, bytes, sized ? total : 0);
+        showStatus(text, fraction, false, { kind: 'download' });
     };
     if (downloads.length) progress();
     await Promise.all(downloads.map(async ({ src, dst, response, length }) => {
@@ -1696,7 +1930,7 @@ const downloadGame = async (FS) => {
         // to size if it was grown
         FS.writeFile(`${dst}/${src.match(/[^/]+$/)[0]}`, size < data.length ? data.slice(0, size) : data, { canOwn: true });
     }));
-    if (brought.length) showStatus('Reading your files…');
+    if (brought.length) showStatus('Reading your files…', undefined, false, { kind: 'reading' });
     const readIn = await read;
     ownRead();
     for (const { src, dst, data } of readIn) {
@@ -1705,26 +1939,12 @@ const downloadGame = async (FS) => {
     }
 };
 
-const engine = import(enginePath + `@CLIENT_BINARY@.js`);
+// nothing heavy before the front says the game may load
+await gameStarted;
+const engine = import(engineScript);
 const startConfig = await configPromise;
-// A link's game directory plays only where the config lists files for it,
-// as a server's own page lists the ones it plays: another would play an
-// empty folder of the player's home, or none of the server's paks
-const listedDir = (field, dir) => {
-    if (!dir || (Object.hasOwn(startConfig, dir) && Array.isArray(startConfig[dir]?.files))) return dir;
-    leftOut(field, `the page's config lists no files for ${dir}`);
-    return '';
-};
-urlBasegame = listedDir('com_basegame', urlBasegame);
-// and a server's own page plays the one it names, not another a link names
-const ownBasegame = typeof startConfig.basegame == 'string' && /^[\w.-]+$/.test(startConfig.basegame) ? startConfig.basegame : '';
-if (urlBasegame && ownBasegame && urlBasegame !== ownBasegame) {
-    leftOut('com_basegame', `this page plays ${ownBasegame}`);
-    urlBasegame = '';
-}
-fs_basegame = listedDir('fs_basegame', fs_basegame);
-fs_game = listedDir('fs_game', fs_game);
-com_basegame = urlBasegame || ownBasegame || BASEGAME;
+// the game directories the link may choose, as the config allows them
+({ urlBasegame, fs_basegame, fs_game, com_basegame } = gameDirsOf(startConfig, leftOut));
 // paks stored already, as the store lists them: to the isolated form before
 // the engine loads here
 isolation = isolationOf(startConfig);
@@ -1732,7 +1952,8 @@ const startOwn = ownOf(startConfig);
 if (isolation.form && startOwn.length) {
     const asked = new Set(startOwn.map(({ src }) => src.toLowerCase()));
     checkIsolated(isolation.form);
-    if ((await (ownStoreEarly = ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
+    // the front's check (ownFiles) may have asked the store already
+    if ((await (ownStoreEarly ??= ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
 }
 const ioquake3 = (await engine).default;
 generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
@@ -1748,6 +1969,21 @@ ioquake3({
     setPlaying,
     saveFile,
     configWritten,
+    // the engine aborted: a front is told, as of an error's exit
+    onAbort: () => tellFront(frontListeners.crash),
+    // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
+    // the page has asked for its own join, 0 while it holds it
+    left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
+    pageJoins: () => pageJoins,
+    // a field the front's play gave the join it asked for, read once
+    pageJoinField: (field) => {
+        // a page without a front gives the join nothing, and the game's own
+        // settings stay as they are
+        if (!frontOn) return null;
+        const value = Object.hasOwn(joinFields, field) ? joinFields[field] : '';
+        if (field === 'password') joinFields.password = '';
+        return value;
+    },
     arguments: generatedArguments,
     locateFile: (file) => enginePath + file,
     preRun: [(module) => {
@@ -1767,7 +2003,7 @@ ioquake3({
         // the stored files' copies go on even when the game can't start, so
         // a failed download doesn't cost the player their choice
         await downloadGame(module.FS).finally(ownRead);
-        showStatus('Starting…');
+        showStatus('Starting…', undefined, false, { kind: 'starting' });
         module.removeRunDependency('setup-ioq3-filesystem');
     }],
     // a player who quit isn't asked before closing the page, and sees the
@@ -1775,9 +2011,17 @@ ioquake3({
     // keeps its words on show
     onExit: (status) => {
         setPlaying(false);
-        if (status) return;
+        // an error's exit keeps its words on show, and tells a front
+        if (status) {
+            tellFront(frontListeners.crash);
+            return;
+        }
         if (document.pointerLockElement) document.exitPointerLock();
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        if (frontListeners.quit.length) {
+            tellFront(frontListeners.quit);
+            return;
+        }
         const left = document.getElementById('left'), again = left.querySelector('button');
         again.onclick = () => location.reload();
         left.hidden = false;
@@ -1787,6 +2031,13 @@ ioquake3({
     postRun: [(module) => {
         runningEngine = module;
         showStatus();
+        if (frontOn) {
+            engineTag = fetch(engineScript, { cache: 'force-cache' }).then((r) => {
+                r.body?.cancel().catch(() => {});
+                return r.headers.get('ETag');
+            }, () => null);
+        }
+        tellFront(frontListeners.started);
     }],
 });
 </script>

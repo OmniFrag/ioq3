@@ -63,6 +63,12 @@ list(APPEND POST_CONFIGURE_FUNCTIONS deploy_shell_files)
 include(utils/png_size)
 
 function(deploy_shell_files)
+    set(WEB_PAGE_SVG_ICON_LINK "")
+    if(WEB_PAGE_SVG_ICON_PATH)
+        configure_file(${WEB_PAGE_SVG_ICON_PATH}
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.svg COPYONLY)
+        set(WEB_PAGE_SVG_ICON_LINK "<link rel=icon href=\"${CLIENT_NAME}.svg\" type=\"image/svg+xml\">\n")
+    endif()
     configure_file(${SOURCE_DIR}/web/client.html.in
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
 
