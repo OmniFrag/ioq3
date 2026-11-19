@@ -6681,18 +6681,66 @@ static const searchpath_t *FS_MapPictureSearch( const char *map, char *name, int
 
 /*
 ================
-FS_MapPicture
+FS_LoosePictureVersion
+
+A loose levelshot's version by its content, for FS_MapPictureByContent:
+"f" and its SHA-256's first 38 digits, so two servers with the same
+picture give it the same version and one changed in place gives a new
+one. Read at most size bytes (Content_HashFileAs), and once for each
+path, size and time while FS_LOOSE_VERSIONS slots, each with its whole
+path, keep it
+================
+*/
+#define FS_LOOSE_VERSIONS	16
+static qboolean FS_LoosePictureVersion( const char *ospath, int64_t size, int64_t mtime, char *version,
+	int versionSize ) {
+	static struct {
+		char	path[MAX_OSPATH];
+		int64_t	size, mtime;
+		char	hex[SHA256_HEX_SIZE];
+	}				kept[FS_LOOSE_VERSIONS];
+	static int		next;
+	byte			digest[SHA256_DIGEST_SIZE];
+	int				i;
+
+	for ( i = 0; i < FS_LOOSE_VERSIONS; i++ ) {
+		if ( kept[i].hex[0] && kept[i].size == size && kept[i].mtime == mtime && !strcmp( kept[i].path, ospath ) ) {
+			break;
+		}
+	}
+	if ( i == FS_LOOSE_VERSIONS ) {
+		// one that changed as it was read is read again next time
+		if ( !Content_HashFileAs( ospath, size, mtime, digest ) ) {
+			return qfalse;
+		}
+		i = next++ % FS_LOOSE_VERSIONS;
+		Q_strncpyz( kept[i].path, ospath, sizeof( kept[i].path ) );
+		kept[i].size = size;
+		kept[i].mtime = mtime;
+		Com_SHA256Hex( digest, kept[i].hex );
+	}
+	Com_sprintf( version, versionSize, "f%.*s", versionSize - 2, kept[i].hex );
+	return qtrue;
+}
+
+/*
+================
+FS_MapPicture, FS_MapPictureByContent
 
 A map's picture (FS_MapPictureSearch): its media type, size, and a
 version that changes whenever its bytes may, the pak's checksum and the
 entry's name hashed, or a loose file's size, of a fixed width, and
 modification time; and where it is, for FS_WriteMapPicture while the
 search path stays as it is. qfalse for none, an empty one, and one past
-FS_MAP_PICTURE_MAX. Its gameOwn is set either way (FS_MapPictureSearch)
+FS_MAP_PICTURE_MAX. Its gameOwn is set either way (FS_MapPictureSearch).
+ByContent gives a loose file a version by its bytes, which reads the
+whole file on the caller's thread the first time: the front page's, once
+at each map's load, never a list of maps
 ================
 */
-qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
+static qboolean FS_FindMapPicture( const char *map, fsMapPicture_t *picture, qboolean byContent ) {
 	const searchpath_t	*search;
+	const char			*ospath;
 	int64_t				size, mtime;
 	long				length;
 	int					format;
@@ -6705,11 +6753,15 @@ qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
 		length = (long)FS_PakEntry( search->pack, picture->name )->len;
 		Com_sprintf( picture->version, sizeof( picture->version ), "p%08x%08x", search->pack->checksum,
 			FS_IndexHash( picture->name ) );
-	} else if ( Content_FileStat( FS_BuildOSPath( search->dir->path, search->dir->gamedir, picture->name ), &size,
-			&mtime ) && FS_PictureSizeAllowed( size ) ) {
+	} else if ( Content_FileStat( ( ospath = FS_BuildOSPath( search->dir->path, search->dir->gamedir,
+			picture->name ) ), &size, &mtime ) && FS_PictureSizeAllowed( size ) ) {
 		length = (long)size;
-		Com_sprintf( picture->version, sizeof( picture->version ), "f%08x%08x%llx", FS_IndexHash( picture->name ),
-			(unsigned)size, (long long)mtime );
+		if ( !byContent ) {
+			Com_sprintf( picture->version, sizeof( picture->version ), "f%08x%08x%llx", FS_IndexHash( picture->name ),
+				(unsigned)size, (long long)mtime );
+		} else if ( !FS_LoosePictureVersion( ospath, size, mtime, picture->version, sizeof( picture->version ) ) ) {
+			return qfalse;
+		}
 	} else {
 		return qfalse;
 	}
@@ -6721,6 +6773,14 @@ qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
 	picture->size = (int)length;
 	picture->search = search;
 	return qtrue;
+}
+
+qboolean FS_MapPicture( const char *map, fsMapPicture_t *picture ) {
+	return FS_FindMapPicture( map, picture, qfalse );
+}
+
+qboolean FS_MapPictureByContent( const char *map, fsMapPicture_t *picture ) {
+	return FS_FindMapPicture( map, picture, qtrue );
 }
 
 // the entry a load of the map reads its BSP from, as the load's own read

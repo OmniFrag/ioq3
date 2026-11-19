@@ -1615,13 +1615,21 @@ one; qfalse if it can't be read, or changes meanwhile
 =================
 */
 qboolean Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size ) {
+	int64_t	mtime;
+
+	if ( !Content_FileStat( ospath, size, &mtime ) ) {
+		return qfalse;
+	}
+	return Content_HashFileAs( ospath, *size, mtime, sha256 );
+}
+
+qboolean Content_HashFileAs( const char *ospath, int64_t size, int64_t mtime, byte sha256[SHA256_DIGEST_SIZE] ) {
 	hashJob_t	job;
 	hashItem_t	item;
 
 	memset( &item, 0, sizeof( item ) );
-	if ( !Content_FileStat( ospath, &item.pak.size, &item.pak.mtime ) ) {
-		return qfalse;
-	}
+	item.pak.size = size;
+	item.pak.mtime = mtime;
 	Q_strncpyz( item.ospath, ospath, sizeof( item.ospath ) );
 	memset( &job, 0, sizeof( job ) );
 	job.items = &item;
@@ -1633,7 +1641,6 @@ qboolean Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], 
 	}
 	free( job.buffer );
 	memcpy( sha256, item.pak.sha256, SHA256_DIGEST_SIZE );
-	*size = item.pak.size;
 	return item.result == HASH_DONE;
 }
 

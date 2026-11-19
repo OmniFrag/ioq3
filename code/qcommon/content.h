@@ -246,6 +246,9 @@ int		Content_ChooseEvictions( const cacheEntry_t *entries, int count, int64_t ma
 // a whole file's SHA-256 and size, read here and now; qfalse if it can't
 // be read, or changes meanwhile
 qboolean	Content_HashFile( const char *ospath, byte sha256[SHA256_DIGEST_SIZE], int64_t *size );
+// the same for a file as a stat found it, size bytes and that time: one
+// past size or changed since fails, a buffer past size read at most
+qboolean	Content_HashFileAs( const char *ospath, int64_t size, int64_t mtime, byte sha256[SHA256_DIGEST_SIZE] );
 
 // the client: at startup, reads index.dat, removes what it doesn't list,
 // and evicts down to the bound

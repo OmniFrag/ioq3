@@ -1404,6 +1404,9 @@ typedef struct {
 	qboolean	gameOwn;
 } fsMapPicture_t;
 qboolean	FS_MapPicture( const char *map, fsMapPicture_t *picture );
+// the same, a loose file's version a hash of its bytes, read on this thread
+// the first time: for one map at its load, never a list
+qboolean	FS_MapPictureByContent( const char *map, fsMapPicture_t *picture );
 qboolean	FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath );
 // whether a picture's size and first bytes are its format's, read no further
 // than FS_PictureHead's count (fs_picture.c)
