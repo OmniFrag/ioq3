@@ -2444,7 +2444,12 @@ static qboolean SV_ClientCommand( client_t *cl, msg_t *msg ) {
 	Cmd_TokenizeString( s );
 	if ( !com_developer->integer ) {
 		// nothing's printed
-	} else if ( Com_IsSecretWord( Cmd_Argv( 0 ) ) || Com_IsSecretCommand( Cmd_ArgsFrom( 1 ), NULL, 0 ) ) {
+	} else if ( Com_IsSecretWord( Cmd_Argv( 0 ) ) || Com_IsSecretCommand( Cmd_ArgsFrom( 1 ), NULL, 0 ) ||
+		( SV_IsChatCommand( Cmd_Argv( 0 ) ) && ( Q_stristr( Cmd_Argv( 0 ), "team" ) ||
+		Q_stristr( Cmd_Argv( 0 ), "tell" ) || !Q_stricmp( Cmd_Argv( 0 ), "gc" ) ) ) ) {
+		// nor a team line's, a tell's or an order's (gc), voiced or not, for
+		// the team or the one player alone, which the console's output would
+		// show its readers
 		Com_DPrintf( "clientCommand: %s : %i : %s (hidden)\n", cl->name, seq, Cmd_Argv( 0 ) );
 	} else if ( !Q_stricmp( Cmd_Argv( 0 ), "userinfo" ) ) {
 		// and a userinfo's password (ENG-098)
