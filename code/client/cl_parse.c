@@ -955,8 +955,15 @@ void CL_ParseCommandString( msg_t *msg ) {
 	// the cgame asks for commands only as snapshots come, and none comes
 	// after the server drops the client: a disconnect before the first,
 	// such as a drop while the client loads, is taken now, rather than
-	// left until cl_timeout says the connection was lost
-	if ( clc.state < CA_ACTIVE && !clc.demoplaying ) {
+	// left until cl_timeout says the connection was lost. Not while the
+	// client has disconnected for a web download itself: the server's
+	// disconnect answers its own, and the client goes on downloading and
+	// connects again after
+	if ( clc.state < CA_ACTIVE && !clc.demoplaying
+#ifdef USE_HTTP
+		&& !clc.disconnectedForHttpDownload
+#endif
+		) {
 		Cmd_TokenizeString( s );
 		if ( !strcmp( Cmd_Argv( 0 ), "disconnect" ) ) {
 			CL_ServerDisconnect();
