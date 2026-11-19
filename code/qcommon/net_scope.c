@@ -79,8 +79,10 @@ connect to (unspecified, multicast or broadcast). An IPv6 address that
 holds an IPv4 one, mapped or through NAT64, is that one's
 ==================
 */
+// an IPv4-mapped IPv6 address's first 12 bytes (::ffff:a.b.c.d)
+static const byte net_mapped[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+
 netScope_t NET_AdrScope( const netadr_t *adr ) {
-	static const byte mapped[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
 	static const byte nat64[12] = { 0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0 };
 	static const byte zero[15] = { 0 };
 	const byte	*ip6 = adr->ip6;
@@ -96,7 +98,7 @@ netScope_t NET_AdrScope( const netadr_t *adr ) {
 		return NET_SCOPE_NONE;
 	}
 
-	if ( !memcmp( ip6, mapped, sizeof( mapped ) ) || !memcmp( ip6, nat64, sizeof( nat64 ) ) ) {
+	if ( !memcmp( ip6, net_mapped, sizeof( net_mapped ) ) || !memcmp( ip6, nat64, sizeof( nat64 ) ) ) {
 		return NET_IPv4Scope( ip6 + 12 );
 	}
 	if ( !memcmp( ip6, zero, sizeof( zero ) ) ) {
@@ -132,4 +134,108 @@ qboolean NET_AdrReachableFrom( const netadr_t *adr, netScope_t from ) {
 	default:
 		return qfalse;
 	}
+}
+
+/*
+==================
+NET_ScopeIsLocal
+
+Whether an address is on the network this computer is on, as a server
+open to its local network alone takes a player (NET_IsLocalNetwork), by
+its bytes and this computer's interfaces' subnets alone: loopback;
+RFC 1918's ranges, IPv6's unique local and link-local addresses, but not
+IPv4's link-local 169.254/16; a subnet of one of the interfaces, nets;
+and the shared space 100.64/10 only when its traffic comes to this
+computer's own address there, to (NULL where that isn't known), as a
+tailnet's does and a carrier's NAT's doesn't, an interface's subnet
+there notwithstanding. An IPv4-mapped IPv6 address is its IPv4; nothing
+else in IPv6, NAT64, 6to4 or Teredo, is read as one
+==================
+*/
+// an IPv4-mapped IPv6 address as its IPv4, any other as it is
+static netadr_t NET_Unmapped( const netadr_t *adr ) {
+	netadr_t	a = *adr;
+
+	if ( a.type == NA_IP6 && !memcmp( a.ip6, net_mapped, sizeof( net_mapped ) ) ) {
+		a.type = NA_IP;
+		Com_Memcpy( a.ip, adr->ip6 + 12, 4 );
+	}
+	return a;
+}
+
+// a netmask's prefix length: its leading 1 bits, size bytes of it; -1 for
+// a mask with a 1 after a 0, which no prefix length says
+int NET_MaskBits( const byte *mask, int size ) {
+	int		bits = 0, i;
+
+	while ( bits < size * 8 && ( mask[bits / 8] & ( 0x80 >> ( bits % 8 ) ) ) ) {
+		bits++;
+	}
+	for ( i = bits; i < size * 8; i++ ) {
+		if ( mask[i / 8] & ( 0x80 >> ( i % 8 ) ) ) {
+			return -1;
+		}
+	}
+	return bits;
+}
+
+// an interface's subnet, base already its address, from its mask: none
+// for a mask that isn't contiguous or has no bits, either of which would
+// make every address the interface's
+qboolean NET_MaskSubnet( const byte *mask, int size, netSubnet_t *net ) {
+	net->bits = NET_MaskBits( mask, size );
+	return net->bits > 0;
+}
+
+// whether a's first bits bits are base's
+static qboolean NET_InSubnet( const netadr_t *a, const netSubnet_t *net ) {
+	const byte	*x = a->type == NA_IP ? a->ip : a->ip6, *y = net->base.type == NA_IP ? net->base.ip : net->base.ip6;
+	int			size = a->type == NA_IP ? 4 : 16, bits = net->bits, i;
+
+	if ( net->base.type != a->type || bits < 0 || bits > size * 8 ) {
+		return qfalse;
+	}
+	for ( i = 0; bits >= 8; i++, bits -= 8 ) {
+		if ( x[i] != y[i] ) {
+			return qfalse;
+		}
+	}
+	return !bits || ( ( x[i] ^ y[i] ) & ( 0xff << ( 8 - bits ) ) & 0xff ) == 0;
+}
+
+qboolean NET_ScopeIsLocal( const netadr_t *adr, const netadr_t *to, const netSubnet_t *nets, int count ) {
+	static const byte	loopback6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+	netadr_t			a = NET_Unmapped( adr ), arrived;
+	int					i;
+
+	switch ( a.type ) {
+	case NA_LOOPBACK:
+		return qtrue;
+	case NA_IP:
+		if ( NET_IPv4Shared( a.ip ) ) {
+			if ( !to ) {
+				return qfalse;
+			}
+			arrived = NET_Unmapped( to );
+			return arrived.type == NA_IP && NET_IPv4Shared( arrived.ip );
+		}
+		if ( a.ip[0] == 127 || NET_IPv4Private( a.ip ) ) {
+			return qtrue;
+		}
+		break;
+	case NA_IP6:
+		if ( !memcmp( a.ip6, loopback6, sizeof( loopback6 ) ) || ( a.ip6[0] & 0xfe ) == 0xfc ||
+			( a.ip6[0] == 0xfe && ( a.ip6[1] & 0xc0 ) == 0x80 ) ) {
+			return qtrue;
+		}
+		break;
+	default:
+		return qfalse;
+	}
+	for ( i = 0; i < count; i++ ) {
+		if ( NET_InSubnet( &a, &nets[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }

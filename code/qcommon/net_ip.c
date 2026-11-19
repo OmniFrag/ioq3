@@ -1882,14 +1882,9 @@ qboolean Sys_IsLANAddress( netadr_t adr ) {
 	return NET_LANRanges( adr );
 }
 
-// an IPv4 address in the shared address space, 100.64/10 (RFC 6598)
-static qboolean NET_SharedSpace( const byte *ip ) {
-	return ip[0] == 100 && ( ip[1] & 0xc0 ) == 64;
-}
-
 /*
 ==================
-NET_IsLocalNetwork
+NET_LocalSubnets, NET_IsLocalNetwork
 
 Whether a player's address is on the network this computer is on, as a
 server open to its local network alone takes (sv_visibility local):
@@ -1903,11 +1898,39 @@ player is judged by to alone, in an interface's subnet or not. A player whose
 datagrams come through a proxy is judged by the addresses the proxy names
 when the proxy is this computer's own (the proxy socket), its header's
 destination for to; one through a relay or another proxy comes from
-elsewhere
+elsewhere. The rule is NET_ScopeIsLocal's, against the interfaces'
+subnets (NET_LocalSubnets), which a gateway judging a browser takes too
 ==================
 */
+int NET_LocalSubnets( netSubnet_t *out, int max ) {
+	const byte	*mask;
+	int			count = 0, index, size;
+
+	for ( index = 0; index < numIP && count < max; index++ ) {
+		netSubnet_t	*net = &out[count];
+
+		if ( localIP[index].type == NA_IP ) {
+			mask = (const byte *)&( (struct sockaddr_in *)&localIP[index].netmask )->sin_addr.s_addr;
+			size = 4;
+		} else if ( localIP[index].type == NA_IP6 ) {
+			mask = (const byte *)&( (struct sockaddr_in6 *)&localIP[index].netmask )->sin6_addr;
+			size = 16;
+		} else {
+			continue;
+		}
+		Com_Memset( net, 0, sizeof( *net ) );
+		if ( NET_SockaddrToAdr( &localIP[index].addr, sizeof( localIP[index].addr ), &net->base ) &&
+			NET_MaskSubnet( mask, size, net ) ) {
+			count++;
+		}
+	}
+	return count;
+}
+
 qboolean NET_IsLocalNetwork( netadr_t adr, const netadr_t *to ) {
 	const netProxyRoute_t	*route;
+	netSubnet_t				nets[MAX_IPS];
+	netadr_t				dst;
 
 	if ( adr.type == NA_LOOPBACK ) {
 		return qtrue;
@@ -1916,13 +1939,15 @@ qboolean NET_IsLocalNetwork( netadr_t adr, const netadr_t *to ) {
 	if ( route && !route->onProxySocket ) {
 		return qfalse;
 	}
-	if ( adr.type != NA_IP || !NET_SharedSpace( adr.ip ) ) {
-		return NET_LANRanges( adr );
-	}
+	// through this computer's own proxy, the header's destination is where
+	// it came to
 	if ( route ) {
-		return route->header.family == 4 && NET_SharedSpace( route->header.dst );
+		Com_Memset( &dst, 0, sizeof( dst ) );
+		dst.type = route->header.family == 4 ? NA_IP : NA_BAD;
+		Com_Memcpy( dst.ip, route->header.dst, sizeof( dst.ip ) );
+		to = &dst;
 	}
-	return to && to->type == NA_IP && NET_SharedSpace( to->ip );
+	return NET_ScopeIsLocal( &adr, to, nets, NET_LocalSubnets( nets, ARRAY_LEN( nets ) ) );
 }
 
 /*

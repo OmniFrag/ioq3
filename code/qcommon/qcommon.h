@@ -209,6 +209,20 @@ netScope_t	NET_AdrScope( const netadr_t *adr );
 qboolean	NET_AdrReachableFrom( const netadr_t *adr, netScope_t from );
 qboolean	NET_IsLANv4( const netadr_t *adr );
 qboolean	NET_IsSharedv4( const netadr_t *adr );
+// a subnet of one of this computer's interfaces, its first bits bits base's
+typedef struct {
+	netadr_t	base;
+	int			bits;
+} netSubnet_t;
+// whether an address is on this computer's network, by its bytes, where
+// its traffic came to (to, NULL for unknown) and the interfaces' subnets
+qboolean	NET_ScopeIsLocal( const netadr_t *adr, const netadr_t *to, const netSubnet_t *nets, int count );
+// this computer's interfaces' subnets, at most max; returns how many. One
+// whose netmask isn't contiguous (NET_MaskBits gives -1) or has no bits is
+// left out (NET_MaskSubnet), as either would take in every address
+int			NET_LocalSubnets( netSubnet_t *out, int max );
+int			NET_MaskBits( const byte *mask, int size );
+qboolean	NET_MaskSubnet( const byte *mask, int size, netSubnet_t *net );
 qboolean	NET_SockaddrToAdr( const void *sockaddr, size_t length, netadr_t *a );
 const char	*NET_TakeBroadcastFailure( void );
 // why a broadcast failed since the last call, or NULL
