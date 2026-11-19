@@ -426,7 +426,7 @@ static void SV_Kick_f( void ) {
 				if( cl->netchan.remoteAddress.type == NA_LOOPBACK ) {
 					continue;
 				}
-				SV_DropClient( cl, "was kicked" );
+				SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 				cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 			}
 		}
@@ -438,7 +438,7 @@ static void SV_Kick_f( void ) {
 				if( cl->netchan.remoteAddress.type != NA_BOT ) {
 					continue;
 				}
-				SV_DropClient( cl, "was kicked" );
+				SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 				cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 			}
 		}
@@ -449,7 +449,7 @@ static void SV_Kick_f( void ) {
 		return;
 	}
 
-	SV_DropClient( cl, "was kicked" );
+	SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 	cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 }
 
@@ -479,7 +479,7 @@ static void SV_KickBots_f( void ) {
 			continue;
 		}
 
-		SV_DropClient( cl, "was kicked" );
+		SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 		cl->lastPacketTime = svs.time; // in case there is a funny zombie
 	}
 }
@@ -509,7 +509,7 @@ static void SV_KickAll_f( void ) {
 			continue;
 		}
 
-		SV_DropClient( cl, "was kicked" );
+		SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 		cl->lastPacketTime = svs.time; // in case there is a funny zombie
 	}
 }
@@ -544,7 +544,7 @@ static void SV_KickNum_f( void ) {
 		return;
 	}
 
-	SV_DropClient( cl, "was kicked" );
+	SV_DropClientAs( cl, "was kicked", SV_DROP_KICKED );
 	cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 }
 

@@ -2159,14 +2159,24 @@ int SV_ExtClientPing( int clientNum ) {
 	return cl->state == CS_ACTIVE ? cl->ping : 999;
 }
 
-qboolean SV_ExtDropClient( int clientNum, const char *reason ) {
+// a client dropped for an extension, as clientkick won't a listen
+// server's own player
+static qboolean SV_ExtDropAs( int clientNum, const char *reason, svDrop_t kind ) {
 	client_t	*cl = SV_ExtClient( clientNum );
 
 	if ( !cl || cl->netchan.remoteAddress.type == NA_LOOPBACK ) {
 		return qfalse;
 	}
-	SV_DropClient( cl, reason );
+	SV_DropClientAs( cl, reason, kind );
 	return qtrue;
+}
+
+qboolean SV_ExtDropClient( int clientNum, const char *reason ) {
+	return SV_ExtDropAs( clientNum, reason, SV_DROP_PLAIN );
+}
+
+qboolean SV_ExtKickClient( int clientNum, const char *reason ) {
+	return SV_ExtDropAs( clientNum, reason, SV_DROP_KICKED );
 }
 
 qboolean SV_ExtMuteClient( int clientNum, qboolean mute, int seconds ) {

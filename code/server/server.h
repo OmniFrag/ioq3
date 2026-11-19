@@ -578,6 +578,17 @@ void SV_ResyncClient( client_t *client );
 qboolean SV_GamestateAwaitingAck( const client_t *client );
 void SV_FreeClient(client_t *client);
 void SV_DropClient( client_t *drop, const char *reason );
+// why the server drops a client, which its disconnect names after the
+// reason, for clients that tell the player in their own words (a second
+// argument, which the classic client never reads): only the server's own
+// decision, never the reason's text
+typedef enum {
+	SV_DROP_PLAIN,
+	SV_DROP_KICKED,
+	SV_DROP_BANNED
+} svDrop_t;
+void SV_DropClientAs( client_t *drop, const char *reason, svDrop_t kind );
+const char *SV_DisconnectWords( const char *reason );
 qboolean SV_MuteClient( client_t *cl, qboolean mute, int seconds );
 qboolean SV_ClientMuted( const client_t *cl );
 

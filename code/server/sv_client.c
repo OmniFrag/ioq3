@@ -503,7 +503,7 @@ int SV_ExtDropBanned( const char *reason ) {
 	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
 		if ( cl->state >= CS_CONNECTED && ( cl->netchan.remoteAddress.type == NA_IP ||
 			cl->netchan.remoteAddress.type == NA_IP6 ) && SV_IsBanned( &cl->netchan.remoteAddress, qfalse ) ) {
-			SV_DropClient( cl, reason );
+			SV_DropClientAs( cl, reason, SV_DROP_BANNED );
 			count++;
 		}
 	}
@@ -1054,10 +1054,34 @@ SV_DropClient
 Called when the player is totally leaving the server, either willingly
 or unwillingly.  This is NOT called if the entire server is quiting
 or crashing -- SV_FinalMessage() will handle that
-With a NULL reason, no one is told
+With a NULL reason, no one is told. The disconnect names the drop's kind
+after its reason (SV_DropClientAs), the reason's quotes made single so
+nothing it holds can stand as one
 =====================
 */
 void SV_DropClient( client_t *drop, const char *reason ) {
+	SV_DropClientAs( drop, reason, SV_DROP_PLAIN );
+}
+
+// a disconnect's reason, in its quotes: none of its own, which would end
+// them early and give the line an argument the server didn't choose; cut
+// short so the line, its kind too, stays under the 1022 characters
+// SV_SendServerCommand sends, which would drop it, and the client not told
+const char *SV_DisconnectWords( const char *reason ) {
+	static char	words[990];
+	char		*c;
+
+	Q_strncpyz( words, reason, sizeof( words ) );
+	for ( c = words; *c; c++ ) {
+		if ( *c == '"' ) {
+			*c = '\'';
+		}
+	}
+	return words;
+}
+
+void SV_DropClientAs( client_t *drop, const char *reason, svDrop_t kind ) {
+	static const char	*kinds[] = { "", " kicked", " banned" };
 	int		i;
 	const qboolean isBot = drop->netchan.remoteAddress.type == NA_BOT;
 
@@ -1092,7 +1116,7 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 
 	// add the disconnect command
 	if ( reason ) {
-		SV_SendServerCommand( drop, "disconnect \"%s\"", reason);
+		SV_SendServerCommand( drop, "disconnect \"%s\"%s", SV_DisconnectWords( reason ), kinds[kind] );
 	}
 
 	drop->lastDisconnectTime = svs.time;

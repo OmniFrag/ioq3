@@ -724,6 +724,9 @@ int			SV_ExtGameTime( void );
 // with "was kicked"; qfalse for none, or a listen server's own player,
 // whom clientkick won't drop either
 qboolean	SV_ExtDropClient( int clientNum, const char *reason );
+// the same, the disconnect saying it was a kick (SV_DropClientAs), as
+// clientkick's does
+qboolean	SV_ExtKickClient( int clientNum, const char *reason );
 // mutes a client, as clientmute does: its chat (say, say_team, tell, the
 // voice chats and orders) reaches neither the game nor anyone, nor does
 // its voice, for seconds or, with 0, until it leaves; a mute longer than
@@ -961,7 +964,8 @@ int		SV_ExtAddBan( const char *address, qboolean exception, const extBanDetails_
 // removes an entry, and saves the list
 qboolean	SV_ExtRemoveBan( int index );
 // drops every client the bans would refuse to let in now, telling each
-// and everyone reason; returns how many
+// and everyone reason, each disconnect saying it was a ban; returns how
+// many
 int		SV_ExtDropBanned( const char *reason );
 
 // A cvar, for extensions (qcommon/cvar.c): when a change to it takes
