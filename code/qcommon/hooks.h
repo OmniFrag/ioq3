@@ -710,6 +710,16 @@ int		SV_ExtClientPing( int clientNum );
 // clientConnected and the userinfo change the game makes right after, is
 // still the slot's last client's: the game sets the bot up after both
 qboolean	SV_ExtClientScore( int clientNum, int *score );
+// and its place as the game ranks it, from 0, RANK_TIED_FLAG set when it
+// shares it; in a team mode, the teams' order (0 red ahead, 1 blue, 2 tied)
+qboolean	SV_ExtClientRank( int clientNum, int *rank );
+// a configstring the game set, as SV_GetConfigstring reads it, cut to
+// size: a fact such as its warmup, its level's start or a player's team,
+// which an extension reads by the game's own numbering; qfalse with no
+// map running or an index out of range. And the game's time, which its
+// times in configstrings count in, in milliseconds; 0 with no map
+qboolean	SV_ExtConfigstring( int index, char *out, int size );
+int			SV_ExtGameTime( void );
 // drops a client, telling it and everyone reason, as clientkick does
 // with "was kicked"; qfalse for none, or a listen server's own player,
 // whom clientkick won't drop either

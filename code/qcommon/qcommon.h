@@ -316,10 +316,21 @@ extern int demo_protocols[];
 // The engine doesn't include the game modules' headers (bg_public.h). These
 // are the game values it relies on; game modules must keep them.
 #define	GT_FFA				0	// g_gametype
+#define	GT_TOURNAMENT		1
 #define	GT_SINGLE_PLAYER	2
+#define	GT_TEAM				3	// and the team modes after it
+#define	GT_CTF				4	// and the flag modes after it
 #define	PM_INTERMISSION		5	// playerState_t pm_type
 #define	PERS_SCORE			0	// playerState_t persistant[]
-#define	CS_WARMUP			5	// configstrings
+#define	PERS_RANK			2
+#define	RANK_TIED_FLAG		0x4000	// in a rank, shared with another
+#define	TEAM_SPECTATOR		3	// a player's team, its configstring's t
+#define	CS_MESSAGE			3	// configstrings
+#define	CS_WARMUP			5
+#define	CS_SCORES1			6	// a team mode's red score, else the first place's
+#define	CS_SCORES2			7	// blue's, else the second's
+#define	CS_LEVEL_START_TIME	21
+#define	CS_INTERMISSION		22
 #define	CS_PLAYERS			(32 + MAX_MODELS + MAX_SOUNDS)
 
 #if !defined UPDATE_SERVER_NAME && !defined STANDALONE

@@ -91,6 +91,33 @@ qboolean SV_ExtClientScore( int clientNum, int *score ) {
 	return qtrue;
 }
 
+qboolean SV_ExtClientRank( int clientNum, int *rank ) {
+	if ( SV_ExtClientState( clientNum ) == EXT_CLIENT_FREE || clientNum >= sv_numGameClients ||
+		!sv.gameClients ) {
+		return qfalse;
+	}
+	*rank = SV_GameClientNum( clientNum )->persistant[PERS_RANK];
+	return qtrue;
+}
+
+qboolean SV_ExtConfigstring( int index, char *out, int size ) {
+	if ( size < 1 ) {
+		return qfalse;
+	}
+	out[0] = '\0';
+	if ( sv.state != SS_GAME || index < 0 || index >= MAX_CONFIGSTRINGS ) {
+		return qfalse;
+	}
+	if ( sv.configstrings[index] ) {
+		Q_strncpyz( out, sv.configstrings[index], size );
+	}
+	return qtrue;
+}
+
+int SV_ExtGameTime( void ) {
+	return sv.state == SS_GAME ? sv.time : 0;
+}
+
 svEntity_t	*SV_SvEntityForGentity( sharedEntity_t *gEnt ) {
 	if ( !gEnt || gEnt->s.number < 0 || gEnt->s.number >= MAX_GENTITIES ) {
 		Com_Error( ERR_DROP, "SV_SvEntityForGentity: bad gEnt" );
