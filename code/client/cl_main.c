@@ -1444,6 +1444,7 @@ void CL_MapLoading( void ) {
 		// a connect to this listen server, whose connect goes out below,
 		// in this command: begun as any other's (CL_ConnectBegin)
 		cl_connectGeneration++;
+		cls.connectInMatch = qfalse;
 		Hooks_ClientConnecting();
 		Q_strncpyz( clc.servername, "localhost", sizeof(clc.servername) );
 		clc.state = CA_CHALLENGING;		// so the connect screen is drawn
@@ -2312,7 +2313,9 @@ qboolean CL_ExtCancel( void ) {
 			return qtrue;
 		}
 	}
-	if ( clc.state <= CA_DISCONNECTED ) {
+	// a connect that reached the match, changing maps now: a match, not
+	// a connect to cancel
+	if ( clc.state <= CA_DISCONNECTED || cls.connectInMatch ) {
 		return qfalse;
 	}
 	CL_Leaving( EXT_LEFT_CANCELED );
@@ -2348,6 +2351,7 @@ static void CL_ConnectBegin( const char *server ) {
 	Cvar_Set("ui_singlePlayerActive", "0");
 
 	cl_connectGeneration++;
+	cls.connectInMatch = qfalse;
 	Hooks_ClientConnecting();
 	// a connect the player began ends the wait for a server to come back:
 	// any but the first after the wait's own try, which is that try's

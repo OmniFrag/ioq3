@@ -534,8 +534,8 @@ void		CL_ExtSetRejoin( const char *command );
 void		CL_ExtLeft( extLeft_t kind, const char *reason );
 // the connect under way, or a wait to rejoin a server, ended as the
 // player's own Escape would end it, but told as canceled: at once, from the
-// state the client is in now; nothing in a match, a demo or at the menu
-// with no wait. qtrue when it ended one. A connect still connecting ends
+// state the client is in now; nothing in a match, a match changing maps,
+// a demo or at the menu with no wait. qtrue when it ended one. A connect still connecting ends
 // in the error that ends the frame (ERR_DISCONNECT), so call it last
 qboolean	CL_ExtCancel( void );
 // grows with each connect begun, and each one the player stopped: a

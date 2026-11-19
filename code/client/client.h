@@ -495,6 +495,10 @@ typedef struct {
 		char		stopped[MAX_STRING_CHARS];	// and once the player stops the wait
 		char		gaveUp[MAX_STRING_CHARS];	// or it gives up
 	} reconnect;
+	// the connect under way has reached the match (CL_FirstSnapshot), so
+	// a map change on its server, though the state drops, isn't a connect
+	// to cancel (CL_ExtCancel); cleared as a connect begins
+	qboolean	connectInMatch;
 
 	// rendering info
 	glconfig_t	glconfig;

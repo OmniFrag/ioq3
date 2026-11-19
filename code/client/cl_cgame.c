@@ -1172,6 +1172,7 @@ void CL_FirstSnapshot( void ) {
 		return;
 	}
 	clc.state = CA_ACTIVE;
+	cls.connectInMatch = qtrue;
 
 	// set the timedelta so we are exactly on this first frame
 	cl.serverTimeDelta = cl.snap.serverTime - cls.realtime;
