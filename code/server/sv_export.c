@@ -1547,19 +1547,28 @@ SV_ContentOwnerLine
 
 Whether the content command running is the server's owner's, who alone
 may add or remove the game's own files: the console's, rcon's, a config's
-and a console tool's (no player's origin); a player's, run through a
-role's lists ("player <name> (<role>, <who>)", hosting's roles.c), only
-for the owner role, read from the last parenthesis, after any a name has
+and a console tool's (no player's or device's origin); a player's, run
+through a role's lists ("player <name> (<role>, <who>)", hosting's
+roles.c), or a device's console line through the gateway ("the device
+"<name>" (<role>) through the gateway", Omniwire's), only for the owner
+role, read from the last parenthesis, after any a name has
 =================
 */
 qboolean SV_ContentOwnerLine( void ) {
 	const char	*origin = Cmd_Origin(), *role;
 
-	if ( !origin || Q_strncmp( origin, "player ", 7 ) ) {
+	if ( !origin ) {
 		return qtrue;
 	}
-	role = strrchr( origin, '(' );
-	return role && !Q_strncmp( role, "(owner, ", 8 );
+	if ( !Q_strncmp( origin, "player ", 7 ) ) {
+		role = strrchr( origin, '(' );
+		return role && !Q_strncmp( role, "(owner, ", 8 );
+	}
+	if ( !Q_strncmp( origin, "the device ", 11 ) ) {
+		role = strrchr( origin, '(' );
+		return role && !Q_strncmp( role, "(owner)", 7 );
+	}
+	return qtrue;
 }
 
 /*
