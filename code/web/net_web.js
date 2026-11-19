@@ -16,17 +16,23 @@
 // then. Received ones wait in one queue for the engine's next frame; past
 // its length the newest are dropped, as a socket's buffer would.
 //
-// A gateway that lets a connection go says why first, in one message on
-// oob, "\xff\xff\xff\xffomnifrag-close <word>", then closes it: idle when
-// the page was silent too long, as a hidden tab's is, shutdown when the
-// gateway stops, and replaced when another connection took its place; any
-// other word, or none (ICE failing, the network gone, the computer
-// asleep), is a plain loss. The engine never sees the message: the
-// connection counts as lost from it on. One lost as idle, while the page
-// was hidden, or within AWAY_MS of the page being shown again after
-// HIDDEN_MS or more hidden while it was open, was lost while the player
-// was away, which the engine words as such and rejoins; a replaced one it
-// doesn't rejoin.
+// A gateway that lets a connection go tells the server first, which drops
+// the player at once, so the server's own disconnect usually reaches the
+// page before anything else. A quarter of a second later the gateway says
+// why, in one message on oob, "\xff\xff\xff\xffomnifrag-close <word>", then
+// closes the connection: idle when the page was silent too long, as a
+// hidden tab's is, shutdown when the gateway stops, and replaced when
+// another connection took its place; any other word, or none (ICE
+// failing, the network gone, the computer asleep), is a plain loss. The
+// engine never sees the message, which this file takes as it arrives: the
+// connection counts as lost from it on. A page that shows read the
+// server's disconnect first, and its own disconnect closed the connection;
+// a hidden page, whose engine runs no frames, still holds that disconnect
+// unread, and finds the connection lost when it reads it. One lost as
+// idle, while the page was hidden, or within AWAY_MS of the page being
+// shown again after HIDDEN_MS or more hidden while it was open, was lost
+// while the player was away, which the engine words as such and rejoins;
+// a replaced one it doesn't rejoin.
 
 addToLibrary({
   $NetWeb: {
@@ -288,7 +294,8 @@ addToLibrary({
     },
 
     // the gateway's word on why it lets the connection go, which ends it
-    // here at once, so a server's disconnect just after finds it lost
+    // here at once; a server's disconnect that came before it and is still
+    // unread, as a hidden page's is, then finds it lost
     closing: function(peer, bytes) {
       var head = NetWeb.CLOSE.length;
       if (bytes.length <= head || bytes.length > head + 32) return false;
