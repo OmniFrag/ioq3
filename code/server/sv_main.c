@@ -369,6 +369,60 @@ but not on every player enter or exit.
 #define	MASTERDNS_MSEC	24*60*60*1000
 /*
 ================
+SV_ExtSetStandIn, SV_ExtLocalPlayer, SV_IsLANClient
+
+An address that stands for many players (hooks.h), and the one judgment
+of a player on the local network for sv_visibility local, which the
+connect and a switch to local ask (SV_OutsidePlayer), with no side
+effect; the connect's refusal says the extension's words
+(SV_StandInRefused). The LAN's exemptions, an unlimited rate with
+sv_lanForceRate, no ping limits and no per-address download limit, go by
+the interfaces' subnets as ever (Sys_IsLANAddress), and never to the
+address that stands for many, which a private range would give them to
+every player it stands for (SV_IsLANClient)
+================
+*/
+static struct {
+	qboolean	set;
+	qboolean	told;		// said printed, once
+	netadr_t	adr;
+	char		said[512];
+} sv_standIn;
+
+void SV_ExtSetStandIn( const netadr_t *adr, const char *said ) {
+	Com_Memset( &sv_standIn, 0, sizeof( sv_standIn ) );
+	if ( adr ) {
+		sv_standIn.set = qtrue;
+		sv_standIn.adr = NET_Unmapped( adr );
+		Q_strncpyz( sv_standIn.said, said ? said : "", sizeof( sv_standIn.said ) );
+	}
+}
+
+// whether from is the address that stands for many, mapped into IPv6 or
+// not, as NET_IsLocalNetwork reads a mapped one as its IPv4
+static qboolean SV_IsStandIn( const netadr_t *from ) {
+	return sv_standIn.set && NET_CompareBaseAdr( NET_Unmapped( from ), sv_standIn.adr );
+}
+
+qboolean SV_ExtLocalPlayer( const netadr_t *from, const netadr_t *to ) {
+	return !SV_IsStandIn( from ) && NET_IsLocalNetwork( *from, to );
+}
+
+qboolean SV_IsLANClient( const netadr_t *adr ) {
+	return !SV_IsStandIn( adr ) && Sys_IsLANAddress( *adr );
+}
+
+// a connect from the address that stands for many refused: its words,
+// once
+void SV_StandInRefused( const netadr_t *from ) {
+	if ( !sv_standIn.told && sv_standIn.said[0] && SV_IsStandIn( from ) ) {
+		sv_standIn.told = qtrue;
+		Com_Printf( "%s\n", sv_standIn.said );
+	}
+}
+
+/*
+================
 SV_ExtVisibility
 
 Who the server takes, as sv_visibility says: "" leaves it to dedicated as
@@ -1878,7 +1932,7 @@ Players on the local network are never dropped for it, nor bots
 */
 static void SV_CheckPingLimits( client_t *cl ) {
 	cl->pingChecked = qtrue;
-	if ( cl->netchan.remoteAddress.type == NA_BOT || Sys_IsLANAddress( cl->netchan.remoteAddress ) ) {
+	if ( cl->netchan.remoteAddress.type == NA_BOT || SV_IsLANClient( &cl->netchan.remoteAddress ) ) {
 		return;
 	}
 	if ( sv_minPing->integer > 0 && cl->ping < sv_minPing->integer ) {
@@ -2336,12 +2390,12 @@ static qboolean SV_Hibernate( void ) {
 SV_OutsidePlayer
 
 Whether a client is a player from outside the local network
-(NET_IsLocalNetwork): never a bot, nor the server's own player
+(SV_ExtLocalPlayer): never a bot, nor the server's own player
 ================
 */
 static qboolean SV_OutsidePlayer( const client_t *cl ) {
 	return cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
-		!NET_IsLocalNetwork( cl->netchan.remoteAddress, &cl->localTo );
+		!SV_ExtLocalPlayer( &cl->netchan.remoteAddress, &cl->localTo );
 }
 
 /*

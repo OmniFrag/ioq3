@@ -729,6 +729,16 @@ typedef enum {
 	EXT_VISIBILITY_EVERYONE
 } extVisibility_t;
 extVisibility_t	SV_ExtVisibility( void );
+// an address that stands for many players, as a container's network
+// gateway does where its port publishing shows every peer by it: under
+// local, a player from it is outside, whatever the local network's rule
+// says, and said is printed once, the first time a connect from it is
+// refused; NULL clears it
+void		SV_ExtSetStandIn( const netadr_t *adr, const char *said );
+// whether a player from an address, come to one of this computer's (to, or
+// NULL), is on the local network as sv_visibility local judges it: the
+// local network's rule, and never the address that stands for many
+qboolean	SV_ExtLocalPlayer( const netadr_t *from, const netadr_t *to );
 // whether who can join asks for the masters' lists: everyone, or with it
 // unset dedicated 2, as ever; SV_ExtListed says whether it's listed now
 qboolean	SV_ExtListingWanted( void );

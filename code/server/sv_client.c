@@ -772,7 +772,8 @@ void SV_DirectConnect( netadr_t from ) {
 	// one open to its local network alone takes no player from elsewhere,
 	// a reconnect into a slot it was just dropped from included
 	NET_PacketDestination( &to );
-	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !NET_IsLocalNetwork( from, &to ) ) {
+	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !SV_ExtLocalPlayer( &from, &to ) ) {
+		SV_StandInRefused( &from );
 		SV_RefuseConnect( from, "This server is for players on its local network only.\n" );
 		return;
 	}
@@ -2044,7 +2045,7 @@ it's an internet public server (dedicated 2), don't need a rate choke
 qboolean SV_IsUnlimitedRate( client_t *cl ) {
 	return cl->netchan.remoteAddress.type == NA_LOOPBACK ||
 		( sv_lanForceRate->integer && com_dedicated->integer != 2 &&
-		Sys_IsLANAddress( cl->netchan.remoteAddress ) );
+		SV_IsLANClient( &cl->netchan.remoteAddress ) );
 }
 
 /*

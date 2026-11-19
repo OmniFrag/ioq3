@@ -153,7 +153,7 @@ else in IPv6, NAT64, 6to4 or Teredo, is read as one
 ==================
 */
 // an IPv4-mapped IPv6 address as its IPv4, any other as it is
-static netadr_t NET_Unmapped( const netadr_t *adr ) {
+netadr_t NET_Unmapped( const netadr_t *adr ) {
 	netadr_t	a = *adr;
 
 	if ( a.type == NA_IP6 && !memcmp( a.ip6, net_mapped, sizeof( net_mapped ) ) ) {

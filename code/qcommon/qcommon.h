@@ -217,6 +217,8 @@ typedef struct {
 // whether an address is on this computer's network, by its bytes, where
 // its traffic came to (to, NULL for unknown) and the interfaces' subnets
 qboolean	NET_ScopeIsLocal( const netadr_t *adr, const netadr_t *to, const netSubnet_t *nets, int count );
+// an IPv4-mapped IPv6 address (::ffff:a.b.c.d) as its IPv4, any other as it is
+netadr_t	NET_Unmapped( const netadr_t *adr );
 // this computer's interfaces' subnets, at most max; returns how many. One
 // whose netmask isn't contiguous (NET_MaskBits gives -1) or has no bits is
 // left out (NET_MaskSubnet), as either would take in every address
@@ -2491,6 +2493,8 @@ qboolean	Sys_StringToAdr( const char *s, netadr_t *a, netadrtype_t family );
 // an IPv4 or IPv6 address written as numbers, never a host name to look up
 qboolean	Sys_NumericToAdr( const char *s, netadr_t *a );
 
+// the interfaces' subnets; the server's exemptions ask SV_IsLANClient,
+// which never takes an address that stands for many players as the LAN
 qboolean	Sys_IsLANAddress (netadr_t adr);
 // a player's address is on the network this computer is on: loopback, a
 // private range, an interface's subnet, 100.64/10 only when to, the local

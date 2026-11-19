@@ -705,7 +705,7 @@ static qboolean SV_ContentBusy( const client_t *cl ) {
 		sameAddress += NET_CompareBaseAdr( other->netchan.remoteAddress, cl->netchan.remoteAddress );
 	}
 	return fast >= CONTENT_MAX_CLIENTS
-		|| ( sameAddress >= CONTENT_PER_ADDRESS && !Sys_IsLANAddress( cl->netchan.remoteAddress ) );
+		|| ( sameAddress >= CONTENT_PER_ADDRESS && !SV_IsLANClient( &cl->netchan.remoteAddress ) );
 }
 
 /*

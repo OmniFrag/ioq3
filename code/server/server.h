@@ -449,6 +449,12 @@ void SVC_RateDropAddress( netadr_t from, int burst, int period );
 void SVC_RateRestoreToxicAddress( netadr_t from, int burst, int period );
 
 void SV_FinalMessage (char *message);
+// a connect from the address that stands for many players refused: the
+// extension's words, once
+void SV_StandInRefused( const netadr_t *from );
+// on the LAN for its exemptions, never as the address that stands for many:
+// what the server asks, never Sys_IsLANAddress alone
+qboolean SV_IsLANClient( const netadr_t *adr );
 void QDECL SV_SendServerCommand( client_t *cl, const char *fmt, ...) Q_PRINTF_FUNC(2, 3);
 
 
