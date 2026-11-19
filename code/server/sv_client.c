@@ -1815,6 +1815,16 @@ int SV_SendDownloadMessages(void)
 		
 		if(cl->state && *cl->downloadName)
 		{
+			// a download message waits, as a snapshot does, while the
+			// client's last message is still going out in fragments, or
+			// others wait behind it: one bigger than the client's fragments
+			// (a browser's 1 KB, a block and its header) would otherwise
+			// queue a message a round and overflow the queue's bound
+			// (SV_Netchan_Transmit), dropping the client
+			if ( cl->netchan.unsentFragments || cl->netchan_start_queue ) {
+				continue;
+			}
+
 			MSG_Init(&msg, msgBuffer, sizeof(msgBuffer));
 			MSG_WriteLong(&msg, cl->lastClientCommand);
 			
