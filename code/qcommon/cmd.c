@@ -46,7 +46,7 @@ typedef struct {
 	int			line;				// the line's number, 0 for none
 	qboolean	counted;			// a frame's: line is the next line's, and counts on
 	qboolean	pak;				// a pak's config's, on a dedicated server
-	char		by;					// a passed vote's text ('v') or a tool's ('t'), or 0 (Cbuf_AddVoteText, Cbuf_AddToolText)
+	char		by;					// a passed vote's text ('v'), a tool's ('t') or the console's ('c'), or 0 (Cbuf_AddVoteText, Cbuf_AddToolText, Cbuf_AddConsoleText)
 } cmdOrigin_t;
 
 typedef struct {
@@ -288,7 +288,7 @@ static void Cbuf_ExecuteMarker( cmd_t *buf, int at ) {
 		origin = &buf->origins[ buf->depth - 1 ];
 		origin->counted = text[1] == '+' || text[1] == '*';
 		origin->pak = text[1] == '*' || text[1] == '#';
-		origin->by = text[1] == 'v' || text[1] == 't' ? text[1] : 0;
+		origin->by = text[1] == 'v' || text[1] == 't' || text[1] == 'c' ? text[1] : 0;
 		origin->line = 1;
 		if ( !origin->counted ) {
 			origin->line = atoi( name );
@@ -765,6 +765,15 @@ qboolean Cmd_IsTool( void ) {
 
 /*
 ============
+Cmd_IsConsole
+============
+*/
+qboolean Cmd_IsConsole( void ) {
+	return cmd_origin.by == 'c';
+}
+
+/*
+============
 Cmd_PushOrigin
 
 The origin of text run at once rather than queued, a settings file's
@@ -838,6 +847,12 @@ void Cbuf_AddVoteText( const char *voter, const char *text ) {
 
 void Cbuf_AddToolText( const char *tool, const char *text ) {
 	Cbuf_AddFrame( Cbuf_For( qfalse, qfalse ), Cbuf_OriginMarker( tool, 0, qfalse, 't' ), text );
+}
+
+// the console's line, as Cbuf_AddText added it, in a frame marked as the
+// console's with no name, so Cmd_Origin stays NULL for it as before
+void Cbuf_AddConsoleText( const char *text ) {
+	Cbuf_AddFrame( Cbuf_Current(), Cbuf_OriginMarker( "", 0, qfalse, 'c' ), text );
 }
 
 // the order the buffers run in: the startup scripts' first, as one buffer

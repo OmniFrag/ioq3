@@ -3283,8 +3283,8 @@ int Com_EventLoop( void ) {
 				CL_JoystickEvent( ev.evValue, ev.evValue2, ev.evTime );
 			break;
 			case SE_CONSOLE:
-				Cbuf_AddText( (char *)ev.evPtr );
-				Cbuf_AddText( "\n" );
+				// a frame of its own, which ends the line
+				Cbuf_AddConsoleText( (char *)ev.evPtr );
 			break;
 			case SE_TEXT_EDITING:
 				CL_TextEditingEvent( ev.evPtr ? (char *)ev.evPtr : "", ev.evValue, ev.evValue2 );
@@ -4826,13 +4826,41 @@ void Com_OpenPipeFile( void )
 ===============
 Com_ReadFromPipe
 
-Read whatever is in com_pipefile, if anything, and execute it
+Read whatever is in com_pipefile, if anything, and run its whole lines as
+the console's (Cbuf_AddConsoleText). A line too long for the buffer, or
+holding a NUL byte, is dropped through its end, with a warning, never run
+in pieces: a tool piping a player's text into a command would otherwise
+have the text's tail run as a command of its own
 ===============
 */
+// the first line end, \r or \n, in buf[from, to), or -1: by length, as a
+// NUL in what was read must not end the search
+static int Com_PipeBreak( const char *buf, int from, int to )
+{
+	for( ; from < to; ++from )
+	{
+		if( buf[ from ] == '\n' || buf[ from ] == '\r' )
+			return from;
+	}
+	return -1;
+}
+
+// the last line end in buf[0, to), or -1
+static int Com_PipeBreakBack( const char *buf, int to )
+{
+	while( --to >= 0 )
+	{
+		if( buf[ to ] == '\n' || buf[ to ] == '\r' )
+			return to;
+	}
+	return -1;
+}
+
 void Com_ReadFromPipe( void )
 {
-	static char buf[MAX_STRING_CHARS];
+	static char buf[MAX_STRING_CHARS + 1];	// a line of 1023 bytes, its end and a NUL
 	static int accu = 0;
+	static qboolean skipping = qfalse;	// the rest of a line dropped, too long for buf or holding a NUL
 	int read;
 
 	if( !pipefile )
@@ -4840,33 +4868,62 @@ void Com_ReadFromPipe( void )
 
 	while( ( read = FS_Read( buf + accu, sizeof( buf ) - accu - 1, pipefile ) ) > 0 )
 	{
-		char *brk = NULL;
-		int i;
-
-		for( i = accu; i < accu + read; ++i )
-		{
-			if( buf[ i ] == '\0' )
-				buf[ i ] = '\n';
-			if( buf[ i ] == '\n' || buf[ i ] == '\r' )
-				brk = &buf[ i + 1 ];
-		}
-		buf[ accu + read ] = '\0';
+		int i, end;
+		char *nul;
 
 		accu += read;
 
-		if( brk )
+		// the dropped line's end, once it comes: what follows it is read on
+		if( skipping )
 		{
-			char tmp = *brk;
-			*brk = '\0';
-			Cbuf_ExecuteText( EXEC_APPEND, buf );
-			*brk = tmp;
-
-			accu -= brk - buf;
-			memmove( buf, brk, accu + 1 );
+			end = Com_PipeBreak( buf, 0, accu );
+			if( end < 0 )
+			{
+				accu = 0;
+				continue;
+			}
+			skipping = qfalse;
+			accu -= end + 1;
+			memmove( buf, buf + end + 1, accu );
 		}
-		else if( accu >= sizeof( buf ) - 1 ) // full
+
+		// a line holding a NUL is dropped whole, through its end: run as
+		// text, the NUL would end it there, or run what follows it as a
+		// command of its own
+		while( ( nul = memchr( buf, '\0', accu ) ) != NULL )
 		{
-			Cbuf_ExecuteText( EXEC_APPEND, buf );
+			int start = Com_PipeBreakBack( buf, nul - buf ) + 1;
+
+			Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of the console pipe (%s) holding a NUL byte\n",
+				com_pipefile->string );
+			end = Com_PipeBreak( buf, nul - buf, accu );
+			if( end < 0 )
+			{
+				accu = start;
+				skipping = qtrue;
+				break;
+			}
+			memmove( buf + start, buf + end + 1, accu - end - 1 );
+			accu -= end + 1 - start;
+		}
+
+		// the whole lines, through the last line end
+		i = Com_PipeBreakBack( buf, accu );
+		if( i >= 0 )
+		{
+			char tmp = buf[ i + 1 ];
+
+			buf[ i + 1 ] = '\0';
+			Cbuf_AddConsoleText( buf );
+			buf[ i + 1 ] = tmp;
+			accu -= i + 1;
+			memmove( buf, buf + i + 1, accu );
+		}
+		else if( !skipping && accu >= (int)sizeof( buf ) - 1 ) // full
+		{
+			Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of the console pipe (%s) longer than %d characters\n",
+				com_pipefile->string, (int)sizeof( buf ) - 2 );
+			skipping = qtrue;
 			accu = 0;
 		}
 	}

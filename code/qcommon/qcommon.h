@@ -758,6 +758,10 @@ void Cbuf_AddToolText( const char *tool, const char *text );
 // a tool's text, with the tool's origin, "the Omniwire tool \"panel\""
 // (Cmd_IsTool)
 
+void Cbuf_AddConsoleText( const char *text );
+// a line the program's own console took, its terminal's or com_pipefile's:
+// no origin, as before, but marked as the console's (Cmd_IsConsole)
+
 //===========================================================================
 
 /*
@@ -837,6 +841,10 @@ qboolean Cmd_IsVote( void );
 qboolean Cmd_IsTool( void );
 // the running command is a tool's (Cbuf_AddToolText): its sets are the
 // tool's (CVAR_SOURCE_TOOL)
+qboolean Cmd_IsConsole( void );
+// the running command is a line the console took, or came from text one
+// queued (Cbuf_AddConsoleText), not a config's it ran: so an extension can
+// name the console as who did it, where Cmd_Origin has none
 void Cmd_PushOrigin( const char *name, int line );
 void Cmd_PopOrigin( void );
 // the origin of text run at once (EXEC_NOW), a settings file's line, say
