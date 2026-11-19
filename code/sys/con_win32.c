@@ -443,6 +443,14 @@ static char *CON_StdinInput( void )
 		return NULL;
 	}
 
+	// a line holding a NUL byte, which would end it there as text: dropped
+	// whole, as con_tty.c's
+	if( memchr( line, '\0', len ) )
+	{
+		Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of standard input holding a NUL byte\n" );
+		return NULL;
+	}
+
 	return line;
 }
 

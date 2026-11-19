@@ -25,7 +25,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 
 #define	MAX_CMD_BUFFER  128*1024
-#define	MAX_CMD_LINE	1024
 
 // Where a buffer's text comes from, for cvar_why and the warnings about
 // configs: an exec frames the config's text with marker lines, which begin
@@ -492,6 +491,8 @@ static void Cbuf_ExecuteTextWithRights( int exec_when, const char *text, qboolea
 	switch (exec_when)
 	{
 	case EXEC_NOW:
+		// one command, run whole, never in pieces: its words as long as the
+		// tokenizer keeps them
 		if (text && strlen(text) > 0) {
 			Com_DPrintf(S_COLOR_YELLOW "EXEC_NOW %s\n", text);
 			Cmd_ExecuteString (text);
@@ -568,7 +569,8 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	char	*text;
 	char	line[MAX_CMD_LINE];
 	cmdOrigin_t	origin, lineOrigin;
-	int		quotes, consumed;
+	int		quotes, consumed, comment;
+	qboolean	tooLong;
 	qboolean	restricted, script, started;
 	cmdOrigin_t	*frame;
 
@@ -580,6 +582,8 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 
 	quotes = 0;
 	started = qfalse;
+	// where the line's comment starts, if it has one: nothing after it runs
+	comment = buf->inSlashComment || buf->inStarComment ? 0 : -1;
 	for (i=0 ; i< buf->cursize ; i++)
 	{
 		// a frame's marker: its frame opens or closes there, and the line
@@ -600,11 +604,13 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 
 		if ( !(quotes&1)) {
 			if (i < buf->cursize - 1) {
-				if (! buf->inStarComment && text[i] == '/' && text[i+1] == '/')
+				if (! buf->inStarComment && text[i] == '/' && text[i+1] == '/') {
 					buf->inSlashComment = qtrue;
-				else if (! buf->inSlashComment && text[i] == '/' && text[i+1] == '*')
+					comment = comment < 0 ? i : comment;
+				} else if (! buf->inSlashComment && text[i] == '/' && text[i+1] == '*') {
 					buf->inStarComment = qtrue;
-				else if (buf->inStarComment && text[i] == '*' && text[i+1] == '/') {
+					comment = comment < 0 ? i : comment;
+				} else if (buf->inStarComment && text[i] == '*' && text[i+1] == '/') {
 					buf->inStarComment = qfalse;
 					// If we are in a star comment, then the part after it is valid
 					// Note: This will cause it to NUL out the terminating '/'
@@ -626,12 +632,21 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 		lineOrigin = frame ? *frame : cmd_noOrigin;
 	}
 
-	if( i >= (MAX_CMD_LINE - 1)) {
-		i = MAX_CMD_LINE - 1;
-	}
+	// a line too long for line[] is refused whole, through its own break
+	// (a newline, quoted or not, or a ; outside quotes and comments, where
+	// the buffer always splits), and nothing of it runs: stock ran its first
+	// MAX_CMD_LINE - 1 bytes and then the rest as another command, with the
+	// same origin, so a tool's or a script's line holding a player's long
+	// text had the text's tail run as a command of its own. A long comment
+	// doesn't make it too long: the command before the comment runs, as
+	// the tokenizer would have skipped the comment anyway
+	tooLong = i >= MAX_CMD_LINE && !( comment >= 0 && comment < MAX_CMD_LINE );
+	if ( !tooLong ) {
+		int	length = i >= MAX_CMD_LINE ? comment : i;
 
-	Com_Memcpy (line, text, i);
-	line[i] = 0;
+		Com_Memcpy( line, text, length );
+		line[length] = 0;
+	}
 
 // delete the text from the command buffer and move remaining commands down
 // this is necessary because commands (exec) can insert data at the
@@ -659,7 +674,25 @@ static void Cbuf_ExecuteLine( cmd_t *buf )
 	cmd_restricted = ( ( buf - cmd_buffers ) & CBUF_RESTRICTED ) != 0;
 	cmd_script = ( ( buf - cmd_buffers ) & CBUF_SCRIPT ) != 0;
 	cmd_origin = lineOrigin;
-	Cmd_ExecuteString (line);
+	if ( tooLong ) {
+		// game code's said once a frame at most for each origin, by the
+		// kind its frame marks (a passed vote's, a tool's...), so a module
+		// queueing such lines can't flood the console, nor hide another
+		// origin's; every other, a config's line, the console's, each time
+		static int	saidAt[256];
+		int			by = (byte)lineOrigin.by;
+		const char	*where = Cmd_Origin();
+
+		if ( !cmd_restricted || com_frameTime != saidAt[by] ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s%sskipped a command line longer than %i characters\n",
+				where ? where : "", where ? ": " : "", MAX_CMD_LINE - 1 );
+			if ( cmd_restricted ) {
+				saidAt[by] = com_frameTime;
+			}
+		}
+	} else {
+		Cmd_ExecuteString (line);
+	}
 	cmd_restricted = restricted;
 	cmd_script = script;
 	cmd_origin = origin;

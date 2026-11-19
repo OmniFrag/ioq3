@@ -4828,9 +4828,10 @@ Com_ReadFromPipe
 
 Read whatever is in com_pipefile, if anything, and run its whole lines as
 the console's (Cbuf_AddConsoleText). A line too long for the buffer, or
-holding a NUL byte, is dropped through its end, with a warning, never run
-in pieces: a tool piping a player's text into a command would otherwise
-have the text's tail run as a command of its own
+holding a NUL byte, is dropped through its end, with a warning, as
+standard input's is, never run in pieces: a tool piping a player's text
+into a command would otherwise have the text's tail run as a command of
+its own
 ===============
 */
 // the first line end, \r or \n, in buf[from, to), or -1: by length, as a
@@ -4858,7 +4859,7 @@ static int Com_PipeBreakBack( const char *buf, int to )
 
 void Com_ReadFromPipe( void )
 {
-	static char buf[MAX_STRING_CHARS + 1];	// a line of 1023 bytes, its end and a NUL
+	static char buf[MAX_CMD_LINE + 1];	// a line as long as the buffer runs, its end and a NUL
 	static int accu = 0;
 	static qboolean skipping = qfalse;	// the rest of a line dropped, too long for buf or holding a NUL
 	int read;

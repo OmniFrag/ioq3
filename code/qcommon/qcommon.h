@@ -693,6 +693,10 @@ files can be execed.
 
 */
 
+// a command line's bytes at most, its end included: a longer one is
+// refused whole, never run in pieces (Cbuf_ExecuteLine, rcon)
+#define	MAX_CMD_LINE	1024
+
 void Cbuf_Init (void);
 // allocates an initial text buffer that will grow as needed
 

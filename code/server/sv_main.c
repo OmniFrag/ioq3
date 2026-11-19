@@ -1546,7 +1546,7 @@ Redirect all printfs
 */
 static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 	qboolean	valid;
-	char		remaining[1024];
+	char		remaining[MAX_CMD_LINE];
 	// TTimo - scaled down to accumulate, but not overflow anything network wise, print wise etc.
 	// (OOB messages are the bottleneck here)
 #define SV_OUTPUTBUF_LENGTH (1024 - 16)
@@ -1607,14 +1607,21 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		while(cmd_aux[0]==' ')
 			cmd_aux++;
 		
-		Q_strcat( remaining, sizeof(remaining), cmd_aux);
-		
-		// its sets' origin, for cvar_why and the settings' history
-		Cmd_PushOrigin( va( "rcon from %s", NET_AdrToString( from ) ), 0 );
-		sv_inRcon = qtrue;
-		Cmd_ExecuteString (remaining);
-		sv_inRcon = qfalse;
-		Cmd_PopOrigin();
+		// one command, run whole or, too long for the command buffer's
+		// line, not at all, as the buffer refuses one (Cbuf_ExecuteLine)
+		if ( strlen( cmd_aux ) >= sizeof( remaining ) ) {
+			Com_Printf( "That command is longer than %i characters, so it wasn't run.\n",
+				(int)sizeof( remaining ) - 1 );
+		} else {
+			Q_strcat( remaining, sizeof(remaining), cmd_aux);
+
+			// its sets' origin, for cvar_why and the settings' history
+			Cmd_PushOrigin( va( "rcon from %s", NET_AdrToString( from ) ), 0 );
+			sv_inRcon = qtrue;
+			Cmd_ExecuteString (remaining);
+			sv_inRcon = qfalse;
+			Cmd_PopOrigin();
+		}
 
 	}
 

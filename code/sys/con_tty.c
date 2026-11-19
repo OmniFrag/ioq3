@@ -348,6 +348,90 @@ void CON_Init( void )
 
 /*
 ==================
+CON_StdinLine
+
+The next whole line of standard input that isn't a terminal (a service
+manager's pipe, a panel's), or NULL while there's none: a line is run only
+whole, as con_win32.c's are, and one too long for the buffer, or holding a
+NUL byte, is dropped through its end with a warning, never run in pieces. Stock ran each read()
+of up to 255 bytes as a line, so a longer line, or one that came in two
+reads, ran in pieces, its tail a command of its own. At the end of the
+input, what's left is a line, and reading stops
+==================
+*/
+static char *CON_StdinLine( void )
+{
+	// a line as long as the command buffer runs, its \r and its \n; a
+	// longer one the buffer refuses whole, or, past buf, dropped here
+	static char		buf[MAX_CMD_LINE + 1], line[MAX_CMD_LINE + 1];
+	static int		len;
+	static qboolean	skipping, ended;
+	char			*end;
+	fd_set			fdset;
+	struct timeval	timeout;
+	ssize_t			got;
+
+	for ( ;; )
+	{
+		end = memchr( buf, '\n', len );
+		if ( end || ( ended && len ) )
+		{
+			int			n = end ? end - buf : len;
+			qboolean	skipped = skipping;
+
+			skipping = qfalse;
+			// a line holding a NUL byte, which would end it there as text:
+			// dropped whole
+			if ( !skipped && memchr( buf, '\0', n ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of standard input holding a NUL byte\n" );
+				skipped = qtrue;
+			}
+			if ( !skipped )
+			{
+				Com_Memcpy( line, buf, n );
+				line[n] = '\0';
+				if ( n && line[n - 1] == '\r' )
+					line[n - 1] = '\0';
+			}
+			len -= end ? n + 1 : n;
+			memmove( buf, buf + n + ( end ? 1 : 0 ), len );
+			if ( !skipped )
+				return line;
+			continue;
+		}
+		if ( ended )
+		{
+			stdin_active = qfalse;
+			return NULL;
+		}
+		if ( len == (int)sizeof( buf ) )
+		{
+			if ( !skipping )
+				Com_Printf( S_COLOR_YELLOW "WARNING: ignored a line of standard input longer than %d characters\n",
+					MAX_CMD_LINE - 1 );
+			skipping = qtrue;
+			len = 0;
+		}
+
+		FD_ZERO( &fdset );
+		FD_SET( STDIN_FILENO, &fdset );
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 0;
+		if ( select( STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout ) == -1 || !FD_ISSET( STDIN_FILENO, &fdset ) )
+			return NULL;
+
+		got = read( STDIN_FILENO, buf + len, sizeof( buf ) - len );
+		if ( got == 0 )
+			ended = qtrue;
+		else if ( got < 0 )
+			return NULL;
+		else
+			len += (int)got;
+	}
+}
+
+/*
+==================
 CON_Input
 ==================
 */
@@ -500,29 +584,7 @@ char *CON_Input( void )
 	}
 	else if (stdin_active)
 	{
-		int     len;
-		fd_set  fdset;
-		struct timeval timeout;
-
-		FD_ZERO(&fdset);
-		FD_SET(STDIN_FILENO, &fdset); // stdin
-		timeout.tv_sec = 0;
-		timeout.tv_usec = 0;
-		if(select (STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout) == -1 || !FD_ISSET(STDIN_FILENO, &fdset))
-			return NULL;
-
-		len = read(STDIN_FILENO, text, sizeof(text));
-		if (len == 0)
-		{ // eof!
-			stdin_active = qfalse;
-			return NULL;
-		}
-
-		if (len < 1)
-			return NULL;
-		text[len-1] = 0;    // rip off the /n and terminate
-
-		return text;
+		return CON_StdinLine();
 	}
 	return NULL;
 }
