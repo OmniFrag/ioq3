@@ -746,6 +746,8 @@ static qboolean	sv_retryCheats;
 static qboolean	sv_retrying;		// SV_RetryMap is starting it
 static qboolean	sv_mapRetried;
 static int		sv_retryTime;
+// a map is loading: an error now ended it before it played
+static qboolean	sv_mapLoading;
 
 // how long after a map is started again, following an error, another
 // error makes the server exit instead
@@ -762,9 +764,16 @@ returns qfalse, with the reason, and the server exits EXIT_MAP_ERROR, so
 its service manager restarts it, and that manager's limits stop a server
 that fails at every start. A server with no map running or loading is
 left as it is, and a draining one quits, as it would as the map ended.
+A map that failed as it loaded goes to the extensions first
+(Hooks_MapFailed), as one keeping a rotation may play another instead,
+or say none of its maps loads, which exits at once. error is the error's
+text; *taken says an extension took it
 ================
 */
-qboolean SV_RestartAfterError( char *why, int size ) {
+qboolean SV_RestartAfterError( const char *error, qboolean *taken, char *why, int size ) {
+	qboolean	loading = sv_mapLoading;
+
+	sv_mapLoading = qfalse;
 	if ( !com_sv_running || !com_sv_running->integer || !sv_mapStarted[0] ) {
 		return qtrue;
 	}
@@ -777,6 +786,15 @@ qboolean SV_RestartAfterError( char *why, int size ) {
 			Cbuf_AddText( "quit\n" );
 		}
 		return qtrue;
+	}
+	if ( loading ) {
+		switch ( Hooks_MapFailed( sv_mapStarted, error, why, size ) ) {
+		case MAPFAILED_TAKEN:
+			*taken = qtrue;
+			return qtrue;
+		case MAPFAILED_EXIT:
+			return qfalse;
+		}
 	}
 	if ( sv_mapRetried && Sys_Milliseconds() - sv_retryTime < SV_ERROR_RETRY_MSEC ) {
 		Com_sprintf( why, size, "%s ended with an error again within %d minutes of starting again, "
@@ -975,6 +993,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 	// shut down the existing game if it is running
 	SV_ShutdownGameProgs();
 	Hooks_MapLoading( server );
+	sv_mapLoading = qtrue;
 	// what an extension latched as the map loads (a mode's game type) is
 	// this map's, as SV_Map_f's latch is
 	Cvar_Get( "g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );
@@ -1197,6 +1216,7 @@ void SV_SpawnServer( char *server, qboolean killBots ) {
 
 	// the proxies players come through, before the first frame's packets
 	SV_ParseTrustedProxies();
+	sv_mapLoading = qfalse;
 	Hooks_MapSpawned();
 
 	Com_Printf ("-----------------------------------\n");

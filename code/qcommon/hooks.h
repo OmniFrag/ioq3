@@ -199,6 +199,17 @@ typedef struct {
 	// words, to refuse it, as a server its owner stopped refuses a config's
 	// map line. Every extension's, until one refuses
 	qboolean	(*mapAllowed)( const char *map, char *why, int whySize );
+	// A dedicated server's map ended with an error as it loaded, after
+	// mapLoading and before mapSpawned: map is its name and reason the
+	// error's text. Return MAPFAILED_TAKEN, having queued the map to play
+	// instead (a map command), and the engine doesn't start the failed one
+	// again; MAPFAILED_EXIT with why, in an admin's words, when none of the
+	// extension's maps would load, and the server exits with
+	// EXIT_MAP_ERROR; or MAPFAILED_PASS for the next extension and then the
+	// engine's own way, the map started again once (SV_RestartAfterError).
+	// Called inside the error, on every extension, active or not, until one
+	// doesn't pass: what it does must not raise an error of its own
+	int			(*mapFailed)( const char *map, const char *reason, char *why, int whySize );
 
 	// The console's status command printed the server's map and players,
 	// or that it isn't running: print lines of the extension's own after
@@ -432,6 +443,12 @@ qboolean	Hooks_CheckRotation( void );
 // whether every extension lets the map command run (mapAllowed), else
 // qfalse with the first refusal's why
 qboolean	Hooks_MapAllowed( const char *map, char *why, int whySize );
+// what an extension does with a map that failed as it loaded (mapFailed):
+// MAPFAILED_PASS when none takes it
+#define MAPFAILED_PASS		0
+#define MAPFAILED_TAKEN		1
+#define MAPFAILED_EXIT		2
+int		Hooks_MapFailed( const char *map, const char *reason, char *why, int whySize );
 // the status command's lines of the extensions' own, after its players,
 // on the console alone (not under a redirect)
 void	Hooks_Status( void );

@@ -718,14 +718,21 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		com_errorEntered = qfalse;
 		longjmp (abortframe, -1);
 	} else if (code == ERR_DROP) {
+		qboolean	taken = qfalse;
+
 		Com_Printf ("********************\nERROR: %s\n********************\n", com_errorMessage);
 		// a dedicated server starts its map again, or exits for its service
 		// manager to restart it; one with a quit waiting quits in the next
-		// frame
+		// frame. A map that failed as it loaded, which an extension took,
+		// isn't part of a stream of errors: the next map it plays may fail
+		// as quickly, and a rotation's bad maps can be next to each other
 		if ( com_dedicated && com_dedicated->integer && !com_quitPending &&
-			!SV_RestartAfterError( why, sizeof( why ) ) ) {
+			!SV_RestartAfterError( com_errorMessage, &taken, why, sizeof( why ) ) ) {
 			com_errorEntered = qfalse;
 			Com_ErrorExit( EXIT_MAP_ERROR, "%s", why );
+		}
+		if ( taken ) {
+			errorCount = 0;
 		}
 		VM_Forced_Unload_Start();
 		SV_Shutdown (va("Server crashed: %s",  com_errorMessage));

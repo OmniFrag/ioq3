@@ -2186,7 +2186,7 @@ void SV_Shutdown( char *finalmsg );
 void SV_FixServerInfo( char *info, int size );
 // after an ERR_DROP, a dedicated server starts its map again; qfalse, with
 // the reason, when it should exit instead
-qboolean SV_RestartAfterError( char *why, int size );
+qboolean SV_RestartAfterError( const char *error, qboolean *taken, char *why, int size );
 void SV_Frame( int msec );
 void SV_PacketEvent( netadr_t from, msg_t *msg );
 // a packet to a dedicated server with no map: a connect to one held

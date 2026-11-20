@@ -307,11 +307,11 @@ qboolean Hooks_WriteServerSettings( void ) {
 
 /*
 ===============
-Hooks_StartDefault, Hooks_StartSummary, Hooks_CheckRotation
+Hooks_StartDefault, Hooks_StartSummary, Hooks_MapFailed, Hooks_CheckRotation
 
 A dedicated server's maps' hooks, on every extension, active or not, as
-they run under --check: the first to start a map or say the rotation ends
-the calls
+they run under --check: the first to start a map, take a failed one or
+say the rotation ends the calls
 ===============
 */
 qboolean Hooks_StartDefault( void ) {
@@ -353,6 +353,21 @@ qboolean Hooks_MapAllowed( const char *map, char *why, int whySize ) {
 		}
 	}
 	return allowed;
+}
+
+int Hooks_MapFailed( const char *map, const char *reason, char *why, int whySize ) {
+	int	i, taken;
+
+	// not counted as running, as Hooks_StartDefault isn't: the map it
+	// queues loads the engine's way
+	why[0] = '\0';
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->mapFailed &&
+			( taken = engineExtensions[i]->mapFailed( map, reason, why, whySize ) ) != MAPFAILED_PASS ) {
+			return taken;
+		}
+	}
+	return MAPFAILED_PASS;
 }
 
 qboolean Hooks_CheckRotation( void ) {
