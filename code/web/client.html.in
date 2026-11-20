@@ -399,6 +399,16 @@ if (FRONT) {
             tellFront(frontListeners.ask, 'open');
             return true;
         },
+        // the player's own files chosen in the front's own press, within
+        // the player's gesture: the system's chooser opens, and the game
+        // starts as start() does; false where it can't run, or once the
+        // files' question is past
+        chooseFiles: () => {
+            if (!webgl || !frontChooser || frontChosen.done) return false;
+            frontChooser.click();
+            startGame();
+            return true;
+        },
         download: frontDownload,
         ownFiles: frontOwnFiles,
         onStarted: (listener) => frontListeners.started.push(listener),
@@ -1294,6 +1304,30 @@ addEventListener('pagehide', (event) => {
 // player may put it off (Not now), and the front asks it again (askAgain);
 // the front hears it open, closed and done (onAsk)
 const askBox = document.getElementById('ask');
+// The front's own way to the player's files (chooseFiles): a file input the
+// page makes as it loads, so the front's own press opens the system's
+// chooser in the player's gesture, which a question opened later, once the
+// engine is in, can't. The files chosen are handles, nothing of them read:
+// held for the files' question (bring), or given to it when it's open
+// already, and dropped once the question is past or the game stops
+const frontChosen = { files: null, to: null, done: false };
+const dropChosen = () => Object.assign(frontChosen, { files: null, to: null, done: true });
+const frontChooser = FRONT ? Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 }) : null;
+if (frontChooser) {
+    // out of sight, not display: none, which some browsers' click() won't open
+    frontChooser.setAttribute('aria-hidden', 'true');
+    Object.assign(frontChooser.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none', left: '0', top: '0' });
+    document.body.appendChild(frontChooser);
+    frontChooser.addEventListener('change', () => {
+        const files = [...frontChooser.files];
+        // so the same files can be chosen again, and the input holds none
+        frontChooser.value = '';
+        if (!files.length || frontChosen.done) return;
+        if (frontChosen.to) frontChosen.to(files);
+        // a second choice before the question adds to the first
+        else frontChosen.files = [...(frontChosen.files ?? []), ...files];
+    });
+}
 const ask = (build) => new Promise((resolve) => {
     const box = document.createElement('div');
     askBox.replaceChildren(box);
@@ -1745,6 +1779,22 @@ const bring = async (own) => {
         if (storing.length) keep(storing);
     };
     const missing = () => own.filter((file) => !have.has(file));
+    // files the player chose in the front's own press (chooseFiles), held
+    // till now: checked as the question's first rounds, which then opens
+    // only for what they didn't fill; one chosen as they're checked is
+    // checked next, and one that fails, unexpectedly, leaves the question
+    let frontRound = false;
+    while (frontChosen.files && missing().length) {
+        const chosen = frontChosen.files;
+        frontChosen.files = null;
+        frontRound = true;
+        try {
+            take(await paks.mapLimited(chosen, 4, (file) => checked(file, file.name)));
+        } catch (error) {
+            console.error(`Couldn't check the chosen files: ${error}`);
+        }
+    }
+    if (frontRound && !missing().length) tellFront(frontListeners.ask, 'done');
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
         paragraph(box, `This server's game data comes from your own copy of the game: from its CD, or the ${folders} folder where it's installed. Choose the files, or that folder.`);
@@ -1774,24 +1824,40 @@ const bring = async (own) => {
                 const chosenFiles = [...input.files];
                 // so the same files can be chosen again
                 input.value = '';
-                // the folder a chosen file is in, when a folder was chosen
-                const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
-                rounds = rounds.then(async () => {
-                    if (!missing().length) return;
-                    // four at a time: each check reads only a pak's end and
-                    // directory, so a few in flight keep the disk busy, and
-                    // a whole install's folder never opens hundreds at once
-                    take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))));
-                    if (missing().length) show();
-                    else done();
-                // a round that fails, unexpectedly, leaves the next to run
-                }).catch((error) => console.error(`Couldn't check the chosen files: ${error}`));
+                round(chosenFiles);
             });
         };
+        // the folder a chosen file is in, when a folder was chosen
+        const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
+        const round = (chosenFiles, fromFront = false) => {
+            rounds = rounds.then(async () => {
+                if (!missing().length) return;
+                // four at a time: each check reads only a pak's end and
+                // directory, so a few in flight keep the disk busy, and
+                // a whole install's folder never opens hundreds at once
+                take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))));
+                if (missing().length) {
+                    show();
+                    // the front's choice, with the question put off (Not
+                    // now): it opens again for what's still needed
+                    if (fromFront && askBox.hidden) {
+                        askBox.hidden = false;
+                        tellFront(frontListeners.ask, 'open');
+                    }
+                } else {
+                    done();
+                }
+            // a round that fails, unexpectedly, leaves the next to run
+            }).catch((error) => console.error(`Couldn't check the chosen files: ${error}`));
+        };
+        // a choice in the front's own press while the question is open: one of its rounds
+        frontChosen.to = (files) => round(files, true);
         chooser('Choose files', false);
         chooser('Choose a folder', true);
         show();
     });
+    // the question past: nothing more taken from the front's chooser, and nothing it chose held
+    dropChosen();
     // to the isolated form once every pak is stored; a pak that wasn't, for
     // want of room or as another tab stored it, keeps the page here, which
     // reads them into memory. The page moved to asks the browser to keep
@@ -1823,6 +1889,8 @@ const downloadGame = async (FS) => {
     // the player's own files read as the rest download: the stored ones
     // through the pak reader where it runs, the rest into memory
     const brought = own.length ? await bring(own) : [];
+    // no files of the player's asked for: nothing the front's chooser chose is held
+    if (!own.length) dropChosen();
     const stored = brought.filter((file) => file.stored);
     const reading = (async () => {
         if (!stored.length) {
@@ -1976,7 +2044,10 @@ ioquake3({
     saveFile,
     configWritten,
     // the engine aborted: a front is told, as of an error's exit
-    onAbort: () => tellFront(frontListeners.crash),
+    onAbort: () => {
+        dropChosen();
+        tellFront(frontListeners.crash);
+    },
     // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
     // the page has asked for its own join, 0 while it holds it
     left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
@@ -2027,6 +2098,7 @@ ioquake3({
         setPlaying(false);
         // an error's exit keeps its words on show, and tells a front
         if (status) {
+            dropChosen();
             tellFront(frontListeners.crash);
             return;
         }
