@@ -2032,7 +2032,11 @@ if (isolation.form && startOwn.length) {
 const ioquake3 = (await engine).default;
 generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
     ...(fs_basegame ? ['+set', 'fs_basegame', `"${fs_basegame}"`] : []), ...(fs_game ? ['+set', 'fs_game', `"${fs_game}"`] : []));
-if (queryArgs && startConfig.consoleArgs === true) generatedArguments.push(...queryArgs.split(/\s+/).filter(Boolean));
+// split at spaces outside quotes, each quoted part kept whole with its
+// quotes, which the engine runs as given (Sys_ArgumentNeedsQuotes). Split
+// inside them too, +bind F7 "a; b; c" reached it as "a; and b; and c", and
+// it quoted the b; for its ;, which cut the bind short
+if (queryArgs && startConfig.consoleArgs === true) generatedArguments.push(...queryArgs.match(/(?:[^\s"]+|"[^"]*"?)+/g) ?? []);
 else if (queryArgs) console.warn("This page's link carried console commands (args), which this page doesn't take; "
     + 'they were left out.');
 ioquake3({
