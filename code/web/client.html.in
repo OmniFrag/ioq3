@@ -131,6 +131,28 @@ const fail = (text) => {
     statusBox.classList.add('error');
     throw new Error(text);
 };
+// A pak the player chose, read where they keep it, changed on their disk
+// since (the browsers refuse such a File: Chromium's NotReadableError,
+// WebKit's NotFoundError): the game stops, as its reads can't go on, and the
+// page says which pak and asks again, never a crash
+const CHANGED_READS = new Set(['NotReadableError', 'NotFoundError']);
+let stoppedFor = null;
+const stopChanged = (src) => {
+    if (stoppedFor) return new Promise(() => {});
+    stoppedFor = src;
+    console.error(`Own files: ${src} changed on the player's disk after it was chosen, so the game stopped`);
+    // the stopped match neither asks before the reload nor holds the pointer
+    removeEventListener('beforeunload', confirmLeave);
+    if (document.pointerLockElement) document.exitPointerLock();
+    showStatus();
+    // nothing to put off: the game can't go on without it
+    ask((box) => {
+        paragraph(box, `${fileName(src)} changed on your computer after you chose it, so the game stopped. Choose it again to keep playing.`);
+        const again = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Choose again' }));
+        again.addEventListener('click', () => location.reload());
+    }, { later: false });
+    return new Promise(() => {});
+};
 const failDownload = (name, response) =>
     fail(`Couldn't download ${name}: ${response ? `the server answered ${response.status}` : 'the connection failed'}.`);
 
@@ -354,7 +376,11 @@ const frontOwnFiles = async () => {
         for (const key of await ownRequest(db, 'readonly', (records) => records.getAllKeys()) ?? []) kept.add(key);
         db?.close();
     }
-    return { needed: own.some((file) => !kept.has(String(file.src).toLowerCase())) };
+    // and the kept folders: allow, one waits on the player's click
+    const folders = await keptFolderFacts();
+    for (const name of folders.names) kept.add(name);
+    const needed = own.some((file) => !kept.has(String(file.src).toLowerCase()));
+    return { needed, allow: needed && folders.waiting };
 };
 // the front started the game for the player's Play (start)
 let frontPlays = false;
@@ -407,8 +433,10 @@ if (FRONT) {
         // starts as start() does; false where it can't run, or once the
         // files' question is past
         chooseFiles: () => {
-            if (!webgl || !frontChooser || frontChosen.done) return false;
-            frontChooser.click();
+            if (!webgl || frontChosen.done || !(frontChooser || canKeepFolders)) return false;
+            frontChosen.opened = true;
+            if (canKeepFolders) frontChosen.pending = chooseFolder();
+            else frontChooser.click();
             startGame();
             return true;
         },
@@ -1397,9 +1425,58 @@ const askBox = document.getElementById('ask');
 // engine is in, can't. The files chosen are handles, nothing of them read:
 // held for the files' question (bring), or given to it when it's open
 // already, and dropped once the question is past or the game stops
-const frontChosen = { files: null, to: null, done: false };
-const dropChosen = () => Object.assign(frontChosen, { files: null, to: null, done: true });
-const frontChooser = FRONT ? Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 }) : null;
+// whether the browser keeps a folder the player chose (showDirectoryPicker,
+// Chromium), whose files the page then reads where they are on later visits
+// too (FOLDERS_DATABASE)
+const canKeepFolders = typeof showDirectoryPicker == 'function' && typeof indexedDB != 'undefined';
+// whether the pak reader's worker can read a File the player chose while
+// the page waits on it: WebKit's (Safari, and every browser on iOS) reads a
+// File's bytes through the page's own thread, which then spins waiting for
+// them, so none comes, synchronous or not; there a chosen File is read into
+// memory, and the copy the question offers is what spares that next time
+const readsChosenInPlace = !/AppleWebKit\//.test(navigator.userAgent) || /Chrome\/|Chromium\//.test(navigator.userAgent);
+// held: each choice before the question, { files, folder }; opened: the
+// front's press opened a chooser this visit
+const frontChosen = { held: [], to: null, pending: null, opened: false, done: false };
+const dropChosen = () => Object.assign(frontChosen, { held: [], to: null, done: true });
+// files the front's press chose, from a kept folder under its key: to the
+// question if it's open, or else held for it
+const frontGive = (files, folder = '') => {
+    if (!files.length || frontChosen.done) return;
+    if (frontChosen.to) frontChosen.to(files, folder);
+    // a second choice before the question is held beside the first, each
+    // with its own folder
+    else frontChosen.held.push({ files, folder });
+};
+// Where the browser keeps a folder: the front's press reads a kept one again
+// with the player's click, when one waits on it, or else opens the browser's
+// folder chooser, and keeps what's chosen. In the press itself, as the
+// browser asks for both only in the player's gesture.
+const chooseFolder = async () => {
+    try {
+        const waiting = [];
+        for (const kept of await keptFolders()) if (await folderState(kept) === 'prompt') waiting.push(kept);
+        if (waiting.length) {
+            for (const kept of waiting)
+                if (await kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied') === 'granted')
+                    frontGive(await folderFiles(kept), kept.key);
+            return;
+        }
+        const handle = await showDirectoryPicker({ id: 'game', mode: 'read' });
+        const { files, folder } = await takeFolder(handle);
+        frontGive(files, folder);
+    } catch {
+        // the player closed the chooser: the question asks when it opens
+    }
+};
+const frontChooser = FRONT && !canKeepFolders
+    ? Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 }) : null;
+// a folder, the game's, where the browser chooses one; files on a phone,
+// whose chooser has none
+if (frontChooser && !iOS && 'webkitdirectory' in frontChooser) {
+    frontChooser.webkitdirectory = true;
+    frontChooser.removeAttribute('accept');
+}
 if (frontChooser) {
     // out of sight, not display: none, which some browsers' click() won't open
     frontChooser.setAttribute('aria-hidden', 'true');
@@ -1409,10 +1486,7 @@ if (frontChooser) {
         const files = [...frontChooser.files];
         // so the same files can be chosen again, and the input holds none
         frontChooser.value = '';
-        if (!files.length || frontChosen.done) return;
-        if (frontChosen.to) frontChosen.to(files);
-        // a second choice before the question adds to the first
-        else frontChosen.files = [...(frontChosen.files ?? []), ...files];
+        frontGive(files);
     });
 }
 const ask = (build, { later = true } = {}) => new Promise((resolve) => {
@@ -1493,10 +1567,10 @@ const ownDatabase = () => new Promise((resolve) => {
         resolve(null);
     }
 });
-const ownRequest = (db, mode, use) => new Promise((resolve) => {
+const ownRequest = (db, mode, use, store = 'files') => new Promise((resolve) => {
     if (!db) return resolve(undefined);
     try {
-        const request = use(db.transaction('files', mode).objectStore('files'));
+        const request = use(db.transaction(store, mode).objectStore(store));
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => resolve(undefined);
     } catch {
@@ -1592,6 +1666,115 @@ const ownAll = (db) => new Promise((resolve) => {
     }
 });
 const fileName = (src) => src.match(/[^/]+$/)[0];
+
+// A folder the player chose, read where it is and kept for the next visit
+// as its handle, where the browser can (showDirectoryPicker, Chromium): on a
+// later visit the browser asks again with one click, or, where the player
+// let it on every visit, not at all. Kept in a database of its own, apart
+// from OWN_DATABASE's copies, which the page removes once they're in OPFS.
+// Elsewhere the player chooses a folder or files each visit, and the page
+// reads them where they are all the same, for that visit.
+const FOLDERS_DATABASE = `${CLIENT_NAME}-own-folders`;
+const foldersDatabase = () => new Promise((resolve) => {
+    try {
+        const request = indexedDB.open(FOLDERS_DATABASE, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('folders');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+    } catch {
+        resolve(null);
+    }
+});
+// the folders database's every record, read in one transaction
+const allFolders = async (db) => await ownRequest(db, 'readonly', (records) => records.getAll(), 'folders') ?? [];
+// every kept folder, as { key, handle, stored, lastUsed }
+const keptFolders = async () => {
+    if (!canKeepFolders) return [];
+    const db = await foldersDatabase();
+    const all = await allFolders(db);
+    db?.close();
+    return all.filter((kept) => kept?.handle?.kind === 'directory');
+};
+// a chosen folder kept, or the one already kept that's the same folder
+// brought up to date; its key
+const keepFolder = async (handle) => {
+    const db = await foldersDatabase();
+    if (!db) return null;
+    const now = Date.now();
+    const all = await allFolders(db);
+    let same = null;
+    for (const kept of all) if (!same && await kept.handle?.isSameEntry?.(handle).catch(() => false)) same = kept;
+    const kept = same ? { ...same, lastUsed: now } : { key: `${now}-${handle.name}`, handle, stored: now, lastUsed: now };
+    const put = await new Promise((resolve) => {
+        try {
+            const transaction = db.transaction('folders', 'readwrite');
+            transaction.objectStore('folders').put(kept, kept.key);
+            transaction.oncomplete = () => resolve('');
+            transaction.onerror = () => resolve(String(transaction.error));
+        } catch (error) {
+            resolve(`${error?.name}: ${error?.message}`);
+        }
+    });
+    db.close();
+    if (put) console.warn(`Own files: couldn't keep the folder ${handle.name}: ${put}`);
+    return put ? null : kept.key;
+};
+// The paks in a folder the player chose, as a chosen folder's files are,
+// each with the folder it's in, which says its game directory (folderOf in
+// bring): in the folder itself and up to two folders down, as an install's
+// baseq3 under the folder chosen, never more than MAX_FOLDER_FILES
+const MAX_FOLDER_FILES = 4096;
+const folderOfFile = new WeakMap();
+// the browser's word on reading a kept folder: 'granted', 'prompt' (one
+// click lets it again) or 'denied'
+const folderState = (kept) => kept.handle.queryPermission({ mode: 'read' }).catch(() => 'denied');
+// a kept folder's paks, walked once a visit (pakFilesIn) whoever asks first:
+// the start-up move, the front's check, the question
+const walked = new Map();
+const folderFiles = (kept) => {
+    // a walk that failed, as before the browser let it, is walked again when asked
+    if (!walked.has(kept.key)) walked.set(kept.key, pakFilesIn(kept.handle).catch(() => {
+        walked.delete(kept.key);
+        return [];
+    }));
+    return walked.get(kept.key);
+};
+// The paks of the kept folders the browser lets the page read now, as
+// <folder>/<name>, lowercased, as the config names its own files; and
+// whether one waits on the player's click to be read again
+const keptFolderFacts = async () => {
+    const names = new Set();
+    let waiting = false;
+    for (const kept of await keptFolders()) {
+        const state = await folderState(kept);
+        waiting ||= state === 'prompt';
+        if (state !== 'granted') continue;
+        for (const file of await folderFiles(kept)) names.add(`${folderOfFile.get(file)}/${file.name.toLowerCase()}`);
+    }
+    return { names, waiting };
+};
+const pakFilesIn = async (dir, depth = 0, out = []) => {
+    for await (const [name, entry] of dir.entries()) {
+        if (out.length >= MAX_FOLDER_FILES) break;
+        if (entry.kind === 'file' && /\.pk3$/i.test(name)) {
+            const file = await entry.getFile().catch(() => null);
+            if (file) {
+                folderOfFile.set(file, dir.name.toLowerCase());
+                out.push(file);
+            }
+        } else if (entry.kind === 'directory' && depth < 2) await pakFilesIn(entry, depth + 1, out);
+    }
+    return out;
+};
+// A folder the chooser gave: its paks, and its key once kept, as it is only
+// when it holds a pak, so a wrong folder chosen isn't asked about again on
+// every later visit
+const takeFolder = async (handle) => {
+    const files = await pakFilesIn(handle).catch(() => []);
+    const folder = files.length ? await keepFolder(handle) ?? '' : '';
+    if (folder) persistOnInput();
+    return { files, folder };
+};
 // the game directories this visit plays, and the files it asks the player
 // for in them
 const gamedirs = () => [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir);
@@ -1671,7 +1854,7 @@ const moveIsolated = async (form, how) => {
         isolation = { why: "it can't mark its move" };
         return;
     }
-    console.log(`Own files: to the page's isolated form at ${form.pathname}, as the paks are stored`);
+    console.log(`Own files: to the page's isolated form at ${form.pathname}, ${how === 'asking' ? "to read what's chosen there where it is" : 'as the paks are stored'}`);
     // a front's Play goes on there, as the play link's does; a front is
     // told the page is moving, so a Play pressed now waits for the new page
     const to = new URL(form);
@@ -1703,12 +1886,23 @@ const bring = async (own) => {
     // says: an entry's, its file's verdict and name; a chosen file's that
     // is none of them, the same
     const have = new Map(), said = new Map(), others = [];
-    // where OPFS has each it has, which the pak reader reads from
-    const storedAt = new Map();
+    // where OPFS has each it has, which the pak reader reads from; and each
+    // read where the player keeps it, with its kept folder's key, '' for
+    // files or a folder chosen for this visit alone
+    const storedAt = new Map(), inPlace = new Map();
+    // what the player chose a copy of this visit, which follows the page
+    // to its isolated form once stored, though this visit reads it in place
+    const chosenCopies = new Set();
+    // whether the player chose to keep a copy in the browser of what they
+    // choose (the question's box), as the page did of everything before
+    let copyChosen = false;
     // a chosen file, or a kept one, checked: { name, folder, blob }, and a
     // pak's checksum or damage
     const checked = async (blob, name, folder) =>
         ({ name, folder, blob, ...(/\.pk3$/i.test(name) ? await paks.checkPak(blob) : {}) });
+    // the folder a chosen file is in, when a folder was chosen: one read
+    // through its handle (pakFilesIn), or one a file input gave
+    const folderOf = (chosen) => folderOfFile.get(chosen) ?? chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
     const fills = (verdict) => verdict === 'good' || verdict === 'unchecked';
     // a file's verdict, in a console line and on its entry's row, or a row
     // of its own
@@ -1851,40 +2045,96 @@ const bring = async (own) => {
             console.log("Own files: IndexedDB's database removed");
         });
     }
-    // a round's chosen files, kept under the names they fill
-    const take = (files) => {
+    // Copies of what the player chose, once they chose to keep one: in OPFS,
+    // or without it in IndexedDB
+    const copy = (taken) => {
         const storing = [];
+        for (const { entry, blob, checksum } of taken) {
+            if (chosenCopies.has(entry)) continue;
+            chosenCopies.add(entry);
+            if (store.call) storing.push({ entry, blob, checksum });
+            else ownRequest(db, 'readwrite', (records) => records.put(blob, entry.src.toLowerCase()));
+        }
+        if (storing.length) keep(storing);
+    };
+    // what's taken this visit, for a copy chosen after it
+    const takenNow = [];
+    // A round's chosen files, under the names they fill: read where they
+    // are, from the folder kept under folder ('' for none), and copied when
+    // the player chose a copy; how says where they came from
+    const take = (files, folder = '', how = 'Chose') => {
+        const taken = [];
         paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
             const { blob, checksum } = files[i];
             if (fills(verdict)) {
                 have.set(entry, blob);
-                if (store.call) storing.push({ entry, blob, checksum });
-                else ownRequest(db, 'readwrite', (records) => records.put(blob, entry.src.toLowerCase()));
+                inPlace.set(entry, folder);
+                taken.push({ entry, blob, checksum });
             }
-            say('Chose', files[i], verdict, entry);
+            say(how, files[i], verdict, entry);
         });
-        if (storing.length) keep(storing);
+        // a kept folder's paks, listed in the index as read in place, in one write
+        if (folder && store.call && taken.length)
+            store.call('note', { folder, files: taken.map(({ entry, blob, checksum }) => ({ src: entry.src.toLowerCase(), name: blob.name,
+                checksum, size: blob.size, mtime: blob.lastModified })) }).catch(() => {});
+        takenNow.push(...taken);
+        if (copyChosen) copy(taken);
     };
     const missing = () => own.filter((file) => !have.has(file));
+    // Kept folders, read where they are once the browser lets the page: at
+    // once on a visit after the player let it every visit, or after a click
+    // in the question below (waiting)
+    const fromFolder = async (kept, how) => {
+        const files = await folderFiles(kept);
+        take(await paks.mapLimited(files, 4, (file) => checked(file, file.name, folderOfFile.get(file))), kept.key, how);
+    };
+    const waiting = [];
+    for (const kept of missing().length ? await keptFolders() : []) {
+        if (!missing().length) break;
+        const state = await folderState(kept);
+        if (state === 'granted') await fromFolder(kept, 'Kept');
+        else if (state === 'prompt') waiting.push(kept);
+    }
     // files the player chose in the front's own press (chooseFiles), held
     // till now: checked as the question's first rounds, which then opens
     // only for what they didn't fill; one chosen as they're checked is
     // checked next, and one that fails, unexpectedly, leaves the question
     let frontRound = false;
-    while (frontChosen.files && missing().length) {
-        const chosen = frontChosen.files;
-        frontChosen.files = null;
+    await frontChosen.pending;
+    while (frontChosen.held.length && missing().length) {
+        const { files: chosen, folder } = frontChosen.held.shift();
         frontRound = true;
         try {
-            take(await paks.mapLimited(chosen, 4, (file) => checked(file, file.name)));
+            take(await paks.mapLimited(chosen, 4, (file) => checked(file, file.name, folderOf(file))), folder);
         } catch (error) {
             console.error(`Couldn't check the chosen files: ${error}`);
         }
     }
     if (frontRound && !missing().length) tellFront(frontListeners.ask, 'done');
+    // a kept folder the front's press let meanwhile (chooseFolder) gave its
+    // files above, and isn't asked about again
+    for (const kept of waiting.splice(0)) if (await folderState(kept) === 'prompt') waiting.push(kept);
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
-        paragraph(box, `This server's game data comes from your own copy of the game: from its CD, or the ${folders} folder where it's installed. Choose the files, or that folder.`);
+        if (waiting.length) {
+            paragraph(box, 'Allow the game to read your game folder again.');
+            const allow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Allow' }));
+            allow.addEventListener('click', () => {
+                for (const kept of waiting.splice(0)) {
+                    const asked = kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied');
+                    rounds = rounds.then(async () => {
+                        if ((await asked) === 'granted' && missing().length) await fromFolder(kept, 'Kept');
+                        sizeCopy();
+                        if (missing().length) show();
+                        else done();
+                    }).catch((error) => console.error(`Couldn't read the kept folder: ${error}`));
+                }
+                allow.hidden = true;
+            });
+        }
+        paragraph(box, canKeepFolders
+            ? `Choose the folder your game is installed in, or its ${folders} folder. The game reads your files from there; nothing is copied.`
+            : `Choose the folder your game is installed in, or its ${folders} folder, or its files.`);
         const left = paragraph(box, '');
         const rows = box.appendChild(Object.assign(document.createElement('ul'), { hidden: true }));
         const row = ({ verdict, name }, pak) => {
@@ -1914,15 +2164,14 @@ const bring = async (own) => {
                 round(chosenFiles);
             });
         };
-        // the folder a chosen file is in, when a folder was chosen
-        const folderOf = (chosen) => chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
-        const round = (chosenFiles, fromFront = false) => {
+        const round = (chosenFiles, fromFront = false, folder = '') => {
             rounds = rounds.then(async () => {
                 if (!missing().length) return;
                 // four at a time: each check reads only a pak's end and
                 // directory, so a few in flight keep the disk busy, and
                 // a whole install's folder never opens hundreds at once
-                take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))));
+                take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))), folder);
+                sizeCopy();
                 if (missing().length) {
                     show();
                     // the front's choice, with the question put off (Not
@@ -1938,9 +2187,43 @@ const bring = async (own) => {
             }).catch((error) => console.error(`Couldn't check the chosen files: ${error}`));
         };
         // a choice in the front's own press while the question is open: one of its rounds
-        frontChosen.to = (files) => round(files, true);
+        frontChosen.to = (files, folder) => round(files, true, folder);
+        // where the browser keeps a folder, it's chosen through its own
+        // chooser and kept; elsewhere through a file input, for this visit
+        if (canKeepFolders) {
+            const button = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Choose folder' }));
+            button.addEventListener('click', async () => {
+                let handle;
+                try {
+                    handle = await showDirectoryPicker({ id: 'game', mode: 'read' });
+                } catch {
+                    return; // the player closed the chooser
+                }
+                const { files, folder } = await takeFolder(handle);
+                round(files, false, folder);
+            });
+        } else {
+            chooser('Choose folder', true);
+        }
         chooser('Choose files', false);
-        chooser('Choose a folder', true);
+        // a copy in the browser, offered, never made unasked: of what's
+        // chosen this visit and read where it is, a kept folder's too, so
+        // the next visit needn't ask; its size once something's chosen
+        let sizeCopy = () => {};
+        if (store.call || db) {
+            const label = box.appendChild(document.createElement('label'));
+            const tick = label.appendChild(Object.assign(document.createElement('input'), { type: 'checkbox', id: 'ask-copy' }));
+            const words = label.appendChild(document.createElement('span'));
+            sizeCopy = () => {
+                const bytes = takenNow.filter(({ entry }) => !chosenCopies.has(entry)).reduce((sum, { blob }) => sum + blob.size, 0);
+                words.textContent = ` Keep a copy in this browser${bytes ? ` (${megabytes(bytes)} MB)` : ''} so you're not asked next time`;
+            };
+            sizeCopy();
+            tick.addEventListener('change', () => {
+                copyChosen = tick.checked;
+                if (copyChosen) copy(takenNow);
+            });
+        }
         show();
     });
     // the question past: nothing more taken from the front's chooser, and nothing it chose held
@@ -1949,14 +2232,25 @@ const bring = async (own) => {
     // want of room or as another tab stored it, keeps the page here, which
     // reads them into memory. The page moved to asks the browser to keep
     // them, as this one would have.
-    if (toIsolate) {
+    // A pak read where it is follows the move only from a kept folder, which
+    // the isolated form reads again; one chosen for this visit alone keeps
+    // the page here, which reads them into memory
+    const follows = [...have.keys()].every((entry) => !inPlace.has(entry) || inPlace.get(entry) || chosenCopies.has(entry));
+    if (toIsolate && follows) {
         showStatus('Reading your files…', undefined, false, { kind: 'reading' });
         await copies;
         if (storedAll) await moveIsolated(isolation.form, toCopy ? 'stored' : 'kept');
+    } else if (toIsolate) {
+        console.log("Own files: the page stays as it is, as files chosen for this visit alone can't follow it to its isolated form");
     }
     if (isolation.why && store.call) console.log(`Own files: the page stays as it is, as ${isolation.why}`);
     if (moved === 'stored') persistOnInput();
-    return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file) }));
+    // the kept copies this visit read, as last used (a kept folder's were, as noted)
+    const used = own.filter((file) => storedAt.has(file)).map((file) => storedAt.get(file));
+    if (used.length && store.call) store.call('used', { paths: used }).catch(() => {});
+    const fromKept = [...inPlace.values()].filter(Boolean).length;
+    console.log(`Own files: ${fromKept} read in place from a kept folder, ${inPlace.size - fromKept} chosen for this visit`);
+    return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file), inPlace: inPlace.has(file) }));
 };
 
 // Download the files the config lists for the game, all at once, showing
@@ -2001,14 +2295,19 @@ const downloadGame = async (FS) => {
     const brought = own.length ? await bring(own) : [];
     // no files of the player's asked for: nothing the front's chooser chose is held
     if (!own.length) dropChosen();
-    const stored = brought.filter((file) => file.stored);
+    // stored in OPFS, or read where the player keeps them, as their Files
+    const readable = (file) => file.stored || (file.inPlace && readsChosenInPlace);
+    const stored = brought.filter(readable).map((file) => (file.stored ? file : { ...file, file: file.blob }));
     const reading = (async () => {
         if (!stored.length) {
             if (brought.length) console.log('Pak reader: off, as none of the paks is stored yet: the paks are read into memory');
             return { on: false };
         }
         const paks = await import(`${enginePath}pak_reader.js`).catch(() => failDownload('pak_reader.js'));
-        const reader = await paks.openReader(FS, stored, `${enginePath}pak_reader_worker.js`, (why) => { askBox.dataset.reader = why; });
+        const reader = await paks.openReader(FS, stored, `${enginePath}pak_reader_worker.js`, (why, src) => {
+            askBox.dataset.reader = why;
+            if (why === 'changed') stopChanged(src);
+        });
         askBox.dataset.reader = reader.on ? 'on' : reader.other ? 'other-tab' : 'off';
         if (reader.on) {
             paksToSay = reader;
@@ -2020,7 +2319,7 @@ const downloadGame = async (FS) => {
                 removeEventListener('beforeunload', confirmLeave);
                 location.reload();
             });
-            console.log(`Pak reader: on, from OPFS through a worker (${reader.modes}): ${stored.map(({ src }) => src).join(', ')}`);
+            console.log(`Pak reader: on, through a worker (${reader.modes}): ${stored.map(({ src }) => src).join(', ')}`);
         } else {
             console.log(`Pak reader: off, as ${reader.why}: the paks are read into memory`);
         }
@@ -2046,12 +2345,17 @@ const downloadGame = async (FS) => {
                 return new Promise(() => {});
             }
         }
-        return file.blob.arrayBuffer();
+        // a pak read where the player keeps it, changed on their disk since
+        // they chose it: the game stops, saying which
+        return file.blob.arrayBuffer().catch((error) => {
+            if (file.inPlace && CHANGED_READS.has(error?.name)) return stopChanged(file.src);
+            throw error;
+        });
     };
     // the files that aren't stored at once, the stored ones once the reader
     // has said it won't read them
     const read = Promise.all(brought.map(async (file) => {
-        const { on, limit } = file.stored ? await reading : {};
+        const { on, limit } = readable(file) ? await reading : {};
         return on ? null : { ...file, data: new Uint8Array(await inMemory(file, limit)) };
     })).then((files) => files.filter(Boolean));
     const downloading = new AbortController();
@@ -2142,6 +2446,13 @@ if (isolation.form && startOwn.length) {
     checkIsolated(isolation.form);
     // the front's check (ownFiles) may have asked the store already
     if ((await (ownStoreEarly ??= ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
+    // a kept folder the browser lets the page read now, there too
+    else if ([...(await keptFolderFacts()).names].some((name) => asked.has(name))) await moveIsolated(isolation.form, 'kept');
+    // a browser that keeps no folder: there before asking, so what the
+    // player chooses is read where it is rather than held in memory; not
+    // once the front's press opened the chooser, whose choice the move
+    // would lose
+    else if (!canKeepFolders && readsChosenInPlace && !frontChosen.opened) await moveIsolated(isolation.form, 'asking');
 }
 const ioquake3 = (await engine).default;
 generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
@@ -2165,7 +2476,9 @@ ioquake3({
     // the engine aborted: a front is told, as of an error's exit
     onAbort: () => {
         dropChosen();
-        tellFront(frontListeners.crash);
+        // a pak that changed on the player's disk stopped it, which the
+        // page says itself (stopChanged)
+        if (!stoppedFor) tellFront(frontListeners.crash);
     },
     // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
     // the page has asked for its own join, 0 while it holds it

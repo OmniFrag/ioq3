@@ -1,14 +1,17 @@
-// The worker that reads the player's stored paks from the browser's private
-// files (OPFS) for the page's pak reader (pak_reader.js), whose engine reads
-// synchronously on the page's main thread, which can't wait for an
-// asynchronous read. It reads each pak, at own/<path> as pak_store.js keeps
-// it, with a sync access handle, asked for again over about a second while
+// The worker that reads the player's paks for the page's pak reader
+// (pak_reader.js), whose engine reads synchronously on the page's main
+// thread, which can't wait for an asynchronous read. A pak stored in the
+// browser's private files (OPFS), at own/<path> as pak_store.js keeps it, is
+// read with a sync access handle, asked for again over about a second while
 // another page's worker still holds it (as an old page's can on a reload;
 // pak_store.js's access() does the same), or else with FileReaderSync on the
-// file's Blob.
+// file's Blob. A pak read where the player keeps it, given as its File, is
+// read with FileReaderSync; one changed on the player's disk since it was
+// chosen can't be read any more, or in Firefox is found changed by its end,
+// which the answer says apart (-2).
 //
 // It posts { running } as it starts. The page posts { sab, dataOffset,
-// paks: [path] } once; the worker opens them and answers { ok, files:
+// paks: [path or File] } once; the worker opens them and answers { ok, files:
 // [{ size, mode, taken }] } (taken: another page held the sync access
 // handle, still, when the worker gave up asking), or { ok: false, error },
 // and then serves reads, blocked in
@@ -18,7 +21,8 @@
 //   ctl[2]  which pak, or -1: close every handle and end, which the page
 //           asks as it goes (pagehide)
 //   ctl[3]  how many bytes
-//   ctl[4]  how many it read, or -1 for an error
+//   ctl[4]  how many it read, or -1 for an error, -2 for a File that changed
+//           on the player's disk since it was chosen
 //   at[0]   (a Float64 at byte 32) where in the pak
 //   bytes   from dataOffset: the bytes read
 
@@ -70,6 +74,44 @@ async function open(own, path) {
     return { size: file.size, mode: 'FileReaderSync', taken, read, close: () => {} };
 }
 
+// A pak read where the player keeps it: its File, read as it is on their disk.
+// Firefox reads such a File as the disk has it now, changed or not, with no
+// error, so its end (the zip's end record, which says where the directory of
+// its files is and how long) is read again at most once a second and
+// compared with the end as it was chosen: a pak rewritten since, as an update
+// rewrites it, is told as changed before the engine reads other bytes at the
+// offsets it took from the old one
+const END_BYTES = 64, END_CHECK_MS = 1000;
+class Changed extends Error {
+    constructor() {
+        super('the file changed since it was chosen');
+        this.name = 'NotReadableError';
+    }
+}
+function openFile(file) {
+    if (typeof FileReaderSync != 'function') throw new Error('no FileReaderSync');
+    const reader = new FileReaderSync();
+    const tail = () => new Uint8Array(reader.readAsArrayBuffer(file.slice(Math.max(0, file.size - END_BYTES), file.size)));
+    const end = tail();
+    let checked = performance.now();
+    const read = (where, length) => {
+        const now = performance.now();
+        if (now - checked >= END_CHECK_MS) {
+            checked = now;
+            const seen = tail();
+            if (seen.length !== end.length || seen.some((byte, i) => byte !== end[i])) throw new Changed();
+        }
+        const data = new Uint8Array(reader.readAsArrayBuffer(file.slice(where, where + length)));
+        bytes.set(data);
+        return data.length;
+    };
+    return { size: file.size, mode: 'in place', taken: false, read, close: () => {} };
+}
+
+// The reading browsers refuse a File with once it's changed on the player's
+// disk: Chromium's NotReadableError, WebKit's NotFoundError
+const CHANGED = new Set(['NotReadableError', 'NotFoundError']);
+
 // Answers each request as it comes, blocked between them, until the page
 // asks it to close
 function serve(paks) {
@@ -92,8 +134,8 @@ function serve(paks) {
         let n;
         try {
             n = paks[ctl[2]].read(at[0], ctl[3]);
-        } catch {
-            n = -1;
+        } catch (error) {
+            n = paks[ctl[2]].mode === 'in place' && CHANGED.has(error?.name) ? -2 : -1;
         }
         ctl[4] = n;
         Atomics.store(ctl, 1, seen);
@@ -105,8 +147,9 @@ onmessage = async ({ data: { sab, dataOffset, paks } }) => {
     at = new Float64Array(sab, 32, 1);
     bytes = new Uint8Array(sab, dataOffset);
     const opening = (async () => {
-        const own = await (await navigator.storage.getDirectory()).getDirectoryHandle('own');
-        return Promise.allSettled(paks.map((path) => open(own, path)));
+        const own = paks.some((pak) => typeof pak == 'string')
+            ? await (await navigator.storage.getDirectory()).getDirectoryHandle('own') : null;
+        return Promise.allSettled(paks.map(async (pak) => (typeof pak == 'string' ? open(own, pak) : openFile(pak))));
     })();
     let opened;
     try {
