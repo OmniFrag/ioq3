@@ -9,6 +9,9 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
    browsers' toolbars. SDL3 needs no border or padding on the canvas. */
 canvas { display: block; width: 100vw; height: 100dvh; border: 0; padding: 0; }
 canvas:focus { outline: none; }
+/* the system's cursor, never over a match whose game wants the pointer
+   (showPlay), over SDL's own canvas cursor */
+canvas.held { cursor: none !important; }
 /* The page's word over the game: the download's progress, or an error.
    Clicks go through it to the canvas, where SDL asks for the pointer. */
 #status, #hints, #leaving { position: fixed; pointer-events: none; font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
@@ -538,7 +541,7 @@ let browsersOwn = browserFullscreen.matches;
 const isFullscreen = () => Boolean(document.fullscreenElement) || browsersOwn;
 // the facts' bits, as sdl_input.c reads them
 const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8, FACT_ASKED = 16, FACT_ASKED_FULL = 32,
-    FACT_ANSWER_SHIFT = 6;
+    FACT_ANSWER_SHIFT = 6, FACT_KEYS = 256;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
 // an input that takes the page into fullscreen: the click the
@@ -606,6 +609,8 @@ const present = ({ fullscreen, pointer }) => {
         showPlay();
     }
 };
+// a key press that's only a modifier, on its way to a combination
+const modifierAlone = (event) => ['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'].includes(event.key);
 // The game's sound (snd_web.c): the engine decides what plays, as its base
 // backend does, and sends what changed once a frame (update), which answers
 // whether the sound runs. Each sound is an AudioBuffer here, outside the
@@ -738,7 +743,7 @@ const sound = (() => {
         // come (a frame without it, or a request refused)
         if (entersFullscreen(event) && document.fullscreenEnabled && fullscreenAnswer !== ANSWER_REFUSED) return;
         // nor a modifier pressed alone, as Alt is on the way to Alt+Enter
-        if (event.type === 'keydown' && ['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'].includes(event.key)) return;
+        if (event.type === 'keydown' && modifierAlone(event)) return;
         // a hidden page's sound is held, whatever reaches it; a browser
         // without Web Audio (Windows' WebKit) plays none
         if (document.hidden || !window.AudioContext) return;
@@ -917,6 +922,29 @@ for (const type of ['pointermove', 'mousemove'])
     addEventListener(type, (event) => {
         if (wantPointer && !locked() && (event.pointerType ?? 'mouse') === 'mouse') event.stopImmediatePropagation();
     }, { capture: true });
+// A key press takes the lock again too, as a click does, and is still the
+// game's: a lock lost with the keys kept comes back as the player plays on.
+// A held key's repeats ask as well, at most every REPEAT_ASK ms, so a key
+// held as the lock goes (the engine keeps it held, Present_Captured) brings
+// it back by itself. Not Esc, which gives the page no activation, nor a
+// modifier, or a press with Ctrl, Alt or Cmd held, which are shortcuts
+// (Alt+Enter, the browser's own), nor a key a page's script makes outside
+// an input, which has no activation (within a real input's, it does). A
+// refused request, as in Chrome's second or so after the player's own Esc,
+// is asked again at the next press; repeats stop asking after one, so a key
+// held through that Esc doesn't take the lock back once Chrome allows it.
+const REPEAT_ASK = 250;
+let repeatAsked = -Infinity, repeatsAsk = true;
+addEventListener('keydown', (event) => {
+    if (event.target !== canvas || !wantPointer || locked() || event.code === 'Escape' || modifierAlone(event)
+        || event.ctrlKey || event.altKey || event.metaKey || !(navigator.userActivation?.isActive ?? true)) return;
+    if (event.repeat) {
+        const now = performance.now();
+        if (!repeatsAsk || now - repeatAsked < REPEAT_ASK) return;
+        repeatAsked = now;
+    } else repeatsAsk = true;
+    lockPointer().then(() => { if (event.repeat && !locked()) repeatsAsk = false; });
+}, { capture: true });
 // Safari bundles a frame's mouse moves into one pointermove whose movement
 // is only the last move's, not their sum, so under the lock most of the
 // mouse's motion was lost (WebKit bug 235116). Where an event shows that,
@@ -988,7 +1016,15 @@ const hintOnce = (text) => {
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => fade(hintBox), 4000);
 };
-const showPlay = () => fade(playBox, playing && wantPointer && !locked() && !exiting ? 'Click to play' : '');
+// The system's cursor stays hidden over the match meanwhile, as under the
+// lock: a lock something else let go of, the page keeping the keys (a
+// program in the background, on Windows), showed it over a game the mouse
+// no longer turned, with nothing else changed.
+const showPlay = () => {
+    const held = playing && wantPointer;
+    canvas.classList.toggle('held', held);
+    fade(playBox, held && !locked() && !exiting ? 'Click to play' : '');
+};
 document.addEventListener('pointerlockchange', showPlay);
 
 // In the page's fullscreen, Esc and F11 are the page's where the browser has
@@ -1115,7 +1151,9 @@ const presentationFacts = () => {
         | (locked() ? FACT_LOCKED : 0)
         | (finePointer.matches ? FACT_POINTER : 0)
         | asked
-        | (fullscreenAnswer << FACT_ANSWER_SHIFT);
+        | (fullscreenAnswer << FACT_ANSWER_SHIFT)
+        // the keys' releases still come, so a key held as the lock goes stays held
+        | (document.hasFocus() && !document.hidden ? FACT_KEYS : 0);
     asked = 0;
     return facts;
 };

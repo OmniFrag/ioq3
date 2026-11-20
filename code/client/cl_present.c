@@ -68,6 +68,7 @@ static struct {
 	qboolean		reasonFor;		// the want it's about
 	qboolean		recreated;		// the last resort was taken for this want
 	int				focusTime;		// since when the window has had the focus, or 0
+	qboolean		keptKeys;		// held keys kept as the pointer went, their releases to come
 } present;
 
 static const char *presentReasons[] = {
@@ -339,16 +340,35 @@ Present_Captured
 Whether the platform holds the pointer, as it reports after this frame's
 change. A release it kept while it held it, a button's, or Esc's when a
 browser frees the lock, never comes: losing it lets go of every held key.
+But where the keys' releases still come with the pointer gone (keysKept,
+the web's page with its focus, shown), only the mouse's buttons are let
+go, so a key held as the lock goes keeps the player running. The rest go
+once they stop coming, as a lost focus or a hidden page soon after does.
 ===============
 */
-void Present_Captured( qboolean captured )
+void Present_Captured( qboolean captured, qboolean keysKept )
 {
+	if( present.keptKeys && !keysKept )
+	{
+		Key_ClearStates( );
+		present.keptKeys = qfalse;
+	}
+
 	if( in_captured->integer == captured )
 	{
 		return;
 	}
 
-	if( !captured )
+	if( captured )
+	{
+		present.keptKeys = qfalse;
+	}
+	else if( keysKept )
+	{
+		Key_ClearMouseButtons( );
+		present.keptKeys = qtrue;
+	}
+	else
 	{
 		Key_ClearStates( );
 	}

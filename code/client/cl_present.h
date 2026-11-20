@@ -72,6 +72,9 @@ typedef struct {
 	// page takes at the player's click, and that click is the entry
 	qboolean		captured;
 	qboolean		capturesAtClick;
+	// the keys' releases still come while the pointer isn't held (the web's
+	// page while it has the focus and shows)
+	qboolean		keysKept;
 } presentFacts_t;
 
 // what the game does with the pointer
@@ -86,13 +89,15 @@ void		Present_Frame( const presentFacts_t *facts, int time );
 void		Present_ToggleFullscreen( cvarSource_t source );
 const char	*Present_Reason( void );
 presentPointer_t	Present_Pointer( const presentFacts_t *facts );
-void		Present_Captured( qboolean captured );
+void		Present_Captured( qboolean captured, qboolean keysKept );
 
 // the platform's (sdl_input.c), and a test's stubs: ask for fullscreen or
 // to leave it, qfalse if the window can't change in place; and a new
-// window. And the client's keys' (cl_keys.c): release every one held
+// window. And the client's keys' (cl_keys.c): release every one held, or
+// only the mouse's buttons
 qboolean	IN_RequestFullscreen( qboolean fullscreen );
 void		IN_RecreateWindow( void );
 void		Key_ClearStates( void );
+void		Key_ClearMouseButtons( void );
 
 #endif

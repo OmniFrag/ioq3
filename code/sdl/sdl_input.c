@@ -1696,6 +1696,8 @@ void IN_ProcessEvent( const SDL_Event *e )
 #define PAGE_ASKED			16	// the player's Alt+Enter, asked for by the page since the last frame
 #define PAGE_ASKED_FULL		32	// and what it asked for
 #define PAGE_ANSWER_SHIFT	6	// 0 none, 1 waiting for a click, 2 refused, 3 the browser's own
+#define PAGE_ANSWER_MASK	3
+#define PAGE_KEYS			256	// the page has the focus and shows, so the keys' releases come
 
 // this frame's, read once
 static int pageFacts;
@@ -1763,7 +1765,7 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 		int answer;
 
 		pageFacts = MAIN_THREAD_EM_ASM_INT({ return Module.presentationFacts?.() ?? 2; });
-		answer = pageFacts >> PAGE_ANSWER_SHIFT;
+		answer = ( pageFacts >> PAGE_ANSWER_SHIFT ) & PAGE_ANSWER_MASK;
 		facts->fullscreen = ( pageFacts & PAGE_FULLSCREEN ) != 0;
 		facts->available = ( pageFacts & PAGE_AVAILABLE ) != 0;
 		facts->standing = qtrue;
@@ -1773,6 +1775,7 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 		facts->holdable = ( pageFacts & PAGE_POINTER ) != 0;
 		facts->captured = IN_Captured( );
 		facts->capturesAtClick = qtrue;
+		facts->keysKept = ( pageFacts & PAGE_KEYS ) != 0;
 	}
 #else
 	facts->fullscreen = ( flags & SDL_WINDOW_FULLSCREEN ) != 0;
@@ -1911,7 +1914,7 @@ void IN_Frame( void )
 		// the pointer over the window
 		IN_HideSystemCursor( pointer.read && facts.cursor && cls.extCursorDrawn &&
 			( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_MOUSE_FOCUS ) );
-		Present_Captured( IN_Captured( ) );
+		Present_Captured( IN_Captured( ), facts.keysKept );
 	}
 
 	if( windowResized )

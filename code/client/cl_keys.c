@@ -1980,6 +1980,25 @@ void Key_ClearStates (void)
 	}
 }
 
+/*
+===================
+Key_ClearMouseButtons
+
+The mouse's held buttons let go, the keys left as they are
+(Present_Captured)
+===================
+*/
+void Key_ClearMouseButtons( void )
+{
+	int		i;
+
+	for ( i = K_MOUSE1; i <= K_MOUSE5; i++ ) {
+		if ( keys[i].down ) {
+			CL_KeyEvent( i, qfalse, 0 );
+		}
+	}
+}
+
 static int keyCatchers = 0;
 
 /*
