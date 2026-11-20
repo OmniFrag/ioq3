@@ -212,6 +212,14 @@ export async function openReader(FS, paks, workerURL, mark) {
         const { size } = files[index];
         FS.mkdirTree(pak.dst);
         const node = FS.createFile(pak.dst, pak.src.match(/[^/]+$/)[0], {}, true, false);
+        // the pak's own time, which the engine's pak index knows it by, so a
+        // pak it hashed on an earlier visit isn't hashed again
+        const time = pak.blob?.lastModified;
+        try {
+            if (time > 0) FS.utime(FS.getPath(node), time, time);
+        } catch (error) {
+            console.warn(`Pak reader: couldn't keep ${pak.src}'s time: ${error}`);
+        }
         // no contents: its size is the pak's (getattr, and llseek's SEEK_END),
         // which a truncate can't change
         node.contents = undefined;

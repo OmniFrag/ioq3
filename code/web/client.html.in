@@ -541,7 +541,7 @@ let browsersOwn = browserFullscreen.matches;
 const isFullscreen = () => Boolean(document.fullscreenElement) || browsersOwn;
 // the facts' bits, as sdl_input.c reads them
 const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8, FACT_ASKED = 16, FACT_ASKED_FULL = 32,
-    FACT_ANSWER_SHIFT = 6, FACT_KEYS = 256;
+    FACT_ANSWER_SHIFT = 6, FACT_KEYS = 256, FACT_RESTART = 512;
 const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
 let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
 // an input that takes the page into fullscreen: the click the
@@ -1145,6 +1145,47 @@ browserFullscreen.addEventListener('change', () => {
 // request only once
 // a mouse or the like, which the lock is for; a touch screen has none
 const finePointer = matchMedia('(any-pointer: fine)');
+// The game's WebGL context, lost (a GPU reset, a driver's, a browser's own
+// for want of memory) and given back. Lost, the game ran on, sound and all,
+// and drew nothing, a black page for good, as nothing took the loss. Now the
+// page takes it, so the browser may give the context back, says each in its
+// console with the time, and has the engine restart its renderer once it's
+// back (FACT_RESTART, vid_restart); with none back within CONTEXT_BACK_MS, it
+// says so and offers to reload.
+const CONTEXT_BACK_MS = 5000;
+// the Reload question, and the question it stood in for, put back if the
+// context comes back after all
+let restartRenderer = false, contextLostAt = 0, contextTimer, lostAsk;
+canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    contextLostAt = performance.now();
+    console.warn(`WebGL: the game's graphics were lost at ${new Date().toISOString()}; waiting for the browser to give them back`);
+    clearTimeout(contextTimer);
+    contextTimer = setTimeout(() => {
+        console.error(`WebGL: the game's graphics weren't given back within ${CONTEXT_BACK_MS / 1000} s`);
+        const before = { children: [...askBox.childNodes], hidden: askBox.hidden };
+        ask((box) => {
+            paragraph(box, "The game's picture stopped: the browser reset its graphics. Reload to play again.");
+            const again = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Reload' }));
+            again.addEventListener('click', () => location.reload());
+        }, { later: false });
+        lostAsk = { box: askBox.firstChild, before };
+    }, CONTEXT_BACK_MS);
+});
+canvas.addEventListener('webglcontextrestored', () => {
+    clearTimeout(contextTimer);
+    console.warn(`WebGL: the game's graphics were given back at ${new Date().toISOString()}, `
+        + `${Math.round(performance.now() - contextLostAt)} ms after they were lost; restarting the renderer`);
+    if (lostAsk && askBox.firstChild === lostAsk.box) {
+        const { children, hidden } = lostAsk.before;
+        askBox.replaceChildren(...children);
+        askBox.hidden = hidden || !children.length;
+        if (!children.length) tellFront(frontListeners.ask, 'done');
+        else if (hidden) tellFront(frontListeners.ask, 'closed');
+    }
+    lostAsk = undefined;
+    restartRenderer = true;
+});
 const presentationFacts = () => {
     const facts = (isFullscreen() ? FACT_FULLSCREEN : 0)
         | (fullscreenAvailable ? FACT_AVAILABLE : 0)
@@ -1153,8 +1194,10 @@ const presentationFacts = () => {
         | asked
         | (fullscreenAnswer << FACT_ANSWER_SHIFT)
         // the keys' releases still come, so a key held as the lock goes stays held
-        | (document.hasFocus() && !document.hidden ? FACT_KEYS : 0);
+        | (document.hasFocus() && !document.hidden ? FACT_KEYS : 0)
+        | (restartRenderer ? FACT_RESTART : 0);
     asked = 0;
+    restartRenderer = false;
     return facts;
 };
 
@@ -1366,7 +1409,7 @@ if (frontChooser) {
         else frontChosen.files = [...(frontChosen.files ?? []), ...files];
     });
 }
-const ask = (build) => new Promise((resolve) => {
+const ask = (build, { later = true } = {}) => new Promise((resolve) => {
     const box = document.createElement('div');
     askBox.replaceChildren(box);
     build(box, () => {
@@ -1375,9 +1418,9 @@ const ask = (build) => new Promise((resolve) => {
         tellFront(frontListeners.ask, 'done');
         resolve();
     });
-    if (frontOn) {
-        const later = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Not now' }));
-        later.addEventListener('click', () => {
+    if (frontOn && later) {
+        const notNow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Not now' }));
+        notNow.addEventListener('click', () => {
             askBox.hidden = true;
             tellFront(frontListeners.ask, 'closed');
         });
@@ -1915,6 +1958,29 @@ const bring = async (own) => {
 // is an error; other files may be, such as the QVMs a build that links its
 // game code doesn't need. A failure stops the rest.
 const megabytes = (bytes) => Math.round(bytes / 1e6);
+// A pak's own time on its file, in ms since 1970: the engine knows each pak
+// it has hashed by its path, size and time (its pak index), so a file the
+// page writes anew each visit, timed now, was hashed again on every join,
+// 500 MB of the player's own paks seven seconds or more. A player's pak's
+// is its File's; a downloaded one's, Last-Modified's, or the gateway's
+// ETag's ("<size>-<mtime>", hex seconds), as the gateway sends no
+// Last-Modified; with neither, it's left as written.
+const keepTime = (FS, path, time) => {
+    if (!Number.isFinite(time) || time <= 0) return;
+    try {
+        FS.utime(path, time, time);
+    } catch (error) {
+        console.warn(`Couldn't keep ${path}'s time: ${error}`);
+    }
+};
+const timeOf = (response) => {
+    // Last-Modified first: another server's ETag of that form needn't be
+    // the gateway's (nginx's is "<mtime>-<size>")
+    const modified = Date.parse(response.headers.get('Last-Modified') ?? '');
+    if (Number.isFinite(modified)) return modified;
+    const [, seconds] = /^(?:W\/)?"[0-9a-f]+-([0-9a-f]+)"$/.exec(response.headers.get('ETag') ?? '') ?? [];
+    return seconds ? parseInt(seconds, 16) * 1000 : NaN;
+};
 const downloadGame = async (FS) => {
     const config = await configPromise;
     const files = gamedirs().flatMap((gamedir) => {
@@ -2040,14 +2106,18 @@ const downloadGame = async (FS) => {
         FS.mkdirTree(dst);
         // the page keeps no copy, so the file system can take this one, cut
         // to size if it was grown
-        FS.writeFile(`${dst}/${src.match(/[^/]+$/)[0]}`, size < data.length ? data.slice(0, size) : data, { canOwn: true });
+        const path = `${dst}/${src.match(/[^/]+$/)[0]}`;
+        FS.writeFile(path, size < data.length ? data.slice(0, size) : data, { canOwn: true });
+        keepTime(FS, path, timeOf(response));
     }));
     if (brought.length) showStatus('Reading your files…', undefined, false, { kind: 'reading' });
     const readIn = await read;
     ownRead();
-    for (const { src, dst, data } of readIn) {
+    for (const { src, dst, data, blob } of readIn) {
+        const path = `${dst}/${fileName(src)}`;
         FS.mkdirTree(dst);
-        FS.writeFile(`${dst}/${fileName(src)}`, data, { canOwn: true });
+        FS.writeFile(path, data, { canOwn: true });
+        keepTime(FS, path, blob?.lastModified);
     }
 };
 
@@ -2131,6 +2201,15 @@ ioquake3({
         // a failed download doesn't cost the player their choice
         await downloadGame(module.FS).finally(ownRead);
         showStatus('Starting…', undefined, false, { kind: 'starting' });
+        // the words drawn before the engine's start, which holds the page's
+        // thread for a while and would leave the last ones on show; a hidden
+        // page, which has no frames, goes on at once, and one hidden while
+        // it waits, as it's hidden
+        await new Promise((resolve) => {
+            if (document.hidden) return resolve();
+            requestAnimationFrame(() => setTimeout(resolve));
+            document.addEventListener('visibilitychange', resolve, { once: true });
+        });
         module.removeRunDependency('setup-ioq3-filesystem');
     }],
     // a player who quit isn't asked before closing the page, and sees the
