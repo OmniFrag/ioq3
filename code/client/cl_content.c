@@ -1742,7 +1742,7 @@ static void CL_ContentWebHashed( const byte *sha256 ) {
 	}
 	// the fast lane's .part goes before the store, which would drop it
 	CL_ContentRaceOver( fetch, CLC_LANE_WEB );
-	if ( !Content_Cache_StoreHashed( clContent.web.temp, sha256, f->gameDir, f->name, f->checksum, why,
+	if ( !Content_Cache_StoreHashed( clContent.web.temp, sha256, f->gameDir, f->name, f->checksum, SOURCE_WEB, why,
 		sizeof( why ) ) ) {
 		FS_Remove( clContent.web.temp );
 		CL_ContentFetchEnded( fetch, FETCH_FAILED, why );

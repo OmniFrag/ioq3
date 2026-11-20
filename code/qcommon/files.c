@@ -5499,6 +5499,32 @@ const byte *FS_ServerPakHash( const char *gameDir, const char *name, unsigned in
 
 /*
 ================
+FS_ServerPakHashNamed
+
+FS_ServerPakHash for a pak named <game directory>/<name>, as the server
+references it, or with .pk3, as FS_MissingPaks names it
+================
+*/
+const byte *FS_ServerPakHashNamed( const char *path, unsigned int checksum )
+{
+	char		dir[MAX_QPATH], name[MAX_QPATH];
+	const char	*slash = strchr( path, '/' );
+	size_t		length;
+
+	if ( !slash || slash - path >= (int)sizeof( dir ) ) {
+		return NULL;
+	}
+	Q_strncpyz( dir, path, slash - path + 1 );
+	Q_strncpyz( name, slash + 1, sizeof( name ) );
+	length = strlen( name );
+	if ( length > 4 && !Q_stricmp( name + length - 4, ".pk3" ) ) {
+		name[length - 4] = '\0';
+	}
+	return FS_ServerPakHash( dir, name, checksum );
+}
+
+/*
+================
 FS_ServerHashesReferencedPak
 
 Whether the server connected to references a pak with an installed pak's
@@ -5796,18 +5822,44 @@ static void FS_RefuseHashedPaks( const searchpath_t *below )
 
 /*
 ================
+FS_SearchesGameDir
+
+Whether the search path has the game directory a pak named <game
+directory>/<name> is in, which FS_AddCachePaks mounts cached paks for
+================
+*/
+static qboolean FS_SearchesGameDir( const char *refName )
+{
+	const searchpath_t	*search;
+	const char			*slash = strchr( refName, '/' );
+
+	for ( search = fs_searchpaths; slash && search; search = search->next ) {
+		if ( search->dir && (int)strlen( search->dir->gamedir ) == slash - refName &&
+			!Q_stricmpn( search->dir->gamedir, refName, slash - refName ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+================
 FS_ServerPaksMatch
 
 Whether every pak in the search path matches the hash the server's
-content manifest gives (FS_PakHashRefused), and every referenced pak the
+content manifest gives (FS_PakHashRefused), every referenced pak the
 search path had when built is still present (FS_HasServerPak), which a
-hash learned since may change, so a restart would mount the same: then
-the hashes needn't restart it (FS_ConditionalRestart)
+hash learned since may change, and none missing has its hash in the
+content cache, which a first visit's restart, before the hashes, took only
+by checksum and so only from this server (P473): if so, a restart would
+mount the same, and the hashes needn't restart it (FS_ConditionalRestart)
 ================
 */
 qboolean FS_ServerPaksMatch( void )
 {
 	const searchpath_t	*search;
+	const byte			*hash;
+	char				ospath[MAX_OSPATH];
 	int					i;
 
 	if ( FS_ServerPakHashesApply() ) {
@@ -5817,8 +5869,17 @@ qboolean FS_ServerPaksMatch( void )
 			}
 		}
 		for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
-			if ( fs_serverReferencedPakHad[i] &&
-				!FS_HasServerPak( fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] ) ) {
+			if ( !fs_serverReferencedPakNames[i] ||
+				FS_HasServerPak( fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] ) ) {
+				continue;
+			}
+			if ( fs_serverReferencedPakHad[i] ) {
+				return qfalse;
+			}
+			// one FS_AddCachePaks would mount: in a game directory of the search path
+			hash = FS_ServerPakHashNamed( fs_serverReferencedPakNames[i], fs_serverReferencedPaks[i] );
+			if ( hash && Content_Cache_FindSHA256( hash, ospath, sizeof( ospath ) ) >= 0 &&
+				FS_SearchesGameDir( fs_serverReferencedPakNames[i] ) ) {
 				return qfalse;
 			}
 		}
@@ -5851,6 +5912,10 @@ int FS_UnhashedServerPaks( pakRecord_t *paks, int max )
 	return count;
 }
 
+// the server the content cache's paks in the search path were mounted for,
+// as Content_Cache_ServerSerial counts it
+static int	fs_cachePaksServer;
+
 /*
 ================
 FS_AddCachePaks
@@ -5873,6 +5938,9 @@ static void FS_AddCachePaks( const char *dir, const searchpath_t *below )
 	const byte			*hash;
 	char				ospath[MAX_OSPATH], cachePath[MAX_OSPATH];
 	int					i, entry;
+
+	// the server they're mounted for (FS_ConditionalRestart)
+	fs_cachePaksServer = Content_Cache_ServerSerial();
 
 	// (com_dedicated and com_sv_running are registered after the first startup)
 	if ( !fs_numServerReferencedPaks || ( com_dedicated && com_dedicated->integer ) ||
@@ -9103,7 +9171,11 @@ qboolean FS_ConditionalRestart(int checksumFeed, qboolean disconnect)
 			fs_gamedirvar->modified = qfalse;
 	}
 
-	if(checksumFeed != fs_checksumFeed || fs_serverPakHashesChanged)
+	// and when the content cache's paks mounted were for another server: a
+	// connect straight to this one never reached the frame that unmounts
+	// them, and this one gets only what's its own (P473)
+	if(checksumFeed != fs_checksumFeed || fs_serverPakHashesChanged ||
+		(fs_numCachePaks && fs_cachePaksServer != Content_Cache_ServerSerial()))
 		FS_Restart(checksumFeed);
 	else if(fs_numServerPaks && !fs_reordered)
 		FS_ReorderPurePaks();
@@ -9195,7 +9267,8 @@ FS_IsEngineFile
 Whether a game directory's file is one the engine keeps for itself: the
 player's settings and CD key, the console log, the crash log and the
 command pipe, and anything in the dedicated servers' own directories
-(servers/, FS_ServerDir). Named as the search would find it: ignoring
+(servers/, FS_ServerDir) or the client's for each server it visits
+(visited/, by the server's key's fingerprint). Named as the search would find it: ignoring
 case, leading slashes and "./", and as Windows would, without final dots
 and spaces
 ===========
@@ -9210,10 +9283,14 @@ qboolean FS_IsEngineFile( const char *qpath ) {
 
 	qpath = FS_SkipPathPrefix( qpath );
 
-	// servers/ as a directory
+	// servers/ and visited/ as directories
 	length = strcspn( qpath, "/\\" );
-	if ( qpath[length] && FS_NameIs( qpath, FS_NameLength( qpath, length ), "servers" ) ) {
-		return qtrue;
+	if ( qpath[length] ) {
+		size_t	folder = FS_NameLength( qpath, length );
+
+		if ( FS_NameIs( qpath, folder, "servers" ) || FS_NameIs( qpath, folder, "visited" ) ) {
+			return qtrue;
+		}
 	}
 
 	length = FS_NameLength( qpath, strlen( qpath ) );

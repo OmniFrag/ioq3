@@ -23,6 +23,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/com_pacing.c
     ${SOURCE_DIR}/qcommon/com_sha256.c
     ${SOURCE_DIR}/qcommon/content.c
+    ${SOURCE_DIR}/qcommon/content_sources.c
     ${SOURCE_DIR}/qcommon/cvar.c
     ${CVAR_DECLARATIONS_SOURCE}
     ${SOURCE_DIR}/qcommon/exttokens.c

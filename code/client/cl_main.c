@@ -1592,6 +1592,7 @@ void CL_Disconnect( qboolean showMainMenu ) {
 			Cvar_VariableString( "com_errorMessage" ) );
 	}
 	cl_leaving = -1;
+	Content_Cache_SetServer( NULL );
 
 	// shutting down the client so enter full screen ui mode
 	Cvar_Set("r_uiFullScreen", "1");
@@ -3524,6 +3525,16 @@ static qboolean CL_CacheName( char *gamedir, char *name, char *why, int whySize 
 	return qtrue;
 }
 
+// how the pak downloading comes: from sv_dlURL, in a build with HTTP
+// downloads (USE_HTTP; the web's has none), or the game's own UDP
+static contentSource_t CL_DownloadSource( void ) {
+#ifdef USE_HTTP
+	return clc.downloadHTTP ? SOURCE_HTTP : SOURCE_UDP;
+#else
+	return SOURCE_UDP;
+#endif
+}
+
 /*
 =================
 CL_StoreDownload
@@ -3546,7 +3557,8 @@ static qboolean CL_StoreDownload( const char *tmp, char *why, int whySize ) {
 	}
 	hash = FS_ServerPakHash( gamedir, name, clc.downloadChecksum );
 	if ( !hash ) {
-		return Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum, why, whySize );
+		return Content_Cache_Store( tmp, gamedir, name, clc.downloadChecksum,
+			CL_DownloadSource(), why, whySize );
 	}
 	if ( !Content_HashFile( tmp, sha256, &size ) ) {
 		Com_sprintf( why, whySize, "%s couldn't be read", clc.downloadRemoteName );
@@ -3557,7 +3569,8 @@ static qboolean CL_StoreDownload( const char *tmp, char *why, int whySize ) {
 			clc.downloadRemoteName );
 		return qfalse;
 	}
-	return Content_Cache_StoreHashed( tmp, sha256, gamedir, name, clc.downloadChecksum, why, whySize );
+	return Content_Cache_StoreHashed( tmp, sha256, gamedir, name, clc.downloadChecksum,
+		CL_DownloadSource(), why, whySize );
 }
 
 /*
@@ -3712,6 +3725,16 @@ static void CL_PrintNeededPaks( void ) {
 		Com_Printf( " and %d more", count - (int)ARRAY_LEN( missing ) );
 	}
 	Com_Printf( "\n" );
+	// a pak the server names by checksum alone is taken only from that
+	// server (P473), so one the cache holds from another is fetched again:
+	// said, so it isn't taken for a fault
+	for ( i = 0; i < MIN( count, (int)ARRAY_LEN( missing ) ); i++ ) {
+		if ( !FS_ServerPakHashNamed( missing[i].name, missing[i].checksum ) &&
+			Content_Cache_HeldForOthers( missing[i].checksum ) ) {
+			Com_Printf( "%s is downloaded again for this server: it didn't send the copy you have, and it "
+				"names the pak only by a checksum anyone can copy\n", missing[i].name );
+		}
+	}
 }
 
 // a set of downloads starts with nothing failed and no file under way
@@ -4313,6 +4336,35 @@ static int CL_ServerFragmentSize( void ) {
 
 /*
 =================
+CL_ContentServer
+
+The server connected to, for the content cache, which keeps what each
+server sent: by the key it proved, wherever it is, or a classic server by
+the address and port it was reached at, never a name, which can point
+anywhere later (P473)
+=================
+*/
+static void CL_ContentServer( void ) {
+	contentServer_t	server;
+
+	Com_Memset( &server, 0, sizeof( server ) );
+	if ( clc.identityProved ) {
+		server.kind = CONTENT_SERVER_KEY;
+		Com_Memcpy( server.id, clc.serverKey, sizeof( clc.serverKey ) );
+	} else if ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) {
+		server.kind = clc.serverAddress.type == NA_IP ? CONTENT_SERVER_IPV4 : CONTENT_SERVER_IPV6;
+		server.port = (unsigned short)BigShort( clc.serverAddress.port );
+		if ( server.kind == CONTENT_SERVER_IPV4 ) {
+			Com_Memcpy( server.id, clc.serverAddress.ip, sizeof( clc.serverAddress.ip ) );
+		} else {
+			Com_Memcpy( server.id, clc.serverAddress.ip6, sizeof( clc.serverAddress.ip6 ) );
+		}
+	}
+	Content_Cache_SetServer( &server );
+}
+
+/*
+=================
 CL_ServerProof
 
 Whether challengeResponse's tokens prove the server's key over this
@@ -4628,6 +4680,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		clc.state = CA_CONNECTED;
 		clc.lastPacketSentTime = -9999;		// send first packet immediately
 		LAN_RecentServer( clc.servername, clc.serverAddress );
+		CL_ContentServer();
 		return;
 	}
 

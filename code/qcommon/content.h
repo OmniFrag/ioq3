@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "ofd.h"
+#include "identity.h"
 
 // the files' common header: magic, version, record size, record count
 #define CONTENT_HEADER_SIZE		16
@@ -45,6 +46,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CONTENT_TEMP_FORMAT		"%s.%d.tmp"
 
 // little-endian fields, as content's files keep them
+void			Content_Put16( byte *p, unsigned int v );
+unsigned int	Content_Get16( const byte *p );
 void			Content_Put32( byte *p, unsigned int v );
 void			Content_Put64( byte *p, int64_t v );
 unsigned int	Content_Get32( const byte *p );
@@ -200,6 +203,67 @@ sends is written under a name it chose
 ==============================================================
 */
 
+// the cache's side file, sources.dat (content_sources.c has its format):
+// each cached pak's servers, by its SHA-256. index.dat stays the cache's
+// list of paks, its format unchanged, so an engine older than the side
+// file reads the cache as before and leaves this file alone
+#define CACHE_SOURCES_FILE		CONTENT_DIR "/sources.dat"
+#define CACHE_SOURCES_MAGIC		"OFCS"
+#define CACHE_SOURCES_FORMAT	1
+#define SOURCES_RECORD_HEAD		60	// a record's fields before its servers
+#define SOURCES_SERVER_SIZE		48	// a server entry's, this format's
+#define SOURCES_MAX_SERVERS		32	// a pak's, the least recently noted given up first
+#define SOURCES_MAX_FILE		( 64 << 20 )	// read whole; past it, the file's left alone
+#define SOURCES_SENT			1	// the server sent the pak
+#define SOURCES_USED			2	// it was mounted for the server
+
+// a server as the cache knows it: by the key it proved, or for a classic
+// server, the address and port it was reached at
+typedef enum {
+	CONTENT_SERVER_NONE,
+	CONTENT_SERVER_KEY = 1,
+	CONTENT_SERVER_IPV4 = 2,
+	CONTENT_SERVER_IPV6 = 3
+} contentServerKind_t;
+
+typedef struct {
+	contentServerKind_t	kind;
+	unsigned short		port;		// an address's, in host order
+	byte				id[IDENT_KEY_SIZE];	// the key, or the address's 4 or 16 bytes, zero-padded
+} contentServer_t;
+
+// how a pak came into the cache
+typedef enum {
+	SOURCE_UNKNOWN,
+	SOURCE_UDP = 1,			// the classic download, over the game's UDP
+	SOURCE_FAST = 2,		// the fast download
+	SOURCE_HTTP = 3,		// a classic download from sv_dlURL
+	SOURCE_WEB = 4,			// the fast download's web lane, by hash
+	SOURCE_INSTALLED = 5	// a copy of the player's own pak
+} contentSource_t;
+
+typedef struct {
+	byte		sha256[SHA256_DIGEST_SIZE];
+	int64_t		stored;			// Unix seconds
+	int64_t		lastUsed;
+	int			source;			// contentSource_t, or a later engine's
+	int			serverSize;		// each server entry's bytes, a later engine's longer
+	int			serverCount;
+	byte		*servers;		// serverCount entries, then the record's rest, allocated
+	int			tailLength;		// the rest's: a later engine's fields, kept as read
+} sourceRecord_t;
+
+// sources.dat's records: how many; -1 if it's damaged, -2 if a later
+// engine's format, which this one leaves alone. Each record's servers are
+// allocated (Content_FreeSources)
+int			Content_ParseSources( const byte *data, int length, sourceRecord_t *records, int maxRecords );
+int			Content_SourcesSize( const sourceRecord_t *records, int count );
+int			Content_WriteSources( const sourceRecord_t *records, int count, byte *out, int size );
+void		Content_FreeSources( sourceRecord_t *records, int count );
+// whether a record names the server with these flags; and adding them
+qboolean	Content_Sources_Has( const sourceRecord_t *r, const contentServer_t *server, int flags );
+qboolean	Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server, int flags, int64_t now );
+
 #define CACHE_INDEX_FILE		CONTENT_DIR "/index.dat"
 #define CACHE_INDEX_MAGIC		"OFCI"
 #define CACHE_INDEX_RECORD_SIZE	144
@@ -256,9 +320,10 @@ void	Content_Cache_Init( void );
 void	Content_Cache_Shutdown( void );
 // the complete cached pak a classic server references by this checksum,
 // in this game directory or another, whatever name the server gives it,
-// not mounted yet, for the search path: its entry's number, and its OS
-// path; -1 if there's none. Of two, one first seen in this game directory,
-// then the most recently used
+// not mounted yet, for the search path, and sent by the server connected
+// to (sources.dat): its entry's number, and its OS path; -1 if there's
+// none. Of two, one first seen in this game directory, then the most
+// recently used
 int		Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, char *ospath, int ospathSize );
 // the same by hash alone, as a content manifest names a pak, mounted or
 // not, to be mounted under each name the manifest gives it
@@ -281,11 +346,11 @@ qboolean	Content_Cache_ValidName( const char *gamedir, const char *name );
 // eviction takes it, until the filesystem restart that mounts it. One
 // larger than the bound isn't kept (Content_Cache_PakFits). If not, why
 qboolean	Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
-			char *why, int whySize );
+			contentSource_t source, char *why, int whySize );
 // the same for a pak whose SHA-256 is known already, as a download hashed
 // as it arrived (NULL: hash it)
 qboolean	Content_Cache_StoreHashed( const char *tmp, const byte *sha256, const char *gamedir, const char *name,
-			unsigned int pakChecksum, char *why, int whySize );
+			unsigned int pakChecksum, contentSource_t source, char *why, int whySize );
 // the same for the installed pak the pak index has with that hash, copied
 qboolean	Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], const char *gamedir, const char *name,
 			unsigned int pakChecksum, char *why, int whySize );
@@ -302,6 +367,17 @@ void		Content_Cache_UpdatePartial( const byte sha256[SHA256_DIGEST_SIZE], int64_
 void		Content_Cache_ReleasePartial( const byte sha256[SHA256_DIGEST_SIZE] );
 qboolean	Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], char *why, int whySize );
 void		Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] );
+// the server connected to, by which the cache records what each server
+// sent (sources.dat, below): by the key it proved, or a classic server by
+// the address it was reached at; NULL once there's none. Each call counts,
+// and the serial tells the file system its cached paks were another's
+// (FS_ConditionalRestart)
+void	Content_Cache_SetServer( const contentServer_t *server );
+int		Content_Cache_ServerSerial( void );
+// whether the cache holds a complete pak with this checksum that the
+// server connected to didn't send, which a classic server's reference
+// therefore downloads again
+qboolean	Content_Cache_HeldForOthers( unsigned int pakChecksum );
 // a pak the search path took (it's used now), or one damaged, which goes
 void	Content_Cache_Mounted( int entry );
 void	Content_Cache_Remove( int entry );
@@ -361,6 +437,8 @@ qboolean	FS_ServerPaksListed( const byte *manifest, const ofcmHeader_t *header )
 // the hash those give a pak with this game directory, name (without .pk3)
 // and checksum, or NULL
 const byte	*FS_ServerPakHash( const char *gameDir, const char *name, unsigned int checksum );
+// the same for a pak named <game directory>/<name>, .pk3 or not
+const byte	*FS_ServerPakHashNamed( const char *path, unsigned int checksum );
 // whether the search path has an installed pak, not from the content cache,
 // for a content manifest entry: a "bring your own" one's by checksum, any
 // other's by checksum, size, game directory and name, and its hash if known

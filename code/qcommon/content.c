@@ -45,7 +45,7 @@ Little-endian, a 16-byte header and fixed-size records
 ==============================================================
 */
 
-static void Content_Put16( byte *p, unsigned int v ) {
+void Content_Put16( byte *p, unsigned int v ) {
 	p[0] = v & 0xff;
 	p[1] = ( v >> 8 ) & 0xff;
 }
@@ -62,7 +62,7 @@ void Content_Put64( byte *p, int64_t v ) {
 	Content_Put32( p + 4, (unsigned int)( (uint64_t)v >> 32 ) );
 }
 
-static unsigned int Content_Get16( const byte *p ) {
+unsigned int Content_Get16( const byte *p ) {
 	return p[0] | ( p[1] << 8 );
 }
 
@@ -1274,6 +1274,19 @@ static qboolean		cacheStarted;		// a client's, once Content_Cache_Init has run
 static qboolean		cacheChanged;		// since index.dat was written
 static cvar_t		*cl_contentCacheMegs;
 
+// sources.dat's records, one a cached pak with a server noted, written as
+// index.dat is; whether this engine leaves the file alone (a later one's,
+// or one it can't read whole), its notes then the run's alone; and the
+// server connected to, and how many times it's been set
+static sourceRecord_t	sourceRecords[CONTENT_MAX_RECORDS];
+static int				sourceCount;
+static qboolean			sourcesLeftAlone;
+static contentServer_t	cacheServer;
+static int				cacheServerSerial;
+
+static sourceRecord_t	*Content_Sources_Find( const byte sha256[SHA256_DIGEST_SIZE] );
+static void				Content_Sources_Drop( int i );
+
 // cl_contentCacheMegs in bytes, 0 for no limit
 static int64_t Content_Cache_MaxBytes( void ) {
 	return cl_contentCacheMegs && cl_contentCacheMegs->integer > 0 ? (int64_t)cl_contentCacheMegs->integer << 20 : 0;
@@ -1324,7 +1337,14 @@ Deletes entry i's file, and the entry
 =================
 */
 static void Content_Cache_Delete( int i ) {
+	sourceRecord_t	*r = Content_Sources_Find( cacheEntries[i].sha256 );
+
 	remove( Content_Cache_EntryFile( &cacheEntries[i] ) );
+	// its senders go with it, but a partial copy's, which gives way to the
+	// whole one under the same hash
+	if ( r && cacheEntries[i].state == CACHE_COMPLETE ) {
+		Content_Sources_Drop( r - sourceRecords );
+	}
 	cacheEntries[i] = cacheEntries[--cacheCount];
 	cacheChanged = qtrue;
 }
@@ -1404,6 +1424,187 @@ static void Content_Cache_Evict( int maxEntries ) {
 		"cl_contentCacheMegs %d\n", count, cl_contentCacheMegs->integer );
 }
 
+// record i goes, the last taking its place
+static void Content_Sources_Drop( int i ) {
+	Content_FreeSources( &sourceRecords[i], 1 );
+	sourceRecords[i] = sourceRecords[--sourceCount];
+	cacheChanged = qtrue;
+}
+
+/*
+=================
+Content_Sources_Load
+
+sources.dat, as Content_Cache_Init starts: damaged, it's written again
+with no record, every cached pak then sent by no server; of a later
+engine's format, it's left alone
+=================
+*/
+static void Content_Sources_Load( void ) {
+	byte	*data;
+	int		length, i, j;
+	int64_t	size, mtime;
+
+	sourceCount = 0;
+	sourcesLeftAlone = qfalse;
+	if ( !Content_FileStat( Content_HomeFile( CACHE_SOURCES_FILE ), &size, &mtime ) ) {
+		return;
+	}
+	// one this engine can't read whole is left alone too, as a later one's
+	data = Content_ReadFile( Content_HomeFile( CACHE_SOURCES_FILE ), SOURCES_MAX_FILE, &length );
+	sourceCount = data ? Content_ParseSources( data, length, sourceRecords, CONTENT_MAX_RECORDS ) : -2;
+	if ( sourceCount == -2 ) {
+		Com_Printf( "%s %s, so it's left alone, and a classic server's paks are downloaded again, kept for "
+			"it until the game quits\n", CACHE_SOURCES_FILE, data ? "is a later engine's" : "can't be read" );
+		sourcesLeftAlone = qtrue;
+		sourceCount = 0;
+	} else if ( sourceCount < 0 ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s is damaged, so no cached pak is taken as a classic server's "
+			"own until it sends it again\n", CACHE_SOURCES_FILE );
+		sourceCount = 0;
+		cacheChanged = qtrue;		// written again, empty
+	}
+	free( data );
+	// a record for a pak no longer cached, as an older engine evicts, goes
+	for ( i = sourceCount - 1; i >= 0; i-- ) {
+		for ( j = 0; j < cacheCount && memcmp( cacheEntries[j].sha256, sourceRecords[i].sha256, SHA256_DIGEST_SIZE ); j++ ) {
+		}
+		if ( j == cacheCount ) {
+			Content_Sources_Drop( i );
+		}
+	}
+}
+
+/*
+=================
+Content_Sources_Find
+
+The record for a hash, or NULL
+=================
+*/
+static sourceRecord_t *Content_Sources_Find( const byte sha256[SHA256_DIGEST_SIZE] ) {
+	int		i;
+
+	for ( i = 0; i < sourceCount; i++ ) {
+		if ( !memcmp( sourceRecords[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			return &sourceRecords[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+=================
+Content_Sources_Noted
+
+Notes the pak's record, made if it has none: stored now, how it came, and
+sent by the server connected to, as source says; SOURCE_UNKNOWN for a
+use, the server's mounting it; and the player's own copy no server sent.
+Written with index.dat; left alone, the notes are this run's alone
+=================
+*/
+static void Content_Sources_Noted( const byte sha256[SHA256_DIGEST_SIZE], contentSource_t source ) {
+	sourceRecord_t	*r = Content_Sources_Find( sha256 );
+	int64_t			now = time( NULL );
+	int				flags = source == SOURCE_UNKNOWN ? SOURCES_USED : source == SOURCE_INSTALLED ? 0 : SOURCES_SENT;
+
+	if ( !r ) {
+		if ( sourceCount == CONTENT_MAX_RECORDS ) {
+			return;
+		}
+		r = &sourceRecords[sourceCount++];
+		memset( r, 0, sizeof( *r ) );
+		memcpy( r->sha256, sha256, SHA256_DIGEST_SIZE );
+		r->stored = now;
+	}
+	if ( source != SOURCE_UNKNOWN ) {
+		r->source = source;
+		r->stored = now;
+	}
+	r->lastUsed = now;
+	if ( flags ) {
+		Content_Sources_Note( r, &cacheServer, flags, now );
+	}
+	cacheChanged = qtrue;
+}
+
+/*
+=================
+Content_Sources_Write
+
+sources.dat, as index.dat is written; a record goes with its pak
+(Content_Cache_Delete)
+=================
+*/
+static void Content_Sources_Write( void ) {
+	byte	*data;
+	int		length = Content_SourcesSize( sourceRecords, sourceCount );
+
+	if ( length < 0 || !( data = malloc( length ) ) ) {
+		return;
+	}
+	Content_WriteSources( sourceRecords, sourceCount, data, length );
+	if ( !Content_WriteFile( Content_HomeFile( CACHE_SOURCES_FILE ), data, length ) && !com_check ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( CACHE_SOURCES_FILE ) );
+	}
+	free( data );
+}
+
+/*
+=================
+Content_Cache_SetServer
+=================
+*/
+void Content_Cache_SetServer( const contentServer_t *server ) {
+	if ( server ) {
+		cacheServer = *server;
+	} else {
+		memset( &cacheServer, 0, sizeof( cacheServer ) );
+	}
+	cacheServerSerial++;
+}
+
+/*
+=================
+Content_Cache_ServerSerial
+=================
+*/
+int Content_Cache_ServerSerial( void ) {
+	return cacheServerSerial;
+}
+
+/*
+=================
+Content_Cache_SentHere
+
+Whether the server connected to sent this entry's pak: what a classic
+server, which names it by checksum alone, mounts (P473). A pak with no
+record was sent by no server
+=================
+*/
+static qboolean Content_Cache_SentHere( const cacheEntry_t *e ) {
+	const sourceRecord_t	*r = Content_Sources_Find( e->sha256 );
+
+	return r && Content_Sources_Has( r, &cacheServer, SOURCES_SENT );
+}
+
+/*
+=================
+Content_Cache_HeldForOthers
+=================
+*/
+qboolean Content_Cache_HeldForOthers( unsigned int pakChecksum ) {
+	int		i;
+
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( cacheEntries[i].state == CACHE_COMPLETE && cacheEntries[i].pakChecksum == pakChecksum &&
+			!Content_Cache_SentHere( &cacheEntries[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 /*
 =================
 Content_Cache_Init
@@ -1442,6 +1643,8 @@ void Content_Cache_Init( void ) {
 		free( data );
 	}
 
+	Content_Sources_Load();
+
 	Content_RemoveStaleTemps();
 	if ( !com_check ) {
 		Content_Cache_RemoveStrays();
@@ -1469,13 +1672,14 @@ int Content_Cache_Find( unsigned int pakChecksum, const char *gamedir, char *osp
 	int					i, best = -1;
 	qboolean			here, bestHere = qfalse;
 
-	// by the checksum alone, in any game directory and under any name, as
-	// two servers may list one pak: a classic download is taken on that
-	// checksum too. Of two paks with one checksum (a collision, or a lie),
-	// the one first seen in this game directory, then the most recently used
+	// by the checksum, which whoever makes a pak controls, so only one this
+	// server sent itself (P473): another's pak with that checksum may be
+	// another's content. In any game directory and under any name, as the
+	// server may list it otherwise now. Of two (a collision, or a lie), the
+	// one first seen in this game directory, then the most recently used
 	for ( i = 0; i < cacheCount; i++ ) {
 		e = &cacheEntries[i];
-		if ( e->state != CACHE_COMPLETE || e->mounted || e->pakChecksum != pakChecksum ) {
+		if ( e->state != CACHE_COMPLETE || e->mounted || e->pakChecksum != pakChecksum || !Content_Cache_SentHere( e ) ) {
 			continue;
 		}
 		here = !Q_stricmp( e->gamedir, gamedir );
@@ -1568,6 +1772,7 @@ void Content_Cache_Mounted( int entry ) {
 		cacheEntries[entry].mounted = qtrue;
 		cacheEntries[entry].lastUsed = time( NULL );
 		cacheChanged = qtrue;
+		Content_Sources_Noted( cacheEntries[entry].sha256, SOURCE_UNKNOWN );
 	}
 }
 
@@ -1602,6 +1807,9 @@ Content_Cache_Flush
 */
 void Content_Cache_Flush( void ) {
 	if ( cacheStarted && cacheChanged ) {
+		if ( !sourcesLeftAlone ) {
+			Content_Sources_Write();
+		}
 		Content_Cache_Write();
 	}
 }
@@ -1660,8 +1868,8 @@ Content_Cache_Store
 =================
 */
 qboolean Content_Cache_Store( const char *tmp, const char *gamedir, const char *name, unsigned int pakChecksum,
-	char *why, int whySize ) {
-	return Content_Cache_StoreHashed( tmp, NULL, gamedir, name, pakChecksum, why, whySize );
+	contentSource_t source, char *why, int whySize ) {
+	return Content_Cache_StoreHashed( tmp, NULL, gamedir, name, pakChecksum, source, why, whySize );
 }
 
 /*
@@ -1695,7 +1903,7 @@ Content_Cache_StoreHashed
 =================
 */
 qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const char *gamedir, const char *name,
-	unsigned int pakChecksum, char *why, int whySize ) {
+	unsigned int pakChecksum, contentSource_t source, char *why, int whySize ) {
 	cacheEntry_t	*e;
 	byte			sha256[SHA256_DIGEST_SIZE];
 	int64_t			size = -1, mtime;
@@ -1729,9 +1937,9 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 		return qfalse;
 	}
 
-	// a pak the cache has already is used again, its record as first seen:
-	// any server finds it by its checksum (Content_Cache_Find), and mounts
-	// it under its own name for it. The new copy replaces the file, in case
+	// a pak the cache has already is used again, its record as first seen,
+	// this server noted as its sender too: each server mounts it under its
+	// own name for it. The new copy replaces the file, in case
 	// it's gone; held as in use, as below
 	if ( ( i = Content_Cache_FindSHA256( sha256, target, sizeof( target ) ) ) >= 0 ) {
 		Content_MakeDirs();
@@ -1743,6 +1951,7 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 		e->pakChecksum = pakChecksum;
 		e->mounted = qtrue;
 		cacheChanged = qtrue;
+		Content_Sources_Noted( sha256, source );
 		Content_Cache_Flush();
 		return qtrue;
 	}
@@ -1774,6 +1983,8 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 	// before it in this set of downloads: each is held as in use until the
 	// filesystem restart that mounts them (Content_Cache_Unmounted)
 	e->mounted = qtrue;
+	// the server connected to sent it, unless it's the player's own copy
+	Content_Sources_Noted( sha256, source );
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
 	return qtrue;
@@ -1900,6 +2111,7 @@ qboolean Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], c
 	e->downloading = qfalse;
 	e->mounted = qtrue;
 	cacheChanged = qtrue;
+	Content_Sources_Noted( sha256, SOURCE_FAST );
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
 	return qtrue;
@@ -1975,7 +2187,7 @@ qboolean Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], co
 		Com_sprintf( why, whySize, "couldn't copy %s into the content cache", from );
 		return qfalse;
 	}
-	if ( !Content_Cache_StoreHashed( tmp, sha256, gamedir, name, pakChecksum, why, whySize ) ) {
+	if ( !Content_Cache_StoreHashed( tmp, sha256, gamedir, name, pakChecksum, SOURCE_INSTALLED, why, whySize ) ) {
 		remove( tmp );
 		return qfalse;
 	}
