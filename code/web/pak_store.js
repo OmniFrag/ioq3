@@ -2,12 +2,20 @@
 // (OPFS) for the next visit, by this dedicated worker of the page's (bring,
 // in client.html.in): each at own/<gamedir>/<name>, the name asked for, with
 // own/index.json listing each one kept, { src, path, name, checksum, size,
-// mtime, stamp }: src the file it fills, as asked for (<gamedir>/<name>,
-// lowercased), path where it is under own/, name and mtime the chosen
-// file's, and stamp the page's of its bytes (stampOf, in pak_check.js),
-// which the page checks on later visits. A second version of a pak under
-// the same name is kept beside the first, at own/<gamedir>/<checksum>/<name>,
-// rather than over it.
+// mtime, stamp, route, stored, lastUsed }: src the file it fills, as asked
+// for (<gamedir>/<name>, lowercased), path where it is under own/, name and
+// mtime the chosen file's, and stamp the page's of its bytes (stampOf, in
+// pak_check.js), which the page checks on later visits; route how it came,
+// 'copied' here, and stored and lastUsed when, in ms since 1970. A second
+// version of a pak under the same name is kept beside the first, at
+// own/<gamedir>/<checksum>/<name>, rather than over it.
+//
+// A pak the page reads where the player keeps it, in a folder whose handle
+// it keeps (client.html.in's FOLDERS_DATABASE), is listed too, with route
+// 'in-place', folder that handle's key, and no path: nothing of it is here.
+// Records are kept as they're read, so a field or a route this page doesn't
+// know, a later version's, stays as it was through this one's writes, and
+// a record without a path is no file of this store's to list or remove.
 //
 // A pak is copied in slices and written with a sync access handle, or with
 // createWritable where the browser has none, or where sync access handles'
@@ -26,6 +34,11 @@
 //   store  { file, src, checksum, stamp } -> { path }, with already if it
 //          was there, the same stamp, or { busy } when another page holds src
 //   stamp  { path, stamp }: a record kept from before stamps given its own
+//   note   { folder, files: [{ src, name, checksum, size, mtime }] }: paks
+//          read in place from a kept folder, each one's record made or
+//          brought up to date, in one write
+//   used   { paths }: the records of the copies at those paths given
+//          lastUsed now
 //   drop   { path }: its record and file removed
 //   tidy   files the index doesn't list removed
 // and { op: 'stop' } as it goes: the copy stops, its handle closed, and
@@ -182,7 +195,8 @@ const ops = {
             // out of the index until it's written.
             const { kept, path } = await withIndex(async () => {
                 const index = await readIndex();
-                const versions = index.files.filter((record) => record.src === src);
+                // the copies of src, not the records of it read in place
+                const versions = index.files.filter((record) => record.src === src && typeof record.path == 'string');
                 const same = versions.find((record) => record.checksum === checksum);
                 if (same?.size === file.size && same.stamp === stamp && (await fileAt(same.path))?.size === same.size) return { kept: same };
                 const path = same?.path ?? (versions.length ? `${gamedir}/${checksum ?? 'unchecked'}/${name}` : src);
@@ -203,8 +217,10 @@ const ops = {
                 await remove(path).catch(() => {});
                 throw error;
             }
+            const now = Date.now();
             await changeIndex((index) => {
-                index.files.push({ src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified, stamp });
+                index.files.push({ src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified, stamp,
+                    route: 'copied', stored: now, lastUsed: now });
             });
             return { path };
         }).catch((error) => {
@@ -218,6 +234,26 @@ const ops = {
         await changeIndex((index) => {
             const record = index.files.find((each) => each.path === path);
             if (record && record.stamp === undefined) record.stamp = stamp;
+        });
+        return {};
+    },
+
+    note: async ({ folder, files }) => {
+        const now = Date.now();
+        await changeIndex((index) => {
+            for (const { src, name, checksum, size, mtime } of files) {
+                const record = index.files.find((each) => each.src === src && each.route === 'in-place' && each.folder === folder);
+                if (record) Object.assign(record, { name, checksum, size, mtime, lastUsed: now });
+                else index.files.push({ src, name, checksum, size, mtime, route: 'in-place', folder, stored: now, lastUsed: now });
+            }
+        });
+        return {};
+    },
+
+    used: async ({ paths }) => {
+        const now = Date.now(), used = new Set(paths);
+        await changeIndex((index) => {
+            for (const record of index.files) if (typeof record.path == 'string' && used.has(record.path)) record.lastUsed = now;
         });
         return {};
     },

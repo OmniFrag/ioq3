@@ -1,6 +1,7 @@
 // The page's pak reader: the player's own paks, stored in the browser's
-// private files (OPFS) by pak_store.js, read by the engine from there, so
-// the page never holds them (downloadGame, in client.html.in). Each becomes
+// private files (OPFS) by pak_store.js or read where the player keeps them,
+// read by the engine from there, so the page never holds them
+// (downloadGame, in client.html.in). Each becomes
 // a file node of Emscripten's file system with no contents and its own
 // stream_ops.read, which a worker (pak_reader_worker.js) answers.
 //
@@ -33,11 +34,17 @@ const EPERM = 63, ENODEV = 43;
 // a zip's end record and comment, at most, which hold where its directory is
 const END_MOST = 0xffff + 22;
 
-// A failed read: the page's error, never an errno for the engine
-class ReaderError extends Error {}
+// A failed read: the page's error, never an errno for the engine; changed,
+// of a pak read where the player keeps it, once it changed on their disk
+class ReaderError extends Error {
+    constructor(message, changed = false) {
+        super(message);
+        this.changed = changed;
+    }
+}
 
-// The worker, started, and given the paks' paths once it runs, within the
-// time limits: its answer, or { error }
+// The worker, started, and given the paks once it runs, each its path or
+// its File, within the time limits: its answer, or { error }
 async function start(url, sab, paths) {
     const worker = new Worker(url);
     let timer;
@@ -59,9 +66,10 @@ async function start(url, sab, paths) {
     return { worker, answer };
 }
 
-// Opens paks, each { src, dst, stored }, stored the path pak_store.js keeps
-// it at, for FS; mark(why) is told why a read failed, 'other-tab' or
-// 'unanswered'. Returns { on, why, other }, other whether another page holds
+// Opens paks, each { src, dst, stored } or { src, dst, file }: stored the
+// path pak_store.js keeps it at, file the File of one read where the player
+// keeps it, for FS; mark(why, src) is told why a read failed, 'other-tab',
+// 'unanswered' or 'changed' (the pak src changed on the player's disk). Returns { on, why, other }, other whether another page holds
 // the paks: on, each pak is a node in FS read through the reader, which has
 // modes, stats(), held() and close(); off, none is, and the page reads them
 // into memory.
@@ -74,7 +82,7 @@ export async function openReader(FS, paks, workerURL, mark) {
     const shared = new Uint8Array(sab, DATA_OFFSET);
     // kept: a Worker nothing refers to may be collected, and the worker,
     // idle in Atomics.wait, ended with it
-    const { worker, answer } = await start(workerURL, sab, paks.map(({ stored }) => stored));
+    const { worker, answer } = await start(workerURL, sab, paks.map(({ stored, file }) => stored ?? file));
     if (!answer.ok) return { on: false, why: answer.error };
     const { files } = answer;
     const other = files.some(({ taken }) => taken);
@@ -102,6 +110,7 @@ export async function openReader(FS, paks, workerURL, mark) {
             if ((spins & 0xffff) === 0 && performance.now() - begun > limit) throw failed(index, `wasn't read within ${limit / 1000} s`);
         stats.roundTrips++;
         stats.spinMs += performance.now() - begun;
+        if (ctl[4] === -2) throw new ReaderError(`${paks[index].src} changed on the player's disk since it was chosen`, true);
         if (ctl[4] < 0) throw failed(index, "couldn't be read");
         return ctl[4];
     };
@@ -233,7 +242,7 @@ export async function openReader(FS, paks, workerURL, mark) {
                 } catch (error) {
                     // never an errno: the engine would take the pak as unreadable
                     if (error instanceof ReaderError) {
-                        mark(other ? 'other-tab' : 'unanswered');
+                        mark(error.changed ? 'changed' : other ? 'other-tab' : 'unanswered', pak.src);
                         console.error(`Pak reader: stopped, as ${error.message}`);
                     }
                     throw error;
