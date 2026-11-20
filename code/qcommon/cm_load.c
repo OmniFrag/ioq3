@@ -699,6 +699,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	int				i;
 	dheader_t		header;
 	int				length;
+	void			*aligned;
 	static unsigned	last_checksum;
 
 	if ( !name || !name[0] ) {
@@ -757,14 +758,13 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		, name, header.version, BSP_VERSION );
 	case BSP_LUMP_OUTSIDE:
 		Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i outside the file", name, i );
-	// the lumps are read in place, as ints and floats
-	case BSP_LUMP_UNALIGNED:
-		Com_Error( ERR_DROP, "CM_LoadMap: %s has lump %i at an unaligned offset", name, i );
 	case BSP_OK:
 		break;
 	}
 
-	cmod_base = (byte *)buf.i;
+	// the lumps are read in place: a map whose lumps aren't aligned, through a copy
+	aligned = BSP_AlignLumps( name, &header, buf.i, Hunk_AllocateTempMemory );
+	cmod_base = aligned ? aligned : (byte *)buf.i;
 
 	// the leaf brushes and surfaces, and the submodels, index these, so
 	// know their counts before loading those
@@ -786,6 +786,9 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	CMod_LoadPatches( &header.lumps[LUMP_SURFACES], &header.lumps[LUMP_DRAWVERTS] );
 
 	// we are NOT freeing the file, because it is cached for the ref
+	if ( aligned ) {
+		Hunk_FreeTempMemory( aligned );
+	}
 	FS_FreeFile (buf.v);
 
 	CM_ValidateTree ();

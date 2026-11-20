@@ -1447,10 +1447,12 @@ typedef enum {
 	BSP_TRUNCATED,
 	BSP_NOT_BSP,
 	BSP_WRONG_VERSION,
-	BSP_LUMP_OUTSIDE,
-	BSP_LUMP_UNALIGNED
+	BSP_LUMP_OUTSIDE
 } bspFault_t;
 bspFault_t	BSP_CheckHeader( const void *data, int length, int fileLength, dheader_t *header, int *lump );
+// a map whose lumps don't all start at a multiple of 4, which the loaders
+// read in place, copied so they do (bsp_align.c)
+void		*BSP_AlignLumps( const char *name, dheader_t *header, const void *file, void *( *alloc )( int size ) );
 // a key of its worldspawn as game code reads the first entity, with the
 // game's limits (game code's MAX_SPAWN_VARS and MAX_SPAWN_VARS_CHARS): found
 // with its value, absent, more text wanted (not whole), or an entity the

@@ -1986,6 +1986,7 @@ void RE_LoadWorldMap( const char *name ) {
 		void *v;
 	} buffer;
 	byte		*startMarker;
+	void		*aligned;
 
 	if ( tr.worldMapLoaded ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map" );
@@ -2041,10 +2042,12 @@ void RE_LoadWorldMap( const char *name ) {
 		if ( !Com_RangeInTable( header->lumps[i].fileofs, header->lumps[i].filelen, length ) ) {
 			ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has lump %i outside the file", name, i );
 		}
-		// the lumps are read in place, as ints and floats
-		if ( header->lumps[i].fileofs & 3 ) {
-			ri.Error( ERR_DROP, "RE_LoadWorldMap: %s has lump %i at an unaligned offset", name, i );
-		}
+	}
+
+	// the lumps are read in place: a map whose lumps aren't aligned, through a copy
+	aligned = BSP_AlignLumps( name, header, buffer.b, ri.Hunk_AllocateTempMemory );
+	if ( aligned ) {
+		fileBase = aligned;
 	}
 
 	// load into heap
@@ -2065,6 +2068,9 @@ void RE_LoadWorldMap( const char *name ) {
 	// only set tr.world now that we know the entire level has loaded properly
 	tr.world = &s_worldData;
 
+	if ( aligned ) {
+		ri.Hunk_FreeTempMemory( aligned );
+	}
     ri.FS_FreeFile( buffer.v );
 }
 

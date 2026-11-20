@@ -32,9 +32,8 @@ BSP_CheckHeader
 
 A BSP's header from its first length bytes, in the file's byte order
 turned to ours, and whether a map loads from the file of fileLength bytes:
-its ident and version, and each lump inside the file at an offset the
-lumps are read in place from. CM_LoadMap says each fault its way; lump is
-the lump at fault
+its ident and version, and each lump inside the file. CM_LoadMap says
+each fault its way; lump is the lump at fault
 =================
 */
 bspFault_t BSP_CheckHeader( const void *data, int length, int fileLength, dheader_t *header, int *lump ) {
@@ -58,9 +57,6 @@ bspFault_t BSP_CheckHeader( const void *data, int length, int fileLength, dheade
 		*lump = i;
 		if ( !Com_RangeInTable( header->lumps[i].fileofs, header->lumps[i].filelen, fileLength ) ) {
 			return BSP_LUMP_OUTSIDE;
-		}
-		if ( header->lumps[i].fileofs & 3 ) {
-			return BSP_LUMP_UNALIGNED;
 		}
 	}
 	return BSP_OK;

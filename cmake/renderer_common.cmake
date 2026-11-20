@@ -27,6 +27,7 @@ set(SDL_RENDERER_SOURCES
 
 set(DYNAMIC_RENDERER_SOURCES
     ${SOURCE_DIR}/renderercommon/tr_subs.c
+    ${SOURCE_DIR}/qcommon/bsp_align.c
     ${SOURCE_DIR}/qcommon/q_shared.c
     ${SOURCE_DIR}/qcommon/q_math.c
 )
