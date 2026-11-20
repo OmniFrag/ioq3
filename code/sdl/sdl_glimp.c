@@ -90,8 +90,13 @@ static int givenWidth, givenHeight;
 // the last frame's fence, which GLimp_EndFrame waits on after the next swap
 static GLsync frameFence;
 #ifdef __EMSCRIPTEN__
-// the fence of the frame before, which GLimp_FrameReady looks at
+// the fence of the frame before, which GLimp_FrameReady looks at, and
+// when it took that place
 static GLsync previousFrameFence;
+static Uint64 previousFrameFenceAt;
+// a frame's fence that isn't done in this long never will be: one that
+// went with a lost WebGL context, which WebKit never says is done
+#define FRAME_FENCE_GIVE_UP_MS 1000
 #endif
 
 int qglMajorVersion, qglMinorVersion;
@@ -1713,7 +1718,8 @@ qboolean GLimp_FrameReady( void )
 #ifdef __EMSCRIPTEN__
 	if( previousFrameFence )
 	{
-		if( qglClientWaitSync( previousFrameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED )
+		if( qglClientWaitSync( previousFrameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED
+			&& SDL_GetTicks( ) - previousFrameFenceAt < FRAME_FENCE_GIVE_UP_MS )
 		{
 			return qfalse;
 		}
@@ -1916,6 +1922,7 @@ void GLimp_EndFrame( void )
 		qglDeleteSync( previousFrameFence );
 	}
 	previousFrameFence = frameFence;
+	previousFrameFenceAt = SDL_GetTicks( );
 	frameFence = NULL;
 
 	if( previousFrameFence && !r_gpuSync->integer )

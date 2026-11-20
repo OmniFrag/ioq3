@@ -1698,6 +1698,7 @@ void IN_ProcessEvent( const SDL_Event *e )
 #define PAGE_ANSWER_SHIFT	6	// 0 none, 1 waiting for a click, 2 refused, 3 the browser's own
 #define PAGE_ANSWER_MASK	3
 #define PAGE_KEYS			256	// the page has the focus and shows, so the keys' releases come
+#define PAGE_RESTART		512	// the WebGL context lost and given back: the renderer's to restart
 
 // this frame's, read once
 static int pageFacts;
@@ -1776,6 +1777,12 @@ static void IN_PresentFacts( presentFacts_t *facts, qboolean loading )
 		facts->captured = IN_Captured( );
 		facts->capturesAtClick = qtrue;
 		facts->keysKept = ( pageFacts & PAGE_KEYS ) != 0;
+		// everything the renderer made went with the lost context
+		if( pageFacts & PAGE_RESTART )
+		{
+			Com_Printf( "The WebGL context came back, so the renderer restarts\n" );
+			Cbuf_ExecuteText( EXEC_APPEND, "vid_restart\n" );
+		}
 	}
 #else
 	facts->fullscreen = ( flags & SDL_WINDOW_FULLSCREEN ) != 0;
