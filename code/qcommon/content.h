@@ -213,24 +213,32 @@ sends is written under a name it chose
 #define SOURCES_RECORD_HEAD		60	// a record's fields before its servers
 #define SOURCES_SERVER_SIZE		48	// a server entry's, this format's
 #define SOURCES_MAX_SERVERS		32	// a pak's, the least recently noted given up first
+#define SOURCES_MAX_ENTRY		256	// an entry size past which a record isn't grown
 #define SOURCES_MAX_FILE		( 64 << 20 )	// read whole; past it, the file's left alone
 #define SOURCES_SENT			1	// the server sent the pak
 #define SOURCES_USED			2	// it was mounted for the server
 
-// a server as the cache knows it: by the key it proved, or for a classic
-// server, the address and port it was reached at
+// a server as the cache knows it: the address it was reached at, and the
+// key it proved there too, if it did. A proof alone doesn't tie the key to
+// the connection, as a server can pass another's proof on, so a key is
+// taken only with the address (Content_ServerAt)
 typedef enum {
 	CONTENT_SERVER_NONE,
-	CONTENT_SERVER_KEY = 1,
+	CONTENT_SERVER_KEY_AT = 1,		// a key at an address: SHA-256 of both (Content_ServerAt)
 	CONTENT_SERVER_IPV4 = 2,
-	CONTENT_SERVER_IPV6 = 3
+	CONTENT_SERVER_IPV6 = 3,
+	CONTENT_SERVER_NAMED = 4		// another transport's server, by the name the player connected to: its SHA-256
 } contentServerKind_t;
 
 typedef struct {
 	contentServerKind_t	kind;
 	unsigned short		port;		// an address's, in host order
-	byte				id[IDENT_KEY_SIZE];	// the key, or the address's 4 or 16 bytes, zero-padded
+	byte				id[IDENT_KEY_SIZE];	// the address's 4 or 16 bytes, zero-padded, or a SHA-256
 } contentServer_t;
+
+// a server that proved key at address: kind CONTENT_SERVER_KEY_AT, its id
+// SHA-256( key, then address's kind, port (2 bytes, little-endian) and id )
+void		Content_ServerAt( contentServer_t *out, const byte key[IDENT_KEY_SIZE], const contentServer_t *address );
 
 // how a pak came into the cache
 typedef enum {
@@ -247,18 +255,22 @@ typedef struct {
 	int64_t		stored;			// Unix seconds
 	int64_t		lastUsed;
 	int			source;			// contentSource_t, or a later engine's
+	byte		reserved[3];	// its bytes 53, 58 and 59, kept as read
 	int			serverSize;		// each server entry's bytes, a later engine's longer
 	int			serverCount;
 	byte		*servers;		// serverCount entries, then the record's rest, allocated
 	int			tailLength;		// the rest's: a later engine's fields, kept as read
 } sourceRecord_t;
 
-// sources.dat's records: how many; -1 if it's damaged, -2 if a later
-// engine's format, which this one leaves alone. Each record's servers are
-// allocated (Content_FreeSources)
-int			Content_ParseSources( const byte *data, int length, sourceRecord_t *records, int maxRecords );
+// sources.dat's records, and its header as read, its reserved bytes kept:
+// how many; -1 if it's damaged, -2 if this engine can't hold it (a later
+// format, more than maxRecords), which it then leaves alone. Each record's
+// servers are allocated (Content_FreeSources). Written with that header,
+// or a new one for NULL
+int			Content_ParseSources( const byte *data, int length, sourceRecord_t *records, int maxRecords,
+				byte header[CONTENT_HEADER_SIZE] );
 int			Content_SourcesSize( const sourceRecord_t *records, int count );
-int			Content_WriteSources( const sourceRecord_t *records, int count, byte *out, int size );
+int			Content_WriteSources( const sourceRecord_t *records, int count, const byte *header, byte *out, int size );
 void		Content_FreeSources( sourceRecord_t *records, int count );
 // whether a record names the server with these flags; and adding them
 qboolean	Content_Sources_Has( const sourceRecord_t *r, const contentServer_t *server, int flags );
@@ -368,10 +380,10 @@ void		Content_Cache_ReleasePartial( const byte sha256[SHA256_DIGEST_SIZE] );
 qboolean	Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], char *why, int whySize );
 void		Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] );
 // the server connected to, by which the cache records what each server
-// sent (sources.dat, below): by the key it proved, or a classic server by
-// the address it was reached at; NULL once there's none. Each call counts,
-// and the serial tells the file system its cached paks were another's
-// (FS_ConditionalRestart)
+// sent (sources.dat, below): the address it was reached at, with the key
+// it proved there (Content_ServerAt); NULL once there's none. A server
+// other than the last one counts, and the serial tells the file system its
+// cached paks were another's (FS_ConditionalRestart)
 void	Content_Cache_SetServer( const contentServer_t *server );
 int		Content_Cache_ServerSerial( void );
 // whether the cache holds a complete pak with this checksum that the

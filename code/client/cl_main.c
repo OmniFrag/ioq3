@@ -4339,28 +4339,34 @@ static int CL_ServerFragmentSize( void ) {
 CL_ContentServer
 
 The server connected to, for the content cache, which keeps what each
-server sent: by the key it proved, wherever it is, or a classic server by
-the address and port it was reached at, never a name, which can point
-anywhere later (P473)
+server sent (P473): the address and port the netchan talks to, never a
+name, which can point anywhere later, or on another transport (a web
+client's), the name the player connected to; and with the key the server
+proved there, both, as a proof alone isn't tied to the connection that
+follows: a server can pass on another's challengeResponse
 =================
 */
 static void CL_ContentServer( void ) {
-	contentServer_t	server;
+	contentServer_t	address;
+	netadr_t		to = clc.netchan.remoteAddress;
 
-	Com_Memset( &server, 0, sizeof( server ) );
-	if ( clc.identityProved ) {
-		server.kind = CONTENT_SERVER_KEY;
-		Com_Memcpy( server.id, clc.serverKey, sizeof( clc.serverKey ) );
-	} else if ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) {
-		server.kind = clc.serverAddress.type == NA_IP ? CONTENT_SERVER_IPV4 : CONTENT_SERVER_IPV6;
-		server.port = (unsigned short)BigShort( clc.serverAddress.port );
-		if ( server.kind == CONTENT_SERVER_IPV4 ) {
-			Com_Memcpy( server.id, clc.serverAddress.ip, sizeof( clc.serverAddress.ip ) );
+	Com_Memset( &address, 0, sizeof( address ) );
+	if ( to.type == NA_IP || to.type == NA_IP6 ) {
+		address.kind = to.type == NA_IP ? CONTENT_SERVER_IPV4 : CONTENT_SERVER_IPV6;
+		address.port = (unsigned short)BigShort( to.port );
+		if ( address.kind == CONTENT_SERVER_IPV4 ) {
+			Com_Memcpy( address.id, to.ip, sizeof( to.ip ) );
 		} else {
-			Com_Memcpy( server.id, clc.serverAddress.ip6, sizeof( clc.serverAddress.ip6 ) );
+			Com_Memcpy( address.id, to.ip6, sizeof( to.ip6 ) );
 		}
+	} else if ( to.type != NA_LOOPBACK && to.type != NA_BOT && clc.servername[0] ) {
+		address.kind = CONTENT_SERVER_NAMED;
+		Com_SHA256Buffer( clc.servername, strlen( clc.servername ), address.id );
 	}
-	Content_Cache_SetServer( &server );
+	if ( clc.identityProved && address.kind != CONTENT_SERVER_NONE ) {
+		Content_ServerAt( &address, clc.serverKey, &address );
+	}
+	Content_Cache_SetServer( &address );
 }
 
 /*

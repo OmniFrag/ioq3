@@ -47,13 +47,42 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //   2  2  the port, for an address
 //   4  4  reserved
 //   8  8  when it last sent or used the pak, Unix seconds
-//  16 32  the server's key, or its address (4 or 16 bytes), zero-padded
+//  16 32  the server's address (4 or 16 bytes, zero-padded), or a SHA-256:
+//         of a key and the address it was proved at (Content_ServerAt), or of
+//         the name another transport's server was connected to by
+//
+// Reserved bytes, the header's and a record's, are kept as read, as are a
+// later engine's fields and entries of a kind this engine doesn't know,
+// which it never gives up for its own. A record is dropped once its pak
+// leaves the cache.
 //
 // The format changes only where an older engine couldn't read the newer
 // file's start this way, and an engine that meets a higher one leaves the
 // file alone
 
 #include "content.h"
+
+/*
+=================
+Content_ServerAt
+=================
+*/
+void Content_ServerAt( contentServer_t *out, const byte key[IDENT_KEY_SIZE], const contentServer_t *address ) {
+	byte	both[IDENT_KEY_SIZE + 3 + IDENT_KEY_SIZE];
+
+	memcpy( both, key, IDENT_KEY_SIZE );
+	both[IDENT_KEY_SIZE] = address->kind;
+	Content_Put16( both + IDENT_KEY_SIZE + 1, address->port );
+	memcpy( both + IDENT_KEY_SIZE + 3, address->id, IDENT_KEY_SIZE );
+	memset( out, 0, sizeof( *out ) );
+	out->kind = CONTENT_SERVER_KEY_AT;
+	Com_SHA256Buffer( both, sizeof( both ), out->id );
+}
+
+// whether this engine knows an entry's kind, which it may give up for another
+static qboolean Sources_KnownKind( int kind ) {
+	return kind >= CONTENT_SERVER_KEY_AT && kind <= CONTENT_SERVER_NAMED;
+}
 
 // a server entry's identity, as the file keeps it
 static void Sources_PutServer( byte *p, const contentServer_t *server ) {
@@ -71,13 +100,15 @@ static qboolean Sources_IsServer( const byte *p, const contentServer_t *server )
 =================
 Content_ParseSources
 
-The records of sources.dat's bytes, each one's servers and rest allocated:
-how many; -1 if it's damaged (a record past the file's end or shorter
-than its servers, a hash twice), -2 if it's of a later format than this
-engine's, which its caller leaves alone
+The records of sources.dat's bytes, each one's servers and rest allocated,
+and its header: how many; -1 if it's damaged (a record past the file's
+end or shorter than its servers, a hash twice), -2 if this engine can't
+hold it, a later format or more records than maxRecords, which its caller
+leaves alone
 =================
 */
-int Content_ParseSources( const byte *data, int length, sourceRecord_t *records, int maxRecords ) {
+int Content_ParseSources( const byte *data, int length, sourceRecord_t *records, int maxRecords,
+	byte header[CONTENT_HEADER_SIZE] ) {
 	sourceRecord_t	*r;
 	const byte		*p;
 	unsigned int	count, recordLength;
@@ -91,8 +122,9 @@ int Content_ParseSources( const byte *data, int length, sourceRecord_t *records,
 	}
 	count = Content_Get32( data + 8 );
 	if ( count > (unsigned int)maxRecords ) {
-		return -1;
+		return -2;
 	}
+	memcpy( header, data, CONTENT_HEADER_SIZE );
 	at = CONTENT_HEADER_SIZE;
 	for ( i = 0; i < (int)count; i++ ) {
 		r = &records[i];
@@ -109,6 +141,9 @@ int Content_ParseSources( const byte *data, int length, sourceRecord_t *records,
 		r->stored = Content_Get64( p + 36 );
 		r->lastUsed = Content_Get64( p + 44 );
 		r->source = p[52];
+		r->reserved[0] = p[53];
+		r->reserved[1] = p[58];
+		r->reserved[2] = p[59];
 		r->serverSize = Content_Get16( p + 54 );
 		r->serverCount = Content_Get16( p + 56 );
 		// in 64 bits: two 16-bit fields' product passes an int. Within the
@@ -163,10 +198,11 @@ int Content_SourcesSize( const sourceRecord_t *records, int count ) {
 Content_WriteSources
 
 sources.dat's bytes for these records, each one's servers and rest as they
-are: the length written, -1 if out is too small
+are, with header's reserved bytes (NULL: none): the length written, -1 if
+out is too small
 =================
 */
-int Content_WriteSources( const sourceRecord_t *records, int count, byte *out, int size ) {
+int Content_WriteSources( const sourceRecord_t *records, int count, const byte *header, byte *out, int size ) {
 	const sourceRecord_t	*r;
 	byte					*p;
 	int						i, length = Content_SourcesSize( records, count ), serversLength;
@@ -174,7 +210,11 @@ int Content_WriteSources( const sourceRecord_t *records, int count, byte *out, i
 	if ( length < 0 || length > size ) {
 		return -1;
 	}
-	memset( out, 0, CONTENT_HEADER_SIZE );
+	if ( header ) {
+		memcpy( out, header, CONTENT_HEADER_SIZE );
+	} else {
+		memset( out, 0, CONTENT_HEADER_SIZE );
+	}
 	memcpy( out, CACHE_SOURCES_MAGIC, 4 );
 	Content_Put16( out + 4, CACHE_SOURCES_FORMAT );
 	Content_Put32( out + 8, count );
@@ -188,7 +228,11 @@ int Content_WriteSources( const sourceRecord_t *records, int count, byte *out, i
 		Content_Put64( p + 36, r->stored );
 		Content_Put64( p + 44, r->lastUsed );
 		p[52] = r->source;
-		Content_Put16( p + 54, r->serverSize );
+		p[53] = r->reserved[0];
+		p[58] = r->reserved[1];
+		p[59] = r->reserved[2];
+		// a record made with no server yet has this format's entry size
+		Content_Put16( p + 54, r->serverSize ? r->serverSize : SOURCES_SERVER_SIZE );
 		Content_Put16( p + 56, r->serverCount );
 		if ( serversLength + r->tailLength ) {
 			memcpy( p + SOURCES_RECORD_HEAD, r->servers, serversLength + r->tailLength );
@@ -239,8 +283,10 @@ Content_Sources_Note
 Adds these flags to the record's entry for the server, made if it has
 none, at now. A record full at SOURCES_MAX_SERVERS gives up the entry
 least recently noted that didn't send the pak, then the least recently
-noted, of this engine's kinds or a later one's, so servers that only used
-it don't push out one that sent it. qfalse if there's no memory for it
+noted, so servers that only used it don't push out one that sent it,
+and never one of a kind a later engine knows and this one doesn't. A
+record whose entries are longer than SOURCES_MAX_ENTRY, a later engine's,
+isn't grown. qfalse if no entry was noted
 =================
 */
 qboolean Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server, int flags, int64_t now ) {
@@ -260,6 +306,9 @@ qboolean Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server,
 			Content_Put64( p + 8, now );
 			return qtrue;
 		}
+		if ( !Sources_KnownKind( p[0] ) ) {
+			continue;
+		}
 		if ( oldest < 0 || Content_Get64( p + 8 ) < Content_Get64( r->servers + oldest * r->serverSize + 8 ) ) {
 			oldest = i;
 		}
@@ -269,6 +318,9 @@ qboolean Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server,
 		}
 	}
 	serversLength = r->serverSize * r->serverCount;
+	if ( r->serverSize > SOURCES_MAX_ENTRY || ( r->serverCount >= SOURCES_MAX_SERVERS && oldest < 0 ) ) {
+		return qfalse;
+	}
 	if ( r->serverCount >= SOURCES_MAX_SERVERS ) {
 		p = r->servers + ( oldestUsed >= 0 ? oldestUsed : oldest ) * r->serverSize;
 	} else {

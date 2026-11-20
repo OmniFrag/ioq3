@@ -1280,8 +1280,9 @@ static cvar_t		*cl_contentCacheMegs;
 // server connected to, and how many times it's been set
 static sourceRecord_t	sourceRecords[CONTENT_MAX_RECORDS];
 static int				sourceCount;
-static qboolean			sourcesLeftAlone;
-static contentServer_t	cacheServer;
+static byte				sourcesHeader[CONTENT_HEADER_SIZE];	// as read, its reserved bytes kept
+static qboolean			sourcesLeftAlone, sourcesTooLargeSaid;
+static contentServer_t	cacheServer, cacheServerLast;	// connected to, and the last connected to
 static int				cacheServerSerial;
 
 static sourceRecord_t	*Content_Sources_Find( const byte sha256[SHA256_DIGEST_SIZE] );
@@ -1452,16 +1453,18 @@ static void Content_Sources_Load( void ) {
 	}
 	// one this engine can't read whole is left alone too, as a later one's
 	data = Content_ReadFile( Content_HomeFile( CACHE_SOURCES_FILE ), SOURCES_MAX_FILE, &length );
-	sourceCount = data ? Content_ParseSources( data, length, sourceRecords, CONTENT_MAX_RECORDS ) : -2;
+	sourceCount = data ? Content_ParseSources( data, length, sourceRecords, CONTENT_MAX_RECORDS, sourcesHeader ) : -2;
 	if ( sourceCount == -2 ) {
 		Com_Printf( "%s %s, so it's left alone, and a classic server's paks are downloaded again, kept for "
-			"it until the game quits\n", CACHE_SOURCES_FILE, data ? "is a later engine's" : "can't be read" );
+			"it until the game quits\n", CACHE_SOURCES_FILE,
+			data ? "is a later engine's, or more than this one holds" : "can't be read" );
 		sourcesLeftAlone = qtrue;
 		sourceCount = 0;
 	} else if ( sourceCount < 0 ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: %s is damaged, so no cached pak is taken as a classic server's "
 			"own until it sends it again\n", CACHE_SOURCES_FILE );
 		sourceCount = 0;
+		memset( sourcesHeader, 0, sizeof( sourcesHeader ) );
 		cacheChanged = qtrue;		// written again, empty
 	}
 	free( data );
@@ -1515,6 +1518,7 @@ static void Content_Sources_Noted( const byte sha256[SHA256_DIGEST_SIZE], conten
 		r = &sourceRecords[sourceCount++];
 		memset( r, 0, sizeof( *r ) );
 		memcpy( r->sha256, sha256, SHA256_DIGEST_SIZE );
+		r->serverSize = SOURCES_SERVER_SIZE;	// a record with no server yet reads back too
 		r->stored = now;
 	}
 	if ( source != SOURCE_UNKNOWN ) {
@@ -1540,10 +1544,20 @@ static void Content_Sources_Write( void ) {
 	byte	*data;
 	int		length = Content_SourcesSize( sourceRecords, sourceCount );
 
-	if ( length < 0 || !( data = malloc( length ) ) ) {
+	// past what an engine reads whole, it would be left alone at the next
+	// start: kept as it is now, said once
+	if ( length < 0 || length > SOURCES_MAX_FILE ) {
+		if ( !sourcesTooLargeSaid ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s would pass %d MB, so it isn't written\n", CACHE_SOURCES_FILE,
+				SOURCES_MAX_FILE >> 20 );
+			sourcesTooLargeSaid = qtrue;
+		}
 		return;
 	}
-	Content_WriteSources( sourceRecords, sourceCount, data, length );
+	if ( !( data = malloc( length ) ) ) {
+		return;
+	}
+	Content_WriteSources( sourceRecords, sourceCount, sourcesHeader, data, length );
 	if ( !Content_WriteFile( Content_HomeFile( CACHE_SOURCES_FILE ), data, length ) && !com_check ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( CACHE_SOURCES_FILE ) );
 	}
@@ -1561,7 +1575,12 @@ void Content_Cache_SetServer( const contentServer_t *server ) {
 	} else {
 		memset( &cacheServer, 0, sizeof( cacheServer ) );
 	}
-	cacheServerSerial++;
+	// counted only for a server other than the last: a reconnect to it, past
+	// the disconnect's none, mounts the same paks, and needn't restart
+	if ( cacheServer.kind != CONTENT_SERVER_NONE && memcmp( &cacheServer, &cacheServerLast, sizeof( cacheServer ) ) ) {
+		cacheServerLast = cacheServer;
+		cacheServerSerial++;
+	}
 }
 
 /*
