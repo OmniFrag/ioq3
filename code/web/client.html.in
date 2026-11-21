@@ -1155,9 +1155,12 @@ const finePointer = matchMedia('(any-pointer: fine)');
 const CONTEXT_BACK_MS = 5000;
 // the Reload question, and the question it stood in for, put back if the
 // context comes back after all
-let restartRenderer = false, contextLostAt = 0, contextTimer, lostAsk;
+// contextGeneration counts the losses, which the renderer reads
+// (GLimp_ContextGeneration): a fence or program from before one is gone
+let restartRenderer = false, contextLostAt = 0, contextTimer, lostAsk, contextGeneration = 0;
 canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
+    contextGeneration++;
     contextLostAt = performance.now();
     console.warn(`WebGL: the game's graphics were lost at ${new Date().toISOString()}; waiting for the browser to give them back`);
     clearTimeout(contextTimer);
@@ -2151,6 +2154,7 @@ ioquake3({
     canvas: canvas,
     present,
     presentationFacts,
+    contextGeneration: () => contextGeneration,
     sound,
     setPlaying,
     saveFile,
