@@ -2528,7 +2528,9 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 ================
 CL_RtcConnect_f
 
-rtc_connect <path>: a connect through the browser (P7). The page opens a
+rtc_connect <path>: a connect through the browser (P7), from the console or
+the command line alone: game code's text can't run it (Cmd_ExecuteString),
+as it checks no answer's signature and expects no key. The page opens a
 WebRTC connection and posts its offer to the path, on the page's own
 server, which answers with the server's gateway's; the connect then goes
 over that connection as over UDP. For tests that play the rendezvous's
