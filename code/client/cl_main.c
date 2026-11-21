@@ -145,6 +145,9 @@ char				cl_reconnectArgs[MAX_OSPATH];
 // the key reconnect's address must prove, as the join that found it did
 // (CL_ExtConnect's expected fingerprint), or "" for any
 static char			cl_reconnectExpected[IDENT_FINGERPRINT_SIZE];
+// how long a reconnect that wants a key waits for a server proving it, as
+// a join waits for its server (join.c's JOIN_GIVE_UP_MS)
+#define RECONNECT_KEYED_MSEC	10000
 // connects begun and stopped (CL_ExtConnectGeneration)
 static int			cl_connectGeneration;
 // cls.realtime as the last connect began
@@ -1934,11 +1937,28 @@ void CL_Reconnect_f( void ) {
 	// at that address since is passed over (CL_ExpectedServer), as the
 	// join's would be. A restarting server's goodbye rejoins as the join
 	// went instead (CL_ReconnectAsked)
-	if ( cl_reconnectArgs[0] && cl_reconnectExpected[0] &&
-		NET_StringToAdr( cl_reconnectArgs, &adr, NA_UNSPEC ) ) {
+	if ( cl_reconnectArgs[0] && cl_reconnectExpected[0] ) {
+		// never a keyless connect in its place
+		if ( !NET_StringToAdr( cl_reconnectArgs, &adr, NA_UNSPEC ) ) {
+			Com_Printf( "Couldn't read %s, the address to reconnect to.\n", cl_reconnectArgs );
+			return;
+		}
 		Q_strncpyz( name, cl_reconnectArgs, sizeof( name ) );
 		Q_strncpyz( expected, cl_reconnectExpected, sizeof( expected ) );
-		CL_ExtConnect( name, &adr, NULL, 1, 0, 0, expected );
+		// as long as the join would wait, not forever: a server there that
+		// proves no key is passed over, and said (CL_ExpectedServer)
+		CL_ExtConnect( name, &adr, NULL, 1, 0, RECONNECT_KEYED_MSEC, expected );
+		// still the address to go back to, if this one finds no server with
+		// the key (CL_ExtConnect forgets it until an answer)
+		Q_strncpyz( cl_reconnectArgs, name, sizeof( cl_reconnectArgs ) );
+		Q_strncpyz( cl_reconnectExpected, expected, sizeof( cl_reconnectExpected ) );
+		return;
+	}
+	// the engine's own rejoin, the join it saved (CL_ExtSetRejoin), runs
+	// with the player's rights though game code ran reconnect: it goes only
+	// where the join went, and a join elsewhere game code can't run itself
+	if ( !cl_reconnectArgs[0] ) {
+		Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", command ) );
 		return;
 	}
 	Cbuf_AddText( va( "%s\n", command ) );
@@ -2538,6 +2558,7 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 	clc.giveUpAt = giveUpMsec > 0 ? cls.realtime + giveUpMsec : 0;
 	Q_strncpyz( clc.expectedFingerprint, expectedFingerprint ? expectedFingerprint : "",
 		sizeof( clc.expectedFingerprint ) );
+	clc.unprovenSaid = qfalse;
 	CL_ConnectSend();
 }
 
@@ -4444,8 +4465,13 @@ static qboolean CL_ExpectedServer( netadr_t from, qboolean proved ) {
 			NET_AdrToStringwPort( from ), fingerprint, clc.expectedFingerprint );
 	} else {
 		// a server short of time to sign, under a flood of challenges,
-		// answers unproven: its address stays, and the next answer may prove
-		Com_DPrintf( "%s answered without proving a key, passed over\n", NET_AdrToStringwPort( from ) );
+		// answers unproven: its address stays, and the next answer may prove.
+		// Said once, as it may be one that never will (a stock server)
+		if ( !clc.unprovenSaid ) {
+			Com_Printf( "%s answers without proving a key, so it isn't known to be the server asked for. Waiting for "
+				"one that proves %s.\n", NET_AdrToStringwPort( from ), clc.expectedFingerprint );
+			clc.unprovenSaid = qtrue;
+		}
 		return qfalse;
 	}
 	for ( i = 0; i < clc.numCandidates; i++ ) {
