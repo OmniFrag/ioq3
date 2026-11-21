@@ -1610,6 +1610,8 @@ void R_Init( void ) {
 
 	// clear all our internal state
 	Com_Memset( &tr, 0, sizeof( tr ) );
+	// should a shutdown in a lost context have stopped short, the deletes are real again
+	GLimp_ForgetObjects( qfalse );
 	Com_Memset( &backEnd, 0, sizeof( backEnd ) );
 	Com_Memset( &tess, 0, sizeof( tess ) );
 
@@ -1671,6 +1673,8 @@ void R_Init( void ) {
 	R_InitNextFrame();
 
 	InitOpenGL();
+	// the context's, once it's made: natively a new one counts one more
+	tr.contextGeneration = GLimp_ContextGeneration();
 
 	R_InitImages();
 
@@ -1813,6 +1817,14 @@ void RE_Shutdown( qboolean destroyWindow ) {
 	ri.Cmd_RemoveCommand( "exportCubemaps" );
 
 
+	// the context lost and given back since R_Init: its objects all went
+	// with the lost one, and none is deleted in this one
+	const qboolean contextLost = GLimp_ContextGeneration() != tr.contextGeneration;
+
+	if ( contextLost ) {
+		GLimp_ForgetObjects( qtrue );
+	}
+
 	if ( tr.registered ) {
 		R_IssuePendingRenderCommands();
 		R_ShutdownStore2D( !destroyWindow );
@@ -1832,6 +1844,12 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 	R_DoneFreeType();
 
+	// the 2D timer's queries outlive a shutdown that keeps the window, but
+	// not the context they were made in
+	if ( contextLost ) {
+		R_Times2DShutdown();
+	}
+
 	// shut down platform specific OpenGL stuff
 	if ( destroyWindow ) {
 		// those a shutdown that kept the window kept, should no init have
@@ -1839,6 +1857,11 @@ void RE_Shutdown( qboolean destroyWindow ) {
 		GLSL_DeleteKeptPrograms();
 		R_ShutdownUpscale2D();
 		R_Times2DShutdown();
+	}
+
+	GLimp_ForgetObjects( qfalse );
+
+	if ( destroyWindow ) {
 		GLimp_Shutdown();
 
 		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
