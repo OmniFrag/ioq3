@@ -148,6 +148,9 @@ static char			cl_reconnectExpected[IDENT_FINGERPRINT_SIZE];
 // how long a reconnect that wants a key waits for a server proving it, as
 // a join waits for its server (join.c's JOIN_GIVE_UP_MS)
 #define RECONNECT_KEYED_MSEC	10000
+// how often game code's reconnect may run the saved rejoin, so it can't
+// keep a rendezvous looking codes up
+#define RECONNECT_RESTRICTED_MSEC	5000
 // connects begun and stopped (CL_ExtConnectGeneration)
 static int			cl_connectGeneration;
 // cls.realtime as the last connect began
@@ -1928,7 +1931,8 @@ void CL_Reconnect_f( void ) {
 	// again as it was joined (CL_ExtSetRejoin)
 	const char	*command = cl_reconnectArgs[0] ? va( "connect %s", cl_reconnectArgs ) : cls.rejoin;
 	netadr_t	adr;
-	char		name[MAX_OSPATH], expected[IDENT_FINGERPRINT_SIZE];
+	char		name[MAX_OSPATH], expected[IDENT_FINGERPRINT_SIZE], rejoin[sizeof( cls.rejoin )];
+	static int	restrictedRejoinAt;
 
 	if ( !command[0] )
 		return;
@@ -1945,19 +1949,30 @@ void CL_Reconnect_f( void ) {
 		}
 		Q_strncpyz( name, cl_reconnectArgs, sizeof( name ) );
 		Q_strncpyz( expected, cl_reconnectExpected, sizeof( expected ) );
+		Q_strncpyz( rejoin, cls.rejoin, sizeof( rejoin ) );
 		// as long as the join would wait, not forever: a server there that
 		// proves no key is passed over, and said (CL_ExpectedServer)
 		CL_ExtConnect( name, &adr, NULL, 1, 0, RECONNECT_KEYED_MSEC, expected );
-		// still the address to go back to, if this one finds no server with
-		// the key (CL_ExtConnect forgets it until an answer)
+		clc.keyedReconnect = qtrue;
+		// still the join's: the address and key to go back to, if this finds
+		// no server with the key (CL_ExtConnect forgets them until an
+		// answer), and its rejoin by code, a restarting server's goodbye's
 		Q_strncpyz( cl_reconnectArgs, name, sizeof( cl_reconnectArgs ) );
 		Q_strncpyz( cl_reconnectExpected, expected, sizeof( cl_reconnectExpected ) );
+		Q_strncpyz( cls.rejoin, rejoin, sizeof( cls.rejoin ) );
 		return;
 	}
 	// the engine's own rejoin, the join it saved (CL_ExtSetRejoin), runs
 	// with the player's rights though game code ran reconnect: it goes only
-	// where the join went, and a join elsewhere game code can't run itself
+	// where the join went, and a join elsewhere game code can't run itself.
+	// Game code's once in RECONNECT_RESTRICTED_MSEC at most
 	if ( !cl_reconnectArgs[0] ) {
+		if ( Cmd_IsRestricted() ) {
+			if ( restrictedRejoinAt && cls.realtime - restrictedRejoinAt < RECONNECT_RESTRICTED_MSEC ) {
+				return;
+			}
+			restrictedRejoinAt = cls.realtime ? cls.realtime : 1;
+		}
 		Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", command ) );
 		return;
 	}
@@ -2547,6 +2562,7 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 	count = MIN( count, MAX_CONNECT_CANDIDATES );
 	// reconnect goes to the address that answers, once one does
 	cl_reconnectArgs[0] = '\0';
+	cl_reconnectExpected[0] = '\0';
 	CL_ConnectBegin( name );
 	for ( i = 0; i < count; i++ ) {
 		clc.candidates[i].adr = candidates[i];
@@ -2558,7 +2574,6 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 	clc.giveUpAt = giveUpMsec > 0 ? cls.realtime + giveUpMsec : 0;
 	Q_strncpyz( clc.expectedFingerprint, expectedFingerprint ? expectedFingerprint : "",
 		sizeof( clc.expectedFingerprint ) );
-	clc.unprovenSaid = qfalse;
 	CL_ConnectSend();
 }
 
@@ -2595,6 +2610,7 @@ static void CL_RtcConnect_f( void ) {
 	}
 	// reconnect needs a new connection, so it has nothing to go back to
 	cl_reconnectArgs[0] = '\0';
+	cl_reconnectExpected[0] = '\0';
 	Q_strncpyz( name, NET_AdrToString( adr ), sizeof( name ) );
 	CL_ConnectBegin( name );
 	clc.serverAddress = adr;
@@ -4466,8 +4482,11 @@ static qboolean CL_ExpectedServer( netadr_t from, qboolean proved ) {
 	} else {
 		// a server short of time to sign, under a flood of challenges,
 		// answers unproven: its address stays, and the next answer may prove.
-		// Said once, as it may be one that never will (a stock server)
-		if ( !clc.unprovenSaid ) {
+		// A reconnect that wants the join's key says it once, as it may be
+		// one that never will (a stock server); a join waits on quietly
+		if ( !clc.keyedReconnect ) {
+			Com_DPrintf( "%s answered without proving a key, passed over\n", NET_AdrToStringwPort( from ) );
+		} else if ( !clc.unprovenSaid ) {
 			Com_Printf( "%s answers without proving a key, so it isn't known to be the server asked for. Waiting for "
 				"one that proves %s.\n", NET_AdrToStringwPort( from ), clc.expectedFingerprint );
 			clc.unprovenSaid = qtrue;

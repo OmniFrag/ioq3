@@ -218,6 +218,7 @@ typedef struct {
 	int			fastUntil, giveUpAt;
 	char		expectedFingerprint[IDENT_FINGERPRINT_SIZE];	// "" for none
 	qboolean	unprovenSaid;			// CL_ExpectedServer has said an answer proved no key
+	qboolean	keyedReconnect;			// a reconnect that wants a join's key (CL_Reconnect_f)
 	// the server's content manifest, as connectResponse names it (ofm) or
 	// the last received, which the paks are checked against
 	// (download-protocol.md section 9.1, step 3)
