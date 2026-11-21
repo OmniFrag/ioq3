@@ -915,14 +915,31 @@ char *Key_KeynumToString( int keynum ) {
 }
 
 
+// what a binding's line in the config adds to it: the command, the
+// spaces and the quotes (Key_WriteBindings)
+#define KEY_SAVED_PREFIX	"bind  \"\""
+
 /*
 ===================
 Key_SetBinding
+
+Refuses a binding whose line in the config would be longer than a command
+line, saying so: the command buffer couldn't run the config's line, nor
+the binding, and bind couldn't bind it again (Key_Bind_f). Returns
+whether the key was bound
 ===================
 */
-void Key_SetBinding( int keynum, const char *binding ) {
+qboolean Key_SetBinding( int keynum, const char *binding ) {
+	int		longest;
+
 	if ( keynum < 0 || keynum >= MAX_KEYS ) {
-		return;
+		return qfalse;
+	}
+	longest = MAX_CMD_LINE - 1 - strlen( KEY_SAVED_PREFIX ) - strlen( Key_KeynumToString( keynum ) );
+	if ( (int)strlen( binding ) > longest ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: binding of %s is longer than %i characters, ignored\n",
+			Key_KeynumToString( keynum ), longest );
+		return qfalse;
 	}
 
 	// free old bindings
@@ -937,6 +954,7 @@ void Key_SetBinding( int keynum, const char *binding ) {
 	// consider this like modifying an archived cvar, so the
 	// file write will be triggered at the next opportunity
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
+	return qtrue;
 }
 
 
@@ -957,8 +975,9 @@ void Key_SetBindingRestricted( int keynum, const char *binding ) {
 			"or a line break, ignored\n", Key_KeynumToString( keynum ) );
 		return;
 	}
-	Key_SetBinding( keynum, binding );
-	keys[keynum].restricted = qtrue;
+	if ( Key_SetBinding( keynum, binding ) ) {
+		keys[keynum].restricted = qtrue;
+	}
 }
 
 /*
@@ -1040,8 +1059,7 @@ Key_Bind_f
 */
 void Key_Bind_f (void)
 {
-	int			i, c, b;
-	char		cmd[1024];
+	int			c, b;
 	
 	c = Cmd_Argc();
 
@@ -1066,16 +1084,12 @@ void Key_Bind_f (void)
 		return;
 	}
 	
-// copy the rest of the command line
-	cmd[0] = 0;		// start out with a null string
-	for (i=2 ; i< c ; i++)
-	{
-		strcat (cmd, Cmd_Argv(i));
-		if (i != (c-1))
-			strcat (cmd, " ");
+// the rest of the command line, whose words may be as long as the
+// tokenizer keeps, in text run at once (EXEC_NOW) or a config's line:
+// Key_SetBinding refuses it whole if it's longer than a command line
+	if ( !Key_SetBinding( b, Cmd_ArgsFrom( 2 ) ) ) {
+		return;
 	}
-
-	Key_SetBinding (b, cmd);
 	// a bind in restricted text runs restricted
 	keys[b].restricted = Cmd_IsRestricted();
 }
