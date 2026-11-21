@@ -135,9 +135,12 @@ if (urlParams.has('play')) {
 // (cpma-1.52), never two together, so it can't end the quotes it's set in
 // nor leave the home; and one the config lists files for, checked once
 // it's in (listedDir)
+// a game directory's name, wherever it comes from (a link, a config):
+// letters, digits, - and _, and a . inside, never two together
+const isGameDir = (dir) => typeof dir == 'string' && /^[A-Za-z0-9_-]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?$/.test(dir) && !dir.includes('..');
 const gameDir = (field) => {
     const dir = linkField(field) || '';
-    if (dir && (!/^[A-Za-z0-9_-]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?$/.test(dir) || dir.includes('..'))) {
+    if (dir && !isGameDir(dir)) {
         leftOut(field, 'a game directory is named with letters, digits, - and _, and a . inside');
         return '';
     }
@@ -186,12 +189,161 @@ if (visitName) setArgument('name', visitName);
 // as "%2b" in URL query strings or it will be stripped by the browser.
 const queryArgs = linkField('args');
 
-const dataURL = new URL(dataPath, location.origin + location.pathname);
+let dataURL = new URL(dataPath, location.origin + location.pathname);
+
+// The shared site's page: a build's own config says "central": true, which
+// only a build sets (WEB_PAGE_CENTRAL), never a server's config, since a
+// server's gateway writes the config its own page reads. That page plays
+// the server its address names, and a server's own page plays its own,
+// whatever its fragment says. Its words are placeholders until they're
+// chosen, kept here
+const CENTRAL_WORDS = {
+    noServer: 'This page plays a server its link names, and this link names none.',
+    unreached: (shown) => `Couldn't reach ${shown} to play it. Check the link, or try again later.`,
+    unread: (shown) => `${shown} didn't say which game it plays, so it can't be played here.`,
+    otherServer: (shown) => `${shown} has another key than this link names, so it may not be the server meant. Ask whoever gave you the link for a new one.`,
+    // the page's title and heading: the name as contacted, the link's
+    // host and port, never one the server gives, beside what it calls itself
+    // first, so a name the server gives can't push it out of a tab's width
+    title: (name, shown) => (name ? `${shown}: ${name}` : shown),
+    runBy: 'This server is run by its host, not OmniFrag.',
+};
+// The server the shared site's address names: #s=<name>[:<port>], its
+// HTTPS port when not 443, and #k=<key>, the 64 hex digits of its Ed25519
+// public key, which the join then takes alone (JoinWeb's sameKey). Without
+// a name and a key, with one malformed or named twice, it names none. The
+// name has a dot, as one with a certificate has, so a link can't aim the
+// page at localhost or a name only the visitor's network knows
+const serverOfFragment = (hash) => {
+    const fields = new URLSearchParams(hash.replace(/^#/, ''));
+    const [names, keys] = [fields.getAll('s'), fields.getAll('k')];
+    if (names.length !== 1 || keys.length !== 1 || !/^[0-9a-f]{64}$/i.test(keys[0])) return null;
+    const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+    const [, name, port] = new RegExp(`^(${label}(?:\\.${label})*)\\.?(?::([1-9][0-9]{0,4}))?$`).exec(names[0].toLowerCase()) ?? [];
+    // a name ending in a number is an IPv4 address to the URL parser, which
+    // rewrites it (127.1 is 127.0.0.1) or refuses it (a.1): none, as is a
+    // name the parser reads as another host
+    if (!name?.includes('.') || name.length > 253 || Number(port ?? 443) > 65535 || /(?:^|\.)[0-9]+$/.test(name)) return null;
+    let url;
+    try { url = new URL(`https://${name}${port ? `:${port}` : ''}`); } catch { return null; }
+    if (url.hostname !== name) return null;
+    const { origin } = url;
+    return Object.freeze({ name, origin, shown: origin.slice('https://'.length), key: keys[0].toLowerCase() });
+};
+// the shared site's server, once its config names it; null on any other page
+let centralServer = null;
+// The game the server plays, from its config: the game directory, the
+// agreement, the server's facts and each game directory's paks, and none of
+// what decides how this page behaves (its isolated form, a link's console
+// commands), which stays this page's own. Each file the server lists is a
+// pak by a plain name, at the server's own origin, going into the game
+// directory it's listed under and nowhere else; anything else (a .cfg the
+// engine would run, a .qvm, a path, another origin) is left out, so no
+// server leaves a file that runs, or that another server's game then reads.
+// One name in a directory, whatever its case, the player's own paks' first,
+// so no pak stands in for another by its name's case
+const PAK_NAME = /^[\w-][\w.-]*\.pk3$/;
+const atServer = (src) => {
+    try {
+        return new URL(src, dataURL).origin === centralServer.origin;
+    } catch {
+        return false;
+    }
+};
+// a config's own fields, and the file system's own folders at its root,
+// which no game directory of a server's stands in for
+const NOT_GAME_DIRS = new Set(['basegame', 'agreement', 'server', 'central', 'consoleArgs', 'isolated', 'home', 'dev', 'proc', 'tmp']);
+const serverDir = (dir) => isGameDir(dir) && !NOT_GAME_DIRS.has(dir) && !(dir in Object.prototype);
+const serverFiles = (dir, list, taken) => (Array.isArray(list) ? list : []).filter((file) => {
+    if (!file || typeof file != 'object' || typeof file.src != 'string' || file.dst !== `/${dir}`) return false;
+    const name = file.src.match(/[^/]*$/)[0];
+    if (!PAK_NAME.test(name) || !atServer(file.src) || taken.has(name.toLowerCase())) return false;
+    taken.add(name.toLowerCase());
+    return true;
+});
+const gameOfServer = (served) => {
+    const config = {};
+    if (serverDir(served.basegame)) config.basegame = served.basegame;
+    if (served.server && typeof served.server == 'object') config.server = served.server;
+    const agreement = served.agreement;
+    if (agreement && typeof agreement == 'object' && typeof agreement.src == 'string' && atServer(agreement.src)) config.agreement = agreement;
+    for (const [dir, value] of Object.entries(served)) {
+        if (!serverDir(dir) || !value || typeof value != 'object' || !(Array.isArray(value.files) || Array.isArray(value.own))) continue;
+        const taken = new Set();
+        const own = serverFiles(dir, value.own, taken);
+        config[dir] = { files: serverFiles(dir, value.files, taken), own };
+    }
+    return config;
+};
+// The policy the static host's header sets, narrowed to the server, before
+// anything of the server's is fetched: the page reaches its own origin and
+// the server's alone (a meta CSP can only narrow the header's)
+const narrowPolicy = (origin) => {
+    const meta = document.createElement('meta');
+    meta.httpEquiv = 'Content-Security-Policy';
+    meta.content = `connect-src 'self' ${origin}; img-src 'self' data: blob: ${origin}`;
+    document.head.prepend(meta);
+};
+const centralConfig = async (own) => {
+    centralServer = serverOfFragment(location.hash);
+    if (!centralServer) fail(CENTRAL_WORDS.noServer);
+    const { origin, shown, name, key } = centralServer;
+    narrowPolicy(origin);
+    showCentral(shown, '');
+    const read = async (path) => {
+        const response = await fetch(`${origin}${path}`, { cache: 'no-store', headers: { Accept: 'application/json' } }).catch(() => null);
+        return response?.ok ? response.json().catch(() => null) : null;
+    };
+    // the server's key first, before anything else of its: the one the link
+    // names, whole, and the name the link reached it at (as the join checks
+    // its answer again)
+    const keyed = await read('/key');
+    if (!keyed) fail(CENTRAL_WORDS.unreached(shown));
+    if (keyed.key !== key || (typeof keyed.name == 'string' && keyed.name && keyed.name !== name)) fail(CENTRAL_WORDS.otherServer(shown));
+    // what the server calls itself, shown beside the name it's reached at
+    read('/summary.json').then((summary) => {
+        if (typeof summary?.name == 'string') showCentral(shown, summary.name);
+    });
+    // the game's files are the server's, at its origin
+    dataURL = new URL('/', origin);
+    const served = await read(`/${CLIENT_NAME}-config.json`);
+    if (!served || typeof served != 'object' || Array.isArray(served)) fail(CENTRAL_WORDS.unread(shown));
+    // a link's console commands never run here
+    return { ...gameOfServer(served), central: true, consoleArgs: false,
+        ...(typeof own.isolated == 'string' && { isolated: own.isolated }) };
+};
+// The page's title and heading on the shared site's page: the server as the
+// link reached it, and what it calls itself, as text (a server's name is
+// its own, and could say anything); the heading goes once the game draws
+let centralTitle = '', centralTitleWatch = null;
+const centralHeading = document.createElement('header');
+centralHeading.id = 'central';
+centralHeading.hidden = true;
+const showCentral = (shown, called) => {
+    // control and format characters (bidirectional overrides among them)
+    // and color codes out, and no more than a line of it, cut between
+    // characters
+    const plainName = [...called.replace(/\^[^^]/g, '').replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').trim()].slice(0, 64).join('').trim();
+    centralTitle = CENTRAL_WORDS.title(plainName, shown);
+    document.title = centralTitle;
+    // the engine's window sets the page's title as it opens (SDL's), which
+    // would leave the tab naming the game rather than the server: kept
+    centralTitleWatch ??= new MutationObserver(() => {
+        if (document.title !== centralTitle) document.title = centralTitle;
+    });
+    centralTitleWatch.observe(document.head, { childList: true, subtree: true, characterData: true });
+    centralHeading.replaceChildren(Object.assign(document.createElement('b'), { textContent: shown }),
+        ...(plainName ? [' ', Object.assign(document.createElement('span'), { textContent: plainName })] : []),
+        Object.assign(document.createElement('p'), { textContent: CENTRAL_WORDS.runBy }));
+    if (!centralHeading.isConnected) document.body.append(centralHeading);
+    centralHeading.hidden = !!runningEngine;
+};
 
 const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {files: []}})
   : fetch(configFilename).catch(() => null).then((r) => r?.ok
       ? r.json().catch(() => fail(`Couldn't read ${configFilename}: it isn't valid JSON.`))
-      : failDownload(configFilename, r));
+      : failDownload(configFilename, r))
+      .then((own) => own?.central === true ? centralConfig(own) : own);
 
 // A page of the build's own in front of the game (WEB_PAGE_FRONT), a module
 // the parent project puts beside this one, whose default export is called
@@ -254,8 +406,17 @@ const gameDirsOf = (config, say = () => {}) => {
         say(field, `the page's config lists no files for ${dir}`);
         return '';
     };
+    // the shared site's page plays the server's game alone: a link's game
+    // directories would run another's game code in its origin (one-site.md,
+    // step 4, which decides what it may run)
+    if (config.central === true) {
+        for (const [field, dir] of [['com_basegame', urlBasegame], ['fs_basegame', fs_basegame], ['fs_game', fs_game]])
+            if (dir) say(field, "the shared site's page plays the server's own game");
+        const own = isGameDir(config.basegame) ? config.basegame : '';
+        return { urlBasegame: '', fs_basegame: '', fs_game: '', com_basegame: own || BASEGAME };
+    }
     let base = listedDir('com_basegame', urlBasegame);
-    const own = typeof config.basegame == 'string' && /^[\w.-]+$/.test(config.basegame) ? config.basegame : '';
+    const own = isGameDir(config.basegame) ? config.basegame : '';
     if (base && own && base !== own) {
         say('com_basegame', `this page plays ${own}`);
         base = '';
@@ -278,7 +439,7 @@ const frontAgreementOf = async () => {
     const response = await fetch(new URL(config.agreement.src, dataURL)).catch(() => null);
     if (!response?.ok) return null;
     const text = await response.text();
-    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    const key = `${CLIENT_NAME}.agreed.${await textHash(text)}`;
     return stored(key) ? null : { text, for: typeof config.agreement.for == 'string' ? config.agreement.for : '', key };
 };
 const frontAgreement = () => (frontAgreementAsked ??= frontAgreementOf());
@@ -1441,11 +1602,18 @@ const ask = (build, { later = true } = {}) => new Promise((resolve) => {
 const paragraph = (box, text) => box.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const store = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
-// FNV-1a's 32 bits, in hex: which text was accepted
-const textHash = (text) => {
+// which text was accepted: its SHA-256, in hex, which no other text a
+// server serves can stand in for (an agreement accepted under the 32-bit
+// hash before is asked once again). A page outside a secure context, which
+// has no WebCrypto, keeps FNV-1a's 32 bits, under a name of their own
+const textHash = async (text) => {
+    if (crypto.subtle) {
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+        return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
     let hash = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
-    return (hash >>> 0).toString(16);
+    return `fnv.${(hash >>> 0).toString(16)}`;
 };
 
 // The agreement the config names, which files marked "agreement" download
@@ -1456,7 +1624,7 @@ const agree = async (agreement) => {
     const response = await fetch(new URL(agreement.src, dataURL)).catch(() => null);
     if (!response?.ok) failDownload(agreement.src, response);
     const text = await response.text();
-    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    const key = `${CLIENT_NAME}.agreed.${await textHash(text)}`;
     if (stored(key)) return;
     await ask((box, done) => {
         paragraph(box, `This server plays ${typeof agreement.for == 'string' ? agreement.for : 'game data'}, which comes with the agreement below. Accept it to download the data and play.`);
@@ -2430,6 +2598,9 @@ ioquake3({
         if (field === 'password') joinFields.password = '';
         return value;
     },
+    // the shared site's server, which the join takes its name, origin and
+    // key from (join_web.js), and NetWeb lets the page reach; null elsewhere
+    centralServer,
     arguments: generatedArguments,
     locateFile: (file) => enginePath + file,
     preRun: [(module) => {
@@ -2486,6 +2657,7 @@ ioquake3({
     // the engine has started, and draws from here on
     postRun: [(module) => {
         runningEngine = module;
+        centralHeading.hidden = true;
         showStatus();
         if (frontOn) {
             engineTag = fetch(engineScript, { cache: 'force-cache' }).then((r) => {

@@ -57,3 +57,9 @@ canvas.held { cursor: none !important; }
 #leaving .fill { stroke: rgb(235, 235, 235); stroke-width: 4; stroke-dasharray: 1; stroke-dashoffset: 1; }
 #leaving.holding .fill { animation: leaving-fill var(--ring-fill) linear var(--ring-after) forwards; }
 @keyframes leaving-fill { to { stroke-dashoffset: 0; } }
+/* The shared site's page: the server as its link reached it, what it calls
+   itself, and whose it is, until the game draws */
+#central { position: fixed; top: 0; left: 0; right: 0; padding: 10px 16px; font: 15px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); background: rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; }
+#central[hidden] { display: none; }
+#central span { color: rgb(180, 180, 180); }
+#central p { margin: 2px 0 0; font-size: 13px; color: rgb(180, 180, 180); }
