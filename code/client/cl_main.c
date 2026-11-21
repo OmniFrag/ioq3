@@ -87,6 +87,7 @@ static cvar_t	*cl_movesByFrame;
 cvar_t	*cl_timedemo;
 cvar_t	*cl_timedemoLog;
 cvar_t	*cl_autoRecordDemo;
+cvar_t	*cl_webCentral;
 cvar_t	*cl_aviFrameRate;
 cvar_t	*cl_aviMotionJpeg;
 cvar_t	*cl_forceavidemo;
@@ -5906,6 +5907,12 @@ void CL_Init( void ) {
 	cl_timedemo = Cvar_Get ("timedemo", "0", 0);
 	cl_timedemoLog = Cvar_Get ("cl_timedemoLog", "", CVAR_ARCHIVE);
 	cl_autoRecordDemo = Cvar_Get ("cl_autoRecordDemo", "0", CVAR_ARCHIVE);
+	// set on its command line by a web page that plays whichever server its
+	// address names, as the name it reached the server at; nothing else may
+	// set it (CL_SystemInfoChanged)
+	cl_webCentral = Cvar_Get( "cl_webCentral", "", CVAR_INIT | CVAR_PROTECTED );
+	Cvar_SetDescription( cl_webCentral, "The name a web page that plays whichever server its address names reached the server at, "
+		"set by that page alone; such a page plays the base game only. Empty on any other page and natively." );
 	cl_aviFrameRate = Cvar_Get ("cl_aviFrameRate", "25", CVAR_ARCHIVE);
 	cl_aviMotionJpeg = Cvar_Get ("cl_aviMotionJpeg", "1", CVAR_ARCHIVE);
 	cl_forceavidemo = Cvar_Get ("cl_forceavidemo", "0", 0);
