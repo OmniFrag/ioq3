@@ -127,6 +127,20 @@ void GLimp_InitExtraExtensions(void)
 		ri.Printf(PRINT_ALL, result[2], extension);
 	}
 
+	// the GLSL programs compiled and linked side by side, their status read
+	// once all are under way (GLSL_InitGPUShaders), rather than one by one
+	extension = "GL_KHR_parallel_shader_compile";
+	glRefConfig.parallelShaderCompile = qfalse;
+	if (SDL_GL_ExtensionSupported(extension))
+	{
+		glRefConfig.parallelShaderCompile = !!r_ext_parallel_shader_compile->integer;
+		ri.Printf(PRINT_ALL, result[glRefConfig.parallelShaderCompile], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
 	//
 	// OpenGL ES extensions
 	//
