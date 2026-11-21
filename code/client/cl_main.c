@@ -142,6 +142,9 @@ clientStatic_t		cls;
 vm_t				*cgvm;
 
 char				cl_reconnectArgs[MAX_OSPATH];
+// the key reconnect's address must prove, as the join that found it did
+// (CL_ExtConnect's expected fingerprint), or "" for any
+static char			cl_reconnectExpected[IDENT_FINGERPRINT_SIZE];
 // connects begun and stopped (CL_ExtConnectGeneration)
 static int			cl_connectGeneration;
 // cls.realtime as the last connect began
@@ -1921,10 +1924,23 @@ void CL_Reconnect_f( void ) {
 	// a connection with no address to go back to, as a web client's, joins
 	// again as it was joined (CL_ExtSetRejoin)
 	const char	*command = cl_reconnectArgs[0] ? va( "connect %s", cl_reconnectArgs ) : cls.rejoin;
+	netadr_t	adr;
+	char		name[MAX_OSPATH], expected[IDENT_FINGERPRINT_SIZE];
 
 	if ( !command[0] )
 		return;
 	Cvar_Set("ui_singlePlayerActive", "0");
+	// an address a join found wants the key the join wanted: another server
+	// at that address since is passed over (CL_ExpectedServer), as the
+	// join's would be. A restarting server's goodbye rejoins as the join
+	// went instead (CL_ReconnectAsked)
+	if ( cl_reconnectArgs[0] && cl_reconnectExpected[0] &&
+		NET_StringToAdr( cl_reconnectArgs, &adr, NA_UNSPEC ) ) {
+		Q_strncpyz( name, cl_reconnectArgs, sizeof( name ) );
+		Q_strncpyz( expected, cl_reconnectExpected, sizeof( expected ) );
+		CL_ExtConnect( name, &adr, NULL, 1, 0, 0, expected );
+		return;
+	}
 	Cbuf_AddText( va( "%s\n", command ) );
 }
 
@@ -2468,8 +2484,9 @@ void CL_Connect_f( void ) {
 		Q_strncpyz( server, Cmd_Argv(2), sizeof( server ) );
 	}
 
-	// save arguments for reconnect
+	// save arguments for reconnect, which expects no key, as this doesn't
 	Q_strncpyz( cl_reconnectArgs, Cmd_Args(), sizeof( cl_reconnectArgs ) );
+	cl_reconnectExpected[0] = '\0';
 
 	CL_ConnectBegin( server );
 
@@ -4592,6 +4609,7 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			// joins again instead (CL_Reconnect_f)
 			if ( from.type != NA_WEB ) {
 				Q_strncpyz( cl_reconnectArgs, NET_AdrToStringwPort( from ), sizeof( cl_reconnectArgs ) );
+				Q_strncpyz( cl_reconnectExpected, clc.expectedFingerprint, sizeof( cl_reconnectExpected ) );
 			}
 		}
 		Com_DPrintf ("challengeResponse: %d\n", clc.challenge);
