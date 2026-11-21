@@ -30,6 +30,102 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 #include "tr_dsa.h"
 
+/*
+==================
+GLimp_Norm16Filters
+
+Whether OpenGL ES samples a 16-bit normalized texture (RGBA16) with
+linear filtering, as the view's textures are: a browser may list
+GL_EXT_texture_norm16 and still take such a texture as incomplete, which
+samples black (Firefox 160, through ANGLE on Windows and Metal on the
+Mac). Answered by drawing the point half-way between a black texel and a
+white one into a pixel and reading it back, on the new context, before
+GL_SetDefaultState sets every binding and state this changes. *drawn says
+whether the test pixel was drawn at all; where it wasn't, the answer is no
+==================
+*/
+static qboolean GLimp_Norm16Filters(qboolean *drawn)
+{
+	static const char *const sources[2] = {
+		"#version 300 es\n"
+		"void main() { gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0); }\n",
+		"#version 300 es\n"
+		"precision mediump float;\n"
+		"uniform mediump sampler2D t;\n"
+		"out vec4 color;\n"
+		"void main() { color = texture(t, vec2(0.5)); }\n",
+	};
+	static const unsigned short texels[] = { 0, 0, 0, 65535, 65535, 65535, 65535, 65535 };
+	GLuint texture, renderbuffer, framebuffer, program, shaders[2], vao = 0;
+	GLint linked = 0;
+	byte pixel[4] = { 0 };
+	int i;
+
+	*drawn = qfalse;
+
+	qglGenTextures(1, &texture);
+	qglBindTexture(GL_TEXTURE_2D, texture);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	qglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16, 2, 1, 0, GL_RGBA, GL_UNSIGNED_SHORT, texels);
+
+	qglGenRenderbuffers(1, &renderbuffer);
+	qglBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+	qglRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
+	qglGenFramebuffers(1, &framebuffer);
+	qglBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+	qglFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+
+	program = qglCreateProgram();
+	for (i = 0; i < 2; i++)
+	{
+		shaders[i] = qglCreateShader(i ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER);
+		qglShaderSource(shaders[i], 1, (const GLchar **)&sources[i], NULL);
+		qglCompileShader(shaders[i]);
+		qglAttachShader(program, shaders[i]);
+	}
+	qglLinkProgram(program);
+	qglGetProgramiv(program, GL_LINK_STATUS, &linked);
+
+	if (linked && qglCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+	{
+		qglUseProgram(program);
+		if (glRefConfig.vertexArrayObject)
+		{
+			qglGenVertexArrays(1, &vao);
+			qglBindVertexArray(vao);
+		}
+		qglViewport(0, 0, 1, 1);
+		qglDrawArrays(GL_TRIANGLES, 0, 3);
+		qglReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		*drawn = qtrue;
+	}
+
+	if (vao)
+	{
+		qglBindVertexArray(0);
+		qglDeleteVertexArrays(1, &vao);
+	}
+	qglUseProgram(0);
+	for (i = 0; i < 2; i++)
+		qglDeleteShader(shaders[i]);
+	qglDeleteProgram(program);
+	qglBindFramebuffer(GL_FRAMEBUFFER, 0);
+	qglDeleteFramebuffers(1, &framebuffer);
+	qglBindRenderbuffer(GL_RENDERBUFFER, 0);
+	qglDeleteRenderbuffers(1, &renderbuffer);
+	qglBindTexture(GL_TEXTURE_2D, 0);
+	qglDeleteTextures(1, &texture);
+	// a driver that refused the format outright has said so here, and the
+	// answer is no; bounded, as a lost context may keep reporting itself
+	for (i = 0; i < 16 && qglGetError() != GL_NO_ERROR; i++)
+		;
+
+	// half-way grey; black where the texture was taken as incomplete, a texel's own where it wasn't filtered
+	return pixel[0] >= 96 && pixel[0] <= 160;
+}
+
 void GLimp_InitExtraExtensions(void)
 {
 	char *extension;
@@ -435,9 +531,21 @@ void GLimp_InitExtraExtensions(void)
 done:
 
 	// 16-bit normalized color buffers, which clamp, for r_stockBlending:
-	// core since OpenGL 3.0; OpenGL ES and WebGL 2 with GL_EXT_texture_norm16
-	glRefConfig.renderNorm16 = qglesMajorVersion ? SDL_GL_ExtensionSupported("GL_EXT_texture_norm16")
-		: q_gl_version_at_least_3_0;
+	// core since OpenGL 3.0; OpenGL ES and WebGL 2 with GL_EXT_texture_norm16,
+	// where the browser filters them as it lists them
+	glRefConfig.renderNorm16 = q_gl_version_at_least_3_0;
+	extension = "GL_EXT_texture_norm16";
+	// (the test draws with OpenGL ES 3.0's framebuffers and shaders)
+	if (QGLES_VERSION_ATLEAST(3, 0) && SDL_GL_ExtensionSupported(extension))
+	{
+		qboolean drawn;
+
+		glRefConfig.renderNorm16 = GLimp_Norm16Filters(&drawn);
+		glRefConfig.norm16Unfiltered = !glRefConfig.renderNorm16;
+		if (glRefConfig.norm16Unfiltered)
+			ri.Printf(PRINT_ALL, drawn ? "...ignoring %s: RGBA16 isn't filtered here\n"
+				: "...ignoring %s: couldn't test that RGBA16 is filtered here\n", extension);
+	}
 
 	// OpenGL 4.2 and OpenGL ES 3.0 - GL_ARB_internalformat_query: the
 	// sample counts each format takes, as OpenGL ES promises GL_MAX_SAMPLES

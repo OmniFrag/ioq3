@@ -2972,11 +2972,13 @@ but have no alpha, so not where shaders blend with the alpha they draw
 samples each takes
 ==================
 */
-static int R_PickViewFormat( void ) {
+static int R_PickViewFormat( const char **why ) {
 	// a framebuffer that clamps, as Quake III's: 16 bits a channel where
 	// OpenGL renders them with the samples 8 bits take, 10 with r_hdr 2,
 	// whose 2 bits of alpha only shaders that blend with it would miss,
-	// else 8
+	// else 8. The view's textures are sampled with linear filtering, so
+	// where a browser lists 16 bits and won't filter them (they'd draw
+	// black; GLimp_Norm16Filters), 10 where the alpha's 2 bits may do
 	if (tr.stockBlending)
 	{
 		if (r_hdr->integer == 2 && r_ignoreDstAlpha->integer)
@@ -2984,6 +2986,12 @@ static int R_PickViewFormat( void ) {
 		if (r_hdr->integer && glRefConfig.renderNorm16
 			&& FBO_Samples(GL_RGBA16) >= FBO_Samples(GL_RGBA8))
 			return GL_RGBA16;
+		if (r_hdr->integer && glRefConfig.norm16Unfiltered)
+		{
+			*why = "RGBA16 isn't filtered here";
+			if (r_ignoreDstAlpha->integer && FBO_Samples(GL_RGB10_A2) >= FBO_Samples(GL_RGBA8))
+				return GL_RGB10_A2;
+		}
 		return GL_RGBA8;
 	}
 
@@ -3001,9 +3009,9 @@ static int R_PickViewFormat( void ) {
 int R_ViewFormat( void ) {
 	if (!tr.viewFormat)
 	{
-		const char *name;
+		const char *name, *why = NULL;
 
-		tr.viewFormat = R_PickViewFormat();
+		tr.viewFormat = R_PickViewFormat( &why );
 		switch (tr.viewFormat)
 		{
 			case GL_RGBA16:            name = "RGBA16";         break;
@@ -3012,7 +3020,10 @@ int R_ViewFormat( void ) {
 			case GL_RGB10_A2:          name = "RGB10_A2";       break;
 			default:                   name = "RGBA8";          break;
 		}
-		ri.Printf(PRINT_ALL, "...view format %s\n", name);
+		if (why)
+			ri.Printf(PRINT_ALL, "...view format %s, as %s\n", name, why);
+		else
+			ri.Printf(PRINT_ALL, "...view format %s\n", name);
 	}
 
 	return tr.viewFormat;

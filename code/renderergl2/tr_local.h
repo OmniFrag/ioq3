@@ -1471,6 +1471,7 @@ typedef struct {
 	qboolean textureFloat32; // OpenGL ES: 32-bit float color buffers, filtered linearly
 	qboolean packedFloat; // R11F_G11F_B10F color buffers, for r_hdr 2
 	qboolean renderNorm16; // RGBA16 color buffers, for r_stockBlending
+	qboolean norm16Unfiltered; // GL_EXT_texture_norm16 listed, but RGBA16 not filtered (GLimp_Norm16Filters)
 	int maxSamples;
 	textureCompressionRef_t textureCompression;
 	qboolean swizzleNormalmap;
