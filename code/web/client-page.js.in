@@ -316,7 +316,10 @@ const centralConfig = async (own) => {
     // which of its game directory's modules are its own code (client_code,
     // the gateway's web_mod_code)
     const game = gameOfServer(served);
-    const ownGames = Object.keys(own).filter((dir) => isGameDir(dir) && Array.isArray(own[dir]?.files));
+    // the base game alone, and its demo, which the engine plays as the base
+    // game (files.c): the game code linked into it is the base game's, and a
+    // QVM never runs here (VM_Create); Team Arena's is Joe's call
+    const ownGames = [BASEGAME, 'demoq3'].filter((dir) => Array.isArray(own[dir]?.files));
     const modCode = served.server?.client_code;
     if ((game.basegame && !ownGames.includes(game.basegame)) || (Array.isArray(modCode) && modCode.length))
         fail(CENTRAL_WORDS.mod(shown));

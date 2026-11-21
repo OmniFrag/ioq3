@@ -1032,6 +1032,9 @@ void	Cvar_Lock( cvar_t *var, const char *origin );
 void	Cvar_SetStart( cvar_t *var, const char *value, const char *origin );
 // notes what the command line or the environment gave a cvar this run
 cvar_t	*Cvar_GetStart( const char *var_name, const char *var_value, int flags );
+// the name the shared site's web page reached its server at (cl_webCentral),
+// set by that page on its start command alone; "" elsewhere
+const char	*Com_WebCentral( void );
 // Cvar_Get for a cvar only the start sets (CVAR_INIT): it takes the command
 // line's or the environment's value, or its default, whatever ran before
 const char	*Cvar_LockedBy( const char *var_name );
