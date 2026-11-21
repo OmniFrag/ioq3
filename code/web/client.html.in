@@ -1155,8 +1155,10 @@ const finePointer = matchMedia('(any-pointer: fine)');
 const CONTEXT_BACK_MS = 5000;
 // the Reload question, and the question it stood in for, put back if the
 // context comes back after all
-// contextGeneration counts the losses, which the renderer reads
-// (GLimp_ContextGeneration): a fence or program from before one is gone
+// contextGeneration counts the losses and the givings back, which the
+// renderer reads (GLimp_ContextGeneration): a fence or program from before
+// one is gone, and a renderer started while the context was lost (a map
+// change, a vid_restart) is started again in the one given back
 let restartRenderer = false, contextLostAt = 0, contextTimer, lostAsk, contextGeneration = 0;
 canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
@@ -1187,6 +1189,7 @@ canvas.addEventListener('webglcontextrestored', () => {
         else if (hidden) tellFront(frontListeners.ask, 'closed');
     }
     lostAsk = undefined;
+    contextGeneration++;
     restartRenderer = true;
 });
 const presentationFacts = () => {

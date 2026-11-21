@@ -97,8 +97,10 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 		R_PerformanceCounters();
 	}
 
-	// actually start the commands going
-	if ( !r_skipBackEnd->integer ) {
+	// actually start the commands going, but in no context other than the
+	// one the renderer started in: one lost, or given back and not started
+	// in again yet, has none of the objects they draw with
+	if ( !r_skipBackEnd->integer && GLimp_ContextGeneration() == tr.contextGeneration ) {
 		// let it start on the new batch
 		RB_ExecuteRenderCommands( cmdList->cmds );
 	}
@@ -544,8 +546,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 		R_SetColorMappings();
 	}
 
-	// check for errors
-	if ( !r_ignoreGLErrors->integer )
+	// check for errors, but not a lost context's, which says so
+	// (CONTEXT_LOST_WEBGL) rather than any of its own
+	if ( !r_ignoreGLErrors->integer && GLimp_ContextGeneration() == tr.contextGeneration )
 	{
 		int	err;
 

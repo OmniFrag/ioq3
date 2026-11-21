@@ -1715,10 +1715,10 @@ qboolean GLimp_WindowSizeIsOwn( void )
 ===============
 GLimp_ContextGeneration
 
-How many times the context has been lost (the web page's count), or
-natively how many contexts have been made, so what was made in one
-context can be told from what's made in the next, which may reuse its
-names
+How many times the context has been lost or given back (the web page's
+count, odd while lost), or natively how many contexts have been made, so
+what was made in one context can be told from what's made in the next,
+which may reuse its names
 ===============
 */
 int GLimp_ContextGeneration( void )
@@ -1727,6 +1727,74 @@ int GLimp_ContextGeneration( void )
 	return MAIN_THREAD_EM_ASM_INT( { return Module.contextGeneration?.() ?? 0; } );
 #else
 	return contextsMade;
+#endif
+}
+
+/*
+===============
+GLimp_ForgetObjects
+
+While forget is set, the deletes and fence waits do nothing: for the
+renderer's shutdown after its context was lost and given back, whose
+objects all went with the lost context, which WebGL refuses one by one
+("object does not belong to this context"). The context's extensions
+are turned on again for the renderer's next start. Natively a no-op
+===============
+*/
+#ifdef __EMSCRIPTEN__
+static void APIENTRY GLimp_NoDeleteN( GLsizei n, const GLuint *names ) { (void)n; (void)names; }
+static void APIENTRY GLimp_NoDelete( GLuint name ) { (void)name; }
+static void APIENTRY GLimp_NoDetach( GLuint program, GLuint shader ) { (void)program; (void)shader; }
+static void APIENTRY GLimp_NoDeleteSync( GLsync sync ) { (void)sync; }
+static GLenum APIENTRY GLimp_NoWait( GLsync sync, GLbitfield flags, GLuint64 timeout )
+{
+	(void)sync; (void)flags; (void)timeout;
+	return GL_ALREADY_SIGNALED;
+}
+#endif
+
+void GLimp_ForgetObjects( qboolean forget )
+{
+#ifdef __EMSCRIPTEN__
+	static qboolean forgetting;
+#define GLIMP_SWAP( name, stub ) \
+	{ \
+		static name##proc *was; \
+		if( forget ) { was = qgl##name; if( was ) qgl##name = (name##proc *)stub; } \
+		else qgl##name = was; \
+	}
+
+	if( forget == forgetting )
+	{
+		return;
+	}
+	forgetting = forget;
+	GLIMP_SWAP( DeleteTextures, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteBuffers, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteQueries, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteRenderbuffers, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteFramebuffers, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteVertexArrays, GLimp_NoDeleteN );
+	GLIMP_SWAP( DeleteProgram, GLimp_NoDelete );
+	GLIMP_SWAP( DeleteShader, GLimp_NoDelete );
+	GLIMP_SWAP( DetachShader, GLimp_NoDetach );
+	GLIMP_SWAP( DeleteSync, GLimp_NoDeleteSync );
+	GLIMP_SWAP( ClientWaitSync, GLimp_NoWait );
+#undef GLIMP_SWAP
+	if( forget )
+	{
+		// nor are this one's fences waited for again
+		previousFrameFence = frameFence = NULL;
+		// and the context given back has none of the extensions the lost one
+		// had on: asked for again, as Emscripten does once for a new context,
+		// before the renderer starts in it
+		MAIN_THREAD_EM_ASM( {
+			var context = GL.currentContext;
+			if( context ) { context.initExtensionsDone = false; GL.initExtensions( context ); }
+		} );
+	}
+#else
+	(void)forget;
 #endif
 }
 

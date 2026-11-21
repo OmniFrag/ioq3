@@ -613,6 +613,14 @@ static uint64_t GLSL_SourceKey(int attribs, const char *vpCode, const char *fpCo
 
 static void GLSL_DeleteKept(const keptProgram_t *kept)
 {
+	// one from a lost context went with it, and is refused in this one
+	if (kept->generation != GLimp_ContextGeneration())
+	{
+		if (kept->uniformBuffer)
+			ri.Free(kept->uniformBuffer);
+		return;
+	}
+
 	if (kept->vertexShader)
 	{
 		qglDetachShader(kept->program, kept->vertexShader);

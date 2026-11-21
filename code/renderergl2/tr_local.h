@@ -1764,6 +1764,7 @@ typedef struct {
 
 	// the field of view RE_SetWeaponFov asked for the next scene, 0 for none
 	float					weaponFovX, weaponFovY;
+	int						contextGeneration;	// the context's at R_Init (GLimp_ContextGeneration)
 } trGlobals_t;
 
 extern backEndState_t	backEnd;
