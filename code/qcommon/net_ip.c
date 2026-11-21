@@ -125,6 +125,11 @@ typedef int SOCKET;
 typedef int	ioctlarg_t;
 #	define socketError			errno
 
+#	ifdef __EMSCRIPTEN__
+		// no socket emulation in a browser, after every system header (P477)
+#		include "../web/no_sockets.h"
+#	endif
+
 #endif
 
 static qboolean usingSocks = qfalse;

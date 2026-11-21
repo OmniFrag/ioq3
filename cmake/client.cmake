@@ -106,6 +106,10 @@ set_output_dirs(${CLIENT_BINARY})
 if(EMSCRIPTEN)
     # relinked when the page's half of the network changes
     set_property(TARGET ${CLIENT_BINARY} APPEND PROPERTY LINK_DEPENDS ${SOURCE_DIR}/web/net_web.js)
+    # and with no socket emulation linked (no_sockets.h)
+    add_custom_command(TARGET ${CLIENT_BINARY} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DSCRIPT=$<TARGET_FILE:${CLIENT_BINARY}> -P ${CMAKE_CURRENT_LIST_DIR}/no-sockfs.cmake
+        VERBATIM)
 endif()
 
 if(NOT USE_RENDERER_DLOPEN)

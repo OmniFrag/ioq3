@@ -2524,7 +2524,9 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 	CL_ConnectSend();
 }
 
-#ifdef __EMSCRIPTEN__
+// a test build's alone (OMNIFRAG_TEST_BUILD): players join by code, whose
+// answer is signed, and a release's or a site's web build hasn't it
+#if defined( __EMSCRIPTEN__ ) && defined( OMNIFRAG_TEST_BUILD )
 /*
 ================
 CL_RtcConnect_f
@@ -6044,7 +6046,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
-#ifdef __EMSCRIPTEN__
+#if defined( __EMSCRIPTEN__ ) && defined( OMNIFRAG_TEST_BUILD )
 	Cmd_AddCommand( "rtc_connect", CL_RtcConnect_f );
 #endif
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
@@ -6133,7 +6135,7 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");
-#ifdef __EMSCRIPTEN__
+#if defined( __EMSCRIPTEN__ ) && defined( OMNIFRAG_TEST_BUILD )
 	Cmd_RemoveCommand( "rtc_connect" );
 #endif
 	Cmd_RemoveCommand ("reconnect");
