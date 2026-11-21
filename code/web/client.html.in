@@ -435,8 +435,21 @@ if (FRONT) {
         chooseFiles: () => {
             if (!webgl || frontChosen.done || !(frontChooser || canKeepFolders)) return false;
             frontChosen.opened = true;
-            if (canKeepFolders) frontChosen.pending = chooseFolder();
-            else frontChooser.click();
+            frontChosen.closed = false;
+            if (canKeepFolders) {
+                // the folder's chooser, which always settles: closed with
+                // nothing chosen, the question waits, put off, and the front
+                // is told so, before the question's built too, so it doesn't
+                // sit on its reading step meanwhile
+                frontChosen.pending = chooseFolder().then(() => {
+                    if (frontChosen.closed && (!frontChosen.to || askBox.hidden)) tellFront(frontListeners.ask, 'closed');
+                });
+            } else {
+                // a file input, whose closing not every browser tells: the
+                // question doesn't wait on it, and opens in the front's step
+                // meanwhile, a choice then being one of its rounds
+                frontChooser.click();
+            }
             startGame();
             return true;
         },
@@ -1436,13 +1449,18 @@ const canKeepFolders = typeof showDirectoryPicker == 'function' && typeof indexe
 // memory, and the copy the question offers is what spares that next time
 const readsChosenInPlace = !/AppleWebKit\//.test(navigator.userAgent) || /Chrome\/|Chromium\//.test(navigator.userAgent);
 // held: each choice before the question, { files, folder }; opened: the
-// front's press opened a chooser this visit
-const frontChosen = { held: [], to: null, pending: null, opened: false, done: false };
+// front's press opened a chooser this visit; closed: the last one it opened
+// was closed with nothing chosen, or the browser refused it
+const frontChosen = { held: [], to: null, pending: null, opened: false, closed: false, done: false };
 const dropChosen = () => Object.assign(frontChosen, { held: [], to: null, done: true });
 // files the front's press chose, from a kept folder under its key: to the
 // question if it's open, or else held for it
 const frontGive = (files, folder = '') => {
-    if (!files.length || frontChosen.done) return;
+    if (frontChosen.done) return;
+    // nothing in what was chosen (an empty folder) is as the chooser closed;
+    // a choice that comes after the page took it as closed undoes that
+    frontChosen.closed = !files.length;
+    if (!files.length) return;
     if (frontChosen.to) frontChosen.to(files, folder);
     // a second choice before the question is held beside the first, each
     // with its own folder
@@ -1457,16 +1475,23 @@ const chooseFolder = async () => {
         const waiting = [];
         for (const kept of await keptFolders()) if (await folderState(kept) === 'prompt') waiting.push(kept);
         if (waiting.length) {
+            let granted = 0;
             for (const kept of waiting)
-                if (await kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied') === 'granted')
+                if (await kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied') === 'granted') {
+                    granted++;
                     frontGive(await folderFiles(kept), kept.key);
+                }
+            // every prompt refused or dismissed: as the chooser closed
+            if (!granted) frontChosen.closed = true;
             return;
         }
         const handle = await showDirectoryPicker({ id: 'game', mode: 'read' });
         const { files, folder } = await takeFolder(handle);
         frontGive(files, folder);
     } catch {
-        // the player closed the chooser: the question asks when it opens
+        // the player closed the chooser, or the browser refused it: the
+        // question waits, put off, for the front's next press
+        frontChosen.closed = true;
     }
 };
 const frontChooser = FRONT && !canKeepFolders
@@ -1489,7 +1514,9 @@ if (frontChooser) {
         frontGive(files);
     });
 }
-const ask = (build, { later = true } = {}) => new Promise((resolve) => {
+// putOff: opened as the player's Not now leaves it, hidden till the front
+// asks again, as when its press's chooser was closed with nothing chosen
+const ask = (build, { later = true, putOff = false } = {}) => new Promise((resolve) => {
     const box = document.createElement('div');
     askBox.replaceChildren(box);
     build(box, () => {
@@ -1504,6 +1531,10 @@ const ask = (build, { later = true } = {}) => new Promise((resolve) => {
             askBox.hidden = true;
             tellFront(frontListeners.ask, 'closed');
         });
+    }
+    if (frontOn && later && putOff) {
+        tellFront(frontListeners.ask, 'closed');
+        return;
     }
     showStatus();
     askBox.hidden = false;
@@ -2114,6 +2145,9 @@ const bring = async (own) => {
     // a kept folder the front's press let meanwhile (chooseFolder) gave its
     // files above, and isn't asked about again
     for (const kept of waiting.splice(0)) if (await folderState(kept) === 'prompt') waiting.push(kept);
+    // the front's chooser closed with nothing chosen: the question isn't
+    // opened over the front, but waits, put off, for the front's next press
+    const putOff = frontChosen.closed && !frontRound && !waiting.length;
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
         if (waiting.length) {
@@ -2132,9 +2166,12 @@ const bring = async (own) => {
                 allow.hidden = true;
             });
         }
+        // with a front, words that name no game folder, the front's own
+        // place for them while they wait on Joe (a placeholder)
+        const where = frontOn ? 'or the folder that holds its .pk3 files' : `or its ${folders} folder`;
         paragraph(box, canKeepFolders
-            ? `Choose the folder your game is installed in, or its ${folders} folder. The game reads your files from there; nothing is copied.`
-            : `Choose the folder your game is installed in, or its ${folders} folder, or its files.`);
+            ? `Choose the folder your game is installed in, ${where}. The game reads your files from there; nothing is copied.`
+            : `Choose the folder your game is installed in, ${where}${frontOn ? '' : ', or its files'}.`);
         const left = paragraph(box, '');
         const rows = box.appendChild(Object.assign(document.createElement('ul'), { hidden: true }));
         const row = ({ verdict, name }, pak) => {
@@ -2188,6 +2225,8 @@ const bring = async (own) => {
         };
         // a choice in the front's own press while the question is open: one of its rounds
         frontChosen.to = (files, folder) => round(files, true, folder);
+        // one that came after its chooser was taken as closed (bring's wait past), as a round of its own
+        for (const { files, folder } of frontChosen.held.splice(0)) frontChosen.to(files, folder);
         // where the browser keeps a folder, it's chosen through its own
         // chooser and kept; elsewhere through a file input, for this visit
         if (canKeepFolders) {
@@ -2225,7 +2264,7 @@ const bring = async (own) => {
             });
         }
         show();
-    });
+    }, { putOff });
     // the question past: nothing more taken from the front's chooser, and nothing it chose held
     dropChosen();
     // to the isolated form once every pak is stored; a pak that wasn't, for
