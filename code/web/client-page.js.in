@@ -21,7 +21,7 @@ if (window.location.protocol === 'file:') throw new Error(`Unfortunately browser
 const FRONT = '@WEB_PAGE_FRONT@';
 // the front shows, until it fails to load
 let frontOn = !!FRONT;
-const frontListeners = { started: [], progress: [], status: [], ask: [], playing: [], left: [], quit: [], crash: [] };
+const frontListeners = { started: [], progress: [], status: [], ask: [], files: [], playing: [], left: [], quit: [], crash: [] };
 // the front's listeners told, one that throws kept from the engine's frame,
 // which calls them (Module.left), and from the others
 const tellFront = (listeners, ...args) => listeners.forEach((listener) => {
@@ -528,36 +528,40 @@ if (FRONT) {
         onStatus: (listener) => frontListeners.status.push(listener),
         onAsk: (listener) => frontListeners.ask.push(listener),
         askAgain: () => {
+            // the files' question a front shows itself, put off
+            const again = frontQuestion?.again();
+            if (again !== undefined) return again;
             if (!askBox.firstChild) return false;
             askBox.hidden = false;
             tellFront(frontListeners.ask, 'open');
             return true;
         },
-        // the player's own files chosen in the front's own press, within
-        // the player's gesture: the system's chooser opens, and the game
-        // starts as start() does; false where it can't run, or once the
-        // files' question is past
-        chooseFiles: () => {
-            if (!webgl || frontChosen.done || !(frontChooser || canKeepFolders)) return false;
-            frontChosen.opened = true;
-            frontChosen.closed = false;
-            if (canKeepFolders) {
-                // the folder's chooser, which always settles: closed with
-                // nothing chosen, the question waits, put off, and the front
-                // is told so, before the question's built too, so it doesn't
-                // sit on its reading step meanwhile
-                frontChosen.pending = chooseFolder().then(() => {
-                    if (frontChosen.closed && (!frontChosen.to || askBox.hidden)) tellFront(frontListeners.ask, 'closed');
-                });
-            } else {
-                // a file input, whose closing not every browser tells: the
-                // question doesn't wait on it, and opens in the front's step
-                // meanwhile, a choice then being one of its rounds
-                frontChooser.click();
-            }
-            startGame();
-            return true;
+        // the player's own files chosen in the front's own press, within the
+        // player's gesture, and the game started as start() does; false where
+        // it can't run, or once the files' question is past. chooseFiles opens
+        // a chooser of .pk3 files; chooseFolder one of a folder, which the
+        // page keeps where the browser lets it
+        chooseFiles: () => frontPress(() => frontFiles.click()),
+        chooseFolder: () => frontPress(() => {
+            if (canKeepFolders) return chooseFolder();
+            (frontChooser ?? frontFiles).click();
+        }),
+        // A front that takes the files' question itself (onFiles): the
+        // page shows no box of its own, and tells the front, at every
+        // change, what's still needed, each file of the last choice refused
+        // and why, whether a kept folder waits on an Allow, and the copy's
+        // offer; the front answers with the calls here, each in its press
+        onFiles: (listener) => frontListeners.files.push(listener),
+        allowFolder: () => !!frontQuestion?.allow(),
+        // a copy in the browser of what the player chooses, asked for any
+        // time, before a first choice too
+        canKeepCopy: isSecureContext && (typeof navigator.storage?.getDirectory == 'function' || typeof indexedDB != 'undefined'),
+        keepCopy: (on) => {
+            frontCopy = !!on;
+            if (frontQuestion) frontQuestion.copy(frontCopy);
+            else frontCopyTo?.(frontCopy);
         },
+        notNow: () => !!frontQuestion?.notNow(),
         download: frontDownload,
         ownFiles: frontOwnFiles,
         onStarted: (listener) => frontListeners.started.push(listener),
@@ -1331,7 +1335,8 @@ canvas.addEventListener('webglcontextrestored', () => {
         const { children, hidden } = lostAsk.before;
         askBox.replaceChildren(...children);
         askBox.hidden = hidden || !children.length;
-        if (!children.length) tellFront(frontListeners.ask, 'done');
+        // a files' question a front shows itself (onFiles) is still asked
+        if (!children.length) tellFront(frontListeners.ask, frontQuestion ? (frontQuestion.shown() ? 'open' : 'closed') : 'done');
         else if (hidden) tellFront(frontListeners.ask, 'closed');
     }
     lostAsk = undefined;
@@ -1557,6 +1562,28 @@ const readsChosenInPlace = !/AppleWebKit\//.test(navigator.userAgent) || /Chrome
 // front's press opened a chooser this visit; closed: the last one it opened
 // was closed with nothing chosen, or the browser refused it
 const frontChosen = { held: [], to: null, pending: null, opened: false, closed: false, done: false };
+// the front's copy asked for (keepCopy), and the files' question while it
+// runs: { shown(), allow(), copy(on), notNow() }
+let frontCopy = false, frontQuestion = null;
+// the copy asked for while bring runs before its question's built
+let frontCopyTo = null;
+// a press of the front's opening a chooser (open: a promise where the
+// chooser settles, the folder's); closed with nothing chosen while the
+// question waits, put off, the front is told so again, and stays on its own
+// step, before the question's built too, so it doesn't sit on its reading
+// step meanwhile
+const frontClosed = () => {
+    if (frontChosen.closed && (!frontChosen.to || !frontQuestion?.shown())) tellFront(frontListeners.ask, 'closed');
+};
+const frontPress = (open) => {
+    if (!webgl || frontChosen.done) return false;
+    frontChosen.opened = true;
+    frontChosen.closed = false;
+    const pending = open();
+    if (pending) frontChosen.pending = pending.then(frontClosed);
+    startGame();
+    return true;
+};
 const dropChosen = () => Object.assign(frontChosen, { held: [], to: null, done: true });
 // files the front's press chose, from a kept folder under its key: to the
 // question if it's open, or else held for it
@@ -1599,38 +1626,53 @@ const chooseFolder = async () => {
         frontChosen.closed = true;
     }
 };
-const frontChooser = FRONT && !canKeepFolders
-    ? Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 }) : null;
-// a folder, the game's, where the browser chooses one; files on a phone,
-// whose chooser has none
-if (frontChooser && !iOS && 'webkitdirectory' in frontChooser) {
-    frontChooser.webkitdirectory = true;
-    frontChooser.removeAttribute('accept');
-}
-if (frontChooser) {
-    // out of sight, not display: none, which some browsers' click() won't open
-    frontChooser.setAttribute('aria-hidden', 'true');
-    Object.assign(frontChooser.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none', left: '0', top: '0' });
-    document.body.appendChild(frontChooser);
-    frontChooser.addEventListener('change', () => {
-        const files = [...frontChooser.files];
+// The front's own inputs, made as the page loads, so its press opens a
+// chooser in the player's gesture: a folder's, where the browser keeps none
+// and has a folder chooser (not a phone's), and one of .pk3 files. Out of
+// sight, not display: none, which some browsers' click() won't open
+const frontInput = (folder) => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 });
+    if (folder) {
+        input.webkitdirectory = true;
+        input.removeAttribute('accept');
+    }
+    input.setAttribute('aria-hidden', 'true');
+    Object.assign(input.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none', left: '0', top: '0' });
+    document.body.appendChild(input);
+    input.addEventListener('change', () => {
+        const files = [...input.files];
         // so the same files can be chosen again, and the input holds none
-        frontChooser.value = '';
+        input.value = '';
         frontGive(files);
     });
-}
+    // closed with nothing chosen, where the browser tells it (cancel): as
+    // the folder's chooser closed; bring doesn't wait on it, as not every
+    // browser tells it
+    input.addEventListener('cancel', () => {
+        if (frontChosen.done) return;
+        frontChosen.closed = true;
+        frontClosed();
+    });
+    return input;
+};
+const frontChooser = FRONT && !canKeepFolders && !iOS && 'webkitdirectory' in HTMLInputElement.prototype ? frontInput(true) : null;
+const frontFiles = FRONT ? frontInput(false) : null;
 // putOff: opened as the player's Not now leaves it, hidden till the front
-// asks again, as when its press's chooser was closed with nothing chosen
-const ask = (build, { later = true, putOff = false } = {}) => new Promise((resolve) => {
+// asks again, as when its press's chooser was closed with nothing chosen.
+// frontOwns: the front shows the question itself (onFiles), so the box is
+// built off the page, its controls driven by the front's calls
+const ask = (build, { later = true, putOff = false, frontOwns = false } = {}) => new Promise((resolve) => {
     const box = document.createElement('div');
-    askBox.replaceChildren(box);
+    if (!frontOwns) askBox.replaceChildren(box);
     build(box, () => {
-        askBox.hidden = true;
-        askBox.replaceChildren();
+        if (!frontOwns) {
+            askBox.hidden = true;
+            askBox.replaceChildren();
+        }
         tellFront(frontListeners.ask, 'done');
         resolve();
     });
-    if (frontOn && later) {
+    if (frontOn && later && !frontOwns) {
         const notNow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Not now' }));
         notNow.addEventListener('click', () => {
             askBox.hidden = true;
@@ -1641,8 +1683,10 @@ const ask = (build, { later = true, putOff = false } = {}) => new Promise((resol
         tellFront(frontListeners.ask, 'closed');
         return;
     }
-    showStatus();
-    askBox.hidden = false;
+    if (!frontOwns) {
+        showStatus();
+        askBox.hidden = false;
+    }
     tellFront(frontListeners.ask, 'open');
 });
 const paragraph = (box, text) => box.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
@@ -1809,6 +1853,12 @@ const ownAll = (db) => new Promise((resolve) => {
     }
 });
 const fileName = (src) => src.match(/[^/]+$/)[0];
+// why a file the player chose fills nothing, as the files' question says it
+const REFUSED = {
+    'checksum': (name) => `${name} isn't the one this server needs.`,
+    'unreadable': (name) => `${name} couldn't be read.`,
+    'not-pak': (name) => `${name} isn't a game file (.pk3).`,
+};
 
 // A folder the player chose, read where it is and kept for the next visit
 // as its handle, where the browser can (showDirectoryPicker, Chromium): on a
@@ -2038,7 +2088,7 @@ const bring = async (own) => {
     const chosenCopies = new Set();
     // whether the player chose to keep a copy in the browser of what they
     // choose (the question's box), as the page did of everything before
-    let copyChosen = false;
+    let copyChosen = frontCopy;
     // a chosen file, or a kept one, checked: { name, folder, blob }, and a
     // pak's checksum or damage
     const checked = async (blob, name, folder) =>
@@ -2202,12 +2252,32 @@ const bring = async (own) => {
     };
     // what's taken this visit, for a copy chosen after it
     const takenNow = [];
+    // the copy the front asked for meanwhile (keepCopy), till the question's tick takes it
+    copyChosen = frontCopy;
+    frontCopyTo = (on) => {
+        copyChosen = on;
+        if (on) copy(takenNow);
+    };
+    // the last choice's files that fill nothing, and why: a pak not the one
+    // asked for (another release, the demo's, Team Arena's, or one chosen
+    // alone that's none of them), one that can't be read, or a file chosen
+    // alone that's no pak; a folder's other files aren't
+    let refused = [];
+    const refusal = ({ name, folder }, verdict) => (verdict === 'damaged' ? 'unreadable'
+        : ['other-release', 'demo', 'team-arena'].includes(verdict) ? 'checksum'
+            : verdict === 'ignored' && folder === undefined ? (/\.pk3$/i.test(name) ? 'checksum' : 'not-pak') : '');
     // A round's chosen files, under the names they fill: read where they
     // are, from the folder kept under folder ('' for none), and copied when
     // the player chose a copy; how says where they came from
     const take = (files, folder = '', how = 'Chose') => {
         const taken = [];
+        // a chosen folder's other games' paks and unreadable files count
+        // only when the folder filled nothing (an install holds Team
+        // Arena's beside the game's); a kept folder's aren't a choice
+        const wrong = [], aside = [];
         paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
+            const why = fills(verdict) ? '' : refusal(files[i], verdict);
+            if (why) (files[i].folder !== undefined && verdict !== 'other-release' ? aside : wrong).push({ name: files[i].name, why });
             const { blob, checksum } = files[i];
             if (fills(verdict)) {
                 have.set(entry, blob);
@@ -2220,6 +2290,7 @@ const bring = async (own) => {
         if (folder && store.call && taken.length)
             store.call('note', { folder, files: taken.map(({ entry, blob, checksum }) => ({ src: entry.src.toLowerCase(), name: blob.name,
                 checksum, size: blob.size, mtime: blob.lastModified })) }).catch(() => {});
+        if (how !== 'Kept') refused = taken.length ? wrong : [...wrong, ...aside];
         takenNow.push(...taken);
         if (copyChosen) copy(taken);
     };
@@ -2260,11 +2331,14 @@ const bring = async (own) => {
     // the front's chooser closed with nothing chosen: the question isn't
     // opened over the front, but waits, put off, for the front's next press
     const putOff = frontChosen.closed && !frontRound && !waiting.length;
+    // a front that shows the question itself (onFiles)
+    const frontOwns = frontOn && frontListeners.files.length > 0;
+    let putAway = putOff, allowButton = null, tick = null;
     if (missing().length) await ask((box, done) => {
         const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
         if (waiting.length) {
             paragraph(box, 'Allow the game to read your game folder again.');
-            const allow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Allow' }));
+            const allow = allowButton = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Allow' }));
             allow.addEventListener('click', () => {
                 for (const kept of waiting.splice(0)) {
                     const asked = kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied');
@@ -2276,6 +2350,7 @@ const bring = async (own) => {
                     }).catch((error) => console.error(`Couldn't read the kept folder: ${error}`));
                 }
                 allow.hidden = true;
+                tellFiles();
             });
         }
         // with a front, words that name no game folder, the front's own
@@ -2285,6 +2360,8 @@ const bring = async (own) => {
             ? `Choose the folder your game is installed in, ${where}. The game reads your files from there; nothing is copied.`
             : `Choose the folder your game is installed in, ${where}${frontOn ? '' : ', or its files'}.`);
         const left = paragraph(box, '');
+        // what the last choice gave that fills nothing, and why
+        const wrong = paragraph(box, '');
         const rows = box.appendChild(Object.assign(document.createElement('ul'), { hidden: true }));
         const row = ({ verdict, name }, pak) => {
             const item = document.createElement('li');
@@ -2295,9 +2372,19 @@ const bring = async (own) => {
         };
         const show = () => {
             left.textContent = `Still needed: ${missing().map((file) => fileName(file.src)).join(', ')}.`;
+            wrong.textContent = refused.map(({ name, why }) => REFUSED[why](name)).join(' ');
+            wrong.hidden = !refused.length;
             rows.replaceChildren(...own.map((file) => row(said.get(file) ?? { verdict: 'missing' }, file.src)),
                 ...others.map((other) => row(other)));
+            tellFiles();
         };
+        // the question as a front that shows it itself is told it
+        const copyBytes = () => takenNow.filter(({ entry }) => !chosenCopies.has(entry)).reduce((sum, { blob }) => sum + blob.size, 0);
+        const tellFiles = () => tellFront(frontListeners.files, {
+            needed: missing().map((file) => fileName(file.src)), refused: refused.map((file) => ({ ...file })),
+            waiting: !!allowButton && !allowButton.hidden, canKeepFolders,
+            copy: { offered: !!tick, bytes: copyBytes(), on: !!tick && copyChosen },
+        });
         // one round at a time, in the order chosen; none once all are in
         let rounds = Promise.resolve();
         const chooser = (label, folder) => {
@@ -2325,8 +2412,9 @@ const bring = async (own) => {
                     show();
                     // the front's choice, with the question put off (Not
                     // now): it opens again for what's still needed
-                    if (fromFront && askBox.hidden) {
-                        askBox.hidden = false;
+                    if (fromFront && !frontQuestion.shown()) {
+                        if (frontOwns) putAway = false;
+                        else askBox.hidden = false;
                         tellFront(frontListeners.ask, 'open');
                     }
                 } else {
@@ -2363,20 +2451,56 @@ const bring = async (own) => {
         let sizeCopy = () => {};
         if (store.call || db) {
             const label = box.appendChild(document.createElement('label'));
-            const tick = label.appendChild(Object.assign(document.createElement('input'), { type: 'checkbox', id: 'ask-copy' }));
+            tick = label.appendChild(Object.assign(document.createElement('input'), { type: 'checkbox', id: 'ask-copy', checked: copyChosen }));
             const words = label.appendChild(document.createElement('span'));
             sizeCopy = () => {
-                const bytes = takenNow.filter(({ entry }) => !chosenCopies.has(entry)).reduce((sum, { blob }) => sum + blob.size, 0);
+                const bytes = copyBytes();
                 words.textContent = ` Keep a copy in this browser${bytes ? ` (${megabytes(bytes)} MB)` : ''} so you're not asked next time`;
+                tellFiles();
             };
             sizeCopy();
             tick.addEventListener('change', () => {
                 copyChosen = tick.checked;
                 if (copyChosen) copy(takenNow);
+                tellFiles();
             });
         }
+        // the question as the front reaches it (allowFolder, keepCopy, notNow)
+        frontQuestion = {
+            shown: () => (frontOwns ? !putAway : !askBox.hidden),
+            allow: () => {
+                if (!allowButton || allowButton.hidden) return false;
+                allowButton.click();
+                // the front's Allow brings a put-off question back
+                if (frontOwns && putAway) {
+                    putAway = false;
+                    tellFront(frontListeners.ask, 'open');
+                }
+                return true;
+            },
+            copy: (on) => {
+                if (!tick || tick.checked === on) return;
+                tick.checked = on;
+                tick.dispatchEvent(new Event('change'));
+            },
+            again: () => {
+                if (!frontOwns) return undefined;
+                putAway = false;
+                tellFront(frontListeners.ask, 'open');
+                return true;
+            },
+            notNow: () => {
+                if (!frontQuestion.shown()) return false;
+                if (frontOwns) putAway = true;
+                else askBox.hidden = true;
+                tellFront(frontListeners.ask, 'closed');
+                return true;
+            },
+        };
         show();
-    }, { putOff });
+    }, { putOff, frontOwns });
+    frontQuestion = null;
+    frontCopyTo = null;
     // the question past: nothing more taken from the front's chooser, and nothing it chose held
     dropChosen();
     // to the isolated form once every pak is stored; a pak that wasn't, for
