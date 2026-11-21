@@ -1581,20 +1581,35 @@ void SV_Init (void)
 		"never a file, as a whole path, and let only the server's user write in it. By default it's the content folder in "
 		"the server's home." );
 	
+	// a client's browser asks these masters for servers (globalservers), so
+	// in a client game code and servers can't change them, as cl_masters;
+	// a dedicated server's are its operator's
+#ifdef DEDICATED
 	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, 0);
+#else
+	sv_master[0] = Cvar_Get("sv_master1", MASTER_SERVER_NAME, CVAR_PROTECTED);
+#endif
 	Cvar_SetDescription( sv_master[0],
 		"First master server the server lists itself on, and players ask\n"
 		"With dedicated 2, the server tells each master it's running every 5 minutes, and as maps start "
 		"and players come and go, so players find it in the browser's Internet list. A player's own "
 		"browser asks the same masters for servers. The first is id's, which Quake III always used." );
+#ifdef DEDICATED
 	sv_master[1] = Cvar_Get("sv_master2", "directory.ioquake3.org", 0);
+#else
+	sv_master[1] = Cvar_Get("sv_master2", "directory.ioquake3.org", CVAR_PROTECTED);
+#endif
 	Cvar_SetDescription( sv_master[1],
 		"Second master server the server lists itself on, and players ask\n"
 		"It works as sv_master1 does: with dedicated 2 the server tells it it's running, and players' "
 		"browsers ask it for servers. The second is ioquake3's, which servers of ioquake3 and the games "
 		"built on it list on." );
 	for(index = 2; index < MAX_MASTER_SERVERS; index++) {
+#ifdef DEDICATED
 		sv_master[index] = Cvar_Get(va("sv_master%d", index + 1), "", CVAR_ARCHIVE);
+#else
+		sv_master[index] = Cvar_Get(va("sv_master%d", index + 1), "", CVAR_ARCHIVE | CVAR_PROTECTED);
+#endif
 		Cvar_SetDescription( sv_master[index],
 			"More master servers, sv_master3 to sv_master5; empty for none\n"
 			"They work as sv_master1 does: with dedicated 2 the server tells each it's running, and players' "
