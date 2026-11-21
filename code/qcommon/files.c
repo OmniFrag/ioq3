@@ -7661,6 +7661,25 @@ static qboolean FS_ServerPakMissing( int i )
 
 /*
 ================
+FS_CentralRefusesPak
+
+Whether the server's referenced pak i, a valid download name, is one a web
+page that plays whichever server its address names (cl_webCentral, the
+client's) never takes: it takes the base game's paks alone, so one of
+another game directory is neither downloaded nor stored, by any lane
+(FS_ComparePaks, FS_MissingPaks)
+================
+*/
+static qboolean FS_CentralRefusesPak( int i )
+{
+	const char	*name = fs_serverReferencedPakNames[i];
+	size_t		length = strlen( com_basegame->string );
+
+	return *Com_WebCentral() && ( Q_stricmpn( name, com_basegame->string, length ) || name[length] != '/' );
+}
+
+/*
+================
 FS_ComparePaks
 
 ----------------
@@ -7709,6 +7728,12 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 
 		if ( FS_ServerPakMissing( i ) ) {
 			// Don't got it
+
+			if ( FS_CentralRefusesPak( i ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: %s.pk3 isn't the base game's, which is all this page takes; not downloaded\n",
+					fs_serverReferencedPakNames[i] );
+				continue;
+			}
 
 			if (dlstring)
 			{
@@ -7778,7 +7803,7 @@ int FS_MissingPaks( missingPak_t *paks, int max ) {
 
 	for ( i = 0; i < fs_numServerReferencedPaks; i++ ) {
 		if ( !fs_serverReferencedPakNames[i] || strlen( fs_serverReferencedPakNames[i] ) + 4 >= sizeof( paks->name ) ||
-			!FS_ValidDownloadName( fs_serverReferencedPakNames[i] ) || !FS_ServerPakMissing( i ) ) {
+			!FS_ValidDownloadName( fs_serverReferencedPakNames[i] ) || !FS_ServerPakMissing( i ) || FS_CentralRefusesPak( i ) ) {
 			continue;
 		}
 		if ( count < max ) {
@@ -8151,6 +8176,18 @@ static void FS_Startup( const char *gameName )
 		// use "" and not the standard basegame name because this messes
 		// up pak file negotiation and lots of other stuff
 		Cvar_ForceReset( "fs_game" );
+	}
+
+	// the shared site's web page (Com_WebCentral) plays its base game alone,
+	// whatever asked for another directory (a game_restart, the Mods menu, a
+	// config): none is searched there
+	if ( *Com_WebCentral() ) {
+		if ( fs_gamedirvar->string[0] ) {
+			Cvar_ForceReset( "fs_game" );
+		}
+		if ( fs_basegame->string[0] ) {
+			Cvar_ForceReset( "fs_basegame" );
+		}
 	}
 
 	if (FS_InvalidGameDir(gameName)) {

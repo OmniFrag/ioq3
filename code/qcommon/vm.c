@@ -764,7 +764,12 @@ static vmLinkedModule_t *VM_FindLinked( const char *module ) {
 	const char			*gameDir = FS_GetCurrentGameDir(), *basedOn = Cvar_VariableString( "fs_basegame" );
 	vmLinkedModule_t	*linked, *baseGame = NULL, *based = NULL;
 
-	if ( !vm_linked->integer ) {
+	// the shared site's web page (Com_WebCentral) runs only the code
+	// linked into it, the base game's, whatever vm_linked and the game
+	// directory say, so VM_Create never looks for a QVM there
+	const qboolean		central = *Com_WebCentral() != '\0';
+
+	if ( !vm_linked->integer && !central ) {
 		return NULL;
 	}
 
@@ -784,7 +789,7 @@ static vmLinkedModule_t *VM_FindLinked( const char *module ) {
 		}
 	}
 
-	if ( !Q_stricmp( gameDir, com_basegame->string ) ) {
+	if ( central || !Q_stricmp( gameDir, com_basegame->string ) ) {
 		return baseGame;
 	}
 	if ( FS_OwnGameCode( module ) ) {
@@ -926,6 +931,13 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
 	Q_strncpyz(vm->name, module, sizeof(vm->name));
 
 	linked = VM_FindLinked( module );
+	// the shared site's web page (Com_WebCentral) runs only the game code
+	// linked into it, which VM_FindLinked always finds there: a QVM, a
+	// server's or a pak's, would run where every server played from that
+	// page keeps its files, so one asked for is refused, never searched for
+	if ( !linked && *Com_WebCentral() ) {
+		Com_Error( ERR_DROP, "%s needs game code this page can't run. Play it on its own page.", Com_WebCentral() );
+	}
 	if ( linked ) {
 		fileHandle_t	f;
 

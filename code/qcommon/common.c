@@ -6654,3 +6654,29 @@ int QDECL Com_strCompare( const void *a, const void *b )
     const char **pb = (const char **)b;
     return strcmp( *pa, *pb );
 }
+
+/*
+=================
+Com_WebCentral
+
+The name a web page that plays whichever server its address names reached
+the server at (cl_webCentral), which that page sets on its start command,
+and nothing else may: its value is the start command's alone
+(Cvar_GetStart), decided the first time it's asked, before the client
+registers it too. "" natively, on a server's own page, and in a dedicated
+server, where a config or rcon that made a cvar of the name would
+otherwise have its own game code refused
+=================
+*/
+const char *Com_WebCentral( void ) {
+#ifdef DEDICATED
+	return "";
+#else
+	static cvar_t	*central;
+
+	if ( !central ) {
+		central = Cvar_GetStart( "cl_webCentral", "", CVAR_PROTECTED );
+	}
+	return com_dedicated && com_dedicated->integer ? "" : central->string;
+#endif
+}

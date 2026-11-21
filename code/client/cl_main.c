@@ -5910,7 +5910,7 @@ void CL_Init( void ) {
 	// set on its command line by a web page that plays whichever server its
 	// address names, as the name it reached the server at; nothing else may
 	// set it (CL_SystemInfoChanged)
-	cl_webCentral = Cvar_Get( "cl_webCentral", "", CVAR_INIT | CVAR_PROTECTED );
+	cl_webCentral = Cvar_GetStart( "cl_webCentral", "", CVAR_PROTECTED );
 	Cvar_SetDescription( cl_webCentral, "The name a web page that plays whichever server its address names reached the server at, "
 		"set by that page alone; such a page plays the base game only. Empty on any other page and natively." );
 	cl_aviFrameRate = Cvar_Get ("cl_aviFrameRate", "25", CVAR_ARCHIVE);
