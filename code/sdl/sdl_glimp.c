@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/html5.h>
+#include <emscripten/em_asm.h>
 #endif
 
 #include "../renderercommon/tr_common.h"
@@ -89,13 +90,17 @@ static int givenWidth, givenHeight;
 
 // the last frame's fence, which GLimp_EndFrame waits on after the next swap
 static GLsync frameFence;
+// the GL contexts made, natively a context's generation (GLimp_ContextGeneration)
+static int contextsMade;
 #ifdef __EMSCRIPTEN__
 // the fence of the frame before, which GLimp_FrameReady looks at, and
 // when it took that place
 static GLsync previousFrameFence;
 static Uint64 previousFrameFenceAt;
-// a frame's fence that isn't done in this long never will be: one that
-// went with a lost WebGL context, which WebKit never says is done
+// the context's generation (GLimp_ContextGeneration) each fence was made in
+static int frameFenceGeneration, previousFrameFenceGeneration;
+// a frame's fence not done in this long is given up on, should a lost
+// context's go unnoticed (GLimp_ContextGeneration)
 #define FRAME_FENCE_GIVE_UP_MS 1000
 #endif
 
@@ -1207,6 +1212,7 @@ attempts:
 				ri.Printf( PRINT_ALL, "SDL_GL_CreateContext() for %s context failed: %s\n", contextName, SDL_GetError() );
 				continue;
 			}
+			contextsMade++;
 
 			if ( !GLimp_GetProcAddresses( fixedFunction ) )
 			{
@@ -1707,6 +1713,25 @@ qboolean GLimp_WindowSizeIsOwn( void )
 
 /*
 ===============
+GLimp_ContextGeneration
+
+How many times the context has been lost (the web page's count), or
+natively how many contexts have been made, so what was made in one
+context can be told from what's made in the next, which may reuse its
+names
+===============
+*/
+int GLimp_ContextGeneration( void )
+{
+#ifdef __EMSCRIPTEN__
+	return MAIN_THREAD_EM_ASM_INT( { return Module.contextGeneration?.() ?? 0; } );
+#else
+	return contextsMade;
+#endif
+}
+
+/*
+===============
 GLimp_FrameReady
 
 Whether the GPU has finished the frame before last, where GLimp_EndFrame
@@ -1718,6 +1743,14 @@ qboolean GLimp_FrameReady( void )
 #ifdef __EMSCRIPTEN__
 	if( previousFrameFence )
 	{
+		// one from before a lost context is no sync object in the context
+		// given back, and WebKit never says it's done: dropped, not waited for
+		if( GLimp_ContextGeneration( ) != previousFrameFenceGeneration )
+		{
+			previousFrameFence = NULL;
+			return qtrue;
+		}
+
 		if( qglClientWaitSync( previousFrameFence, 0, 0 ) == GL_TIMEOUT_EXPIRED
 			&& SDL_GetTicks( ) - previousFrameFenceAt < FRAME_FENCE_GIVE_UP_MS )
 		{
@@ -1923,6 +1956,7 @@ void GLimp_EndFrame( void )
 	}
 	previousFrameFence = frameFence;
 	previousFrameFenceAt = SDL_GetTicks( );
+	previousFrameFenceGeneration = frameFenceGeneration;
 	frameFence = NULL;
 
 	if( previousFrameFence && !r_gpuSync->integer )
@@ -1947,6 +1981,10 @@ void GLimp_EndFrame( void )
 	if( fences && !waited )
 	{
 		frameFence = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
+#ifdef __EMSCRIPTEN__
+		// read as it's made: a loss before the next frame is a later one
+		frameFenceGeneration = GLimp_ContextGeneration( );
+#endif
 	}
 #ifdef __EMSCRIPTEN__
 	else if( r_gpuSync->integer && !qglFenceSync )

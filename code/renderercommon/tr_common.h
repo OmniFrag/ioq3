@@ -441,6 +441,7 @@ void		GLimp_EndFrame( void );
 qboolean	GLimp_SetFullscreen( qboolean fullscreen );
 qboolean	GLimp_WindowSizeIsOwn( void );
 qboolean	GLimp_FrameReady( void );
+int		GLimp_ContextGeneration( void );
 qboolean	GLimp_UpdateWindowSize( void );
 
 void		GLimp_LogComment( char *comment );
