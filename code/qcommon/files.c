@@ -363,6 +363,9 @@ typedef struct searchpath_s {
 } searchpath_t;
 
 static	char		fs_gamedir[MAX_OSPATH];	// this will be a single file name with no separators
+// a dedicated server's game directory for its own folder (FS_ServerGameDir):
+// the one it would write in without fs_game
+static	char		fs_serverGameDir[MAX_OSPATH];
 static	cvar_t		*fs_debug;
 static	cvar_t		*fs_homeconfigpath;
 static	cvar_t		*fs_homedatapath;
@@ -1493,12 +1496,13 @@ static qboolean FS_IsLog( const char *filename ) {
 
 /*
 ===========
-FS_FOpenFileAppend_HomeData
+FS_OSPath_FOpenFileAppend
 
+A file to append to, by its OS path, named filename; a log whose path in
+its game directory is gamePath keeps to the logs' budget (FS_IsLog)
 ===========
 */
-fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
-	char			*ospath;
+static fileHandle_t FS_OSPath_FOpenFileAppend( const char *ospath, const char *filename, const char *gamePath ) {
 	fileHandle_t	f;
 	qboolean		isLog;
 
@@ -1514,10 +1518,8 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 	// don't let sound stutter
 	S_ClearSoundBuffer();
 
-	ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename );
-
 	if ( fs_debug->integer ) {
-		Com_Printf( "FS_FOpenFileAppend_HomeData: %s\n", ospath );
+		Com_Printf( "FS_OSPath_FOpenFileAppend: %s\n", ospath );
 	}
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
@@ -1529,7 +1531,7 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 	// a log kept within the logs' budget, qconsole.log or the game's: it
 	// may first start afresh; and isn't written while the disk is short of
 	// com_logFreeSpace
-	isLog = FS_IsLog( filename );
+	isLog = FS_IsLog( gamePath );
 	if ( isLog ) {
 		Log_Prepare( ospath );
 	}
@@ -1547,11 +1549,40 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 
 /*
 ===========
-FS_FCreateOpenPipeFile
+FS_FOpenFileAppend_HomeData
 
+A file in the game directory written in
 ===========
 */
-fileHandle_t FS_FCreateOpenPipeFile( const char *filename ) {
+fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
+	return FS_OSPath_FOpenFileAppend( FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename ),
+		filename, filename );
+}
+
+/*
+===========
+FS_BaseDir_FOpenFileAppend_HomeData
+
+A file by its path in the home, a game directory first, such as a
+dedicated server's own (FS_ServerQPath)
+===========
+*/
+fileHandle_t FS_BaseDir_FOpenFileAppend_HomeData( const char *filename ) {
+	const char	*gamePath = strchr( filename, '/' );
+
+	return FS_OSPath_FOpenFileAppend( FS_BaseDir_BuildOSPath( fs_homedatapath->string, filename ),
+		filename, gamePath ? gamePath + 1 : filename );
+}
+
+/*
+===========
+FS_BaseDir_FCreateOpenPipeFile
+
+A pipe by its path in the home, a game directory first, such as a
+dedicated server's own (FS_ServerQPath)
+===========
+*/
+fileHandle_t FS_BaseDir_FCreateOpenPipeFile( const char *filename ) {
 	char	    		*ospath;
 	FILE					*fifo;
 	fileHandle_t	f;
@@ -1568,10 +1599,10 @@ fileHandle_t FS_FCreateOpenPipeFile( const char *filename ) {
 	// don't let sound stutter
 	S_ClearSoundBuffer();
 
-	ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename );
+	ospath = FS_BaseDir_BuildOSPath( fs_homedatapath->string, filename );
 
 	if ( fs_debug->integer ) {
-		Com_Printf( "FS_FCreateOpenPipeFile: %s\n", ospath );
+		Com_Printf( "FS_BaseDir_FCreateOpenPipeFile: %s\n", ospath );
 	}
 
 	FS_CheckFilenameIsMutable( ospath, __func__ );
@@ -7990,16 +8021,19 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	size_t	len;
 	FILE	*in, *out;
 	qboolean	failed;
+	const char	*toGame;
 
 	fs_uncopiedConfig[0] = '\0';
 	if ( !predHome[0] ) {
 		return;
 	}
 
-	// a dedicated server's goes in its own directory (FS_ServerFile), and
-	// one in the game directory, where servers kept it and its mark before,
-	// is ours too
-	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, gameName, FS_ServerFile( Q3CONFIG_CFG ) ), sizeof( to ) );
+	// a dedicated server's goes in its own directory (FS_ServerFile), in its
+	// own folder's game directory whatever fs_game says (FS_ServerGameDir),
+	// and one in the game directory written in, where servers kept it and
+	// its mark before, is ours too, as is the predecessor's there
+	toGame = Com_IsClient() ? gameName : fs_serverGameDir;
+	Q_strncpyz( to, FS_BuildOSPath( fs_homeconfigpath->string, toGame, FS_ServerFile( Q3CONFIG_CFG ) ), sizeof( to ) );
 	Q_strncpyz( old, FS_BuildOSPath( fs_homeconfigpath->string, gameName, Q3CONFIG_CFG ), sizeof( old ) );
 	Com_sprintf( mark, sizeof( mark ), "%s.imported", to );
 	if ( FS_FileInPathExists( mark ) || FS_FileInPathExists( va( "%s.imported", old ) ) ) {
@@ -8015,7 +8049,7 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	Q_strncpyz( from, FS_BuildOSPath( predHome, gameName, Q3CONFIG_CFG ), sizeof( from ) );
 	if ( com_check ) {
 		Q_strncpyz( fs_uncopiedConfig, from, sizeof( fs_uncopiedConfig ) );
-		Com_sprintf( fs_uncopiedConfigTo, sizeof( fs_uncopiedConfigTo ), "%s/%s", gameName, FS_ServerFile( Q3CONFIG_CFG ) );
+		Com_sprintf( fs_uncopiedConfigTo, sizeof( fs_uncopiedConfigTo ), "%s/%s", toGame, FS_ServerFile( Q3CONFIG_CFG ) );
 		return;
 	}
 	if ( !( in = Sys_FOpen( from, "rb" ) ) ) {
@@ -8040,6 +8074,169 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 	Com_Printf( "Copied your settings from %s\n", from );
 	FS_DirsWritten( to );
 	FS_MarkPredecessorConfig( mark, from );
+}
+
+/*
+================
+FS_IsFolder
+
+Whether a folder is there, by its parent's list, as every system lists one:
+by its exact name where names differ by case, as rename takes it
+================
+*/
+static qboolean FS_IsFolder( const char *ospath ) {
+	char		parent[MAX_OSPATH];
+	char		*sep, **folders;
+	int			count, i;
+	qboolean	found = qfalse;
+
+	Q_strncpyz( parent, ospath, sizeof( parent ) );
+	sep = strrchr( parent, PATH_SEP );
+	if ( !sep ) {
+		return qfalse;
+	}
+	*sep = '\0';
+	folders = Sys_ListFiles( parent, "/", NULL, &count, qtrue );
+	for ( i = 0; i < count && !found; i++ ) {
+#ifdef _WIN32
+		found = !FS_FilenameCompare( folders[i], sep + 1 );
+#else
+		found = !strcmp( folders[i], sep + 1 );
+#endif
+	}
+	Sys_FreeFileList( folders );
+	return found;
+}
+
+/*
+================
+FS_ServerFolderFree
+
+Stops the start (EXIT_FOLDER_IN_USE, which a supervisor tries again)
+when another running server holds a PID file in this server's folder in a
+game directory, or with byName, for an older release's folder, is this
+program by its name (Sys_ServerFolderPID)
+================
+*/
+static void FS_ServerFolderFree( const char *game, const char *dir, qboolean byName ) {
+	int	pid = Sys_ServerFolderPID( FS_BuildOSPath( fs_homestatepath->string, game, dir ), byName );
+
+	if ( pid ) {
+		Com_ErrorExit( EXIT_FOLDER_IN_USE, "Another server%s is using this server's folder, %s/%s: give this one "
+			"a folder of its own with +set sv_instance <name>, or stop that one first",
+			pid > 0 ? va( ", process %d,", pid ) : "", game, dir );
+	}
+}
+
+/*
+================
+FS_AdoptServerDir
+
+A dedicated server's folder (FS_ServerDir) from before it was always in the
+server's game directory (FS_ServerGameDir): where that has none and the
+game directory written in, a mod's, has one, it's moved there, once, from
+each home it's in, so the server keeps its key, roles, bans and
+certificates. Moved rather than copied, so there's one copy of its keys and
+no second set of bans or roles to drift apart. Where the server's game
+directory has one in any home, it's the server's, none is moved, so no
+server is made of two, and the other is said to be no longer read. A move
+that fails partway is undone, so a server never runs from two. A folder
+holds one running server: one whose folder, or the one it would move, has
+another running server's PID file stops before anything moves, and a
+supervisor tries again (FS_ServerFolderFree). Once for
+each pair of game directories, not at every map's FS_Restart; --check
+moves nothing and says what a start would
+================
+*/
+static void FS_AdoptServerDir( void ) {
+	static char		adopted[MAX_OSPATH * 2];
+	const cvar_t	*homes[] = { fs_homeconfigpath, fs_homedatapath, fs_homestatepath };
+	const char		*dir = FS_ServerDir();
+	char			from[ARRAY_LEN( homes )][MAX_OSPATH], to[ARRAY_LEN( homes )][MAX_OSPATH], pair[MAX_OSPATH * 2];
+	char			stuck[MAX_OSPATH * ARRAY_LEN( homes )];
+	qboolean		moving[ARRAY_LEN( homes )], anyFrom = qfalse, anyTo = qfalse;
+	int				i, j, failed;
+
+	if ( !dir[0] ) {
+		return;
+	}
+	Com_sprintf( pair, sizeof( pair ), "%s>%s", fs_gamedir, fs_serverGameDir );
+	if ( !strcmp( pair, adopted ) ) {
+		return;
+	}
+	Q_strncpyz( adopted, pair, sizeof( adopted ) );
+
+	// one running server per folder: this one's, and the one it would move
+	if ( !com_check ) {
+		FS_ServerFolderFree( fs_serverGameDir, dir, qfalse );
+		// the one an older release's server may be running from
+		if ( FS_FilenameCompare( fs_serverGameDir, fs_gamedir ) ) {
+			FS_ServerFolderFree( fs_gamedir, dir, qtrue );
+		}
+	}
+	if ( !FS_FilenameCompare( fs_serverGameDir, fs_gamedir ) ) {
+		return;
+	}
+
+	for ( i = 0; i < ARRAY_LEN( homes ); i++ ) {
+		// each home once, as they're often one
+		for ( j = 0; j < i && Q_stricmp( homes[j]->string, homes[i]->string ); j++ ) {
+		}
+		moving[i] = qfalse;
+		if ( j < i || !homes[i]->string[0] ) {
+			continue;
+		}
+		Q_strncpyz( from[i], FS_BuildOSPath( homes[i]->string, fs_gamedir, dir ), sizeof( from[i] ) );
+		moving[i] = FS_IsFolder( from[i] );
+		if ( moving[i] ) {
+			anyFrom = qtrue;
+		}
+		if ( FS_IsFolder( FS_BuildOSPath( homes[i]->string, fs_serverGameDir, dir ) ) ) {
+			anyTo = qtrue;
+		}
+	}
+	if ( !anyFrom ) {
+		return;
+	}
+	if ( anyTo ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: %s/%s is no longer read: this server's folder is %s/%s, "
+			"whatever fs_game says\n", fs_gamedir, dir, fs_serverGameDir, dir );
+		return;
+	}
+	if ( com_check ) {
+		Com_Printf( "  folder:   %s/%s, which a start moves to %s/%s, this server's whatever fs_game says; "
+			"--check moves nothing\n", fs_gamedir, dir, fs_serverGameDir, dir );
+		return;
+	}
+	for ( i = 0; i < ARRAY_LEN( homes ); i++ ) {
+		if ( !moving[i] ) {
+			continue;
+		}
+		Q_strncpyz( to[i], FS_BuildOSPath( homes[i]->string, fs_serverGameDir, dir ), sizeof( to[i] ) );
+		errno = 0;
+		if ( !FS_CreatePath( to[i] ) && !rename( from[i], to[i] ) ) {
+			continue;
+		}
+		failed = errno;
+		// the homes moved before this one go back, so the server isn't split
+		// between two folders, at this start or the next
+		stuck[0] = '\0';
+		for ( j = i - 1; j >= 0; j-- ) {
+			if ( moving[j] && rename( to[j], from[j] ) ) {
+				Q_strcat( stuck, sizeof( stuck ), va( "%s%s", stuck[0] ? ", " : "", to[j] ) );
+			}
+		}
+		if ( stuck[0] ) {
+			Com_ErrorExit( EXIT_CONFIG_ERROR, "Couldn't move %s to %s, this server's folder whatever fs_game says "
+				"(%s), nor move back %s: the server's folder is split between the two, so move each home's to %s/%s "
+				"by hand", from[i], to[i], failed ? strerror( failed ) : "no reason given", stuck, fs_serverGameDir, dir );
+		}
+		Com_ErrorExit( EXIT_CONFIG_ERROR, "Couldn't move %s to %s, this server's folder whatever fs_game says (%s), "
+			"so nothing was moved: close anything using a file in it, or move the folder there in each home by "
+			"hand", from[i], to[i], failed ? strerror( failed ) : "no reason given" );
+	}
+	Com_Printf( "  folder:   %s/%s moved to %s/%s, this server's whatever fs_game says\n",
+		fs_gamedir, dir, fs_serverGameDir, dir );
 }
 
 /*
@@ -8191,13 +8388,20 @@ static void FS_Startup( const char *gameName )
 		FS_AddGameDirectories(fs_basegame->string, qfalse);
 	}
 
+	// a dedicated server's own folder is in the game directory it would
+	// write in without fs_game, so a mod's keeps the server's key, roles,
+	// bans and certificates (FS_ServerGameDir)
+	Q_strncpyz( fs_serverGameDir, fs_gamedir, sizeof( fs_serverGameDir ) );
+
 	// check for additional game folder for mods
 	if ( fs_gamedirvar->string[0] && Q_stricmp( fs_gamedirvar->string, gameName ) ) {
 		FS_AddGameDirectories(fs_gamedirvar->string, qfalse);
 	}
 
-	// a dedicated server's into the directory it writes in, the last one
-	// added (FS_ServerGameDir)
+	FS_AdoptServerDir();
+
+	// a dedicated server's from the game directory written in, into its
+	// own folder's game directory (FS_ServerGameDir)
 	FS_ImportPredecessorConfig(predConfigPath, Com_IsClient() ? gameName : fs_gamedir);
 
 #ifndef STANDALONE
@@ -9522,46 +9726,47 @@ Handle based file calls for virtual machines
 ========================================================================================
 */
 
-int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
-	int		r;
-	qboolean	sync;
+/*
+===========
+FS_FOpenFileWriteMode
 
-	sync = qfalse;
-
-	switch( mode ) {
-		case FS_READ:
-			r = FS_FOpenFileRead( qpath, f, qtrue );
-			break;
+FS_FOpenFileByMode's write and append: a file in the game directory written
+in, or with baseDir, by its path in the home, a game directory first
+===========
+*/
+static int FS_FOpenFileWriteMode( const char *qpath, fileHandle_t *f, fsMode_t mode, qboolean baseDir ) {
+	switch ( mode ) {
 		case FS_WRITE:
-			*f = FS_FOpenFileWrite_HomeData( qpath );
-			r = 0;
-			if (*f == 0) {
-				r = -1;
-			}
+			*f = baseDir ? FS_BaseDir_FOpenFileWrite_HomeData( qpath ) : FS_FOpenFileWrite_HomeData( qpath );
 			break;
-		case FS_APPEND_SYNC:
-			sync = qtrue;
 		case FS_APPEND:
-			*f = FS_FOpenFileAppend_HomeData( qpath );
-			r = 0;
-			if (*f == 0) {
-				r = -1;
-			}
+		case FS_APPEND_SYNC:
+			*f = baseDir ? FS_BaseDir_FOpenFileAppend_HomeData( qpath ) : FS_FOpenFileAppend_HomeData( qpath );
 			break;
 		default:
 			Com_Error( ERR_DROP, "FS_FOpenFileByMode: bad mode" );
 			return -1;
 	}
+	if ( !*f ) {
+		return -1;
+	}
+	fsh[*f].fileSize = 0;
+	fsh[*f].handleSync = mode == FS_APPEND_SYNC;
+	return 0;
+}
 
-	if (!f) {
-		return r;
+int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+	int		r;
+
+	if ( mode != FS_READ ) {
+		return FS_FOpenFileWriteMode( qpath, f, mode, qfalse );
 	}
 
-	if ( *f ) {
+	r = FS_FOpenFileRead( qpath, f, qtrue );
+	if ( f && *f ) {
 		fsh[*f].fileSize = r;
+		fsh[*f].handleSync = qfalse;
 	}
-	fsh[*f].handleSync = sync;
-
 	return r;
 }
 
@@ -9654,7 +9859,7 @@ FS_VM_FOpenFile
 A module's trap_FS_FOpenFile: the handle it gets is its own, and only it may
 use it (FS_HandleOwnedBy). A dedicated server's game log (g_log, which
 every Quake III game module writes) goes in the server's own directory
-(FS_ServerFile), so servers sharing a home keep their logs apart
+(FS_ServerQPath), so servers sharing a home keep their logs apart
 ===========
 */
 int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_t mode ) {
@@ -9681,9 +9886,10 @@ int FS_VM_FOpenFile( const vm_t *vm, const char *qpath, fileHandle_t *f, fsMode_
 	// the engine's files there (the bans, the PID file)
 	if ( mode != FS_READ && *FS_ServerDir() && COM_CompareExtension( qpath, ".log" ) &&
 		!Q_stricmp( FS_SkipPathPrefix( qpath ), FS_SkipPathPrefix( Cvar_VariableString( "g_log" ) ) ) ) {
-		qpath = FS_ServerFile( FS_SkipPathPrefix( qpath ) );
+		r = FS_FOpenFileWriteMode( FS_ServerQPath( FS_SkipPathPrefix( qpath ) ), f, mode, qtrue );
+	} else {
+		r = FS_FOpenFileByMode( qpath, f, mode );
 	}
-	r = FS_FOpenFileByMode( qpath, f, mode );
 	if ( f && *f ) {
 		fsh[*f].owner = vm;
 	}
@@ -9790,7 +9996,7 @@ const char *FS_ServerDir( void )
 	if ( !dir[0] ) {
 		instance = Cvar_GetStart( "sv_instance", "", CVAR_PROTECTED );
 		Cvar_SetDescription( instance, "Name of this server among those sharing a home\n"
-			"Its folder is servers/<name> in the game directory, and its Omniwire instance server-<name>; "
+			"Its folder is servers/<name> in the base game's directory whatever fs_game says, and its Omniwire instance server-<name>; "
 			"empty uses the port, servers/27960, as before. Letters, digits, - and _, up to 32, set on the "
 			"command line or in the environment (OMNIFRAG_SV_INSTANCE)." );
 		for ( c = instance->string; *c; c++ ) {
@@ -9818,16 +10024,18 @@ const char *FS_ServerDir( void )
 FS_ServerGameDir
 
 The game directory a dedicated server's own folder (FS_ServerDir) is in:
-the one it writes in, the last one searched (fs_gamedir): a mod's with
-fs_game, or baseq3, which the demo the engine chose for want of the full
-game's paks searches above demoq3 (FS_ChooseDemo), so the server finds its
-settings, bans, keys and logs as it left them once retail paks are added.
-The current game directory on a client
+the one it would write in without fs_game, the base game's, whatever
+fs_game says, so a mod switch keeps its key, roles, bans and certificates
+(an older folder in the mod's is moved, FS_AdoptServerDir); baseq3 where
+the demo the engine chose for want of the full game's paks searches it
+above demoq3 (FS_ChooseDemo), so the server finds its settings, bans,
+keys and logs as it left them once retail paks are added. The current
+game directory on a client
 ================
 */
 const char *FS_ServerGameDir( void )
 {
-	return Com_IsClient() ? FS_GetCurrentGameDir() : FS_LoadedGameDir();
+	return Com_IsClient() ? FS_GetCurrentGameDir() : fs_serverGameDir;
 }
 
 /*
@@ -9848,7 +10056,9 @@ const char *FS_ServerQPath( const char *filename )
 FS_ServerFile
 
 A file in the server's own directory (FS_ServerDir), relative to the
-game directory: the name alone on a client
+game directory: the name alone on a client. Open it by FS_ServerQPath and
+the FS_BaseDir_ functions, so it's in the server's game directory
+(FS_ServerGameDir) whatever fs_game says
 ================
 */
 const char *FS_ServerFile( const char *filename )

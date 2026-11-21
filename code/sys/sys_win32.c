@@ -1597,6 +1597,90 @@ qboolean Sys_PIDIsRunning( int pid )
 	return qfalse;
 }
 
+// the byte a running server locks, past any PID file's text, so a lock
+// never keeps another program from reading the PID
+#define PID_LOCK_OFFSET_HIGH	1
+
+/*
+==============
+Sys_LockPIDFile
+
+Holds a PID file for as long as it's open, which Windows lets go at any
+exit, a kill or a power loss included: a byte range past its text, so the
+PID stays readable
+==============
+*/
+qboolean Sys_LockPIDFile( FILE *f )
+{
+	OVERLAPPED	at = { 0 };
+	HANDLE		h = (HANDLE)_get_osfhandle( _fileno( f ) );
+
+	// not a child's, the gateway's, which would hold it past this exit
+	SetHandleInformation( h, HANDLE_FLAG_INHERIT, 0 );
+	at.OffsetHigh = PID_LOCK_OFFSET_HIGH;
+	return LockFileEx( h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at ) != 0;
+}
+
+/*
+==============
+Sys_PIDFileLocked
+
+Whether a running process holds a PID file (Sys_LockPIDFile)
+==============
+*/
+qboolean Sys_PIDFileLocked( const char *path )
+{
+	OVERLAPPED	at = { 0 };
+	HANDLE		h;
+	qboolean	held;
+
+	h = CreateFileA( path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+		OPEN_EXISTING, 0, NULL );
+	if( h == INVALID_HANDLE_VALUE )
+		return qfalse;
+	at.OffsetHigh = PID_LOCK_OFFSET_HIGH;
+	held = !LockFileEx( h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &at );
+	if( !held )
+		UnlockFileEx( h, 0, 1, 0, &at );
+	CloseHandle( h );
+	return held;
+}
+
+// a path's last part, after its last \\ or /
+static const char *Sys_PathName( const char *path )
+{
+	const char	*name = path, *c;
+
+	for( c = path; *c; c++ )
+	{
+		if( *c == '\\' || *c == '/' )
+			name = c + 1;
+	}
+	return name;
+}
+
+/*
+==============
+Sys_PIDIsOurs
+
+Whether a running process is this program, by its program's name
+==============
+*/
+qboolean Sys_PIDIsOurs( int pid )
+{
+	char	theirs[ MAX_OSPATH ], ours[ MAX_OSPATH ];
+	HANDLE	process = OpenProcess( 0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, FALSE, (DWORD)pid );
+	DWORD	length;
+
+	if( !process )
+		return qfalse;
+	length = GetProcessImageFileNameA( process, theirs, sizeof( theirs ) );
+	CloseHandle( process );
+	if( !length || !GetModuleFileNameA( NULL, ours, sizeof( ours ) ) )
+		return qfalse;
+	return !Q_stricmp( Sys_PathName( theirs ), Sys_PathName( ours ) );
+}
+
 /*
 =================
 Sys_DllExtension

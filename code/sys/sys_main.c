@@ -250,8 +250,47 @@ static int Sys_ReadPIDFile( const char *pidFile )
 	return atoi( pidBuffer );
 }
 
-// the PID file this process wrote, "" for none
+/*
+=================
+Sys_ServerFolderPID
+
+A running dedicated server other than this one whose PID file is in a
+server's folder (its OS path), 0 for none: a folder holds one running
+server (FS_ServerDir). A running server holds its PID file locked
+(Sys_LockPIDFile), so a file a kill or a power loss left behind, whose
+process number something else has now, counts for nothing. With byName,
+for the folder an older release's server kept, whose file it didn't
+lock, a live process that's this program by its name counts too
+=================
+*/
+int Sys_ServerFolderPID( const char *folder, qboolean byName )
+{
+	char		**pids;
+	const char	*path;
+	int			count, i, pid, found = 0;
+
+	pids = Sys_ListFiles( folder, ".pid", NULL, &count, qfalse );
+	for( i = 0; i < count && !found; i++ )
+	{
+		if( !Sys_IsServerPIDFile( pids[ i ] ) )
+			continue;
+		path = va( "%s%c%s", folder, PATH_SEP, pids[ i ] );
+		pid = Sys_ReadPIDFile( path );
+		if( pid == Sys_PID( ) )
+			continue;
+		if( Sys_PIDFileLocked( path ) )
+			found = pid > 0 ? pid : -1;
+		else if( byName && pid > 0 && Sys_PIDIsOurs( pid ) )
+			found = pid;
+	}
+	Sys_FreeFileList( pids );
+	return found;
+}
+
+// the PID file this process wrote, "" for none, and a dedicated server's
+// open, held for its run (Sys_LockPIDFile)
 static char pidFileWritten[ MAX_OSPATH ];
+static FILE *pidFileHeld;
 
 /*
 =================
@@ -262,6 +301,11 @@ Removes the PID file this process wrote, if it wrote one
 */
 void Sys_RemovePIDFile( void )
 {
+	if( pidFileHeld )
+	{
+		fclose( pidFileHeld );
+		pidFileHeld = NULL;
+	}
 	if( pidFileWritten[ 0 ] )
 	{
 		remove( pidFileWritten );
@@ -306,8 +350,15 @@ static qboolean Sys_WritePIDFile( const char *gamedir )
 
 	if( ( f = fopen( pidFile, "w" ) ) != NULL )
 	{
+		// a dedicated server's is held from the start (Sys_ServerFolderPID)
+		if( !Com_IsClient( ) && !Sys_LockPIDFile( f ) )
+			Com_Printf( S_COLOR_YELLOW "WARNING: couldn't lock %s, so another server could start in this folder.\n", pidFile );
 		fprintf( f, "%d", Sys_PID( ) );
-		fclose( f );
+		fflush( f );
+		if( Com_IsClient( ) )
+			fclose( f );
+		else
+			pidFileHeld = f;
 		Q_strncpyz( pidFileWritten, pidFile, sizeof( pidFileWritten ) );
 	}
 	else

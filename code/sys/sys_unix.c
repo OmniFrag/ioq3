@@ -37,6 +37,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <pwd.h>
 #include <libgen.h>
 #include <fcntl.h>
+#include <sys/file.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 #if defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
 #include <sys/ioctl.h>
 #include <linux/fs.h>	// FICLONE
@@ -1903,6 +1907,92 @@ Sys_PIDIsRunning
 qboolean Sys_PIDIsRunning( int pid )
 {
 	return kill( pid, 0 ) == 0;
+}
+
+/*
+==============
+Sys_LockPIDFile
+
+Holds a PID file for as long as it's open, which the kernel lets go at
+any exit, a kill or a power loss included
+==============
+*/
+qboolean Sys_LockPIDFile( FILE *f )
+{
+	// not a child's, the gateway's, which would hold it past this exit
+	fcntl( fileno( f ), F_SETFD, FD_CLOEXEC );
+	return flock( fileno( f ), LOCK_EX | LOCK_NB ) == 0;
+}
+
+/*
+==============
+Sys_PIDFileLocked
+
+Whether a running process holds a PID file (Sys_LockPIDFile)
+==============
+*/
+qboolean Sys_PIDFileLocked( const char *path )
+{
+	int			fd = open( path, O_RDONLY );
+	qboolean	held;
+
+	if( fd < 0 )
+		return qfalse;
+	held = flock( fd, LOCK_EX | LOCK_NB ) != 0 && errno == EWOULDBLOCK;
+	close( fd );
+	return held;
+}
+
+/*
+==============
+Sys_ProcessName
+
+A process's program's name, without its folder, or "" if it can't be told
+==============
+*/
+static const char *Sys_ProcessName( int pid, char *name, int size )
+{
+#ifdef __APPLE__
+	if( proc_name( pid, name, size ) <= 0 )
+		name[ 0 ] = '\0';
+#else
+	char	path[ MAX_OSPATH ];
+	ssize_t	length = readlink( va( "/proc/%d/exe", pid ), path, sizeof( path ) - 1 );
+	FILE	*comm;
+
+	name[ 0 ] = '\0';
+	if( length > 0 )
+	{
+		path[ length ] = '\0';
+		Q_strncpyz( name, COM_SkipPath( path ), size );
+	}
+	// another user's process, whose exe isn't readable: its command's name
+	else if( ( comm = fopen( va( "/proc/%d/comm", pid ), "r" ) ) != NULL )
+	{
+		if( fgets( name, size, comm ) )
+			name[ strcspn( name, "\n" ) ] = '\0';
+		fclose( comm );
+	}
+#endif
+	return name;
+}
+
+/*
+==============
+Sys_PIDIsOurs
+
+Whether a running process is this program, by its name: comm keeps 15
+characters, so names are compared that far
+==============
+*/
+qboolean Sys_PIDIsOurs( int pid )
+{
+	char	theirs[ MAX_OSPATH ], ours[ MAX_OSPATH ];
+
+	if( !Sys_PIDIsRunning( pid ) || !*Sys_ProcessName( pid, theirs, sizeof( theirs ) ) ||
+		!*Sys_ProcessName( Sys_PID( ), ours, sizeof( ours ) ) )
+		return qfalse;
+	return !strncmp( theirs, ours, 15 );
 }
 
 /*

@@ -95,6 +95,13 @@ void Sys_AnsiColorPrint( const char *msg );
 
 int Sys_PID( void );
 qboolean Sys_PIDIsRunning( int pid );
+// a dedicated server's PID file held for its run, so a probe tells a running
+// server's from one a crash or a power loss left behind
+qboolean Sys_LockPIDFile( FILE *f );
+qboolean Sys_PIDFileLocked( const char *path );
+// whether a process is this program by its name, for an older release's
+// server, whose PID file isn't locked
+qboolean Sys_PIDIsOurs( int pid );
 qboolean Sys_IsServerPIDFile( const char *name );
 // whether a file name is a dedicated server's PID file's
 

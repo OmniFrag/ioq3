@@ -485,6 +485,20 @@ static void Com_LogStart( const struct tm *now ) {
 
 /*
 =============
+Com_OwnFile
+
+A file of the engine's own, the console's log or pipe, by its path in the
+home: a dedicated server's in its own folder (FS_ServerQPath), in its game
+directory whatever fs_game says; a client's in the game directory written
+in, as ever
+=============
+*/
+static const char *Com_OwnFile( const char *name ) {
+	return Com_IsClient() ? va( "%s/%s", FS_LoadedGameDir(), name ) : FS_ServerQPath( name );
+}
+
+/*
+=============
 Com_Printf
 
 Both client and server can use this, and it will output
@@ -538,7 +552,7 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			// a dedicated server's in its own directory; from a day before,
 			// or grown past its size, it starts afresh, the lines before set
 			// aside and compressed (Log_Prepare)
-			logfile = FS_FOpenFileAppend_HomeData( FS_ServerFile( "qconsole.log" ) );
+			logfile = FS_BaseDir_FOpenFileAppend_HomeData( Com_OwnFile( "qconsole.log" ) );
 
 			// after Log_Prepare, whose localtime would change it
 			time( &aclock );
@@ -3552,12 +3566,26 @@ const char *Com_ServerSavedValue( const cvar_t *var ) {
 =================
 Com_SettingsPath
 
-A file's path or oldPath filled in: the game directory whose settings
-were read, and the server's own directory in it
+A file's path filled in: the game directory whose settings were read,
+and the server's own directory in it
 =================
 */
 static void Com_SettingsPath( const char *format, char *path, int size ) {
 	Com_sprintf( path, size, format, com_settingsMod, FS_ServerDir() );
+}
+
+/*
+=================
+Com_OldSettingsPath
+
+A file's oldPath filled in: where an older version kept it, the game
+directory written in, a mod's for a dedicated server with fs_game, not its
+own folder's (FS_ServerGameDir), so a mod's server never reads the base
+game's server's old config
+=================
+*/
+static void Com_OldSettingsPath( const char *format, char *path, int size ) {
+	Com_sprintf( path, size, format, FS_LoadedGameDir(), FS_ServerDir() );
 }
 
 /*
@@ -3982,7 +4010,7 @@ static qboolean Com_ReadSettingsFile( settingsFile_t *file ) {
 		if ( !file->oldPath ) {
 			return qfalse;
 		}
-		Com_SettingsPath( file->oldPath, oldPath, sizeof( oldPath ) );
+		Com_OldSettingsPath( file->oldPath, oldPath, sizeof( oldPath ) );
 		if ( FS_BaseDir_ReadFile_HomeConfig( oldPath, (void **)&text ) >= 0 ) {
 			// an extension's import says where they go itself
 			if ( com_serverImport ) {
@@ -4082,8 +4110,9 @@ autoexec.cfg, and that first write saves over them, as stock's did
 */
 void Com_ExecuteCfg(void)
 {
-	// the game directory whose settings are read and written
-	Q_strncpyz( com_settingsMod, FS_LoadedGameDir(), sizeof( com_settingsMod ) );
+	// the game directory whose settings are read and written: a dedicated
+	// server's own folder's, whatever fs_game says (FS_ServerGameDir)
+	Q_strncpyz( com_settingsMod, Com_IsClient() ? FS_LoadedGameDir() : FS_ServerGameDir(), sizeof( com_settingsMod ) );
 
 	Com_ExecuteScript( "default.cfg" );
 
@@ -4540,6 +4569,11 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 
 #ifndef DEDICATED
 	com_isClient = !Cvar_VariableIntegerValue( "dedicated" );
+	// the client program run as a dedicated server takes its environment's
+	// settings too, before its folder's name is fixed (FS_ServerDir)
+	if ( !com_isClient ) {
+		Com_StartupVariable( NULL );
+	}
 #endif
 
 	Com_InitZoneMemory();
@@ -4820,7 +4854,7 @@ void Com_Init( char *commandLine, const char *lost, int lostBytes ) {
 Com_OpenPipeFile
 
 Opens com_pipefile, if it's set. A dedicated server's is in its own
-directory (FS_ServerFile), which is its own only once its port is: one
+directory (Com_OwnFile), which is its own only once its port is: one
 refused a port in use (NET_PortTaken) would otherwise replace, and then
 remove, the pipe of the server there
 ===============
@@ -4828,7 +4862,7 @@ remove, the pipe of the server there
 void Com_OpenPipeFile( void )
 {
 	if( com_pipefile->string[0] && !pipefile )
-		pipefile = FS_FCreateOpenPipeFile( FS_ServerFile( com_pipefile->string ) );
+		pipefile = FS_BaseDir_FCreateOpenPipeFile( Com_OwnFile( com_pipefile->string ) );
 }
 
 /*
@@ -6071,7 +6105,7 @@ void Com_Shutdown (void) {
 
 	if( pipefile ) {
 		FS_FCloseFile( pipefile );
-		FS_Remove_HomeData( FS_ServerFile( com_pipefile->string ) );
+		FS_BaseDir_Remove_HomeData( Com_OwnFile( com_pipefile->string ) );
 	}
 
 }

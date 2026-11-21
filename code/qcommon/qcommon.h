@@ -1336,6 +1336,8 @@ fileHandle_t	FS_FOpenFileWrite_HomeConfig( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeData( const char *filename );
 fileHandle_t	FS_FOpenFileWrite_HomeState( const char *filename );
 fileHandle_t	FS_FOpenFileAppend_HomeData( const char *filename );
+// a file by its path in the home, a game directory first (FS_ServerQPath)
+fileHandle_t	FS_BaseDir_FOpenFileAppend_HomeData( const char *filename );
 
 // logs.c: logs kept within com_logSpace and com_logFreeSpace
 void		Log_Init( void );
@@ -1358,7 +1360,7 @@ void		Log_Frame( void );
 void		Com_InitExtensions( void );
 void		Com_StartClient( void );
 
-fileHandle_t	FS_FCreateOpenPipeFile( const char *filename );
+fileHandle_t	FS_BaseDir_FCreateOpenPipeFile( const char *filename );
 // will properly create any needed paths and deal with seperater character issues
 
 fileHandle_t FS_BaseDir_FOpenFileWrite_HomeConfig( const char *filename );
@@ -1865,6 +1867,8 @@ void 		QDECL Com_ErrorExit( int status, const char *fmt, ... ) Q_NO_RETURN Q_PRI
 									// doesn't parse or holds a bad value
 #define EXIT_RESTART		8	// a restart asked for: a supervisor starts it again, as it
 									// would after any other status but 0
+#define EXIT_FOLDER_IN_USE	9	// a dedicated server's folder is another running
+									// server's: a supervisor tries again, as it frees
 qboolean	Com_ReadServerConfig( void );
 // for an extension keeping a dedicated server's settings (Hooks_ReadServerSettings):
 // the engine's own config of them, q3config_server.cfg, applied if there is one
@@ -2607,6 +2611,8 @@ qboolean Sys_OpenFolderInFileManager( const char *path, qboolean create );
 
 void Sys_RemovePIDFile( void );
 void Sys_InitPIDFile( const char *gamedir );
+// another running dedicated server whose PID file is in a server's folder, 0 for none
+int Sys_ServerFolderPID( const char *folder, qboolean byName );
 void Sys_StopWatchdog( int signal, int seconds );
 void Sys_ForceStop( int signal, int seconds );
 
