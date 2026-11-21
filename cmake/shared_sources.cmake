@@ -41,6 +41,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/net_ip.c
     ${SOURCE_DIR}/qcommon/net_proxy.c
     ${SOURCE_DIR}/qcommon/net_scope.c
+    ${SOURCE_DIR}/qcommon/noise.c
     ${SOURCE_DIR}/qcommon/ofd.c
     ${SOURCE_DIR}/qcommon/huffman.c
     ${SOURCE_DIR}/qcommon/q_math.c
@@ -55,7 +56,8 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/vm_powerpc.c
     ${SOURCE_DIR}/qcommon/vm_sparc.c
     ${SOURCE_DIR}/qcommon/vm_x86.c
-    # Ed25519 and Argon2id for identity.c (thirdparty/monocypher-4.0.2)
+    # Ed25519 and Argon2id for identity.c, and X25519, ChaChaPoly and SHA-512
+    # for noise.c (thirdparty/monocypher-4.0.2)
     ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher.c
     ${SOURCE_DIR}/thirdparty/monocypher-4.0.2/monocypher-ed25519.c
 )

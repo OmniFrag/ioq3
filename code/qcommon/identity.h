@@ -73,6 +73,11 @@ typedef struct identKey_s {
 } identKey_t;
 
 void		Ident_KeyFromSeed( identKey_t *key, const byte seed[IDENT_KEY_SIZE] );
+// The key as an X25519 static, for the session's Noise handshake (noise.h):
+// the public key by crypto_eddsa_to_x25519, the secret the scalar Ed25519
+// signs with. A key and its negation give one X25519 key
+void		Ident_X25519Public( const byte key[IDENT_KEY_SIZE], byte x25519[IDENT_KEY_SIZE] );
+void		Ident_X25519Pair( const identKey_t *key, byte secret[IDENT_KEY_SIZE], byte pub[IDENT_KEY_SIZE] );
 void		Ident_Wipe( void *secret, size_t size );
 // whether two 32-byte values are the same, in constant time
 qboolean	Ident_Equal32( const byte a[IDENT_KEY_SIZE], const byte b[IDENT_KEY_SIZE] );

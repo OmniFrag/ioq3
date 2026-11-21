@@ -40,6 +40,21 @@ void Ident_KeyFromSeed( identKey_t *key, const byte seed[IDENT_KEY_SIZE] ) {
 	crypto_ed25519_key_pair( key->secret, key->pub, copy );
 }
 
+void Ident_X25519Public( const byte key[IDENT_KEY_SIZE], byte x25519[IDENT_KEY_SIZE] ) {
+	crypto_eddsa_to_x25519( x25519, key );
+}
+
+void Ident_X25519Pair( const identKey_t *key, byte secret[IDENT_KEY_SIZE], byte pub[IDENT_KEY_SIZE] ) {
+	byte	hash[64];
+
+	// the first half of SHA-512 of the seed, which Ed25519 trims to its
+	// scalar and crypto_x25519 clamps alike
+	crypto_sha512( hash, key->secret, IDENT_KEY_SIZE );
+	Com_Memcpy( secret, hash, IDENT_KEY_SIZE );
+	crypto_wipe( hash, sizeof( hash ) );
+	Ident_X25519Public( key->pub, pub );
+}
+
 qboolean Ident_Equal32( const byte a[IDENT_KEY_SIZE], const byte b[IDENT_KEY_SIZE] ) {
 	return crypto_verify32( a, b ) == 0;
 }
