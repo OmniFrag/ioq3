@@ -567,6 +567,99 @@ static void GLSL_ShowProgramUniforms(GLuint program)
 	}
 }
 
+/*
+====================
+The programs a renderer shutdown that kept its window left built, as the
+context did: the next GLSL_InitGPUShaders takes each back that it would
+build again from the same source, rather than compile and link it, and
+deletes the rest. A map change or a join restarts the renderer that way,
+and building every program took 0.2 s in Chrome and 0.35 s in Firefox
+====================
+*/
+typedef struct {
+	uint64_t	key;
+	GLuint		program, vertexShader, fragmentShader;
+	char		*uniformBuffer;	// the values its uniforms hold, as the program has them
+	int			generation;		// the context's it was built in (GLimp_ContextGeneration)
+} keptProgram_t;
+
+#define MAX_KEPT_PROGRAMS	256
+static keptProgram_t	keptPrograms[MAX_KEPT_PROGRAMS];
+static int				numKeptPrograms, numTakenPrograms;
+static qboolean			keepingPrograms;	// GLSL_ShutdownGPUShaders keeping, so GLSL_DeleteGPUShader keeps
+
+// FNV-1a over a program's attributes and its two sources, each with its end
+static uint64_t GLSL_SourceKey(int attribs, const char *vpCode, const char *fpCode)
+{
+	uint64_t	key = 14695981039346656037ULL;
+	const char	*sources[2] = { vpCode, fpCode ? fpCode : "" };
+	int			i;
+
+	for (i = 0; i < 4; i++)
+		key = (key ^ (uint8_t)(attribs >> (i * 8))) * 1099511628211ULL;
+	for (i = 0; i < 2; i++)
+	{
+		const char *c;
+
+		for (c = sources[i]; ; c++)
+		{
+			key = (key ^ (uint8_t)*c) * 1099511628211ULL;
+			if (!*c)
+				break;
+		}
+	}
+	return key;
+}
+
+static void GLSL_DeleteKept(const keptProgram_t *kept)
+{
+	if (kept->vertexShader)
+	{
+		qglDetachShader(kept->program, kept->vertexShader);
+		qglDeleteShader(kept->vertexShader);
+	}
+	if (kept->fragmentShader)
+	{
+		qglDetachShader(kept->program, kept->fragmentShader);
+		qglDeleteShader(kept->fragmentShader);
+	}
+	qglDeleteProgram(kept->program);
+	if (kept->uniformBuffer)
+		ri.Free(kept->uniformBuffer);
+}
+
+// the kept programs not taken back; before the window goes too
+// (RE_Shutdown), as a context made after would know their names as others
+void GLSL_DeleteKeptPrograms(void)
+{
+	while (numKeptPrograms > 0)
+		GLSL_DeleteKept(&keptPrograms[--numKeptPrograms]);
+}
+
+// a kept program built from the same source in this context, taken back
+static qboolean GLSL_TakeKept(shaderProgram_t *program)
+{
+	int i;
+
+	for (i = 0; i < numKeptPrograms; i++)
+	{
+		keptProgram_t *kept = &keptPrograms[i];
+
+		if (kept->key != program->sourceKey || kept->generation != program->generation || !qglIsProgram(kept->program))
+			continue;
+
+		program->program = kept->program;
+		program->vertexShader = kept->vertexShader;
+		program->fragmentShader = kept->fragmentShader;
+		// the same source has the same uniforms, which hold their values
+		program->uniformBuffer = kept->uniformBuffer;
+		*kept = keptPrograms[--numKeptPrograms];
+		numTakenPrograms++;
+		return qtrue;
+	}
+	return qfalse;
+}
+
 static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int attribs, const char *vpCode, const char *fpCode)
 {
 	ri.Printf(PRINT_DEVELOPER, "------- GPU shader -------\n");
@@ -578,8 +671,13 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 
 	Q_strncpyz(program->name, name, sizeof(program->name));
 
-	program->program = qglCreateProgram();
 	program->attribs = attribs;
+	program->sourceKey = GLSL_SourceKey(attribs, vpCode, fpCode);
+	program->generation = GLimp_ContextGeneration();
+	if (GLSL_TakeKept(program))
+		return 1;
+
+	program->program = qglCreateProgram();
 
 	if (!(GLSL_CompileGPUShader(program->program, &program->vertexShader, vpCode, strlen(vpCode), GL_VERTEX_SHADER)))
 	{
@@ -755,9 +853,13 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 	}
 
 	// GL starts uniforms at zero, and the cache must match, or setting
-	// one to what stale memory happens to hold skips the upload
-	program->uniformBuffer = ri.Malloc(size);
-	Com_Memset(program->uniformBuffer, 0, size);
+	// one to what stale memory happens to hold skips the upload; a kept
+	// program brings the values its uniforms still hold (GLSL_TakeKept)
+	if (!program->uniformBuffer)
+	{
+		program->uniformBuffer = ri.Malloc(size);
+		Com_Memset(program->uniformBuffer, 0, size);
+	}
 }
 
 void GLSL_FinishGPUShader(shaderProgram_t *program)
@@ -997,24 +1099,13 @@ void GLSL_DeleteGPUShader(shaderProgram_t *program)
 {
 	if(program->program)
 	{
-		if (program->vertexShader)
-		{
-			qglDetachShader(program->program, program->vertexShader);
-			qglDeleteShader(program->vertexShader);
-		}
+		const keptProgram_t kept = { program->sourceKey, program->program, program->vertexShader,
+			program->fragmentShader, program->uniformBuffer, program->generation };
 
-		if (program->fragmentShader)
-		{
-			qglDetachShader(program->program, program->fragmentShader);
-			qglDeleteShader(program->fragmentShader);
-		}
-
-		qglDeleteProgram(program->program);
-
-		if (program->uniformBuffer)
-		{
-			ri.Free(program->uniformBuffer);
-		}
+		if (keepingPrograms && numKeptPrograms < MAX_KEPT_PROGRAMS)
+			keptPrograms[numKeptPrograms++] = kept;
+		else
+			GLSL_DeleteKept(&kept);
 
 		Com_Memset(program, 0, sizeof(*program));
 	}
@@ -1778,16 +1869,24 @@ void GLSL_InitGPUShaders(void)
 #endif
 
 
+	// a kept program not taken back was built from a source changed since
+	GLSL_DeleteKeptPrograms();
+
 	endTime = ri.Milliseconds();
 
-	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc) in %5.2f seconds\n", 
+	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc, %i kept from before) in %5.2f seconds\n", 
 		numGenShaders + numLightShaders + numEtcShaders, numGenShaders, numLightShaders, 
-		numEtcShaders, (endTime - startTime) / 1000.0);
+		numEtcShaders, numTakenPrograms, (endTime - startTime) / 1000.0);
+	numTakenPrograms = 0;
 }
 
-void GLSL_ShutdownGPUShaders(void)
+void GLSL_ShutdownGPUShaders(qboolean keep)
 {
 	int i;
+
+	// any left from before, which a shutdown keeps no longer than the next
+	GLSL_DeleteKeptPrograms();
+	keepingPrograms = keep;
 
 	ri.Printf(PRINT_ALL, "------- GLSL_ShutdownGPUShaders -------\n");
 
@@ -1835,6 +1934,8 @@ void GLSL_ShutdownGPUShaders(void)
 
 	for ( i = 0; i < 4; i++)
 		GLSL_DeleteGPUShader(&tr.depthBlurShader[i]);
+
+	keepingPrograms = qfalse;
 }
 
 

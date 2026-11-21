@@ -175,6 +175,7 @@ extern void (APIENTRYP qglUnlockArraysEXT) (void);
 	GLE(void, GetShaderiv, GLuint shader, GLenum pname, GLint *params) \
 	GLE(void, GetShaderInfoLog, GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog) \
 	GLE(void, GetShaderSource, GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *source) \
+	GLE(GLboolean, IsProgram, GLuint program) \
 	GLE(GLint, GetUniformLocation, GLuint program, const GLchar *name) \
 	GLE(void, LinkProgram, GLuint program) \
 	GLE(void, ShaderSource, GLuint shader, GLsizei count, const GLchar* *string, const GLint *length) \

@@ -1822,7 +1822,8 @@ void RE_Shutdown( qboolean destroyWindow ) {
 			FBO_Shutdown();
 		R_DeleteTextures();
 		R_ShutdownVaos();
-		GLSL_ShutdownGPUShaders();
+		// the context stays with the window, and the programs with it
+		GLSL_ShutdownGPUShaders( !destroyWindow );
 	}
 
 	// captures asked for in a frame that never finished: a video frame's
@@ -1833,6 +1834,9 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 	// shut down platform specific OpenGL stuff
 	if ( destroyWindow ) {
+		// those a shutdown that kept the window kept, should no init have
+		// taken them since (tr.registered off, so none above)
+		GLSL_DeleteKeptPrograms();
 		R_ShutdownUpscale2D();
 		R_Times2DShutdown();
 		GLimp_Shutdown();
