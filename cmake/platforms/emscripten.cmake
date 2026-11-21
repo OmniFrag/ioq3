@@ -43,7 +43,7 @@ list(APPEND CLIENT_LINK_OPTIONS
     -sEXIT_RUNTIME=1
     -sEXPORT_ES6
     -sEXPORT_NAME=${CLIENT_NAME}
-    # the page keeps the home in the browser's storage (client.html.in)
+    # the page keeps the home in the browser's storage (client-page.js.in)
     -lidbfs.js
     # the browser's connections to servers (code/web/net_web.c)
     --js-library=${SOURCE_DIR}/web/net_web.js
@@ -71,6 +71,12 @@ function(deploy_shell_files)
     endif()
     configure_file(${SOURCE_DIR}/web/client.html.in
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
+    # its style and program, files of their own, so its content security
+    # policy needs no 'unsafe-inline'
+    configure_file(${SOURCE_DIR}/web/client-page.css.in
+        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.css @ONLY)
+    configure_file(${SOURCE_DIR}/web/client-page.js.in
+        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.js @ONLY)
 
     # The page's icon, and a web app manifest, with which a browser can
     # install the page as an app

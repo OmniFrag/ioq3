@@ -1,0 +1,2498 @@
+// The web client page's program (client.html.in), a module of its own so the
+// page's content security policy needs no 'unsafe-inline'. Configured with
+// the page (@ONLY), so the names in at signs below are the build's.
+// These strings are set in the generated file in the build directory.
+const CLIENT_NAME = '@CLIENT_NAME@';
+const BASEGAME = '@BASEGAME@';
+const EMSCRIPTEN_PRELOAD_FILE = '@EMSCRIPTEN_PRELOAD_FILE@' === 'ON';
+const MIN_WEBGL_VERSION = Number('@WEB_MIN_WEBGL_VERSION@');
+
+// Path or URL containing the client engine .js, .wasm, and possibly .data.
+let enginePath = './';
+// Path or URL containing fs_game directories.
+let dataPath = './';
+// Path or URL for config file that specifies the files to load for each fs_game.
+let configFilename = `./${CLIENT_NAME}-config.json`;
+
+if (window.location.protocol === 'file:') throw new Error(`Unfortunately browser security restrictions prevent loading wasm from a file: URL. This file must be loaded from a web server. The easiest way to do this is probably to use Python\'s built-in web server by running \`python3 -m http.server\` in the top level source directory and then navigate to http://localhost:8000/build/debug-emscripten-wasm32/${CLIENT_NAME}.html`);
+
+// The front page's listeners (FRONT, below), here as the download's
+// progress goes to them
+const FRONT = '@WEB_PAGE_FRONT@';
+// the front shows, until it fails to load
+let frontOn = !!FRONT;
+const frontListeners = { started: [], progress: [], status: [], ask: [], playing: [], left: [], quit: [], crash: [] };
+// the front's listeners told, one that throws kept from the engine's frame,
+// which calls them (Module.left), and from the others
+const tellFront = (listeners, ...args) => listeners.forEach((listener) => {
+    try {
+        listener(...args);
+    } catch (error) {
+        console.error('The front page failed in a listener:', error);
+    }
+});
+
+// What the page says over the game: the download's progress, with a bar
+// for a fraction, or an error; nothing hides it. An error stays. A front
+// page is told the rest (onStatus) and shows it itself; the page shows
+// only errors
+const statusBox = document.getElementById('status');
+const statusText = statusBox.querySelector('span');
+const statusBar = statusBox.querySelector('progress');
+// what = { kind, bytes, total }: what it is, for a front's own words
+// ('reading' the player's files, 'starting', 'download'), and how many
+// bytes of how many where it counts them
+const showStatus = (text, fraction, error = false, what = {}) => {
+    if (statusBox.classList.contains('error')) return;
+    // a front shows what the page is doing in its own words (onStatus)
+    if (frontOn && !error) {
+        tellFront(frontListeners.status, { text: text ?? '', fraction, kind: text ? what.kind ?? '' : '', bytes: what.bytes, total: what.total });
+        return;
+    }
+    statusBox.hidden = !text;
+    statusText.textContent = text ?? '';
+    statusBar.hidden = fraction === undefined;
+    if (fraction !== undefined) statusBar.value = fraction;
+};
+// An error the game can't start after: the page goes no further
+const fail = (text) => {
+    showStatus(text, undefined, true);
+    statusBox.classList.add('error');
+    throw new Error(text);
+};
+// A pak the player chose, read where they keep it, changed on their disk
+// since (the browsers refuse such a File: Chromium's NotReadableError,
+// WebKit's NotFoundError): the game stops, as its reads can't go on, and the
+// page says which pak and asks again, never a crash
+const CHANGED_READS = new Set(['NotReadableError', 'NotFoundError']);
+let stoppedFor = null;
+const stopChanged = (src) => {
+    if (stoppedFor) return new Promise(() => {});
+    stoppedFor = src;
+    console.error(`Own files: ${src} changed on the player's disk after it was chosen, so the game stopped`);
+    // the stopped match neither asks before the reload nor holds the pointer
+    removeEventListener('beforeunload', confirmLeave);
+    if (document.pointerLockElement) document.exitPointerLock();
+    showStatus();
+    // nothing to put off: the game can't go on without it
+    ask((box) => {
+        paragraph(box, `${fileName(src)} changed on your computer after you chose it, so the game stopped. Choose it again to keep playing.`);
+        const again = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Choose again' }));
+        again.addEventListener('click', () => location.reload());
+    }, { later: false });
+    return new Promise(() => {});
+};
+const failDownload = (name, response) =>
+    fail(`Couldn't download ${name}: ${response ? `the server answered ${response.status}` : 'the connection failed'}.`);
+
+// Ask for WebGL on a canvas of the page's own, before downloading anything:
+// a canvas keeps the first kind of context it gives out, and the game's
+// must be SDL's to choose
+const probe = document.createElement('canvas');
+const webgl = probe.getContext('webgl2') ?? (MIN_WEBGL_VERSION < 2 ? probe.getContext('webgl') : null);
+webgl?.getExtension('WEBGL_lose_context')?.loseContext();
+// a front page says so in its own words (canRun), and the game never starts
+const noWebGL = `This browser can't run the game: it needs WebGL${MIN_WEBGL_VERSION < 2 ? '' : ' 2'}, which is missing or turned off.`;
+if (!webgl && !FRONT)
+    fail(noWebGL);
+
+// First set up the command line arguments and the Emscripten filesystem.
+//
+// What a link may carry, in its query (nothing is read from its fragment
+// here; joining by a code's link reads the key's fingerprint there): the
+// page's own options, a game directory by a plain name, a name for this
+// visit, play for the front page (FRONT, below), which goes into the game
+// at once, and console commands (args) only where the page's config says it
+// takes them (consoleArgs), as the tests' and a developer's server does;
+// never the build's own config, which a server's gateway serves. Anyone
+// can post a link to a server's page, even one at localhost, and a
+// command from it would run with the console's rights in every visitor's
+// game, its binds, settings and written files kept in the browser.
+// Anything else is left out, each field named once in the console, and so
+// is a field the link names twice, which reads one way here and maybe
+// another wherever else the link is read.
+// a link's name's most characters, as the game's MAX_NAME_LENGTH
+const MAX_LINK_NAME = 32;
+const urlParams = new URLSearchParams(window.location.search);
+const LINK_FIELDS = ['com_basegame', 'fs_basegame', 'fs_game', 'fullscreen', 'maxPixelRatio', 'rawMouse',
+    'desynchronized', 'name', 'play', 'args'];
+const leftOut = (field, why) => console.warn(`The link's ${field} was left out: ${why}.`);
+const twice = new Set([...urlParams.keys()].filter((field, i, all) => all.indexOf(field) !== i));
+for (const field of new Set(urlParams.keys()))
+    if (!LINK_FIELDS.includes(field)) leftOut(field, 'the page takes no such field');
+    else if (twice.has(field)) leftOut(field, 'the link names it more than once');
+const linkField = (field) => twice.has(field) ? null : urlParams.get(field);
+// ?play=1, read once as the page opens and taken out of the address, so a
+// reload, a step back, a bookmark or a copied link doesn't play again; the
+// page's own move to its isolated form writes it for a Play just pressed
+const linkPlay = linkField('play') === '1';
+if (urlParams.has('play')) {
+    const url = new URL(location.href);
+    url.searchParams.delete('play');
+    history.replaceState(history.state, '', url);
+}
+// a game directory's name: letters, digits, - and _, and a . inside
+// (cpma-1.52), never two together, so it can't end the quotes it's set in
+// nor leave the home; and one the config lists files for, checked once
+// it's in (listedDir)
+const gameDir = (field) => {
+    const dir = linkField(field) || '';
+    if (dir && (!/^[A-Za-z0-9_-]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?$/.test(dir) || dir.includes('..'))) {
+        leftOut(field, 'a game directory is named with letters, digits, - and _, and a . inside');
+        return '';
+    }
+    return dir;
+};
+// The URL's game directory, or the config's (P358: a server's own page
+// names the one it plays), or BASEGAME; set once the config is in
+let urlBasegame = gameDir('com_basegame');
+let com_basegame;
+let fs_basegame = gameDir('fs_basegame');
+let fs_game = gameDir('fs_game');
+// A name for this visit, set as the command line sets one, so it's never
+// saved, cleaned as the game cleans a typed one: no control characters,
+// spaces at most two together and none leading, no black, and something
+// left to read. No quote, backslash, semicolon or percent sign, which
+// would end its quotes or its userinfo
+const cleanName = (raw) => {
+    let name = raw.replace(/[\x00-\x1f\x7f"\\;%]/g, '');
+    // until none is left: taking ^0 out of ^^00 leaves one
+    while (/\^[08]/.test(name)) name = name.replace(/\^[08]/g, '');
+    name = name.replace(/ {3,}/g, '  ').trim();
+    // a color code counts nothing toward what's left to read
+    return name.replace(/\^./g, '').length && name.length <= MAX_LINK_NAME ? name : '';
+};
+const visitName = (() => {
+    const raw = linkField('name');
+    if (raw === null) return '';
+    const name = cleanName(raw);
+    if (!name) leftOut('name', `a name has 1 to ${MAX_LINK_NAME} characters, some of them not a color code`);
+    return name;
+})();
+// Set for this visit only. The web's defaults, and a touch device's, are the
+// engine's; the canvas has its CSS box's size, and r_mode isn't used.
+// The engine's arguments, each value one, in its quotes: the engine joins
+// them with spaces, and quotes one with a + of its own, so a value split
+// at its spaces, as "a b+quit c", would end its quotes at b+quit and start
+// a command there
+const generatedArguments = [];
+const setArgument = (cvar, value) => generatedArguments.push('+set', cvar, `"${value}"`);
+// ?fullscreen=0 plays this visit in the page's window, and 1 fullscreen
+const fullscreenField = linkField('fullscreen');
+if (fullscreenField !== null) setArgument('r_fullscreen', fullscreenField === '0' ? 0 : 1);
+if (visitName) setArgument('name', visitName);
+// Console commands come after, and win, once the config says the page
+// takes them (consoleArgs). Note that unfortunately "+" needs to be encoded
+// as "%2b" in URL query strings or it will be stripped by the browser.
+const queryArgs = linkField('args');
+
+const dataURL = new URL(dataPath, location.origin + location.pathname);
+
+const configPromise = EMSCRIPTEN_PRELOAD_FILE ? Promise.resolve({[BASEGAME]: {files: []}})
+  : fetch(configFilename).catch(() => null).then((r) => r?.ok
+      ? r.json().catch(() => fail(`Couldn't read ${configFilename}: it isn't valid JSON.`))
+      : failDownload(configFilename, r));
+
+// A page of the build's own in front of the game (WEB_PAGE_FRONT), a module
+// the parent project puts beside this one, whose default export is called
+// with the page's side of it. It's shown first and decides when the game
+// loads (start: a first visit's player chooses to, a return visit's page
+// may at once; start({ play: true }) for a Play, which goes on into the
+// match after the page moves to its isolated form for the player's own
+// files), and when the page's own join goes, and goes again after a
+// leave (play: each counts one more in pageJoins, which an extension's join
+// as the page opens, such as by its link, follows, joining once for each,
+// with the name and password play gave it, pageJoinField).
+// It shows the agreement the game's files come with, when one needs
+// accepting (agreement, then accept, which the page's own question then
+// finds kept), what a first visit downloads (download) and whether the
+// player's own files are wanted and not kept yet (ownFiles), the page's own
+// questions as they open and close (onAsk, askAgain), what it's doing
+// meanwhile, such as reading the player's files in (onStatus: its words,
+// its kind, how far along and its bytes where it counts them, or '' once
+// done), the client's join as it goes, in the same way (onStatus's
+// 'joining' the server, 'getting' its files, by bytes, and 'entering' its
+// map, '' once in or stopped), which cancelJoin stops, and the download's
+// progress (onProgress: the bytes in and
+// the total, 0 when the server doesn't say), in place of the page's own
+// words, which show only its errors; and whether this browser can run the
+// game at all (canRun), which start then never does. It's told when the game has
+// started (onStarted), when the player is in a match or no longer
+// (onPlaying), when the client leaves
+// a server and stays at the menu (onLeft, with the kind's name, hooks.h's
+// extLeftNames, and the menu's words), and when the player quits (onQuit),
+// in place of the page's own screen, and when the game crashed (onCrash: an
+// error's exit or an abort); and it can ask whether the server now
+// serves another build of the game than the one playing (updated, by the
+// engine script's ETag). Without one, or one that fails to load, the game
+// loads and joins at once.
+const engineScript = enginePath + `@CLIENT_BINARY@.js`;
+// the engine script's ETag as this page has it, once the game has loaded,
+// from the browser's cache
+let engineTag = null;
+let startGame, pageJoins = FRONT ? 0 : 1, joinCancels = 0;
+// what the front's play gave the next join: a name, cleaned as a link's is,
+// and a password, which is never stored and goes once it's taken
+const joinFields = { name: '', password: '' };
+const gameStarted = new Promise((resolve) => { startGame = resolve; });
+const noFront = (why) => {
+    if (why) console.error(`The front page didn't load, so the game starts at once: ${why}`);
+    for (const listeners of Object.values(frontListeners)) listeners.length = 0;
+    frontOn = false;
+    pageJoins = Math.max(pageJoins, 1);
+    if (!webgl) fail(noWebGL);
+    startGame();
+};
+// A link's game directories as the config allows them: one plays only
+// where the config lists files for it, as a server's own page lists the
+// ones it plays (another would play an empty folder of the player's home,
+// or none of the server's paks), and a server's own page plays the one it
+// names, not another a link names; each left out told to say(field, why)
+const gameDirsOf = (config, say = () => {}) => {
+    const listedDir = (field, dir) => {
+        if (!dir || (Object.hasOwn(config, dir) && Array.isArray(config[dir]?.files))) return dir;
+        say(field, `the page's config lists no files for ${dir}`);
+        return '';
+    };
+    let base = listedDir('com_basegame', urlBasegame);
+    const own = typeof config.basegame == 'string' && /^[\w.-]+$/.test(config.basegame) ? config.basegame : '';
+    if (base && own && base !== own) {
+        say('com_basegame', `this page plays ${own}`);
+        base = '';
+    }
+    return { urlBasegame: base, fs_basegame: listedDir('fs_basegame', fs_basegame), fs_game: listedDir('fs_game', fs_game),
+        com_basegame: base || own || BASEGAME };
+};
+// the game directories the config gives this visit
+const frontDirs = async () => {
+    const config = await configPromise;
+    const chosen = gameDirsOf(config);
+    return { config, dirs: [chosen.com_basegame, chosen.fs_basegame, chosen.fs_game].filter(Boolean) };
+};
+// the agreement a first download needs accepted, as agree() below asks it:
+// { text, for, key }, or null for none or one accepted already
+let frontAgreementAsked;
+const frontAgreementOf = async () => {
+    const { config, dirs } = await frontDirs();
+    if (!config.agreement?.src || !dirs.some((dir) => config[dir]?.files?.some?.((file) => file.agreement))) return null;
+    const response = await fetch(new URL(config.agreement.src, dataURL)).catch(() => null);
+    if (!response?.ok) return null;
+    const text = await response.text();
+    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    return stored(key) ? null : { text, for: typeof config.agreement.for == 'string' ? config.agreement.for : '', key };
+};
+const frontAgreement = () => (frontAgreementAsked ??= frontAgreementOf());
+// what a first visit downloads: how many files, and their bytes where the
+// config gives every file's size, else null
+const frontDownload = async () => {
+    const { config, dirs } = await frontDirs();
+    const files = dirs.flatMap((dir) => (Array.isArray(config[dir]?.files) ? config[dir].files : []));
+    const sized = files.every((file) => Number.isFinite(file?.size));
+    return { files: files.length, bytes: sized ? files.reduce((sum, file) => sum + file.size, 0) : null };
+};
+// whether the player's own files the config asks for (own) aren't all kept
+// in this browser yet, in its private files or IndexedDB, as bring() keeps
+// them; the page's own check, with each file's checksum, comes as it starts
+const frontOwnFiles = async () => {
+    const { config, dirs } = await frontDirs();
+    const own = dirs.flatMap((dir) => (Array.isArray(config[dir]?.own) ? config[dir].own : []));
+    if (!own.length) return { needed: false };
+    const store = await (ownStoreEarly ??= ownStore()).catch(() => ({}));
+    const kept = new Set((store.files ?? []).map(({ src }) => src));
+    const databases = await indexedDB.databases?.().catch(() => undefined);
+    if (!databases || databases.some(({ name }) => name === OWN_DATABASE)) {
+        const db = await ownDatabase();
+        for (const key of await ownRequest(db, 'readonly', (records) => records.getAllKeys()) ?? []) kept.add(key);
+        db?.close();
+    }
+    // and the kept folders: allow, one waits on the player's click
+    const folders = await keptFolderFacts();
+    for (const name of folders.names) kept.add(name);
+    const needed = own.some((file) => !kept.has(String(file.src).toLowerCase()));
+    return { needed, allow: needed && folders.waiting };
+};
+// the front started the game for the player's Play (start)
+let frontPlays = false;
+if (FRONT) {
+    // the default export's own promise, if any, is the front's: one that
+    // rejects later isn't a front that failed to load
+    import(new URL(FRONT, location.href).href).then((module) => { module.default({
+        canvas,
+        config: configPromise,
+        // ?play=1: what the front's own play does, at once; and the link's
+        // name, which a play that gives it back keeps for the visit alone
+        link: { play: linkPlay, name: visitName },
+        canRun: !!webgl,
+        // { play }: started for the player's Play, or a Play after a quiet
+        // start, which a page that moves to its isolated form for the
+        // player's own files carries there
+        start: ({ play = false } = {}) => {
+            frontPlays ||= play;
+            return webgl ? startGame() : fail(noWebGL);
+        },
+        play: ({ name = '', password = '' } = {}) => {
+            // a link's name is set for the visit already (P448), never saved
+            const cleaned = cleanName(String(name));
+            joinFields.name = cleaned === visitName ? '' : cleaned;
+            // what userinfo can hold, as Info_SetValueForKey takes it
+            joinFields.password = String(password).replace(/[\x00-\x1f\x7f"\\;]/g, '').slice(0, 64);
+            pageJoins++;
+        },
+        // the join under way, the page's own or the client's rejoin, stopped
+        cancelJoin: () => {
+            joinCancels++;
+        },
+        agreement: frontAgreement,
+        accept: async () => {
+            const agreement = await frontAgreement();
+            if (agreement) store(agreement.key, '1');
+            frontAgreementAsked = Promise.resolve(null);
+        },
+        onProgress: (listener) => frontListeners.progress.push(listener),
+        onStatus: (listener) => frontListeners.status.push(listener),
+        onAsk: (listener) => frontListeners.ask.push(listener),
+        askAgain: () => {
+            if (!askBox.firstChild) return false;
+            askBox.hidden = false;
+            tellFront(frontListeners.ask, 'open');
+            return true;
+        },
+        // the player's own files chosen in the front's own press, within
+        // the player's gesture: the system's chooser opens, and the game
+        // starts as start() does; false where it can't run, or once the
+        // files' question is past
+        chooseFiles: () => {
+            if (!webgl || frontChosen.done || !(frontChooser || canKeepFolders)) return false;
+            frontChosen.opened = true;
+            if (canKeepFolders) frontChosen.pending = chooseFolder();
+            else frontChooser.click();
+            startGame();
+            return true;
+        },
+        download: frontDownload,
+        ownFiles: frontOwnFiles,
+        onStarted: (listener) => frontListeners.started.push(listener),
+        onPlaying: (listener) => frontListeners.playing.push(listener),
+        onLeft: (listener) => frontListeners.left.push(listener),
+        onQuit: (listener) => frontListeners.quit.push(listener),
+        onCrash: (listener) => frontListeners.crash.push(listener),
+        updated: async () => {
+            const tag = await engineTag;
+            if (!tag) return false;
+            const response = await fetch(engineScript, { cache: 'no-store', headers: { 'If-None-Match': tag } })
+                .catch(() => null);
+            // the headers decide: not the script itself, which another build's is
+            response?.body?.cancel().catch(() => {});
+            const now = response?.headers.get('ETag');
+            return response?.status === 200 && !!now && now !== tag;
+        },
+    }); }).catch(noFront);
+} else {
+    noFront();
+}
+
+// The game takes keys while its canvas has focus; start with it there
+canvas.focus();
+
+// Cap the device pixel ratio SDL3 sizes the canvas by at 2 (?maxPixelRatio=):
+// a phone at 3 would draw 2.25 times the pixels. It still follows zoom and displays.
+const requestedPixelRatio = Number(linkField('maxPixelRatio'));
+const maxPixelRatio = requestedPixelRatio > 0 ? requestedPixelRatio : 2;
+const pixelRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+    ?? Object.getOwnPropertyDescriptor(Window.prototype, 'devicePixelRatio');
+if (pixelRatio?.get)
+    Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => Math.min(pixelRatio.get.call(window), maxPixelRatio),
+    });
+// SDL3 reads the ratio only as the window resizes (Emscripten_HandleResize),
+// and a browser fires no resize when only the ratio changes, as when the
+// window moves to a display of another density. A resolution query at the
+// browser's own ratio changes then, so its change is passed on as a resize,
+// and the query is made again at the new ratio.
+const watchPixelRatio = () => matchMedia(`(resolution: ${pixelRatio?.get?.call(window) ?? devicePixelRatio}dppx)`)
+    .addEventListener('change', () => {
+        dispatchEvent(new Event('resize'));
+        watchPixelRatio();
+    }, { once: true });
+watchPixelRatio();
+
+// Raw mouse input on Windows, as the native client has there (?rawMouse=0
+// or 1 overrides): without it, Chromium on Windows sometimes reports a huge
+// movementY that snaps the view straight up or down. Elsewhere the system's
+// own motion, as natively on macOS. A browser without raw input either
+// ignores the option or rejects the request with NotSupportedError; only
+// that rejection falls back to a plain lock. Other failures, such as a
+// request made during a fullscreen change, must not quietly downgrade to it.
+// That rejection stands for the visit: later requests are plain from the
+// start, rather than each a refusal and a second request after it.
+// One request at a time: a second made while the first is out is the same
+// request, as two at once leave the pointer free in Chrome, the first's
+// refusal undoing the second's lock. It resolves, never rejecting, once the
+// browser has answered; a lock granted after the game stopped wanting it is
+// let go. A request that throws rather than rejects is a refusal too, so the
+// click's fullscreen request after it still goes out.
+const rawMouseField = linkField('rawMouse');
+const rawMouse = rawMouseField !== null ? rawMouseField !== '0' : /Windows/.test(navigator.userAgent);
+let rawLock = rawMouse, lockRequest = null;
+const lockPointer = () => lockRequest ??= new Promise((resolve) => resolve(canvas.requestPointerLock(rawLock ? { unadjustedMovement: true } : undefined)))
+    .catch((e) => {
+        if (!rawLock || e?.name !== 'NotSupportedError') throw e;
+        rawLock = false;
+        return canvas.requestPointerLock();
+    })
+    .then(() => { if (!wantPointer && locked()) document.exitPointerLock(); }, () => {})
+    .finally(() => { lockRequest = null; });
+const locked = () => document.pointerLockElement === canvas;
+
+// The WebGL context SDL creates, which has no attributes of its own for
+// these: the fast GPU where there are two; an opaque canvas, since the
+// frame's alpha is the renderer's own business, and a blend that zeroes
+// it, as a burn mark's does, showed the black page through as a hard-edged
+// hole; and with ?desynchronized, frames drawn straight to the screen
+// rather than through the page's compositor, a frame sooner, where the
+// browser can (it may tear, or ignore it).
+const getContext = HTMLCanvasElement.prototype.getContext;
+const desynchronized = linkField('desynchronized') !== null;
+HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+    if (type === 'webgl' || type === 'webgl2')
+        attributes = { ...attributes, alpha: false, powerPreference: 'high-performance', ...(desynchronized && { desynchronized }) };
+    return getContext.call(this, type, attributes);
+};
+
+// The page owns browser fullscreen and the pointer lock, which a browser
+// grants only on the player's input, and the engine says whether the player
+// wants fullscreen and the game the pointer (Module.present, cl_present.c
+// and sdl_input.c): the page goes fullscreen at once if the player's input
+// allows, as with the menu's click, or else on their next click, which also
+// takes the lock, and reports what is (Module.presentationFacts). A request
+// for fullscreen stands until it's met: leaving fullscreen by the browser's
+// means, even with a click a moment later, doesn't bring it back, and the
+// engine stops wanting it for this visit. The lock is asked for at each
+// click without it.
+// The whole page goes fullscreen, the canvas following its size. The click
+// that asks for fullscreen asks for the lock first, in the click itself, as
+// Chrome and Safari refuse a lock asked for once fullscreen is granted
+// (Chrome 156 and Safari 26.6.2 do, with NotAllowedError) and Firefox grants
+// either (tests/web/lock-order.mjs measures it). In any browser, fullscreen
+// entered without the lock asks for it once more, once the click's request
+// has had its answer (the fullscreenchange listener), and a refusal there
+// leaves it to the player's next click. Older Safari, which refused the lock
+// in that click but granted fullscreen, relies on that retry. iOS has none:
+// its fullscreen ends on a downward swipe, which playing by touch does all
+// the time.
+const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// for what a browser does with fullscreen's keys, and says of them
+const browser = /Firefox\//.test(navigator.userAgent) ? 'firefox' : /Chrome\//.test(navigator.userAgent) ? 'chromium'
+    : /Safari\//.test(navigator.userAgent) ? 'safari' : 'other';
+const mac = /Macintosh/.test(navigator.userAgent);
+const fullscreenAvailable = !iOS && !!document.documentElement.requestFullscreen;
+// The browser's own fullscreen (F11 in Chrome, Edge and Firefox on Windows
+// and Linux) isn't the page's, and only the browser's key leaves it: it's
+// reported as fullscreen all the same, the platform's own. It's told from
+// the page's by beginning without it: the media query may match in the
+// page's fullscreen too, and lag its end.
+const browserFullscreen = matchMedia('(display-mode: fullscreen)');
+let browsersOwn = browserFullscreen.matches;
+const isFullscreen = () => Boolean(document.fullscreenElement) || browsersOwn;
+// the facts' bits, as sdl_input.c reads them
+const FACT_FULLSCREEN = 1, FACT_AVAILABLE = 2, FACT_LOCKED = 4, FACT_POINTER = 8, FACT_ASKED = 16, FACT_ASKED_FULL = 32,
+    FACT_ANSWER_SHIFT = 6, FACT_KEYS = 256, FACT_RESTART = 512;
+const ANSWER_NONE = 0, ANSWER_CLICK = 1, ANSWER_REFUSED = 2, ANSWER_BROWSERS_OWN = 3;
+let wantFullscreen = false, fullscreenAnswer = ANSWER_NONE, wantPointer = false;
+// an input that takes the page into fullscreen: the click the
+// presentation's pointerdown below claims while the game wants it, or
+// Alt+Enter (Option+Return), which the keydown below asks it for
+const entersFullscreen = (event) => event.target === canvas && !isFullscreen() && (event.type === 'pointerdown'
+    ? event.pointerType === 'mouse' && wantFullscreen
+    : event.type === 'keydown' && event.code === 'Enter' && event.altKey && !event.repeat && fullscreenAvailable);
+// a request out, which a second one would only get in the way of; and who
+// asked to leave fullscreen, 'game' or 'page', until it's done, while "Click
+// to play" waits (the browser frees the pointer a frame or two before
+// fullscreen ends), and the game's leaving needs no hint
+let entering = false, exiting = null;
+// Keyboard Lock as the request's option (Firefox from 151, Safari from
+// 26.4), which only a browser that has it reads: lockOption says it did. One
+// that knows the option but not the lock refuses the request with
+// NotSupportedError, and is asked again without it, then and from then on;
+// should the first request have used up the player's activation, the
+// standing request takes their next click.
+let lockOption = false;
+let fullscreenOptions = { get keyboardLock() { lockOption = true; return 'browser'; } };
+const requestFullscreen = () => document.documentElement.requestFullscreen(fullscreenOptions)
+    .catch((e) => {
+        if (e?.name !== 'NotSupportedError' || !fullscreenOptions) throw e;
+        fullscreenOptions = undefined;
+        lockOption = false;
+        return document.documentElement.requestFullscreen();
+    });
+const enterFullscreen = () => {
+    if (entering) return;
+    entering = true;
+    fullscreenAnswer = ANSWER_NONE;
+    if (wantPointer && !locked()) lockPointer();
+    requestFullscreen()
+        .catch(() => {
+            if (document.fullscreenElement) return;
+            // the request stands; the lock needn't wait for it
+            fullscreenAnswer = ANSWER_REFUSED;
+            if (wantPointer && !locked()) lockPointer();
+        })
+        .finally(() => { entering = false; });
+};
+const exitFullscreen = (byGame = true) => {
+    exiting = byGame ? 'game' : 'page';
+    return document.exitFullscreen().catch(() => {
+        exiting = null;
+        showPlay();
+    });
+};
+const present = ({ fullscreen, pointer }) => {
+    if (fullscreen !== undefined) {
+        fullscreenAnswer = ANSWER_NONE;
+        wantFullscreen = fullscreen && fullscreenAvailable && !isFullscreen();
+        if (wantFullscreen) {
+            if (navigator.userActivation?.isActive ?? false) enterFullscreen();
+            else fullscreenAnswer = ANSWER_CLICK;
+        } else if (!fullscreen) {
+            if (document.fullscreenElement) exitFullscreen();
+            else if (browsersOwn) fullscreenAnswer = ANSWER_BROWSERS_OWN;
+        }
+    }
+    if (pointer !== undefined) {
+        wantPointer = pointer;
+        if (!wantPointer && locked()) document.exitPointerLock();
+        showPlay();
+    }
+};
+// a key press that's only a modifier, on its way to a combination
+const modifierAlone = (event) => ['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'].includes(event.key);
+// The game's sound (snd_web.c): the engine decides what plays, as its base
+// backend does, and sends what changed once a frame (update), which answers
+// whether the sound runs. Each sound is an AudioBuffer here, outside the
+// engine's memory; each channel a strip, a splitter into two gains, left and
+// right, as the base mixer's volumes; and each playing sound a source node
+// into its channel's strip, mixed by the browser on its audio thread. The
+// page makes the one AudioContext in the player's first input, at the
+// smallest latency the browser gives, so the browser has no context to
+// refuse or warn about, and resumes it in a later input if the browser held
+// it. Until it runs, the engine starts nothing, and a stream's samples are
+// dropped rather than held to play at once. Its listeners come before the
+// presentation's below, which keep the clicks they claim from the rest.
+const sound = (() => {
+    const buffers = [], strips = [], streams = [];
+    let context = null, master = null, merger = null, open = null;
+    // The engine's frames say the game runs, not the page's visibility,
+    // which an extension can fake (docs/design/audio.md, "When the frames
+    // stop"). They've stopped once the page has waited FRAMES_STOP seconds
+    // for the browser to run one: a frame of the engine's own that takes
+    // long (a map's load, a shader's first compile) isn't waiting, and is
+    // the game running. They come steadily again after STEADY seconds
+    // without such a wait: a throttled page's come a few at a time and
+    // never do. The sound runs only while they're steady. Each update holds
+    // the gain `open` a while more, on the audio thread's clock, so the
+    // sound closes when the frames stop with no frame or timer to close
+    // it. Hidden, or with no steady frames for STALL_SUSPEND seconds, the
+    // context is suspended too, to spare the device.
+    const FRAMES_STOP = 0.75, STEADY = 0.25, STALL_SUSPEND = 5;
+    let steadySince = -Infinity, lastSteady = -Infinity;
+    // The longest the page has waited for a frame since the last update, in
+    // seconds: from one frame's callbacks ending to the next frame's
+    // starting. The engine's main loop asks for its frames here.
+    let waited = 0;
+    {
+        const raf = window.requestAnimationFrame.bind(window);
+        let ended = performance.now(), frame = null;
+        window.requestAnimationFrame = (callback) => raf((time) => {
+            // a frame's first callback; the others are the same frame's
+            if (time !== frame) {
+                frame = time;
+                waited = Math.max(waited, (performance.now() - ended) / 1000);
+            }
+            try {
+                callback(time);
+            } finally {
+                ended = performance.now();
+            }
+        });
+    }
+    // the context time `open` was last held open from, or null while shut
+    let openedAt = null;
+    // the page suspended the context, not the browser
+    let suspended = false;
+    const STATES = ['suspended', 'running', 'closed', 'interrupted'];
+    function ended() {
+        this.disconnect();
+        if (this.strip?.source === this) this.strip.source = null;
+        streams[this.stream]?.delete(this);
+    }
+    const stop = (source) => {
+        source.onended = null;
+        try { source.stop(); } catch { /* never started */ }
+        source.disconnect();
+    };
+    const strip = (i) => {
+        if (!strips[i]) {
+            // a mono sound to both gains, as the base mixer plays it: the
+            // input mixes it up to stereo, which a splitter, always
+            // discrete, would not
+            const input = new GainNode(context, { channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers' });
+            const split = new ChannelSplitterNode(context, { numberOfOutputs: 2 });
+            const left = new GainNode(context, { gain: 0 }), right = new GainNode(context, { gain: 0 });
+            input.connect(split);
+            split.connect(left, 0);
+            split.connect(right, 1);
+            left.connect(merger, 0, 0);
+            right.connect(merger, 0, 1);
+            strips[i] = { input, left, right, source: null };
+        }
+        return strips[i];
+    };
+    const stopStrip = (s) => {
+        if (!s?.source) return;
+        stop(s.source);
+        s.source = null;
+    };
+    const stopStream = (i) => {
+        streams[i]?.forEach(stop);
+        streams[i] = undefined;
+    };
+    // Held open, re-armed at most every REARM seconds, it closes from
+    // FRAMES_STOP after the last frame, never before the frames count as
+    // stopped, fading for FADE; shut, it's closed at once
+    const REARM = 0.05, FADE = 0.05;
+    const hold = (steady) => {
+        const at = context.currentTime;
+        // shut already, or held open lately enough
+        if (!steady && openedAt === null) return;
+        if (steady && openedAt !== null && at < openedAt + REARM) return;
+        open.gain.cancelScheduledValues(at);
+        open.gain.setValueAtTime(steady ? 1 : 0, at);
+        if (steady) {
+            open.gain.setValueAtTime(1, at + FRAMES_STOP + REARM);
+            open.gain.linearRampToValueAtTime(0, at + FRAMES_STOP + REARM + FADE);
+        }
+        openedAt = steady ? at : null;
+    };
+    // Shut and suspended, what played waits, unheard, until the next update
+    // says the sound stopped: the engine then stops it all and starts what
+    // the game's time has. The next update sees the frames stopped however
+    // short the hide, or the paused nodes would play on, behind the game's
+    // time
+    const suspend = () => {
+        hold(false);
+        waited = Infinity;
+        suspended = true;
+        context.suspend().catch(() => {});
+    };
+    const resume = () => {
+        suspended = false;
+        context.resume().catch(() => {});
+    };
+    const begin = (event) => {
+        // with no userActivation, any trusted input is let try
+        if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
+        // not an input that takes the page into fullscreen, whose
+        // activation Safari spends on the lock and fullscreen: sound started
+        // in it hid the page on the way in (Safari 26.6), freeing the lock.
+        // It starts at the next input, or in this one where fullscreen can't
+        // come (a frame without it, or a request refused)
+        if (entersFullscreen(event) && document.fullscreenEnabled && fullscreenAnswer !== ANSWER_REFUSED) return;
+        // nor a modifier pressed alone, as Alt is on the way to Alt+Enter
+        if (event.type === 'keydown' && modifierAlone(event)) return;
+        // a hidden page's sound is held, whatever reaches it; a browser
+        // without Web Audio (Windows' WebKit) plays none
+        if (document.hidden || !window.AudioContext) return;
+        if (!context) {
+            try {
+                context = new AudioContext({ latencyHint: 0 });
+            } catch {
+                context = new AudioContext();
+            }
+            master = new GainNode(context, { gain: 0 });
+            open = new GainNode(context, { gain: 0 });
+            merger = new ChannelMergerNode(context, { numberOfInputs: 2 });
+            merger.connect(master);
+            master.connect(open);
+            open.connect(context.destination);
+            // The frames stopped and nothing said why: a timer still runs,
+            // if slowly, where steady frames don't. A long task (a map's
+            // load) stops both, and isn't one.
+            let lastTick = performance.now() / 1000;
+            setInterval(() => {
+                const now = performance.now() / 1000, ticking = now - lastTick < 2;
+                lastTick = now;
+                if (ticking && context.state === 'running' && now - lastSteady > STALL_SUSPEND) suspend();
+            }, 1000);
+        }
+        if (context.state !== 'running') resume();
+    };
+    for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, begin, { capture: true });
+    // A hidden page's sound waits, said at once rather than at the gap in
+    // its frames. Shown again it resumes, or at the next input where the
+    // browser wants one (Safari, after an interruption).
+    document.addEventListener('visibilitychange', () => {
+        if (!context) return;
+        if (document.hidden) suspend();
+        else if (context.state !== 'running') resume();
+    });
+    return {
+        state: () => context ? STATES.indexOf(context.state) + 1 : 0,
+        rate: () => context?.sampleRate ?? 0,
+        latency: () => context ? context.baseLatency + (context.outputLatency || 0) : 0,
+        // a sound's samples, a channel after another
+        load(id, samples, frames, channels, rate) {
+            let buffer;
+            try {
+                // a rate the browser can't hold leaves the sound silent
+                buffer = new AudioBuffer({ numberOfChannels: channels, length: Math.max(frames, 1), sampleRate: rate });
+            } catch {
+                buffers[id] = undefined;
+                return;
+            }
+            for (let c = 0; c < channels; c++) buffer.copyToChannel(samples.subarray(c * frames, (c + 1) * frames), c);
+            buffers[id] = buffer;
+        },
+        // snd_web.c's operations: op, strip, then its values
+        update(commands) {
+            const now = performance.now() / 1000;
+            if (waited >= FRAMES_STOP) steadySince = now;
+            waited = 0;
+            const steady = now - steadySince >= STEADY;
+            if (steady) lastSteady = now;
+            if (!context) return false;
+            if (steady && suspended && !document.hidden) resume();
+            hold(steady);
+            for (let k = 0; k < commands.length; k += 6) {
+                const s = commands[k + 1];
+                switch (commands[k]) {
+                case 0: { // start: sfx, offset, loop, rate
+                    const buffer = buffers[commands[k + 2]];
+                    if (!buffer) break;
+                    const loop = Boolean(commands[k + 4]), offset = commands[k + 3];
+                    const into = strip(s);
+                    stopStrip(into);
+                    const source = new AudioBufferSourceNode(context, { buffer, loop, playbackRate: commands[k + 5] });
+                    source.strip = into;
+                    source.onended = ended;
+                    source.connect(into.input);
+                    source.start(0, loop ? offset % buffer.duration : Math.max(offset, 0));
+                    into.source = source;
+                    break;
+                }
+                case 1: stopStrip(strips[s]); break;
+                case 2: {
+                    const into = strip(s);
+                    into.left.gain.value = commands[k + 2] / 256;
+                    into.right.gain.value = commands[k + 3] / 256;
+                    break;
+                }
+                case 3: if (strips[s]?.source) strips[s].source.playbackRate.value = commands[k + 2]; break;
+                case 4: master.gain.value = commands[k + 2]; break;
+                }
+            }
+            // a gap stops it, here as for the engine, which then stops it
+            // all and, steady again, starts what the game's time has
+            return steady && context.state === 'running';
+        },
+        // a stream's samples, left then right, with their gains in them,
+        // after its last
+        stream(i, samples, frames, rate) {
+            if (context?.state !== 'running' || !frames) {
+                stopStream(i);
+                return;
+            }
+            let buffer;
+            try {
+                buffer = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: rate });
+            } catch {
+                return;
+            }
+            buffer.copyToChannel(samples.subarray(0, frames), 0);
+            buffer.copyToChannel(samples.subarray(frames), 1);
+            const queued = streams[i] ??= new Set();
+            const source = new AudioBufferSourceNode(context, { buffer });
+            source.stream = i;
+            source.onended = ended;
+            source.connect(master);
+            // back to back, or a moment from now if it ran out
+            const at = Math.max(queued.next ?? 0, context.currentTime + 0.02);
+            source.start(at);
+            queued.next = at + buffer.duration;
+            queued.add(source);
+        },
+        stopStream,
+        stopAll() {
+            strips.forEach(stopStrip);
+            streams.forEach((_, i) => stopStream(i));
+        },
+    };
+})();
+
+// The browser is asked to keep the player's stored files, once the page
+// wants it (persistOnInput, as bring stores them), in the player's next
+// input, where a browser that asks the player wants one
+// (navigator.storage.persist); its listeners come before the
+// presentation's below, which keep the clicks they claim from the rest.
+// null once asked.
+let persistWanted = false;
+const persistInput = (event) => {
+    if (!persistWanted || !event.isTrusted) return;
+    persistWanted = null;
+    navigator.storage.persist().then((granted) => {
+        askBox.dataset.persist = granted ? 'granted' : 'refused';
+        console.log(`Asked the browser to keep the stored files: ${granted ? 'granted' : 'refused'}`);
+    }, () => {});
+};
+for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, persistInput, { capture: true });
+
+// A click that goes fullscreen or takes the lock is the page's, never the
+// game's: SDL sees neither its press nor its release, which Safari's change
+// to fullscreen could lose, leaving the gun firing. A touch is the game's.
+// A claimed release that never came is forgotten at the next press, whose
+// release is then the game's.
+let claimedPointer;
+addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    claimedPointer = undefined;
+    if (event.target !== canvas) return;
+    const goFullscreen = entersFullscreen(event);
+    const takeLock = wantPointer && !locked();
+    if (!goFullscreen && !takeLock) return;
+    event.stopImmediatePropagation();
+    claimedPointer = event.pointerId;
+    if (goFullscreen) enterFullscreen();
+    else lockPointer();
+}, { capture: true });
+addEventListener('pointerup', (event) => {
+    if (event.pointerId !== claimedPointer) return;
+    claimedPointer = undefined;
+    event.stopImmediatePropagation();
+}, { capture: true });
+// The mouse's motion is the game's only under the lock. As the lock ends
+// (Esc, leaving fullscreen) the browser puts the cursor back where it was,
+// which SDL would pass on as one long move, and the engine, learning of the
+// loss a frame later, would turn the view by it: while the game wants the
+// lock and hasn't got it, the motion stays the page's.
+for (const type of ['pointermove', 'mousemove'])
+    addEventListener(type, (event) => {
+        if (wantPointer && !locked() && (event.pointerType ?? 'mouse') === 'mouse') event.stopImmediatePropagation();
+    }, { capture: true });
+// A key press takes the lock again too, as a click does, and is still the
+// game's: a lock lost with the keys kept comes back as the player plays on.
+// A held key's repeats ask as well, at most every REPEAT_ASK ms, so a key
+// held as the lock goes (the engine keeps it held, Present_Captured) brings
+// it back by itself. Not Esc, which gives the page no activation, nor a
+// modifier, or a press with Ctrl, Alt or Cmd held, which are shortcuts
+// (Alt+Enter, the browser's own), nor a key a page's script makes outside
+// an input, which has no activation (within a real input's, it does). A
+// refused request, as in Chrome's second or so after the player's own Esc,
+// is asked again at the next press; repeats stop asking after one, so a key
+// held through that Esc doesn't take the lock back once Chrome allows it.
+const REPEAT_ASK = 250;
+let repeatAsked = -Infinity, repeatsAsk = true;
+addEventListener('keydown', (event) => {
+    if (event.target !== canvas || !wantPointer || locked() || event.code === 'Escape' || modifierAlone(event)
+        || event.ctrlKey || event.altKey || event.metaKey || !(navigator.userActivation?.isActive ?? true)) return;
+    if (event.repeat) {
+        const now = performance.now();
+        if (!repeatsAsk || now - repeatAsked < REPEAT_ASK) return;
+        repeatAsked = now;
+    } else repeatsAsk = true;
+    lockPointer().then(() => { if (event.repeat && !locked()) repeatsAsk = false; });
+}, { capture: true });
+// Safari bundles a frame's mouse moves into one pointermove whose movement
+// is only the last move's, not their sum, so under the lock most of the
+// mouse's motion was lost (WebKit bug 235116). Where an event shows that,
+// its movement becomes the sum of its bundled moves before SDL reads it;
+// browsers that sum already are left alone. Not with raw input, where
+// Safari makes only the event's own movement raw.
+addEventListener('pointermove', (event) => {
+    if (rawMouse || event.pointerType !== 'mouse' || !locked()) return;
+    const moves = event.getCoalescedEvents?.() ?? [];
+    const last = moves.at(-1);
+    if (moves.length < 2 || event.movementX !== last.movementX || event.movementY !== last.movementY) return;
+    const sum = (axis) => moves.reduce((total, move) => total + move[axis], 0);
+    Object.defineProperties(event, { movementX: { value: sum('movementX') }, movementY: { value: sum('movementY') } });
+}, { capture: true });
+
+// The browser's find (Cmd+F, Ctrl+F) isn't the game's: during play SDL
+// cancels every key it takes, but with text input on, as in the console,
+// it lets keys by to type with, and the find bar would open over the game
+// and take the keys from it (ENG-168). The game still gets the key.
+addEventListener('keydown', (event) => {
+    if (event.target === canvas && event.code === 'KeyF' && (event.metaKey || event.ctrlKey)) event.preventDefault();
+}, { capture: true });
+
+// Alt+Enter (Option+Return on a Mac) is the page's too: Firefox grants
+// fullscreen only while the key is handled, and the engine reads its keys a
+// frame later. The page asks for the other of what's on screen at the key,
+// SDL sees neither its press nor its release, and the engine is told what
+// was asked, as the player's own request, which it saves (cl_present.c).
+// A claimed release that never came is forgotten at the next press, as a
+// click's is.
+let asked = 0, claimedEnter = false;
+addEventListener('keydown', (event) => {
+    if (event.code !== 'Enter') return;
+    claimedEnter = false;
+    if (event.target !== canvas || !event.altKey) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    claimedEnter = true;
+    if (event.repeat) return;
+    const fullscreen = !isFullscreen();
+    asked = FACT_ASKED | (fullscreen ? FACT_ASKED_FULL : 0);
+    present({ fullscreen });
+}, { capture: true });
+addEventListener('keyup', (event) => {
+    if (event.code !== 'Enter' || !claimedEnter) return;
+    claimedEnter = false;
+    event.stopImmediatePropagation();
+}, { capture: true });
+
+// The page's hints: the timed ones, held about four seconds, and each only
+// the first time in a visit; and "Click to play", while the game wants the
+// pointer in a match and doesn't have it. It stays up through a click the
+// browser refuses, as Chrome does for a second or two after the player's
+// Esc in a window, and says nothing more.
+const hintBox = document.getElementById('hint');
+const playBox = document.getElementById('play');
+const hinted = new Set();
+let hintTimer, playing = false;
+const fade = (box, text) => {
+    if (text) box.textContent = text;
+    box.classList.toggle('shown', Boolean(text));
+};
+for (const box of [hintBox, playBox])
+    box.addEventListener('transitionend', () => { if (!box.classList.contains('shown')) box.textContent = ''; });
+const hintOnce = (text) => {
+    if (hinted.has(text)) return;
+    hinted.add(text);
+    fade(hintBox, text);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => fade(hintBox), 4000);
+};
+// The system's cursor stays hidden over the match meanwhile, as under the
+// lock: a lock something else let go of, the page keeping the keys (a
+// program in the background, on Windows), showed it over a game the mouse
+// no longer turned, with nothing else changed.
+const showPlay = () => {
+    const held = playing && wantPointer;
+    canvas.classList.toggle('held', held);
+    fade(playBox, held && !locked() && !exiting ? 'Click to play' : '');
+};
+document.addEventListener('pointerlockchange', showPlay);
+
+// In the page's fullscreen, Esc and F11 are the page's where the browser has
+// Keyboard Lock: as the fullscreen request's option (Firefox, Safari), or
+// navigator.keyboard's (Chrome). F11 is the game's, which takes a
+// screenshot. Esc is the page's first (Joe, 2026-10-06): a tap is the
+// game's, given to it whole as the key comes up, so the menu opens, closes
+// or goes back as natively; held ESC_HOLD ms, it frees the pointer and
+// leaves fullscreen, as the browser's own longer hold does (1.5 s in Chrome
+// and Safari), and the game never sees it, so the player stays where they
+// were. A ring fills from ESC_RING ms, which a tap never reaches. The
+// browser lets go of the keys as fullscreen ends. Chrome and Firefox say how
+// to leave, where the page's hint would go; elsewhere the page says it: with
+// Keyboard Lock a held Esc, and without it, in Safari, one Esc frees the
+// pointer and a second leaves. On leaving, by any means but the game's, it
+// says how to come back.
+const ESC_HOLD = 750, ESC_RING = 250;
+const keyboardLock = navigator.keyboard?.lock ? navigator.keyboard : null;
+const leavingBox = document.getElementById('leaving');
+leavingBox.style.setProperty('--ring-after', `${ESC_RING}ms`);
+leavingBox.style.setProperty('--ring-fill', `${ESC_HOLD - ESC_RING}ms`);
+let keysLocked = false, escHeld = null;
+// the tap's press and release, given on to the game with the press's
+// modifiers, which the page's listeners let by. SDL3 takes them as it does
+// the player's keys, by their code, and doesn't ask isTrusted; the replay's
+// keys are made too, so only the Mac lane's real ones would show if it did
+const givenEscs = new WeakSet();
+const giveEsc = (press) => {
+    for (const type of ['keydown', 'keyup']) {
+        const event = new KeyboardEvent(type, { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true,
+            shiftKey: press.shiftKey, ctrlKey: press.ctrlKey, altKey: press.altKey, metaKey: press.metaKey });
+        givenEscs.add(event);
+        canvas.dispatchEvent(event);
+    }
+};
+const ring = (shown) => leavingBox.classList.toggle('holding', shown);
+const endHold = () => {
+    clearTimeout(escHeld?.timer);
+    escHeld = null;
+    ring(false);
+};
+// as the browser's own hold does, so with the hint for coming back; the
+// pointer once fullscreen has gone, so "Click to play" never shows in it
+const leave = () => exitFullscreen(false).then(() => document.exitPointerLock());
+const leaveByHold = () => {
+    escHeld.left = true;
+    ring(false);
+    leave();
+};
+addEventListener('keydown', (event) => {
+    if (event.code !== 'Escape' || givenEscs.has(event)) return;
+    // a new press after a hold that left, whose release never came
+    if (escHeld?.left && !event.repeat) endHold();
+    if (!(keysLocked || escHeld)) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    // repeats are nobody's, and never start a hold: a hold's, or one's
+    // whose press went elsewhere, as fullscreen began or focus came back
+    if (escHeld || event.repeat) return;
+    escHeld = { press: event, timer: setTimeout(leaveByHold, ESC_HOLD) };
+    ring(true);
+}, { capture: true });
+addEventListener('keyup', (event) => {
+    if (event.code !== 'Escape' || givenEscs.has(event) || !escHeld) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    const { press, left } = escHeld;
+    endHold();
+    if (left) return;
+    // held long enough by the keys' own times, though the page, busy, as
+    // with a map's load, missed its moment
+    if (event.timeStamp - press.timeStamp >= ESC_HOLD) leave();
+    else giveEsc(press);
+}, { capture: true });
+// a hold whose release won't come to the page is nobody's; one that left
+// stays, to keep its repeats and release from the game, as Safari blurs the
+// window as it leaves fullscreen
+addEventListener('blur', () => { if (!escHeld?.left) endHold(); });
+// The hint waits for the lock's answer: a refused lock leaves Esc the
+// browser's. An answer after fullscreen ended locks nothing.
+const lockedKeys = (locked) => {
+    keysLocked = locked && Boolean(document.fullscreenElement);
+    const hint = browser === 'chromium' || browser === 'firefox' ? ''
+        : keysLocked ? 'Hold Esc to leave fullscreen'
+        : browser === 'safari' && wantPointer ? 'Press Esc twice to leave fullscreen'
+        : 'Press Esc to leave fullscreen';
+    if (hint && document.fullscreenElement) hintOnce(hint);
+};
+document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+        wantFullscreen = false;
+        endHold();
+        if (lockOption) lockedKeys(true);
+        else if (keyboardLock) keyboardLock.lock(['Escape', 'F11']).then(() => lockedKeys(true), () => lockedKeys(false));
+        else lockedKeys(false);
+        // fullscreen without the lock (one refused in the click): asked for
+        // once more, once the click's request has had its answer (above)
+        (lockRequest ?? Promise.resolve()).then(() => {
+            if (document.fullscreenElement && wantPointer && !locked()) lockPointer();
+        });
+    } else {
+        keysLocked = false;
+        if (!escHeld?.left) endHold();
+        keyboardLock?.unlock();
+        if (exiting !== 'game') hintOnce(mac ? 'Option+Return for fullscreen' : 'Alt+Enter for fullscreen');
+        exiting = null;
+        showPlay();
+    }
+});
+// The browser's own fullscreen fires no fullscreenchange: entering it meets
+// a standing request, so leaving it by its key doesn't make a click go in.
+browserFullscreen.addEventListener('change', () => {
+    browsersOwn = browserFullscreen.matches && !document.fullscreenElement;
+    if (browsersOwn) wantFullscreen = false;
+});
+
+// as bits, for the engine to read each frame (IN_PresentFacts); Alt+Enter's
+// request only once
+// a mouse or the like, which the lock is for; a touch screen has none
+const finePointer = matchMedia('(any-pointer: fine)');
+// The game's WebGL context, lost (a GPU reset, a driver's, a browser's own
+// for want of memory) and given back. Lost, the game ran on, sound and all,
+// and drew nothing, a black page for good, as nothing took the loss. Now the
+// page takes it, so the browser may give the context back, says each in its
+// console with the time, and has the engine restart its renderer once it's
+// back (FACT_RESTART, vid_restart); with none back within CONTEXT_BACK_MS, it
+// says so and offers to reload.
+const CONTEXT_BACK_MS = 5000;
+// the Reload question, and the question it stood in for, put back if the
+// context comes back after all
+// contextGeneration counts the losses and the givings back, which the
+// renderer reads (GLimp_ContextGeneration): a fence or program from before
+// one is gone, and a renderer started while the context was lost (a map
+// change, a vid_restart) is started again in the one given back
+let restartRenderer = false, contextLostAt = 0, contextTimer, lostAsk, contextGeneration = 0;
+canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    contextGeneration++;
+    contextLostAt = performance.now();
+    console.warn(`WebGL: the game's graphics were lost at ${new Date().toISOString()}; waiting for the browser to give them back`);
+    clearTimeout(contextTimer);
+    contextTimer = setTimeout(() => {
+        console.error(`WebGL: the game's graphics weren't given back within ${CONTEXT_BACK_MS / 1000} s`);
+        const before = { children: [...askBox.childNodes], hidden: askBox.hidden };
+        ask((box) => {
+            paragraph(box, "The game's picture stopped: the browser reset its graphics. Reload to play again.");
+            const again = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Reload' }));
+            again.addEventListener('click', () => location.reload());
+        }, { later: false });
+        lostAsk = { box: askBox.firstChild, before };
+    }, CONTEXT_BACK_MS);
+});
+canvas.addEventListener('webglcontextrestored', () => {
+    clearTimeout(contextTimer);
+    console.warn(`WebGL: the game's graphics were given back at ${new Date().toISOString()}, `
+        + `${Math.round(performance.now() - contextLostAt)} ms after they were lost; restarting the renderer`);
+    if (lostAsk && askBox.firstChild === lostAsk.box) {
+        const { children, hidden } = lostAsk.before;
+        askBox.replaceChildren(...children);
+        askBox.hidden = hidden || !children.length;
+        if (!children.length) tellFront(frontListeners.ask, 'done');
+        else if (hidden) tellFront(frontListeners.ask, 'closed');
+    }
+    lostAsk = undefined;
+    contextGeneration++;
+    restartRenderer = true;
+});
+const presentationFacts = () => {
+    const facts = (isFullscreen() ? FACT_FULLSCREEN : 0)
+        | (fullscreenAvailable ? FACT_AVAILABLE : 0)
+        | (locked() ? FACT_LOCKED : 0)
+        | (finePointer.matches ? FACT_POINTER : 0)
+        | asked
+        | (fullscreenAnswer << FACT_ANSWER_SHIFT)
+        // the keys' releases still come, so a key held as the lock goes stays held
+        | (document.hasFocus() && !document.hidden ? FACT_KEYS : 0)
+        | (restartRenderer ? FACT_RESTART : 0);
+    asked = 0;
+    restartRenderer = false;
+    return facts;
+};
+
+// A right click is the game's. SDL leaves the event be, and the browser's
+// menu would open over the game while the pointer is free: on the menus,
+// and with the console down.
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+// A player in a match is asked before the page closes or reloads, and one on
+// the menu isn't; the engine says when a match starts and ends (CL_Frame).
+// The listener is there only meanwhile: a browser may leave a page with one
+// out of its back-forward cache.
+const confirmLeave = (event) => {
+    event.preventDefault();
+    event.returnValue = '';
+};
+// the pak reader, when it reads the player's stored paks (downloadGame),
+// until its results are said, as the player first enters a match
+let paksToSay = null;
+const setPlaying = (inMatch) => {
+    playing = inMatch;
+    if (playing) addEventListener('beforeunload', confirmLeave);
+    else removeEventListener('beforeunload', confirmLeave);
+    showPlay();
+    tellFront(frontListeners.playing, playing);
+    if (playing && paksToSay) {
+        const { reads, roundTrips, hits, misses, direct, spinMs } = paksToSay.stats();
+        console.log(`Pak reader: in the match, ${reads} reads, ${roundTrips} round trips (${hits} block hits, ${misses} misses, `
+            + `${direct} straight through), ${spinMs} ms waiting, ${paksToSay.held()} bytes of the paks held`);
+        paksToSay = null;
+    }
+};
+
+// The engine's files live in the page's memory: a screenshot it writes
+// is handed to the player as a download (FS_WriteFile), named for when it
+// was taken, since the engine keeps no copy and so names every one shot0000;
+// a touch log (touchlog_download) keeps its own name, its run's date and time
+const saveFile = (path, bytes) => {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([bytes]));
+    link.download = path.startsWith('touchlogs/') ? `@CLIENT_BINARY@-touchlog-${path.slice('touchlogs/'.length)}`
+        : `@CLIENT_BINARY@-${stamp}.${path.split('.').pop()}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+};
+
+// The home, Emscripten's HOME, where the engine keeps its config, the
+// console's history and recorded demos, is kept in the browser's storage
+// between visits. It's read back before the engine starts, and saved when
+// the engine writes its config and when the page is hidden or closed,
+// which may be the last chance. Only once it was read, or the first save
+// would replace what's stored with a new home. A browser that won't store
+// it, as in some private windows, plays without.
+const HOME = '/home/web_user';
+// A save asked for while one runs follows it, but the page's last, as it's
+// left, goes at once (now): the one running may have read the home before
+// the engine's quit wrote it, and the page may not outlive it.
+let homeFS, saving = false, saveAgain = false;
+const saveHome = (now = false, saved) => {
+    if (!homeFS) return;
+    if (saving && !now) {
+        saveAgain = true;
+        return;
+    }
+    saving = true;
+    homeFS.syncfs(false, (error) => {
+        if (error) console.warn(`Couldn't save the settings: ${error}`);
+        else saved?.();
+        saving = false;
+        if (saveAgain) {
+            saveAgain = false;
+            saveHome();
+        }
+    });
+};
+
+// A copy of the settings files in the page's own storage, written at once as
+// the page is left: a browser may end the page before IndexedDB finishes the
+// save begun then, as Chromium and WebKit do, which loses a setting changed
+// in the second before. The next start takes from it each file written
+// later than IndexedDB's, with the time it was written, and drops it once a
+// save holds them. A full or blocked localStorage leaves IndexedDB's alone
+const SETTINGS_COPY = 'omnifrag-settings';
+// the home's settings files, the engine's .cfg files of a few KB each, as
+// [path, mtime]
+const settingsFiles = (fs, dir = HOME, out = []) => {
+    for (const name of fs.readdir(dir)) {
+        if (name === '.' || name === '..') continue;
+        const path = `${dir}/${name}`, stat = fs.stat(path);
+        if (fs.isDir(stat.mode)) settingsFiles(fs, path, out);
+        else if (name.endsWith('.cfg') && stat.size <= 65536) out.push([path, stat.mtime.getTime()]);
+    }
+    return out;
+};
+const copySettings = () => {
+    if (!homeFS) return;
+    try {
+        // each byte a character: a config needn't be UTF-8 (a name's high
+        // characters), and must come back as it was
+        const files = settingsFiles(homeFS).map(([path, mtime]) =>
+            [path, mtime, Array.from(homeFS.readFile(path), (byte) => String.fromCharCode(byte)).join('')]);
+        localStorage.setItem(SETTINGS_COPY, JSON.stringify(files));
+    } catch {
+        // the storage is full or blocked: IndexedDB's save is all there is,
+        // and an older copy mustn't stand for this leave's
+        try { localStorage.removeItem(SETTINGS_COPY); } catch { /* blocked */ }
+    }
+};
+const restoreSettings = (fs) => {
+    let kept;
+    try {
+        kept = localStorage.getItem(SETTINGS_COPY);
+    } catch {
+        return; // blocked: there's no copy
+    }
+    if (!kept) return;
+    try {
+        // only what IndexedDB's save missed: a file another tab saved since,
+        // or one this copy has as it was, is left as stored
+        for (const [path, mtime, text] of JSON.parse(kept)) {
+            const stored = fs.analyzePath(path).exists ? fs.stat(path).mtime.getTime() : -Infinity;
+            if (stored >= mtime) continue;
+            fs.mkdirTree(path.slice(0, path.lastIndexOf('/')));
+            fs.writeFile(path, Uint8Array.from(text, (c) => c.charCodeAt(0)));
+            fs.utime(path, mtime, mtime);
+        }
+        // kept until a save has them, should this page go as soon as it
+        // starts, unless a leave since wrote another
+        saveHome(true, () => {
+            try {
+                if (localStorage.getItem(SETTINGS_COPY) === kept) localStorage.removeItem(SETTINGS_COPY);
+            } catch { /* blocked */ }
+        });
+    } catch (e) {
+        console.warn(`Couldn't read the settings kept as the page was last left: ${e}`);
+    }
+};
+// The config is written whenever a setting changes, every frame while a
+// slider is dragged: the first write after a quiet second saves at once, as
+// a reload may come next, and those after it a second after the last
+let configSave = 0, lastWrite = -Infinity;
+const configWritten = () => {
+    const quiet = performance.now() - lastWrite > 1000;
+    lastWrite = performance.now();
+    clearTimeout(configSave);
+    if (quiet) saveHome();
+    else configSave = setTimeout(saveHome, 1000);
+};
+// The engine, once it's started: the page ends it as it's closed or left
+// for good, as the quit command does, and the settings it writes then are
+// saved. A page the browser keeps in its back-forward cache may come back,
+// and keeps playing, so it's only saved
+let runningEngine = null;
+// a phone may end a tab it has hidden without a pagehide, so its copy too
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    copySettings();
+    saveHome();
+});
+// A reload or a close starts here, before pagehide, and a save begun here has
+// the longest to finish: the engine writes its config in the frame a setting
+// changes, so it's current. One who stays saved for nothing
+addEventListener('beforeunload', () => {
+    copySettings();
+    saveHome(true);
+});
+addEventListener('pagehide', (event) => {
+    if (!event.persisted && runningEngine) {
+        const ending = runningEngine;
+        runningEngine = null;
+        // quit's exit unwinds the call by throwing
+        try {
+            ending._Sys_PageHide();
+        } catch (e) {
+            if (e?.name !== 'ExitStatus') console.warn(`The engine's quit failed: ${e}`);
+        }
+    }
+    copySettings();
+    saveHome(true);
+});
+
+// What the page asks the player, over the game: build(box, done) fills the
+// box, and calls done once it has its answer. With a front page, the
+// player may put it off (Not now), and the front asks it again (askAgain);
+// the front hears it open, closed and done (onAsk)
+const askBox = document.getElementById('ask');
+// The front's own way to the player's files (chooseFiles): a file input the
+// page makes as it loads, so the front's own press opens the system's
+// chooser in the player's gesture, which a question opened later, once the
+// engine is in, can't. The files chosen are handles, nothing of them read:
+// held for the files' question (bring), or given to it when it's open
+// already, and dropped once the question is past or the game stops
+// whether the browser keeps a folder the player chose (showDirectoryPicker,
+// Chromium), whose files the page then reads where they are on later visits
+// too (FOLDERS_DATABASE)
+const canKeepFolders = typeof showDirectoryPicker == 'function' && typeof indexedDB != 'undefined';
+// whether the pak reader's worker can read a File the player chose while
+// the page waits on it: WebKit's (Safari, and every browser on iOS) reads a
+// File's bytes through the page's own thread, which then spins waiting for
+// them, so none comes, synchronous or not; there a chosen File is read into
+// memory, and the copy the question offers is what spares that next time
+const readsChosenInPlace = !/AppleWebKit\//.test(navigator.userAgent) || /Chrome\/|Chromium\//.test(navigator.userAgent);
+// held: each choice before the question, { files, folder }; opened: the
+// front's press opened a chooser this visit
+const frontChosen = { held: [], to: null, pending: null, opened: false, done: false };
+const dropChosen = () => Object.assign(frontChosen, { held: [], to: null, done: true });
+// files the front's press chose, from a kept folder under its key: to the
+// question if it's open, or else held for it
+const frontGive = (files, folder = '') => {
+    if (!files.length || frontChosen.done) return;
+    if (frontChosen.to) frontChosen.to(files, folder);
+    // a second choice before the question is held beside the first, each
+    // with its own folder
+    else frontChosen.held.push({ files, folder });
+};
+// Where the browser keeps a folder: the front's press reads a kept one again
+// with the player's click, when one waits on it, or else opens the browser's
+// folder chooser, and keeps what's chosen. In the press itself, as the
+// browser asks for both only in the player's gesture.
+const chooseFolder = async () => {
+    try {
+        const waiting = [];
+        for (const kept of await keptFolders()) if (await folderState(kept) === 'prompt') waiting.push(kept);
+        if (waiting.length) {
+            for (const kept of waiting)
+                if (await kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied') === 'granted')
+                    frontGive(await folderFiles(kept), kept.key);
+            return;
+        }
+        const handle = await showDirectoryPicker({ id: 'game', mode: 'read' });
+        const { files, folder } = await takeFolder(handle);
+        frontGive(files, folder);
+    } catch {
+        // the player closed the chooser: the question asks when it opens
+    }
+};
+const frontChooser = FRONT && !canKeepFolders
+    ? Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: '.pk3', tabIndex: -1 }) : null;
+// a folder, the game's, where the browser chooses one; files on a phone,
+// whose chooser has none
+if (frontChooser && !iOS && 'webkitdirectory' in frontChooser) {
+    frontChooser.webkitdirectory = true;
+    frontChooser.removeAttribute('accept');
+}
+if (frontChooser) {
+    // out of sight, not display: none, which some browsers' click() won't open
+    frontChooser.setAttribute('aria-hidden', 'true');
+    Object.assign(frontChooser.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none', left: '0', top: '0' });
+    document.body.appendChild(frontChooser);
+    frontChooser.addEventListener('change', () => {
+        const files = [...frontChooser.files];
+        // so the same files can be chosen again, and the input holds none
+        frontChooser.value = '';
+        frontGive(files);
+    });
+}
+const ask = (build, { later = true } = {}) => new Promise((resolve) => {
+    const box = document.createElement('div');
+    askBox.replaceChildren(box);
+    build(box, () => {
+        askBox.hidden = true;
+        askBox.replaceChildren();
+        tellFront(frontListeners.ask, 'done');
+        resolve();
+    });
+    if (frontOn && later) {
+        const notNow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Not now' }));
+        notNow.addEventListener('click', () => {
+            askBox.hidden = true;
+            tellFront(frontListeners.ask, 'closed');
+        });
+    }
+    showStatus();
+    askBox.hidden = false;
+    tellFront(frontListeners.ask, 'open');
+});
+const paragraph = (box, text) => box.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
+const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+const store = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
+// FNV-1a's 32 bits, in hex: which text was accepted
+const textHash = (text) => {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+    return (hash >>> 0).toString(16);
+};
+
+// The agreement the config names, which files marked "agreement" download
+// only once the player has accepted: its whole text, after one line of the
+// page's on why it's shown (PLAN D11). The browser remembers an accepted
+// text, and asks again when it changes.
+const agree = async (agreement) => {
+    const response = await fetch(new URL(agreement.src, dataURL)).catch(() => null);
+    if (!response?.ok) failDownload(agreement.src, response);
+    const text = await response.text();
+    const key = `${CLIENT_NAME}.agreed.${textHash(text)}`;
+    if (stored(key)) return;
+    await ask((box, done) => {
+        paragraph(box, `This server plays ${typeof agreement.for == 'string' ? agreement.for : 'game data'}, which comes with the agreement below. Accept it to download the data and play.`);
+        box.appendChild(Object.assign(document.createElement('pre'), { textContent: text }));
+        const accept = box.appendChild(Object.assign(document.createElement('button'), { textContent: 'Accept' }));
+        accept.addEventListener('click', () => {
+            store(key, '1');
+            done();
+        });
+    });
+};
+
+// Files the player brings from their own copy of the game, from its CD or
+// the folder it's installed in, chosen as files or as that whole folder, in
+// as many rounds as they like. Each is checked as it's chosen, before it's
+// taken (pak_check.js, loaded only then): a pak by the checksum it must
+// have, the config's for it or the game's own, whatever the chosen file's
+// name, and one with no checksum known by its name, one in a folder of the
+// file's game directory first (a whole install has a pak0.pk3 in each).
+// What each is goes on #ask's rows as data (data-verdict, data-pak,
+// data-file), one for each file asked for and one for each chosen file
+// that's none of them, and in a console line. They're kept in the browser
+// under the names asked for, for the next visit: in its private files
+// (OPFS) where it has them, through a worker of the page's (ownStore
+// below), or else in IndexedDB. A kept file is checked again on the next
+// visit, IndexedDB's by its checksum, and OPFS's by its size and a stamp of
+// samples of its bytes against the index's; one the browser won't keep, or
+// that no longer checks, is asked for again.
+const OWN_DATABASE = `${CLIENT_NAME}-own`;
+const ownDatabase = () => new Promise((resolve) => {
+    try {
+        const request = indexedDB.open(OWN_DATABASE, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('files');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+    } catch {
+        resolve(null);
+    }
+});
+const ownRequest = (db, mode, use, store = 'files') => new Promise((resolve) => {
+    if (!db) return resolve(undefined);
+    try {
+        const request = use(db.transaction(store, mode).objectStore(store));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(undefined);
+    } catch {
+        resolve(undefined);
+    }
+});
+// The player's paks in the browser's private files (OPFS), kept by a
+// dedicated worker (pak_store.js), which alone can write them with a sync
+// access handle: { call(op, args, copied), files }, the files its index
+// lists, or { why } not. Not where the page isn't a secure context, as on a
+// plain-HTTP LAN server, nor in a private window, which has no OPFS, nor
+// when the worker doesn't answer within STORE_ANSWER_MS, as a second tab's
+// in WebKit never did while another held a sync access handle; IndexedDB
+// keeps them then. That time starts once the worker runs, which it says
+// first, so a slow link's download of its script, within STORE_START_MS,
+// isn't counted. The worker stops its copy, and lets go of its handle, as
+// the page goes, and goes on if the page comes back.
+const STORE_START_MS = 15000, STORE_ANSWER_MS = 2000;
+const ownStore = async () => {
+    if (!isSecureContext || !navigator.storage?.getDirectory || !navigator.locks || typeof Worker != 'function')
+        return { why: 'the page has no private files here' };
+    let worker;
+    try {
+        worker = new Worker(`${enginePath}pak_store.js`);
+    } catch (error) {
+        return { why: `its worker didn't start (${error})` };
+    }
+    const waiting = new Map();
+    let next = 1, timer, running;
+    worker.onmessage = ({ data: { id, ok, copied, error, ...answer } }) => {
+        if (answer.running) return running?.();
+        const call = waiting.get(id);
+        if (!call) return;
+        if (ok === undefined) return call.copied?.(copied);
+        waiting.delete(id);
+        if (ok) call.resolve(answer);
+        else call.reject(new Error(error));
+    };
+    worker.onerror = (event) => {
+        event.preventDefault();
+        waiting.forEach((call) => call.reject(new Error(event.message || 'the worker failed')));
+        waiting.clear();
+    };
+    const call = (op, args = {}, copied) => new Promise((resolve, reject) => {
+        const id = next++;
+        waiting.set(id, { resolve, reject, copied });
+        worker.postMessage({ id, op, ...args });
+    });
+    const late = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`didn't start within ${STORE_START_MS / 1000} s`)), STORE_START_MS);
+        running = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => reject(new Error(`didn't answer within ${STORE_ANSWER_MS / 1000} s`)), STORE_ANSWER_MS);
+        };
+    });
+    try {
+        const { sync, files } = await Promise.race([call('list'), late]);
+        addEventListener('pagehide', () => worker.postMessage({ op: 'stop' }));
+        addEventListener('pageshow', (event) => { if (event.persisted) worker.postMessage({ op: 'resume' }); });
+        return { call, files, how: sync ? 'sync access handles' : 'createWritable' };
+    } catch (error) {
+        worker.terminate();
+        return { why: `its worker ${error.message}` };
+    } finally {
+        clearTimeout(timer);
+    }
+};
+// Once the player's files are all stored, the page wants the browser not to
+// clear them when it's short of room (persistOnInput, and persistInput
+// above), unless it already won't
+const persistOnInput = () => {
+    if (!navigator.storage?.persist) return;
+    (navigator.storage.persisted?.() ?? Promise.resolve(false)).then((already) => {
+        if (already) askBox.dataset.persist = 'granted';
+        else if (persistWanted === false) persistWanted = true;
+    }, () => {});
+};
+// every [key, file] the database keeps, read in one transaction
+const ownAll = (db) => new Promise((resolve) => {
+    if (!db) return resolve([]);
+    const all = [];
+    try {
+        const request = db.transaction('files', 'readonly').objectStore('files').openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return resolve(all);
+            all.push([cursor.key, cursor.value]);
+            cursor.continue();
+        };
+        request.onerror = () => resolve(all);
+    } catch {
+        resolve([]);
+    }
+});
+const fileName = (src) => src.match(/[^/]+$/)[0];
+
+// A folder the player chose, read where it is and kept for the next visit
+// as its handle, where the browser can (showDirectoryPicker, Chromium): on a
+// later visit the browser asks again with one click, or, where the player
+// let it on every visit, not at all. Kept in a database of its own, apart
+// from OWN_DATABASE's copies, which the page removes once they're in OPFS.
+// Elsewhere the player chooses a folder or files each visit, and the page
+// reads them where they are all the same, for that visit.
+const FOLDERS_DATABASE = `${CLIENT_NAME}-own-folders`;
+const foldersDatabase = () => new Promise((resolve) => {
+    try {
+        const request = indexedDB.open(FOLDERS_DATABASE, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('folders');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+    } catch {
+        resolve(null);
+    }
+});
+// the folders database's every record, read in one transaction
+const allFolders = async (db) => await ownRequest(db, 'readonly', (records) => records.getAll(), 'folders') ?? [];
+// every kept folder, as { key, handle, stored, lastUsed }
+const keptFolders = async () => {
+    if (!canKeepFolders) return [];
+    const db = await foldersDatabase();
+    const all = await allFolders(db);
+    db?.close();
+    return all.filter((kept) => kept?.handle?.kind === 'directory');
+};
+// a chosen folder kept, or the one already kept that's the same folder
+// brought up to date; its key
+const keepFolder = async (handle) => {
+    const db = await foldersDatabase();
+    if (!db) return null;
+    const now = Date.now();
+    const all = await allFolders(db);
+    let same = null;
+    for (const kept of all) if (!same && await kept.handle?.isSameEntry?.(handle).catch(() => false)) same = kept;
+    const kept = same ? { ...same, lastUsed: now } : { key: `${now}-${handle.name}`, handle, stored: now, lastUsed: now };
+    const put = await new Promise((resolve) => {
+        try {
+            const transaction = db.transaction('folders', 'readwrite');
+            transaction.objectStore('folders').put(kept, kept.key);
+            transaction.oncomplete = () => resolve('');
+            transaction.onerror = () => resolve(String(transaction.error));
+        } catch (error) {
+            resolve(`${error?.name}: ${error?.message}`);
+        }
+    });
+    db.close();
+    if (put) console.warn(`Own files: couldn't keep the folder ${handle.name}: ${put}`);
+    return put ? null : kept.key;
+};
+// The paks in a folder the player chose, as a chosen folder's files are,
+// each with the folder it's in, which says its game directory (folderOf in
+// bring): in the folder itself and up to two folders down, as an install's
+// baseq3 under the folder chosen, never more than MAX_FOLDER_FILES
+const MAX_FOLDER_FILES = 4096;
+const folderOfFile = new WeakMap();
+// the browser's word on reading a kept folder: 'granted', 'prompt' (one
+// click lets it again) or 'denied'
+const folderState = (kept) => kept.handle.queryPermission({ mode: 'read' }).catch(() => 'denied');
+// a kept folder's paks, walked once a visit (pakFilesIn) whoever asks first:
+// the start-up move, the front's check, the question
+const walked = new Map();
+const folderFiles = (kept) => {
+    // a walk that failed, as before the browser let it, is walked again when asked
+    if (!walked.has(kept.key)) walked.set(kept.key, pakFilesIn(kept.handle).catch(() => {
+        walked.delete(kept.key);
+        return [];
+    }));
+    return walked.get(kept.key);
+};
+// The paks of the kept folders the browser lets the page read now, as
+// <folder>/<name>, lowercased, as the config names its own files; and
+// whether one waits on the player's click to be read again
+const keptFolderFacts = async () => {
+    const names = new Set();
+    let waiting = false;
+    for (const kept of await keptFolders()) {
+        const state = await folderState(kept);
+        waiting ||= state === 'prompt';
+        if (state !== 'granted') continue;
+        for (const file of await folderFiles(kept)) names.add(`${folderOfFile.get(file)}/${file.name.toLowerCase()}`);
+    }
+    return { names, waiting };
+};
+const pakFilesIn = async (dir, depth = 0, out = []) => {
+    for await (const [name, entry] of dir.entries()) {
+        if (out.length >= MAX_FOLDER_FILES) break;
+        if (entry.kind === 'file' && /\.pk3$/i.test(name)) {
+            const file = await entry.getFile().catch(() => null);
+            if (file) {
+                folderOfFile.set(file, dir.name.toLowerCase());
+                out.push(file);
+            }
+        } else if (entry.kind === 'directory' && depth < 2) await pakFilesIn(entry, depth + 1, out);
+    }
+    return out;
+};
+// A folder the chooser gave: its paks, and its key once kept, as it is only
+// when it holds a pak, so a wrong folder chosen isn't asked about again on
+// every later visit
+const takeFolder = async (handle) => {
+    const files = await pakFilesIn(handle).catch(() => []);
+    const folder = files.length ? await keepFolder(handle) ?? '' : '';
+    if (folder) persistOnInput();
+    return { files, folder };
+};
+// the game directories this visit plays, and the files it asks the player
+// for in them
+const gamedirs = () => [com_basegame, fs_basegame, fs_game].filter((gamedir) => gamedir);
+const ownOf = (config) => gamedirs().flatMap((gamedir) => Array.isArray(config[gamedir]?.own) ? config[gamedir].own : []);
+
+// The page's isolated form (PLAN D17's opt-in): the same page, cross-origin
+// isolated (COOP and COEP), where the pak reader reads the player's stored
+// paks rather than hold them (downloadGame). A config with one names it,
+// isolated, a folder relative to the page's ("own/", the gateway's). The page
+// moves there, its query and fragment kept, once it has paks stored that the
+// config asks for: before the engine loads when they're stored already, or
+// once the player's chosen paks are (bring). It stays in another page's
+// frame, which can't isolate it, and when another page opened it, which the
+// move would cut off (COOP); it moves only to a form that answers,
+// isolated (moveIsolated), and once, never from the isolated form itself.
+// isolation is { form }, the URL, or { why } the page stays, or {} without one.
+const ISOLATING = `${CLIENT_NAME}.isolating`;
+let isolation = {};
+// how the page that moved here had the paks, 'kept' or 'stored' (then), or
+// '' when none moved here; null when the page can't tell
+const moved = (() => {
+    try {
+        const how = sessionStorage.getItem(ISOLATING) ?? '';
+        sessionStorage.removeItem(ISOLATING);
+        return how;
+    } catch {
+        return null;
+    }
+})();
+const isolationOf = (config) => {
+    if (crossOriginIsolated || typeof config.isolated != 'string') return {};
+    const page = location.pathname.match(/[^/]*$/)[0];
+    if (moved !== '' || location.pathname.endsWith(`/${config.isolated}${page}`))
+        return { why: moved === null ? "it can't tell it moved once" : "its isolated form isn't cross-origin isolated" };
+    if (window.top !== window) return { why: "another page's frame can't isolate it" };
+    if (window.opener) return { why: 'the page that opened it would lose it' };
+    const form = new URL(config.isolated + page + location.search + location.hash, location.href);
+    return form.origin === location.origin ? { form } : { why: 'its isolated form is on another site' };
+};
+// Whether the isolated form is one, asked once, as soon as the page may move:
+// the head of its page within MOVE_CHECK_MS, with the headers that make it
+// cross-origin isolated, COOP same-origin and COEP require-corp or
+// credentialless; '' when it has them, or why not. A host that names the
+// form without serving it, or serves it without them, keeps the page here.
+const MOVE_CHECK_MS = 2000;
+let isolatedCheck;
+// (A timer rather than AbortSignal.timeout, which Safari has only from 16.)
+const checkIsolated = (form) => isolatedCheck ??= Promise.race([
+    fetch(form, { method: 'HEAD', cache: 'no-store' }).then((answer) => {
+        const policy = (name) => answer.headers.get(name)?.split(';')[0].trim();
+        if (!answer.ok) return `answered ${answer.status}`;
+        return policy('Cross-Origin-Opener-Policy') === 'same-origin'
+            && ['require-corp', 'credentialless'].includes(policy('Cross-Origin-Embedder-Policy')) ? '' : "isn't cross-origin isolated";
+    }, () => "didn't answer"),
+    new Promise((resolve) => setTimeout(resolve, MOVE_CHECK_MS, `didn't answer within ${MOVE_CHECK_MS / 1000} s`)),
+]);
+// whether the isolated form answered, isolated; isolation says why not
+const formAnswers = async (form) => {
+    const answered = await checkIsolated(form);
+    if (answered) isolation = { why: `its isolated form at ${form.pathname} ${answered}` };
+    return !answered;
+};
+const mark = (how) => {
+    try {
+        sessionStorage.setItem(ISOLATING, how);
+        return true;
+    } catch {
+        return false;
+    }
+};
+// The move, after which nothing on this page goes on; or, when the form
+// isn't isolated or the page can't mark the move, none, isolation then
+// saying why
+const moveIsolated = async (form, how) => {
+    if (!await formAnswers(form)) return;
+    if (!mark(how)) {
+        isolation = { why: "it can't mark its move" };
+        return;
+    }
+    console.log(`Own files: to the page's isolated form at ${form.pathname}, ${how === 'asking' ? "to read what's chosen there where it is" : 'as the paks are stored'}`);
+    // a front's Play goes on there, as the play link's does; a front is
+    // told the page is moving, so a Play pressed now waits for the new page
+    const to = new URL(form);
+    if (frontPlays) to.searchParams.set('play', '1');
+    tellFront(frontListeners.status, { text: '', kind: 'moving' });
+    location.replace(to);
+    return new Promise(() => {});
+};
+// ownStore's answer, asked for before the engine loads on a page that may
+// move, which bring takes rather than ask again
+let ownStoreEarly;
+
+// set once the page has read the player's files in (downloadGame)
+let ownRead;
+const ownReadDone = new Promise((resolve) => { ownRead = resolve; });
+// how long a stored file's stamp may take to read before bring takes it by
+// its size
+const STAMP_READ_MS = 2000;
+const bring = async (own) => {
+    const [paks, store, databases] = await Promise.all([import(`${enginePath}pak_check.js`).catch(() => failDownload('pak_check.js')),
+        ownStoreEarly ?? ownStore(), indexedDB.databases?.().catch(() => undefined)]);
+    // with OPFS, IndexedDB's database only to move its files from, if it's
+    // there, rather than made anew each visit
+    const db = store.call && databases && !databases.some(({ name }) => name === OWN_DATABASE) ? null : await ownDatabase();
+    askBox.dataset.store = store.call ? 'opfs' : 'indexeddb';
+    console.log(store.call ? `Own files: in the browser's private files (OPFS), written with ${store.how}`
+        : `Own files: in IndexedDB, as ${store.why}`);
+    // the files asked for that the page has, by entry, and what each row
+    // says: an entry's, its file's verdict and name; a chosen file's that
+    // is none of them, the same
+    const have = new Map(), said = new Map(), others = [];
+    // where OPFS has each it has, which the pak reader reads from; and each
+    // read where the player keeps it, with its kept folder's key, '' for
+    // files or a folder chosen for this visit alone
+    const storedAt = new Map(), inPlace = new Map();
+    // what the player chose a copy of this visit, which follows the page
+    // to its isolated form once stored, though this visit reads it in place
+    const chosenCopies = new Set();
+    // whether the player chose to keep a copy in the browser of what they
+    // choose (the question's box), as the page did of everything before
+    let copyChosen = false;
+    // a chosen file, or a kept one, checked: { name, folder, blob }, and a
+    // pak's checksum or damage
+    const checked = async (blob, name, folder) =>
+        ({ name, folder, blob, ...(/\.pk3$/i.test(name) ? await paks.checkPak(blob) : {}) });
+    // the folder a chosen file is in, when a folder was chosen: one read
+    // through its handle (pakFilesIn), or one a file input gave
+    const folderOf = (chosen) => folderOfFile.get(chosen) ?? chosen.webkitRelativePath?.split('/').slice(-2, -1)[0]?.toLowerCase();
+    const fills = (verdict) => verdict === 'good' || verdict === 'unchecked';
+    // a file's verdict, in a console line and on its entry's row, or a row
+    // of its own
+    const say = (how, { name, checksum, damaged }, verdict, entry) => {
+        console.log(`${how} ${name}: ${verdict}${entry ? ` for ${entry.src}` : ''}`
+            + `${checksum !== undefined ? `, checksum ${checksum}` : ''}${damaged ? `, ${damaged}` : ''}`);
+        if (entry) said.set(entry, { verdict, name });
+        else others.push({ verdict, name });
+    };
+    // A kept file, checked against its own entry alone: the page has it if
+    // it fills the entry, and says so, and what it is otherwise, unless quiet
+    const reuse = (file, keptFile, quiet = false) => {
+        const [{ verdict }] = paks.judge([file], new Set(), [keptFile]);
+        if (fills(verdict)) have.set(file, keptFile.blob);
+        if (fills(verdict) || !quiet) say('Kept', keptFile, verdict, file);
+        return fills(verdict);
+    };
+    // The stored files' copies, one at a time: each pak is large, one disk
+    // writes it no faster for a second beside it, and each copy holds a sync
+    // access handle, which is exclusive. They wait for the page to read the
+    // player's files in (downloadGame), which the engine waits on, unless
+    // the page moves to its isolated form once they're stored, which reads
+    // them there. A form that didn't answer, isolated, keeps the page here
+    // as a plain one; its check, asked as the page started, has mostly
+    // answered by now.
+    if (isolation.form && store.call) await formAnswers(isolation.form);
+    const toIsolate = Boolean(isolation.form && store.call);
+    let copies = toIsolate ? Promise.resolve() : ownReadDone;
+    const queue = (work) => { copies = copies.then(work).catch((error) => console.error(`Couldn't store files: ${error}`)); };
+    // OPFS's files: each as the index has it while its size and stamp
+    // (paks.stampOf) are the index's, or while it can't be read for its
+    // stamp, as while another tab holds it, which the engine's reads then
+    // meet as before. One stored before stamps is checked again and, if it
+    // still is what its record says, stamped. Any other is no longer the
+    // file stored, as WebKit can leave one zero-filled at its full size: it's
+    // damaged, removed, and asked for again, never handed to the engine.
+    // Another version of the same pak is passed by quietly.
+    // The stamps of the records of files asked for, four at a time:
+    // undefined for another size, null for a file that can't be read, or
+    // isn't within STAMP_READ_MS, as WebKit's read of a pak another tab
+    // holds can wait rather than fail (inMemory, in downloadGame)
+    const asked = new Set(own.map((file) => file.src.toLowerCase()));
+    const stamps = new Map(store.call ? await paks.mapLimited(store.files.filter(({ src }) => asked.has(src)), 4, async (record) => {
+        if (record.file.size !== record.size) return [record, undefined];
+        const stamp = await Promise.race([paks.stampOf(record.file).catch(() => null),
+            new Promise((resolve) => setTimeout(resolve, STAMP_READ_MS, null))]);
+        if (stamp === null) console.log(`Own files: couldn't read ${record.path} for its stamp, so it's taken by its size`);
+        return [record, stamp];
+    }) : []);
+    if (store.call) for (const file of own) {
+        for (const record of store.files.filter(({ src }) => src === file.src.toLowerCase())) {
+            const stamp = stamps.get(record);
+            const unstamped = stamp && record.stamp === undefined;
+            const keptFile = stamp === null || (stamp && stamp === record.stamp)
+                ? { name: record.name, blob: record.file, checksum: record.checksum }
+                : unstamped ? await checked(record.file, record.name)
+                : { name: record.name, blob: record.file, damaged: 'not as it was stored' };
+            const { damaged } = keptFile;
+            if (reuse(file, keptFile, !damaged)) {
+                storedAt.set(file, record.path);
+                if (unstamped && keptFile.checksum === record.checksum) store.call('stamp', { path: record.path, stamp }).catch(() => {});
+                break;
+            }
+            if (damaged && damaged !== 'unreadable') store.call('drop', { path: record.path }).catch(() => {});
+        }
+    }
+    const fromStore = have.size;
+    // IndexedDB's, as the page kept them before OPFS, or keeps them without:
+    // each checked once, for this visit and for its move into OPFS below,
+    // and without OPFS only the ones asked for
+    const kept = (await paks.mapLimited((await ownAll(db)).filter(([key]) => store.call || asked.has(key)), 4,
+        async ([key, blob]) => typeof key == 'string' && blob instanceof Blob
+            ? { key, ...await checked(blob, blob.name ?? fileName(key)) } : null)).filter(Boolean);
+    for (const file of own) {
+        const keptFile = kept.find(({ key }) => key === file.src.toLowerCase());
+        if (keptFile && !have.has(file)) reuse(file, keptFile);
+    }
+    console.log(`Own files: ${fromStore} kept in OPFS, ${have.size - fromStore} in IndexedDB`);
+    // Stores files, each { entry, blob, checksum }, under the names they
+    // fill, if the browser has room for them all; nothing is written
+    // otherwise. The worker leaves a copy cut short out of its index. A file
+    // moved from IndexedDB has done, which takes it out of IndexedDB.
+    let toCopy = 0, copied = 0, storedAll = true;
+    const keep = (files) => queue(async () => {
+        const size = files.reduce((sum, { blob }) => sum + blob.size, 0);
+        const { quota, usage = 0 } = await navigator.storage.estimate().catch(() => ({}));
+        if (quota !== undefined && quota - usage < size) {
+            storedAll = false;
+            askBox.dataset.keeping = 'no-room';
+            console.log(`Not storing ${files.length} file${files.length === 1 ? '' : 's'}: `
+                + `${size} bytes, and the browser has ${Math.max(quota - usage, 0)} free`);
+            return;
+        }
+        askBox.dataset.keeping = 'copying';
+        askBox.dataset.toCopy = toCopy += size;
+        for (const { entry, blob, checksum, done } of files) {
+            const from = copied, name = blob.name ?? entry.src;
+            try {
+                const stamp = await paks.stampOf(blob);
+                const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum, stamp },
+                    (bytes) => {
+                        askBox.dataset.copied = from + bytes;
+                        if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100, false,
+                            { kind: 'reading', bytes: from + bytes, total: toCopy });
+                    });
+                if (busy) {
+                    storedAll = false;
+                    console.log(`Didn't store ${name} for ${entry.src}: another tab is storing it`);
+                } else {
+                    console.log(`${done ? 'Moved' : 'Stored'} ${name} for ${entry.src} in OPFS as ${path}${already ? ', there already' : ''}`);
+                    done?.();
+                }
+            } catch (error) {
+                storedAll = false;
+                console.log(`Couldn't store ${name} for ${entry.src}: ${error.message}`);
+            }
+            askBox.dataset.copied = copied = from + blob.size;
+        }
+        askBox.dataset.keeping = storedAll ? 'stored' : 'failed';
+        if (storedAll) persistOnInput();
+    });
+    if (store.call) {
+        // what a copy cut short left behind
+        queue(async () => {
+            const { removed } = await store.call('tidy');
+            if (removed.length) console.log(`Removed what was left of ${removed.join(', ')}`);
+        });
+        // IndexedDB's files go into OPFS, once: each leaves IndexedDB once
+        // it's stored, a damaged one at once, and the database goes with the
+        // last
+        const forget = (key) => () => ownRequest(db, 'readwrite', (records) => records.delete(key));
+        kept.filter(({ damaged }) => damaged).forEach(({ key }) => forget(key)());
+        const moving = kept.filter(({ damaged }) => !damaged)
+            .map(({ key, blob, checksum }) => ({ entry: { src: key }, blob, checksum, done: forget(key) }));
+        if (moving.length) keep(moving);
+        queue(async () => {
+            if (!db || (await ownRequest(db, 'readonly', (records) => records.count())) !== 0) return;
+            db.close();
+            indexedDB.deleteDatabase(OWN_DATABASE);
+            console.log("Own files: IndexedDB's database removed");
+        });
+    }
+    // Copies of what the player chose, once they chose to keep one: in OPFS,
+    // or without it in IndexedDB
+    const copy = (taken) => {
+        const storing = [];
+        for (const { entry, blob, checksum } of taken) {
+            if (chosenCopies.has(entry)) continue;
+            chosenCopies.add(entry);
+            if (store.call) storing.push({ entry, blob, checksum });
+            else ownRequest(db, 'readwrite', (records) => records.put(blob, entry.src.toLowerCase()));
+        }
+        if (storing.length) keep(storing);
+    };
+    // what's taken this visit, for a copy chosen after it
+    const takenNow = [];
+    // A round's chosen files, under the names they fill: read where they
+    // are, from the folder kept under folder ('' for none), and copied when
+    // the player chose a copy; how says where they came from
+    const take = (files, folder = '', how = 'Chose') => {
+        const taken = [];
+        paks.judge(own, new Set(have.keys()), files).forEach(({ verdict, entry }, i) => {
+            const { blob, checksum } = files[i];
+            if (fills(verdict)) {
+                have.set(entry, blob);
+                inPlace.set(entry, folder);
+                taken.push({ entry, blob, checksum });
+            }
+            say(how, files[i], verdict, entry);
+        });
+        // a kept folder's paks, listed in the index as read in place, in one write
+        if (folder && store.call && taken.length)
+            store.call('note', { folder, files: taken.map(({ entry, blob, checksum }) => ({ src: entry.src.toLowerCase(), name: blob.name,
+                checksum, size: blob.size, mtime: blob.lastModified })) }).catch(() => {});
+        takenNow.push(...taken);
+        if (copyChosen) copy(taken);
+    };
+    const missing = () => own.filter((file) => !have.has(file));
+    // Kept folders, read where they are once the browser lets the page: at
+    // once on a visit after the player let it every visit, or after a click
+    // in the question below (waiting)
+    const fromFolder = async (kept, how) => {
+        const files = await folderFiles(kept);
+        take(await paks.mapLimited(files, 4, (file) => checked(file, file.name, folderOfFile.get(file))), kept.key, how);
+    };
+    const waiting = [];
+    for (const kept of missing().length ? await keptFolders() : []) {
+        if (!missing().length) break;
+        const state = await folderState(kept);
+        if (state === 'granted') await fromFolder(kept, 'Kept');
+        else if (state === 'prompt') waiting.push(kept);
+    }
+    // files the player chose in the front's own press (chooseFiles), held
+    // till now: checked as the question's first rounds, which then opens
+    // only for what they didn't fill; one chosen as they're checked is
+    // checked next, and one that fails, unexpectedly, leaves the question
+    let frontRound = false;
+    await frontChosen.pending;
+    while (frontChosen.held.length && missing().length) {
+        const { files: chosen, folder } = frontChosen.held.shift();
+        frontRound = true;
+        try {
+            take(await paks.mapLimited(chosen, 4, (file) => checked(file, file.name, folderOf(file))), folder);
+        } catch (error) {
+            console.error(`Couldn't check the chosen files: ${error}`);
+        }
+    }
+    if (frontRound && !missing().length) tellFront(frontListeners.ask, 'done');
+    // a kept folder the front's press let meanwhile (chooseFolder) gave its
+    // files above, and isn't asked about again
+    for (const kept of waiting.splice(0)) if (await folderState(kept) === 'prompt') waiting.push(kept);
+    if (missing().length) await ask((box, done) => {
+        const folders = [...new Set(own.map((file) => file.src.split('/')[0]))].join(' and ');
+        if (waiting.length) {
+            paragraph(box, 'Allow the game to read your game folder again.');
+            const allow = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Allow' }));
+            allow.addEventListener('click', () => {
+                for (const kept of waiting.splice(0)) {
+                    const asked = kept.handle.requestPermission({ mode: 'read' }).catch(() => 'denied');
+                    rounds = rounds.then(async () => {
+                        if ((await asked) === 'granted' && missing().length) await fromFolder(kept, 'Kept');
+                        sizeCopy();
+                        if (missing().length) show();
+                        else done();
+                    }).catch((error) => console.error(`Couldn't read the kept folder: ${error}`));
+                }
+                allow.hidden = true;
+            });
+        }
+        paragraph(box, canKeepFolders
+            ? `Choose the folder your game is installed in, or its ${folders} folder. The game reads your files from there; nothing is copied.`
+            : `Choose the folder your game is installed in, or its ${folders} folder, or its files.`);
+        const left = paragraph(box, '');
+        const rows = box.appendChild(Object.assign(document.createElement('ul'), { hidden: true }));
+        const row = ({ verdict, name }, pak) => {
+            const item = document.createElement('li');
+            item.dataset.verdict = verdict;
+            if (pak) item.dataset.pak = pak;
+            if (name) item.dataset.file = name;
+            return item;
+        };
+        const show = () => {
+            left.textContent = `Still needed: ${missing().map((file) => fileName(file.src)).join(', ')}.`;
+            rows.replaceChildren(...own.map((file) => row(said.get(file) ?? { verdict: 'missing' }, file.src)),
+                ...others.map((other) => row(other)));
+        };
+        // one round at a time, in the order chosen; none once all are in
+        let rounds = Promise.resolve();
+        const chooser = (label, folder) => {
+            const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true });
+            if (folder) input.webkitdirectory = true;
+            else input.accept = '.pk3';
+            const button = box.appendChild(Object.assign(document.createElement('label'), { textContent: label }));
+            button.appendChild(input);
+            input.addEventListener('change', () => {
+                const chosenFiles = [...input.files];
+                // so the same files can be chosen again
+                input.value = '';
+                round(chosenFiles);
+            });
+        };
+        const round = (chosenFiles, fromFront = false, folder = '') => {
+            rounds = rounds.then(async () => {
+                if (!missing().length) return;
+                // four at a time: each check reads only a pak's end and
+                // directory, so a few in flight keep the disk busy, and
+                // a whole install's folder never opens hundreds at once
+                take(await paks.mapLimited(chosenFiles, 4, (chosen) => checked(chosen, chosen.name, folderOf(chosen))), folder);
+                sizeCopy();
+                if (missing().length) {
+                    show();
+                    // the front's choice, with the question put off (Not
+                    // now): it opens again for what's still needed
+                    if (fromFront && askBox.hidden) {
+                        askBox.hidden = false;
+                        tellFront(frontListeners.ask, 'open');
+                    }
+                } else {
+                    done();
+                }
+            // a round that fails, unexpectedly, leaves the next to run
+            }).catch((error) => console.error(`Couldn't check the chosen files: ${error}`));
+        };
+        // a choice in the front's own press while the question is open: one of its rounds
+        frontChosen.to = (files, folder) => round(files, true, folder);
+        // where the browser keeps a folder, it's chosen through its own
+        // chooser and kept; elsewhere through a file input, for this visit
+        if (canKeepFolders) {
+            const button = box.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Choose folder' }));
+            button.addEventListener('click', async () => {
+                let handle;
+                try {
+                    handle = await showDirectoryPicker({ id: 'game', mode: 'read' });
+                } catch {
+                    return; // the player closed the chooser
+                }
+                const { files, folder } = await takeFolder(handle);
+                round(files, false, folder);
+            });
+        } else {
+            chooser('Choose folder', true);
+        }
+        chooser('Choose files', false);
+        // a copy in the browser, offered, never made unasked: of what's
+        // chosen this visit and read where it is, a kept folder's too, so
+        // the next visit needn't ask; its size once something's chosen
+        let sizeCopy = () => {};
+        if (store.call || db) {
+            const label = box.appendChild(document.createElement('label'));
+            const tick = label.appendChild(Object.assign(document.createElement('input'), { type: 'checkbox', id: 'ask-copy' }));
+            const words = label.appendChild(document.createElement('span'));
+            sizeCopy = () => {
+                const bytes = takenNow.filter(({ entry }) => !chosenCopies.has(entry)).reduce((sum, { blob }) => sum + blob.size, 0);
+                words.textContent = ` Keep a copy in this browser${bytes ? ` (${megabytes(bytes)} MB)` : ''} so you're not asked next time`;
+            };
+            sizeCopy();
+            tick.addEventListener('change', () => {
+                copyChosen = tick.checked;
+                if (copyChosen) copy(takenNow);
+            });
+        }
+        show();
+    });
+    // the question past: nothing more taken from the front's chooser, and nothing it chose held
+    dropChosen();
+    // to the isolated form once every pak is stored; a pak that wasn't, for
+    // want of room or as another tab stored it, keeps the page here, which
+    // reads them into memory. The page moved to asks the browser to keep
+    // them, as this one would have.
+    // A pak read where it is follows the move only from a kept folder, which
+    // the isolated form reads again; one chosen for this visit alone keeps
+    // the page here, which reads them into memory
+    const follows = [...have.keys()].every((entry) => !inPlace.has(entry) || inPlace.get(entry) || chosenCopies.has(entry));
+    if (toIsolate && follows) {
+        showStatus('Reading your files…', undefined, false, { kind: 'reading' });
+        await copies;
+        if (storedAll) await moveIsolated(isolation.form, toCopy ? 'stored' : 'kept');
+    } else if (toIsolate) {
+        console.log("Own files: the page stays as it is, as files chosen for this visit alone can't follow it to its isolated form");
+    }
+    if (isolation.why && store.call) console.log(`Own files: the page stays as it is, as ${isolation.why}`);
+    if (moved === 'stored') persistOnInput();
+    // the kept copies this visit read, as last used (a kept folder's were, as noted)
+    const used = own.filter((file) => storedAt.has(file)).map((file) => storedAt.get(file));
+    if (used.length && store.call) store.call('used', { paths: used }).catch(() => {});
+    const fromKept = [...inPlace.values()].filter(Boolean).length;
+    console.log(`Own files: ${fromKept} read in place from a kept folder, ${inPlace.size - fromKept} chosen for this visit`);
+    return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file), inPlace: inPlace.has(file) }));
+};
+
+// Download the files the config lists for the game, all at once, showing
+// their progress against the sizes the server gives. A pak that's missing
+// is an error; other files may be, such as the QVMs a build that links its
+// game code doesn't need. A failure stops the rest.
+const megabytes = (bytes) => Math.round(bytes / 1e6);
+// A pak's own time on its file, in ms since 1970: the engine knows each pak
+// it has hashed by its path, size and time (its pak index), so a file the
+// page writes anew each visit, timed now, was hashed again on every join,
+// 500 MB of the player's own paks seven seconds or more. A player's pak's
+// is its File's; a downloaded one's, Last-Modified's, or the gateway's
+// ETag's ("<size>-<mtime>", hex seconds), as the gateway sends no
+// Last-Modified; with neither, it's left as written.
+const keepTime = (FS, path, time) => {
+    if (!Number.isFinite(time) || time <= 0) return;
+    try {
+        FS.utime(path, time, time);
+    } catch (error) {
+        console.warn(`Couldn't keep ${path}'s time: ${error}`);
+    }
+};
+const timeOf = (response) => {
+    // Last-Modified first: another server's ETag of that form needn't be
+    // the gateway's (nginx's is "<mtime>-<size>")
+    const modified = Date.parse(response.headers.get('Last-Modified') ?? '');
+    if (Number.isFinite(modified)) return modified;
+    const [, seconds] = /^(?:W\/)?"[0-9a-f]+-([0-9a-f]+)"$/.exec(response.headers.get('ETag') ?? '') ?? [];
+    return seconds ? parseInt(seconds, 16) * 1000 : NaN;
+};
+const downloadGame = async (FS) => {
+    const config = await configPromise;
+    const files = gamedirs().flatMap((gamedir) => {
+        if (config[gamedir]?.files) return config[gamedir].files;
+        console.warn(`Game directory '${gamedir}' cannot be used. It must have files listed in ${configFilename}.`);
+        return [];
+    });
+    const own = ownOf(config);
+    if (files.some((file) => file.agreement) && config.agreement?.src) await agree(config.agreement);
+    // the player's own files read as the rest download: the stored ones
+    // through the pak reader where it runs, the rest into memory
+    const brought = own.length ? await bring(own) : [];
+    // no files of the player's asked for: nothing the front's chooser chose is held
+    if (!own.length) dropChosen();
+    // stored in OPFS, or read where the player keeps them, as their Files
+    const readable = (file) => file.stored || (file.inPlace && readsChosenInPlace);
+    const stored = brought.filter(readable).map((file) => (file.stored ? file : { ...file, file: file.blob }));
+    const reading = (async () => {
+        if (!stored.length) {
+            if (brought.length) console.log('Pak reader: off, as none of the paks is stored yet: the paks are read into memory');
+            return { on: false };
+        }
+        const paks = await import(`${enginePath}pak_reader.js`).catch(() => failDownload('pak_reader.js'));
+        const reader = await paks.openReader(FS, stored, `${enginePath}pak_reader_worker.js`, (why, src) => {
+            askBox.dataset.reader = why;
+            if (why === 'changed') stopChanged(src);
+        });
+        askBox.dataset.reader = reader.on ? 'on' : reader.other ? 'other-tab' : 'off';
+        if (reader.on) {
+            paksToSay = reader;
+            addEventListener('pagehide', reader.close);
+            // a page back from the back-forward cache has let go of the paks,
+            // and so loads again, rather than stop at the engine's next read
+            addEventListener('pageshow', (event) => {
+                if (!event.persisted) return;
+                removeEventListener('beforeunload', confirmLeave);
+                location.reload();
+            });
+            console.log(`Pak reader: on, through a worker (${reader.modes}): ${stored.map(({ src }) => src).join(', ')}`);
+        } else {
+            console.log(`Pak reader: off, as ${reader.why}: the paks are read into memory`);
+        }
+        return { ...reader, limit: paks.READ_LIMIT_MS };
+    })();
+    // A stored pak the reader couldn't prove, as when another tab holds it,
+    // may not read into memory either: its end is read first, and one whose
+    // end isn't read within the reader's limit is said and marked, and the
+    // page goes no further, rather than hand the engine a pak it can't read.
+    // The whole pak then reads in as long as it takes.
+    const inMemory = async (file, limit) => {
+        if (file.stored) {
+            let timer;
+            const end = file.blob.slice(Math.max(0, file.blob.size - 0x10015)).arrayBuffer();
+            const proved = await Promise.race([end.then(() => true, () => true), new Promise((resolve) => {
+                timer = setTimeout(() => resolve(false), limit);
+            })]);
+            clearTimeout(timer);
+            if (!proved) {
+                const other = askBox.dataset.reader === 'other-tab';
+                if (!other) askBox.dataset.reader = 'unreadable';
+                console.error(`Pak reader: ${file.src} wasn't read within ${limit / 1000} s${other ? ': it may be open in another tab' : ''}`);
+                return new Promise(() => {});
+            }
+        }
+        // a pak read where the player keeps it, changed on their disk since
+        // they chose it: the game stops, saying which
+        return file.blob.arrayBuffer().catch((error) => {
+            if (file.inPlace && CHANGED_READS.has(error?.name)) return stopChanged(file.src);
+            throw error;
+        });
+    };
+    // the files that aren't stored at once, the stored ones once the reader
+    // has said it won't read them
+    const read = Promise.all(brought.map(async (file) => {
+        const { on, limit } = readable(file) ? await reading : {};
+        return on ? null : { ...file, data: new Uint8Array(await inMemory(file, limit)) };
+    })).then((files) => files.filter(Boolean));
+    const downloading = new AbortController();
+    const stop = (name, response) => {
+        downloading.abort();
+        failDownload(name, response);
+    };
+    const responses = await Promise.all(files.map((file) =>
+        fetch(new URL(file.src, dataURL), { signal: downloading.signal }).catch(() => null)));
+    const downloads = [];
+    let received = 0, total = 0, sized = true;
+    responses.forEach((response, i) => {
+        const { src } = files[i];
+        if (response?.status === 404 && !/\.pk3$/i.test(src)) {
+            console.warn(`${src} isn't on the server; skipped`);
+            return;
+        }
+        if (!response?.ok) stop(src, response);
+        // a compressed response's length isn't what it reads as
+        const length = Number(response.headers.get('Content-Length'));
+        if (length > 0 && !response.headers.has('Content-Encoding')) total += length;
+        else sized = false;
+        downloads.push({ ...files[i], response, length });
+    });
+    // when a whole megabyte or hundredth more is in, so the bar ends full
+    let shown = '';
+    const progress = () => {
+        const bytes = sized ? Math.min(received, total) : received;
+        const text = `Downloading the game: ${megabytes(bytes)}${sized ? ` of ${megabytes(total)}` : ''} MB`;
+        const fraction = sized ? Math.floor(100 * bytes / total) / 100 : undefined;
+        if (`${text} ${fraction}` === shown) return;
+        shown = `${text} ${fraction}`;
+        tellFront(frontListeners.progress, bytes, sized ? total : 0);
+        showStatus(text, fraction, false, { kind: 'download' });
+    };
+    if (downloads.length) progress();
+    await Promise.all(downloads.map(async ({ src, dst, response, length }) => {
+        // into one buffer of the size given, grown if that's wrong
+        let data = new Uint8Array(length), size = 0;
+        try {
+            const reader = response.body.getReader();
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (size + value.length > data.length) {
+                    const grown = new Uint8Array(Math.max(2 * data.length, size + value.length));
+                    grown.set(data.subarray(0, size));
+                    data = grown;
+                }
+                data.set(value, size);
+                size += value.length;
+                received += value.length;
+                progress();
+            }
+        } catch {
+            stop(src);
+        }
+        FS.mkdirTree(dst);
+        // the page keeps no copy, so the file system can take this one, cut
+        // to size if it was grown
+        const path = `${dst}/${src.match(/[^/]+$/)[0]}`;
+        FS.writeFile(path, size < data.length ? data.slice(0, size) : data, { canOwn: true });
+        keepTime(FS, path, timeOf(response));
+    }));
+    if (brought.length) showStatus('Reading your files…', undefined, false, { kind: 'reading' });
+    const readIn = await read;
+    ownRead();
+    for (const { src, dst, data, blob } of readIn) {
+        const path = `${dst}/${fileName(src)}`;
+        FS.mkdirTree(dst);
+        FS.writeFile(path, data, { canOwn: true });
+        keepTime(FS, path, blob?.lastModified);
+    }
+};
+
+// nothing heavy before the front says the game may load
+await gameStarted;
+const engine = import(engineScript);
+const startConfig = await configPromise;
+// the game directories the link may choose, as the config allows them
+({ urlBasegame, fs_basegame, fs_game, com_basegame } = gameDirsOf(startConfig, leftOut));
+// paks stored already, as the store lists them: to the isolated form before
+// the engine loads here
+isolation = isolationOf(startConfig);
+const startOwn = ownOf(startConfig);
+if (isolation.form && startOwn.length) {
+    const asked = new Set(startOwn.map(({ src }) => src.toLowerCase()));
+    checkIsolated(isolation.form);
+    // the front's check (ownFiles) may have asked the store already
+    if ((await (ownStoreEarly ??= ownStore())).files?.some(({ src }) => asked.has(src))) await moveIsolated(isolation.form, 'kept');
+    // a kept folder the browser lets the page read now, there too
+    else if ([...(await keptFolderFacts()).names].some((name) => asked.has(name))) await moveIsolated(isolation.form, 'kept');
+    // a browser that keeps no folder: there before asking, so what the
+    // player chooses is read where it is rather than held in memory; not
+    // once the front's press opened the chooser, whose choice the move
+    // would lose
+    else if (!canKeepFolders && readsChosenInPlace && !frontChosen.opened) await moveIsolated(isolation.form, 'asking');
+}
+const ioquake3 = (await engine).default;
+generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
+    ...(fs_basegame ? ['+set', 'fs_basegame', `"${fs_basegame}"`] : []), ...(fs_game ? ['+set', 'fs_game', `"${fs_game}"`] : []));
+// split at spaces outside quotes, each quoted part kept whole with its
+// quotes, which the engine runs as given (Sys_ArgumentNeedsQuotes). Split
+// inside them too, +bind F7 "a; b; c" reached it as "a; and b; and c", and
+// it quoted the b; for its ;, which cut the bind short
+if (queryArgs && startConfig.consoleArgs === true) generatedArguments.push(...queryArgs.match(/(?:[^\s"]+|"[^"]*"?)+/g) ?? []);
+else if (queryArgs) console.warn("This page's link carried console commands (args), which this page doesn't take; "
+    + 'they were left out.');
+ioquake3({
+    canvas: canvas,
+    present,
+    presentationFacts,
+    contextGeneration: () => contextGeneration,
+    sound,
+    setPlaying,
+    saveFile,
+    configWritten,
+    // the engine aborted: a front is told, as of an error's exit
+    onAbort: () => {
+        dropChosen();
+        // a pak that changed on the player's disk stopped it, which the
+        // page says itself (stopChanged)
+        if (!stoppedFor) tellFront(frontListeners.crash);
+    },
+    // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
+    // the page has asked for its own join, 0 while it holds it
+    left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
+    pageJoins: () => pageJoins,
+    // and how many times it has canceled the join under way
+    pageJoinCancels: () => joinCancels,
+    // the client's join as it goes (the join extension's), to a front as a
+    // status of its own: 'joining', 'getting' with its bytes of total, or
+    // 'entering', '' once in or stopped
+    joinStatus: (kind, bytes, total) => {
+        if (frontOn) tellFront(frontListeners.status, { text: '', kind, bytes, total });
+    },
+    // a field the front's play gave the join it asked for, read once
+    pageJoinField: (field) => {
+        // a page without a front gives the join nothing, and the game's own
+        // settings stay as they are
+        if (!frontOn) return null;
+        const value = Object.hasOwn(joinFields, field) ? joinFields[field] : '';
+        if (field === 'password') joinFields.password = '';
+        return value;
+    },
+    arguments: generatedArguments,
+    locateFile: (file) => enginePath + file,
+    preRun: [(module) => {
+        module.FS.mount(module.FS.filesystems.IDBFS, {}, HOME);
+        module.addRunDependency('load-home');
+        module.FS.syncfs(true, (error) => {
+            if (error) console.warn(`Couldn't read the settings saved before: ${error}`);
+            else {
+                homeFS = module.FS;
+                restoreSettings(homeFS);
+            }
+            module.removeRunDependency('load-home');
+        });
+    }, async (module) => {
+        // a download that fails leaves the engine waiting, under its error
+        module.addRunDependency('setup-ioq3-filesystem');
+        // the stored files' copies go on even when the game can't start, so
+        // a failed download doesn't cost the player their choice
+        await downloadGame(module.FS).finally(ownRead);
+        showStatus('Starting…', undefined, false, { kind: 'starting' });
+        // the words drawn before the engine's start, which holds the page's
+        // thread for a while and would leave the last ones on show; a hidden
+        // page, which has no frames, goes on at once, and one hidden while
+        // it waits, as it's hidden
+        await new Promise((resolve) => {
+            if (document.hidden) return resolve();
+            requestAnimationFrame(() => setTimeout(resolve));
+            document.addEventListener('visibilitychange', resolve, { once: true });
+        });
+        module.removeRunDependency('setup-ioq3-filesystem');
+    }],
+    // a player who quit isn't asked before closing the page, and sees the
+    // page's own screen rather than the game's last frame: an error's exit
+    // keeps its words on show
+    onExit: (status) => {
+        setPlaying(false);
+        // an error's exit keeps its words on show, and tells a front
+        if (status) {
+            dropChosen();
+            tellFront(frontListeners.crash);
+            return;
+        }
+        if (document.pointerLockElement) document.exitPointerLock();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        if (frontListeners.quit.length) {
+            tellFront(frontListeners.quit);
+            return;
+        }
+        const left = document.getElementById('left'), again = left.querySelector('button');
+        again.onclick = () => location.reload();
+        left.hidden = false;
+        again.focus();
+    },
+    // the engine has started, and draws from here on
+    postRun: [(module) => {
+        runningEngine = module;
+        showStatus();
+        if (frontOn) {
+            engineTag = fetch(engineScript, { cache: 'force-cache' }).then((r) => {
+                r.body?.cancel().catch(() => {});
+                return r.headers.get('ETag');
+            }, () => null);
+        }
+        tellFront(frontListeners.started);
+    }],
+});

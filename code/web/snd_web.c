@@ -34,7 +34,7 @@ quantum, without a buffer of ours before it, and keeps playing through a
 frame that stalls. The frame's new sounds go when the listener is placed,
 before the frame is drawn, and again with the frame's sound update.
 
-The page (Module.sound in client.html.in) makes the AudioContext in the
+The page (Module.sound in client-page.js.in) makes the AudioContext in the
 player's first input, as browsers allow. Until it runs, and while the
 browser holds it, nothing starts; when it does, each sound still playing in
 the game's time starts where it has reached, and each loop at its place in

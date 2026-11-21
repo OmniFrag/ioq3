@@ -1,6 +1,6 @@
 // The player's own paks, kept in the browser's origin private file system
 // (OPFS) for the next visit, by this dedicated worker of the page's (bring,
-// in client.html.in): each at own/<gamedir>/<name>, the name asked for, with
+// in client-page.js.in): each at own/<gamedir>/<name>, the name asked for, with
 // own/index.json listing each one kept, { src, path, name, checksum, size,
 // mtime, stamp, route, stored, lastUsed }: src the file it fills, as asked
 // for (<gamedir>/<name>, lowercased), path where it is under own/, name and
@@ -11,7 +11,7 @@
 // own/<gamedir>/<checksum>/<name>, rather than over it.
 //
 // A pak the page reads where the player keeps it, in a folder whose handle
-// it keeps (client.html.in's FOLDERS_DATABASE), is listed too, with route
+// it keeps (client-page.js.in's FOLDERS_DATABASE), is listed too, with route
 // 'in-place', folder that handle's key, and no path: nothing of it is here.
 // Records are kept as they're read, so a field or a route this page doesn't
 // know, a later version's, stays as it was through this one's writes, and

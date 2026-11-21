@@ -1,7 +1,7 @@
 // The page's pak reader: the player's own paks, stored in the browser's
 // private files (OPFS) by pak_store.js or read where the player keeps them,
 // read by the engine from there, so the page never holds them
-// (downloadGame, in client.html.in). Each becomes
+// (downloadGame, in client-page.js.in). Each becomes
 // a file node of Emscripten's file system with no contents and its own
 // stream_ops.read, which a worker (pak_reader_worker.js) answers.
 //

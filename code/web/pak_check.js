@@ -1,5 +1,5 @@
 // The player's own paks, checked before the page takes them (bring, in
-// client.html.in): each one's checksum, as the engine computes it when it
+// client-page.js.in): each one's checksum, as the engine computes it when it
 // opens a pak (PakDir_Read in qcommon/pak_dir.c, Com_BlockChecksum in
 // qcommon/md4.c), from the zip's end record and directory alone, read with
 // Blob.slice and nothing inflated; and what each chosen file is, against the
@@ -177,7 +177,7 @@ async function readDirectory(blob, most) {
 // its directory's start (where its last end record, in the last sample,
 // says; the middle without one) and at its end; of the whole file when it's
 // no larger than the samples. The page takes one as it stores a pak and
-// again on each later visit (bring, in client.html.in), so a stored pak
+// again on each later visit (bring, in client-page.js.in), so a stored pak
 // whose bytes changed, as one WebKit wrote can come back zero-filled at its
 // full size, isn't taken for the pak stored. The directory alone, which
 // checkPak reads, would miss that.
