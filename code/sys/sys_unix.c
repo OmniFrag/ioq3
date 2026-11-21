@@ -41,6 +41,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef __APPLE__
 #include <libproc.h>
 #endif
+#if defined( __linux__ ) || defined( __APPLE__ )
+#include <sys/random.h>
+#endif
 #if defined( __linux__ ) && !defined( __EMSCRIPTEN__ )
 #include <sys/ioctl.h>
 #include <linux/fs.h>	// FICLONE
@@ -717,11 +720,48 @@ int Sys_Milliseconds (void)
 /*
 ==================
 Sys_RandomBytes
+
+From getrandom on Linux, which waits until the kernel's pool is seeded, as
+reading /dev/urandom on an older kernel at first boot doesn't (when a new
+server writes its key), and getentropy on macOS, 256 bytes at a time;
+/dev/urandom where neither is
 ==================
 */
 qboolean Sys_RandomBytes( byte *string, int len )
 {
 	FILE *fp;
+
+#if defined( __linux__ ) && ( !defined( __ANDROID__ ) || __ANDROID_API__ >= 28 )
+	{
+		int		done = 0;
+		ssize_t	got;
+
+		while ( done < len ) {
+			got = getrandom( string + done, len - done, 0 );
+			if ( got > 0 ) {
+				done += (int)got;
+			} else if ( got < 0 && errno == ENOSYS ) {
+				break;		// a kernel before 3.17: the file
+			} else if ( got < 0 && errno != EINTR ) {
+				return qfalse;
+			}
+		}
+		if ( done == len ) {
+			return qtrue;
+		}
+	}
+#elif defined( __APPLE__ )
+	{
+		int		done;
+
+		for ( done = 0; done < len; done += 256 ) {
+			if ( getentropy( string + done, len - done < 256 ? len - done : 256 ) ) {
+				return qfalse;
+			}
+		}
+		return qtrue;
+	}
+#endif
 
 	fp = fopen( "/dev/urandom", "r" );
 	if( !fp )

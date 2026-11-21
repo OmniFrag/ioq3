@@ -101,6 +101,7 @@ static struct {
 	qboolean		ready;
 	unsigned int	slot;
 	byte			secrets[2][SV_CHALLENGE_SECRET];
+	qboolean		secure[2];		// each from the system's randomness, not Com_RandomBytes
 } challengeSecrets;
 
 // one challenge and what it agreed
@@ -126,16 +127,17 @@ typedef struct {
 SV_ChallengeSecret
 =================
 */
-static void SV_ChallengeSecret( byte secret[SV_CHALLENGE_SECRET] ) {
+static void SV_ChallengeSecret( int which ) {
 	static qboolean	warned;
 
-	if ( !Com_RandomSecret( secret, SV_CHALLENGE_SECRET ) ) {
+	challengeSecrets.secure[which] = Com_RandomSecret( challengeSecrets.secrets[which], SV_CHALLENGE_SECRET );
+	if ( !challengeSecrets.secure[which] ) {
 		if ( !warned ) {
 			Com_Printf( S_COLOR_YELLOW "WARNING: no secure randomness for the challenges' secret; "
-				"forged addresses may be able to connect\n" );
+				"forged addresses may be able to connect, and no extension is agreed\n" );
 			warned = qtrue;
 		}
-		Com_RandomBytes( secret, SV_CHALLENGE_SECRET );
+		Com_RandomBytes( challengeSecrets.secrets[which], SV_CHALLENGE_SECRET );
 	}
 }
 
@@ -159,9 +161,9 @@ void SV_ChallengeRotate( void ) {
 	}
 	// the next slot, also as the clock wraps, overwrites the one before last
 	if ( !challengeSecrets.ready || ( ( slot - challengeSecrets.slot ) & ( SV_CHALLENGE_SLOTS - 1 ) ) != 1 ) {
-		SV_ChallengeSecret( challengeSecrets.secrets[!( slot & 1 )] );
+		SV_ChallengeSecret( !( slot & 1 ) );
 	}
-	SV_ChallengeSecret( challengeSecrets.secrets[slot & 1] );
+	SV_ChallengeSecret( slot & 1 );
 	challengeSecrets.slot = slot;
 	challengeSecrets.ready = qtrue;
 	Com_DPrintf( "Challenge secret rotated\n" );
@@ -361,7 +363,9 @@ void SV_GetChallenge( netadr_t from ) {
 	SV_ChallengeRotate();
 	SV_ChallengeAddress( &challenge, from );
 	// the extensions its tokens ask for, after the game name
-	challenge.ofx = SV_AskedExtensions( 3 );
+	// a challenge made under a weak secret binds nothing, so it agrees
+	// nothing: the connection is a classic one
+	challenge.ofx = challengeSecrets.secure[challengeSecrets.slot & 1] ? SV_AskedExtensions( 3 ) : 0;
 	challenge.fragmentSize = SV_AskedFragmentSize( 3 );
 	challenge.secret = (int)( challengeSecrets.slot & 1 );
 	challenge.challenge = SV_MakeChallenge( challenge.secret, &challenge );

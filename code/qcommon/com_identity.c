@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "identity.h"
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 typedef enum {
 	KEY_UNREAD,
 	KEY_READY,
@@ -44,15 +48,23 @@ static keyState_t	com_deviceKeyState, com_serverKeyState;
 =================
 Com_RandomSecret
 
-Bytes from the system's randomness alone: qfalse, saying so, where there
-is none, rather than the weak fallback Com_RandomBytes takes
+Bytes from the system's randomness alone: qfalse, saying so once, where
+there is none, rather than the weak fallback Com_RandomBytes takes. In a
+test build, OMNIFRAG_TEST_NO_RANDOMNESS stands in for a system without it,
+as it does for hosting's HS_RandomSecret
 =================
 */
 qboolean Com_RandomSecret( byte *bytes, int length ) {
-	if ( Sys_RandomBytes( bytes, length ) ) {
+	static qboolean	warned;
+
+	if ( !Com_TestEnv( "OMNIFRAG_TEST_NO_RANDOMNESS" ) && Sys_RandomBytes( bytes, length ) ) {
 		return qtrue;
 	}
-	Com_Printf( S_COLOR_YELLOW "WARNING: the system gives no randomness, so nothing is proved with keys\n" );
+	if ( !warned ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the system gives no randomness, so no key is made or proved, and "
+			"connections aren't protected\n" );
+		warned = qtrue;
+	}
 	return qfalse;
 }
 
@@ -74,6 +86,16 @@ static keyState_t Com_LoadKey( const char *ospath, identKey_t *key, const char *
 	Q_strncpyz( path, ospath, sizeof( path ) );
 	length = FS_ReadOSFile( path, &buffer );
 	if ( length >= 0 ) {
+#ifndef _WIN32
+		struct stat	st;
+
+		// written for its user alone (Sys_FOpenPrivate); a copy restored
+		// from a backup often isn't
+		if ( !stat( path, &st ) && ( st.st_mode & ( S_IRWXG | S_IRWXO ) ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s can be read by other users of this computer; make it yours "
+				"alone (chmod 600 %s)\n", path, path );
+		}
+#endif
 		read = Ident_ReadKeyFile( buffer, (int)length, seed );
 		Ident_Wipe( buffer, length );
 		Z_Free( buffer );

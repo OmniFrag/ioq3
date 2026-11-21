@@ -2408,6 +2408,24 @@ void CL_ExtSetRejoin( const char *command ) {
 }
 
 /*
+=================
+CL_NewChallenge
+
+A client challenge, which the server's challengeResponse echoes so no one
+else's answer is taken: from the system's randomness, or without it the
+classic guessable number, as a stock server needs one either way
+=================
+*/
+static int CL_NewChallenge( void ) {
+	int		challenge;
+
+	if ( !Com_RandomSecret( (byte *)&challenge, sizeof( challenge ) ) ) {
+		challenge = (int)( ( ( (unsigned int)rand() << 16 ) ^ (unsigned int)rand() ) ^ Com_Milliseconds() );
+	}
+	return challenge;
+}
+
+/*
 ==================
 CL_ConnectBegin, CL_ConnectSend
 
@@ -2491,7 +2509,7 @@ static void CL_ConnectSend( void ) {
 		clc.state = CA_CONNECTING;
 		
 		// Set a client challenge number that ideally is mirrored back by the server.
-		clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
+		clc.challenge = CL_NewChallenge();
 	}
 	// a new connect, with a nonce of its own for its key's proof
 	clc.clientNonceSet = qfalse;
@@ -4270,7 +4288,7 @@ when the one the connect carries has run out
 */
 static void CL_ChallengeAgain( void ) {
 	clc.state = CA_CONNECTING;
-	clc.challenge = (((unsigned int)rand() << 16) ^ (unsigned int)rand()) ^ Com_Milliseconds();
+	clc.challenge = CL_NewChallenge();
 	clc.connectTime = -99999;
 }
 
