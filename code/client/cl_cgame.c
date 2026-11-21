@@ -414,6 +414,7 @@ void CL_ShutdownCGame( void ) {
 	Hooks_ModuleShutdown( EXT_MODULE_CGAME );
 	VM_Free( cgvm );
 	cgvm = NULL;
+	Cbuf_EndGameCodeWait();
 }
 
 static int	FloatAsInt( float f ) {

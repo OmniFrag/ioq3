@@ -1269,6 +1269,7 @@ void CL_ShutdownUI( void ) {
 	Hooks_ModuleShutdown( EXT_MODULE_UI );
 	VM_Free( uivm );
 	uivm = NULL;
+	Cbuf_EndGameCodeWait();
 }
 
 /*

@@ -103,6 +103,7 @@ void CL_InitKeyCommands( void ) {
 	// (default.cfg does): take those commands quietly rather than call
 	// each one unknown
 	Cmd_AddCommand( "bind", CL_NoKeys_f );
+	Cmd_AddCommand( "bind_restricted", CL_NoKeys_f );
 	Cmd_AddCommand( "unbind", CL_NoKeys_f );
 	Cmd_AddCommand( "unbindall", CL_NoKeys_f );
 	Cmd_AddCommand( "bindlist", CL_NoKeys_f );

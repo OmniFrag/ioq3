@@ -749,6 +749,9 @@ qboolean Cbuf_ScriptsEmpty( void );
 
 void Cbuf_Clear( void );
 // Drops every buffer's text and waits, unrun: --check's, before it exits
+void Cbuf_EndGameCodeWait( void );
+// Ends a wait in game code's buffer, its text kept: a module unloaded holds
+// nothing up after it, the keys that run in that buffer among them
 
 void Cbuf_AddTextFrom( const char *origin, const char *text );
 // Cbuf_AddText for text whose lines all have the origin given, the

@@ -3744,8 +3744,10 @@ static void Com_ExecuteConfigLine( const char *path, int number, const char *lin
 Com_ApplyConfig
 
 A config's settings and binds, as the player's own, with full rights, as
-they're read. A config is data, so anything else in it is left out, with a
-warning: Quake III's aliases are cvars (vstr), which apply as settings. An
+they're read; but a bind_restricted line's binding runs restricted, as
+one game code or a pak's config made is saved (Key_WriteBindings), so it
+must be applied as written. A config is data, so anything else in it is
+left out, with a warning: Quake III's aliases are cvars (vstr), which apply as settings. An
 imported config's values that are its writer's defaults are left out too
 (Com_ConfigWriter), as it saved them unchosen, its dedicated server's too
 (serverDefaults) on a dedicated server, and so is a stock
@@ -3822,8 +3824,8 @@ static void Com_ApplyConfig( char *text, const char *path, const cvarDefault_t *
 					Com_ExecuteConfigLine( path, number, line );
 				}
 			}
-		} else if ( !Q_stricmp( command, "bind" ) || !Q_stricmp( command, "unbind" ) ||
-			!Q_stricmp( command, "unbindall" ) ) {
+		} else if ( !Q_stricmp( command, "bind" ) || !Q_stricmp( command, "bind_restricted" ) ||
+			!Q_stricmp( command, "unbind" ) || !Q_stricmp( command, "unbindall" ) ) {
 			Com_ExecuteConfigLine( path, number, line );
 		} else {
 			Com_Printf( S_COLOR_YELLOW "WARNING: %s, line %d: %s isn't a setting or a binding, and was left out\n",

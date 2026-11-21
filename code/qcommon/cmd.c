@@ -123,6 +123,12 @@ next frame.  This allows commands like:
 bind g "cmd use rocket ; +attack ; wait ; -attack ; cmd use blaster"
 ============
 */
+// the longest wait game code's text and game content may make, in frames:
+// mods' binds and configs wait one to a few hundred, and the player's keys
+// bound in that buffer, a menu's and a pak's defaults among them, wait with
+// it (a second at 1000 frames a second, eight at 125)
+#define CBUF_RESTRICTED_WAIT	1000
+
 void Cmd_Wait_f( void ) {
 	cmd_t	*buf = Cbuf_Current();
 
@@ -132,6 +138,9 @@ void Cmd_Wait_f( void ) {
 			buf->wait = 1; // ignore the argument
 	} else {
 		buf->wait = 1;
+	}
+	if ( cmd_restricted && buf->wait > CBUF_RESTRICTED_WAIT ) {
+		buf->wait = CBUF_RESTRICTED_WAIT;
 	}
 }
 
@@ -985,6 +994,21 @@ qboolean Cbuf_Empty( void )
 		}
 	}
 	return qtrue;
+}
+
+/*
+============
+Cbuf_EndGameCodeWait
+
+A module unloaded: game code's buffer waits no longer, so a wait it left
+holds nothing after it, the keys that run in that buffer among them. Its
+text stays, which a menu queues after a map line (Start Server's bots),
+or a vote (a rotation's nextmap)
+============
+*/
+void Cbuf_EndGameCodeWait( void )
+{
+	cmd_buffers[CBUF_RESTRICTED].wait = 0;
 }
 
 /*
