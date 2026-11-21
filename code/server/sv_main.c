@@ -888,6 +888,8 @@ typedef struct {
 // getstatus from an address can't starve its admin's commands
 static bucketTable_t queryBuckets;
 static bucketTable_t rconBuckets;
+// the session's handshakes, which cost a DH each (SVC_RateLimitHandshake)
+static bucketTable_t handshakeBuckets;
 rateLimit_t outboundLeakyBucket;
 
 /*
@@ -1074,6 +1076,25 @@ qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period ) {
 	leakyBucket_t *bucket = SVC_BucketForAddress( &queryBuckets, from, burst, period );
 
 	return SVC_RateLimit( bucket ? &bucket->rate : NULL, burst, period );
+}
+
+/*
+================
+SVC_RateLimitHandshake
+
+The session's handshakes from an IPv4 address, or an IPv6 /64, which one
+network holds many of: 5 a second with a burst of 10, in a table of their
+own, so a query or a classic connect spends none of it
+================
+*/
+qboolean SVC_RateLimitHandshake( netadr_t from ) {
+	leakyBucket_t	*bucket;
+
+	if ( from.type == NA_IP6 ) {
+		Com_Memset( from.ip6 + 8, 0, 8 );
+	}
+	bucket = SVC_BucketForAddress( &handshakeBuckets, from, 10, 200 );
+	return SVC_RateLimit( bucket ? &bucket->rate : NULL, 10, 200 );
 }
 
 /*
@@ -1752,6 +1773,9 @@ static void SV_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			return;
 		}
 		SV_DirectConnect( from );
+	} else if ( !Q_stricmp( c, "session" ) ) {
+		// the session's third message (sv_session.c)
+		SV_SessionFinish( from, msg );
 	} else if (!Q_stricmp(c, "rcon")) {
 		SVC_RemoteCommand( from, msg );
 	} else if (!Q_stricmp(c, "disconnect")) {
@@ -1977,6 +2001,13 @@ static void SV_CheckTimeouts( void ) {
 			// using the client id cause the cl->name is empty at this point
 			Com_DPrintf( "Going from CS_ZOMBIE to CS_FREE for client %d\n", i );
 			cl->state = CS_FREE;	// can now be reused
+			Netchan_WipeKeys( &cl->netchan );
+			continue;
+		}
+		// a sealed connection that can't seal its next datagram ends: past
+		// the guard or the cap (Netchan_Send). Its goodbye can't be sent
+		if ( cl->state >= CS_CONNECTED && cl->netchan.failed ) {
+			SV_DropClient( cl, "lost the connection: it can't seal more datagrams" );
 			continue;
 		}
 		if ( cl->state == CS_ACTIVE && !cl->pingChecked && cl->pingCheckTime &&
@@ -2002,6 +2033,7 @@ static void SV_CheckTimeouts( void ) {
 			SVC_RateDropAddress( cl->netchan.remoteAddress, 10, 1000 );
 			SV_DropClient( cl, NULL );
 			cl->state = CS_FREE;	// don't bother with zombie state
+			Netchan_WipeKeys( &cl->netchan );
 			continue;
 		}
 		// a bot sends no packets: it's marked alive only as the game reads
@@ -2013,6 +2045,7 @@ static void SV_CheckTimeouts( void ) {
 			if ( ++cl->timeoutCount > 5 ) {
 				SV_DropClient (cl, "timed out"); 
 				cl->state = CS_FREE;	// don't bother with zombie state
+				Netchan_WipeKeys( &cl->netchan );
 			}
 		} else {
 			cl->timeoutCount = 0;

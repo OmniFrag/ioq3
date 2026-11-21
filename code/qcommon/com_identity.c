@@ -176,32 +176,58 @@ const char *Com_KeyFingerprint( const identKey_t *key ) {
 
 /*
 =================
-Com_KnownServerKey
+Com_RememberedServerKey, Com_RememberServerKey, Com_ForgetServerKey
 
-The key a server at an address proved, against the one it proved before,
-kept in known_servers.txt at the home config base's root: one not proved
-before is remembered. KNOWN_CHANGED gives the one before in known.
---check writes nothing
+The keys servers are remembered by, in known_servers.txt at the home
+config base's root, by address: the client's trust rule (the handshake
+design, 14.5) checks a session's key against the remembered one, and the
+engine alone writes them, once a session's first sealed datagram opens
 =================
 */
-knownKey_t Com_KnownServerKey( const char *address, const byte key[IDENT_KEY_SIZE], byte known[IDENT_KEY_SIZE] ) {
-	char		path[MAX_OSPATH], line[NET_ADDRSTRMAXLEN + IDENT_HEX_SIZE + 2];
-	void		*text = NULL;
-	knownKey_t	result;
+static const char *Com_KnownServersPath( void ) {
+	return FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), IDENT_KNOWN_FILE );
+}
 
-	Q_strncpyz( path, FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homeconfigpath" ), IDENT_KNOWN_FILE ),
-		sizeof( path ) );
-	FS_ReadOSFile( path, &text );
-	if ( Ident_KnownServer( text, address, known ) ) {
-		result = Ident_Equal32( known, key ) ? KNOWN_SAME : KNOWN_CHANGED;
-	} else {
-		result = KNOWN_NEW;
-		if ( !com_check && Ident_KnownServerLine( address, key, line, sizeof( line ) ) ) {
-			FS_AppendOSFile( path, line, (int)strlen( line ), qfalse );
-		}
-	}
+qboolean Com_RememberedServerKey( const char *address, byte key[IDENT_KEY_SIZE] ) {
+	void		*text = NULL;
+	qboolean	found;
+
+	FS_ReadOSFile( Com_KnownServersPath(), &text );
+	found = Ident_KnownServer( text, address, key );
 	if ( text ) {
 		Z_Free( text );
 	}
-	return result;
+	return found;
+}
+
+// the file with the address's line replaced, or left out for a NULL key
+static qboolean Com_WriteServerKey( const char *address, const byte *key ) {
+	char		path[MAX_OSPATH], *out;
+	void		*text = NULL;
+	long		length;
+	int			size, written;
+	qboolean	ok;
+
+	if ( com_check ) {
+		return qfalse;
+	}
+	Q_strncpyz( path, Com_KnownServersPath(), sizeof( path ) );
+	length = FS_ReadOSFile( path, &text );
+	size = (int)MAX( length, 0 ) + MAX_OSPATH + IDENT_HEX_SIZE + 4;
+	out = Z_Malloc( size );
+	written = Ident_KnownServerText( text, address, key, out, size );
+	ok = written >= 0 && FS_ReplaceOSFile( path, out, written, qfalse );
+	Z_Free( out );
+	if ( text ) {
+		Z_Free( text );
+	}
+	return ok;
+}
+
+qboolean Com_RememberServerKey( const char *address, const byte key[IDENT_KEY_SIZE] ) {
+	return Com_WriteServerKey( address, key );
+}
+
+void Com_ForgetServerKey( const char *address ) {
+	Com_WriteServerKey( address, NULL );
 }

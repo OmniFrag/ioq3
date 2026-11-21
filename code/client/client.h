@@ -23,7 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
-#include "../qcommon/identity.h"
+#include "../qcommon/session.h"
 #include "../renderercommon/tr_public.h"
 #include "cl_ext.h"
 #include "../ui/ui_public.h"
@@ -170,6 +170,16 @@ demo through a file.
 
 #define MAX_TIMEDEMO_DURATIONS	4096
 
+// a session's key against what a connect trusts (CL_SessionKeyAccepted)
+typedef enum {
+	KEY_UNTRUSTED,		// no session, a classic or stock connection, or a
+						// key the player hasn't trusted: a private address's
+						// new one, which carries no secret
+	KEY_EXPECTED,		// the key the connect expected, as a join code's
+	KEY_REMEMBERED,		// the one its address is remembered by
+	KEY_FIRST_USE		// none remembered for its address
+} keyTrust_t;
+
 typedef struct {
 
 	connstate_t	state;				// connection status
@@ -194,14 +204,35 @@ typedef struct {
 	// the fragment size the server agreed to on challengeResponse (off),
 	// which the netchan splits at; 0 for the classic one
 	int			fragmentSize;
-	// with OFX_IDENTITY, this connect's nonce (ofc), and once the server
-	// proved its key on challengeResponse, the key and its nonce, which
-	// the connect's proof of this device signs (identity.h)
-	byte		clientNonce[32];
-	qboolean	clientNonceSet;
-	qboolean	identityProved;
+	// with OFX_SESSION, the handshake (session.h): its state, its first
+	// message (the ephemeral, the connect's ofe) and the third message's
+	// datagram, each sent again unchanged until its answer comes,
+	// with how many times and when the third went; sessionPending until the
+	// server's first packet comes. Then the server's proven key and the
+	// transport's keys, this side's to send and to receive
+	noiseHandshake_t	session;
+	byte		sessionFirst[NOISE_DHLEN];
+	byte		sessionFinish[MAX_PACKETLEN];
+	int			sessionFinishLength;
+	int			sessionFinishSends, sessionFinishAt;
+	qboolean	sessionPending;
+	qboolean	sessionProven;
+	// how this connect trusts the session's key (the handshake design,
+	// 14.5): the one it expected, the one its address is remembered by, or
+	// one seen for the first time, remembered once the first sealed
+	// datagram opens; KEY_UNTRUSTED without a session, or for a private
+	// address's new key, joined but sent no secret. The address it's
+	// remembered by
+	keyTrust_t	keyTrust;
+	char		keyAddress[NET_ADDRSTRMAXLEN];
+	// the address the player dialed, which challengeResponse's may replace
+	// (a proxy's hand-off): what the remembered key is looked up by; and,
+	// for a connect by name, the name and port, looked up first, so a name
+	// pointed elsewhere doesn't make a first join ("" otherwise)
+	netadr_t	dialed;
+	char		keyName[MAX_OSPATH];
 	byte		serverKey[32];
-	byte		serverNonce[32];
+	byte		sendKey[32], receiveKey[32];
 	// challengeResponse's ofv, which binds what it agreed: the connect
 	// repeats those terms with it, as a stateless challenge needs (ENG-067);
 	// empty from a server that sends none
@@ -217,7 +248,7 @@ typedef struct {
 	int			numCandidates;
 	int			fastUntil, giveUpAt;
 	char		expectedFingerprint[IDENT_FINGERPRINT_SIZE];	// "" for none
-	qboolean	unprovenSaid;			// CL_ExpectedServer has said an answer proved no key
+	qboolean	unprovenSaid;			// challengeResponse has said an answer proved no key
 	qboolean	keyedReconnect;			// a reconnect that wants a join's key (CL_Reconnect_f)
 	// the server's content manifest, as connectResponse names it (ofm) or
 	// the last received, which the paks are checked against
@@ -477,6 +508,16 @@ typedef struct {
 	// how the connect began, when an extension's command did and goes back
 	// to the server as reconnect can't (CL_ExtSetRejoin); "" otherwise
 	char		rejoin[MAX_STRING_CHARS];
+
+	// what /acceptkey trusts (CL_AcceptKey_f): the address a connect
+	// stopped at for a key other than the one remembered, or a private one
+	// joined with such a key (KEY_UNTRUSTED), and that key; or,
+	// keyless, for an answer without a session from an address with one
+	// remembered, which it forgets. "" for none
+	char		acceptAddress[NET_ADDRSTRMAXLEN];
+	byte		acceptKey[IDENT_KEY_SIZE];
+	qboolean	acceptKeyless;
+	char		acceptName[MAX_OSPATH];		// the name it was dialed by, or ""
 	// the reconnect the client makes by itself, for a server that said it's
 	// restarting (CL_ReconnectAsked), or a connection its transport lost
 	// (CL_ReconnectLost)

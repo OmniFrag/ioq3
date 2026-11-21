@@ -34,6 +34,11 @@ static qboolean NET_IPv4Private( const byte *ip ) {
 	return ip[0] == 10 || ( ip[0] == 172 && ( ip[1] & 0xf0 ) == 16 ) || ( ip[0] == 192 && ip[1] == 168 );
 }
 
+// IPv6's unique local fc00::/7 and link-local fe80::/10
+static qboolean NET_IPv6Private( const byte *ip6 ) {
+	return ( ip6[0] & 0xfe ) == 0xfc || ( ip6[0] == 0xfe && ( ip6[1] & 0xc0 ) == 0x80 );
+}
+
 // RFC 6598's shared space, 100.64.0.0/10, carriers' and VPNs' NAT
 static qboolean NET_IPv4Shared( const byte *ip ) {
 	return ip[0] == 100 && ( ip[1] & 0xc0 ) == 64;
@@ -67,6 +72,22 @@ qboolean NET_IsLANv4( const netadr_t *adr ) {
 
 qboolean NET_IsSharedv4( const netadr_t *adr ) {
 	return adr->type == NA_IP && NET_IPv4Shared( adr->ip );
+}
+
+/*
+==================
+NET_IsPrivate
+
+Whether an address is in a private range many networks reuse: RFC 1918's,
+IPv6's unique local fc00::/7 or its link-local fe80::/10, an IPv4-mapped
+one as its IPv4. Not loopback, and not every address on one of this
+computer's subnets (Sys_IsLANAddress)
+==================
+*/
+qboolean NET_IsPrivate( const netadr_t *adr ) {
+	netadr_t	a = NET_Unmapped( adr );
+
+	return ( a.type == NA_IP && NET_IPv4Private( a.ip ) ) || ( a.type == NA_IP6 && NET_IPv6Private( a.ip6 ) );
 }
 
 /*
@@ -224,8 +245,7 @@ qboolean NET_ScopeIsLocal( const netadr_t *adr, const netadr_t *to, const netSub
 		}
 		break;
 	case NA_IP6:
-		if ( !memcmp( a.ip6, loopback6, sizeof( loopback6 ) ) || ( a.ip6[0] & 0xfe ) == 0xfc ||
-			( a.ip6[0] == 0xfe && ( a.ip6[1] & 0xc0 ) == 0x80 ) ) {
+		if ( !memcmp( a.ip6, loopback6, sizeof( loopback6 ) ) || NET_IPv6Private( a.ip6 ) ) {
 			return qtrue;
 		}
 		break;

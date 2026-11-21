@@ -19,7 +19,7 @@ along with Quake III Arena source code; if not, write to the Free Software
 Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
-// identity.c -- device and server keys, and the proofs of the handshake
+// identity.c -- device and server keys, their conversion for the session
 // (identity.h)
 
 #include "q_shared.h"
@@ -38,6 +38,24 @@ void Ident_KeyFromSeed( identKey_t *key, const byte seed[IDENT_KEY_SIZE] ) {
 	// Monocypher wipes the seed it's given
 	Com_Memcpy( copy, seed, IDENT_KEY_SIZE );
 	crypto_ed25519_key_pair( key->secret, key->pub, copy );
+}
+
+qboolean Ident_ValidKey( const byte key[IDENT_KEY_SIZE] ) {
+	// R the identity point, S 0: with h 0, [S]B - [h]A is the identity, which
+	// R matches, so the equation holds exactly when A decodes to a point
+	static const byte	zeroSignature[IDENT_SIG_SIZE] = { 1 };
+	static const byte	zeroHash[IDENT_KEY_SIZE];
+	int					i;
+
+	// y canonical: below 2^255 - 19, as libsodium has it
+	if ( ( key[31] & 0x7f ) == 0x7f && key[0] >= 0xed ) {
+		for ( i = 1; i < 31 && key[i] == 0xff; i++ ) {
+		}
+		if ( i == 31 ) {
+			return qfalse;
+		}
+	}
+	return crypto_eddsa_check_equation( zeroSignature, key, zeroHash ) == 0;
 }
 
 void Ident_X25519Public( const byte key[IDENT_KEY_SIZE], byte x25519[IDENT_KEY_SIZE] ) {
@@ -61,79 +79,10 @@ qboolean Ident_Equal32( const byte a[IDENT_KEY_SIZE], const byte b[IDENT_KEY_SIZ
 
 /*
 =================
-Ident_Message
-
-What a proof signs: the domain with its terminator, then the parts, each
-IDENT_KEY_SIZE bytes, then the challenge's 4 bytes, least significant
-first, when there is one
-=================
-*/
-#define IDENT_MESSAGE_SIZE	( 32 + IDENT_KEY_SIZE * 3 + 4 )
-
-static int Ident_Message( byte message[IDENT_MESSAGE_SIZE], const char *domain, const byte *a, const byte *b,
-	const byte *c, const int *challenge ) {
-	int		length = (int)strlen( domain ) + 1;
-	const byte	*parts[3] = { a, b, c };
-	int		i;
-
-	Com_Memcpy( message, domain, length );
-	for ( i = 0; i < 3; i++ ) {
-		if ( parts[i] ) {
-			Com_Memcpy( message + length, parts[i], IDENT_KEY_SIZE );
-			length += IDENT_KEY_SIZE;
-		}
-	}
-	if ( challenge ) {
-		unsigned int	value = (unsigned int)*challenge;
-
-		for ( i = 0; i < 4; i++ ) {
-			message[length++] = (byte)( value >> ( i * 8 ) );
-		}
-	}
-	return length;
-}
-
-void Ident_SignServer( const identKey_t *server, const byte clientNonce[IDENT_KEY_SIZE],
-	const byte serverNonce[IDENT_KEY_SIZE], byte sig[IDENT_SIG_SIZE] ) {
-	byte	message[IDENT_MESSAGE_SIZE];
-	int		length = Ident_Message( message, IDENT_SERVER_DOMAIN, clientNonce, serverNonce, NULL, NULL );
-
-	crypto_ed25519_sign( sig, server->secret, message, length );
-}
-
-qboolean Ident_CheckServer( const byte serverKey[IDENT_KEY_SIZE], const byte clientNonce[IDENT_KEY_SIZE],
-	const byte serverNonce[IDENT_KEY_SIZE], const byte sig[IDENT_SIG_SIZE] ) {
-	byte	message[IDENT_MESSAGE_SIZE];
-	int		length = Ident_Message( message, IDENT_SERVER_DOMAIN, clientNonce, serverNonce, NULL, NULL );
-
-	return crypto_ed25519_check( sig, serverKey, message, length ) == 0;
-}
-
-void Ident_SignClient( const identKey_t *client, const byte serverKey[IDENT_KEY_SIZE],
-	const byte serverNonce[IDENT_KEY_SIZE], const byte clientNonce[IDENT_KEY_SIZE], int challenge,
-	byte sig[IDENT_SIG_SIZE] ) {
-	byte	message[IDENT_MESSAGE_SIZE];
-	int		length = Ident_Message( message, IDENT_CLIENT_DOMAIN, serverKey, serverNonce, clientNonce, &challenge );
-
-	crypto_ed25519_sign( sig, client->secret, message, length );
-}
-
-qboolean Ident_CheckClient( const byte clientKey[IDENT_KEY_SIZE], const byte serverKey[IDENT_KEY_SIZE],
-	const byte serverNonce[IDENT_KEY_SIZE], const byte clientNonce[IDENT_KEY_SIZE], int challenge,
-	const byte sig[IDENT_SIG_SIZE] ) {
-	byte	message[IDENT_MESSAGE_SIZE];
-	int		length = Ident_Message( message, IDENT_CLIENT_DOMAIN, serverKey, serverNonce, clientNonce, &challenge );
-
-	return crypto_ed25519_check( sig, clientKey, message, length ) == 0;
-}
-
-/*
-=================
 Ident_PurposeMessage
 
 What a purpose's signature signs, in buf: IDENT_PURPOSE_DOMAIN and the
-purpose, each with its terminator, then the message. No proof's domain is
-IDENT_PURPOSE_DOMAIN, so none signs the same bytes. 0 when
+purpose, each with its terminator, then the message. 0 when
 Ident_SignPurpose refuses it
 =================
 */
@@ -175,46 +124,6 @@ qboolean Ident_CheckPurpose( const byte key[IDENT_KEY_SIZE], const char *purpose
 	return total && crypto_ed25519_check( sig, key, buf, total ) == 0;
 }
 
-qboolean Ident_ReadNonce( const extTokens_t *tokens, const char *key, byte nonce[IDENT_KEY_SIZE] ) {
-	const char	*value = Com_ExtensionValue( tokens, key );
-
-	return value && Com_SHA256FromHex( value, nonce );
-}
-
-// a signature's two halves, ofs then oft
-static qboolean Ident_ReadSig( const extTokens_t *tokens, byte sig[IDENT_SIG_SIZE] ) {
-	return Ident_ReadNonce( tokens, "ofs", sig ) && Ident_ReadNonce( tokens, "oft", sig + IDENT_KEY_SIZE );
-}
-
-qboolean Ident_ReadServerProof( const extTokens_t *tokens, byte serverNonce[IDENT_KEY_SIZE],
-	byte serverKey[IDENT_KEY_SIZE], byte sig[IDENT_SIG_SIZE] ) {
-	return Ident_ReadNonce( tokens, "ofn", serverNonce ) && Ident_ReadNonce( tokens, "ofp", serverKey ) &&
-		Ident_ReadSig( tokens, sig );
-}
-
-qboolean Ident_ReadClientProof( const extTokens_t *tokens, byte clientKey[IDENT_KEY_SIZE], byte sig[IDENT_SIG_SIZE] ) {
-	return Ident_ReadNonce( tokens, "ofi", clientKey ) && Ident_ReadSig( tokens, sig );
-}
-
-qboolean Ident_AppendHex( char *text, int size, const char *key, const byte bytes[IDENT_KEY_SIZE] ) {
-	char	hex[IDENT_HEX_SIZE];
-
-	Com_SHA256Hex( bytes, hex );
-	return Com_AppendExtensionToken( text, size, key, hex );
-}
-
-qboolean Ident_AppendSig( char *text, int size, const byte sig[IDENT_SIG_SIZE] ) {
-	char	saved[EXT_MAX_STRING];
-
-	// both halves or neither
-	Q_strncpyz( saved, text, sizeof( saved ) );
-	if ( Ident_AppendHex( text, size, "ofs", sig ) && Ident_AppendHex( text, size, "oft", sig + IDENT_KEY_SIZE ) ) {
-		return qtrue;
-	}
-	Q_strncpyz( text, saved, size );
-	return qfalse;
-}
-
 void Ident_Fingerprint( const byte key[IDENT_KEY_SIZE], char fingerprint[IDENT_FINGERPRINT_SIZE] ) {
 	byte	digest[SHA256_DIGEST_SIZE];
 	char	hex[SHA256_HEX_SIZE];
@@ -247,10 +156,51 @@ qboolean Ident_KnownServer( const char *text, const char *address, byte key[IDEN
 }
 
 qboolean Ident_KnownServerLine( const char *address, const byte key[IDENT_KEY_SIZE], char *line, int size ) {
-	char	hex[IDENT_HEX_SIZE];
+	char		hex[IDENT_HEX_SIZE];
+	const char	*c;
 
+	// a space ends the address, and a line break the line
+	for ( c = address; *c; c++ ) {
+		if ( (unsigned char)*c <= ' ' || *c == 127 ) {
+			return qfalse;
+		}
+	}
 	Com_SHA256Hex( key, hex );
 	return Com_sprintf( line, size, "%s %s\n", address, hex ) < size;
+}
+
+int Ident_KnownServerText( const char *text, const char *address, const byte *key, char *out, int size ) {
+	int			length = (int)strlen( address ), written = 0, lineLength;
+	const char	*next;
+	char		line[MAX_OSPATH + IDENT_HEX_SIZE + 2];
+
+	for ( ; text && *text; text = next ) {
+		next = strchr( text, '\n' );
+		next = next ? next + 1 : text + strlen( text );
+		// every other address's line as it was, ending as a line does
+		if ( !strncmp( text, address, length ) && text[length] == ' ' ) {
+			continue;
+		}
+		lineLength = (int)( next - text );
+		if ( written + lineLength + 1 >= size ) {
+			return -1;
+		}
+		Com_Memcpy( out + written, text, lineLength );
+		written += lineLength;
+		if ( out[written - 1] != '\n' ) {
+			out[written++] = '\n';
+		}
+	}
+	if ( key ) {
+		if ( !Ident_KnownServerLine( address, key, line, sizeof( line ) ) ||
+			written + (int)strlen( line ) >= size ) {
+			return -1;
+		}
+		Q_strncpyz( out + written, line, size - written );
+		written += (int)strlen( line );
+	}
+	out[written] = '\0';
+	return written;
 }
 
 void Ident_KeyFileText( const byte seed[IDENT_KEY_SIZE], char text[IDENT_FILE_SIZE + 1] ) {

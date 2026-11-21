@@ -193,6 +193,12 @@ static int noGameRestart = qfalse;
 
 extern void SV_BotFrame( int time );
 void CL_CheckForResend( void );
+static void CL_SessionResend( void );
+static void CL_SessionForget( void );
+// CL_SessionAnswer's copy of the handshake, read on before it's kept
+static noiseHandshake_t	cl_sessionCopy;
+static qboolean CL_SecretWithheld( const char *text, char *rewritten, int size );
+static qboolean CL_RememberKey( const char *name, const char *address, const byte key[IDENT_KEY_SIZE] );
 void CL_ShowIP_f(void);
 void CL_ServerStatus_f(void);
 void CL_ServerStatusResponse( netadr_t from, msg_t *msg );
@@ -628,6 +634,16 @@ not have future usercmd_t executed before it is executed
 void CL_AddReliableCommand(const char *cmd, qboolean isDisconnectCmd)
 {
 	int unacknowledged = clc.reliableSequence - clc.reliableAcknowledge;
+	char	rewritten[MAX_STRING_CHARS] = "";
+
+	// a secret goes only where the session lets it, whoever sends it: the
+	// console, a chat line or game code (CL_SecretWithheld)
+	if ( !isDisconnectCmd && CL_SecretWithheld( cmd, rewritten, sizeof( rewritten ) ) ) {
+		return;
+	}
+	if ( rewritten[0] ) {
+		cmd = rewritten;
+	}
 	
 	// if we would be losing an old command that hasn't been acknowledged,
 	// we must drop the connection
@@ -1609,6 +1625,8 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	}
 	cl_leaving = -1;
 	Content_Cache_SetServer( NULL );
+	// the session's secrets go with the connection
+	CL_SessionForget();
 
 	// shutting down the client so enter full screen ui mode
 	Cvar_Set("r_uiFullScreen", "1");
@@ -1699,6 +1717,7 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	NET_CloseConnection( clc.serverAddress );
 
 	// wipe the client connection
+	// the session's keys with it, once the goodbye is sealed and sent
 	Com_Memset( &clc, 0, sizeof( clc ) );
 
 	clc.state = CA_DISCONNECTED;
@@ -1757,7 +1776,6 @@ void CL_ForwardCommandToServer( const char *string ) {
 		Com_Printf ("Unknown command \"%s" S_COLOR_WHITE "\"\n", cmd);
 		return;
 	}
-
 	if ( Cmd_Argc() > 1 ) {
 		CL_AddReliableCommand(string, qfalse);
 	} else {
@@ -1948,7 +1966,7 @@ void CL_Reconnect_f( void ) {
 	}
 	Cvar_Set("ui_singlePlayerActive", "0");
 	// an address a join found wants the key the join wanted: another server
-	// at that address since is passed over (CL_ExpectedServer), as the
+	// at that address since is passed over (CL_SessionKeyAccepted), as the
 	// join's would be. A restarting server's goodbye rejoins as the join
 	// went instead (CL_ReconnectAsked)
 	if ( cl_reconnectAddress[0] && cl_reconnectExpected[0] ) {
@@ -1961,7 +1979,7 @@ void CL_Reconnect_f( void ) {
 		Q_strncpyz( expected, cl_reconnectExpected, sizeof( expected ) );
 		Q_strncpyz( rejoin, cls.rejoin, sizeof( rejoin ) );
 		// as long as the join would wait, not forever: a server there that
-		// proves no key is passed over, and said (CL_ExpectedServer)
+		// proves no key is passed over, and said (challengeResponse)
 		CL_ExtConnect( name, &adr, NULL, 1, 0, RECONNECT_KEYED_MSEC, expected );
 		clc.keyedReconnect = qtrue;
 		// still the join's: the address and key to go back to, if this finds
@@ -2409,6 +2427,208 @@ void CL_ExtSetRejoin( const char *command ) {
 
 /*
 =================
+CL_SessionForget
+
+What a connect's session holds, wiped: a new connect, a new challenge or
+a disconnect starts again with nothing
+=================
+*/
+static void CL_SessionForget( void ) {
+	Noise_Wipe( &clc.session );
+	Noise_Wipe( &cl_sessionCopy );
+	Ident_Wipe( clc.sessionFirst, sizeof( clc.sessionFirst ) );
+	Ident_Wipe( clc.sessionFinish, sizeof( clc.sessionFinish ) );
+	Ident_Wipe( clc.sendKey, sizeof( clc.sendKey ) );
+	Ident_Wipe( clc.receiveKey, sizeof( clc.receiveKey ) );
+	clc.sessionFinishLength = clc.sessionFinishSends = 0;
+	clc.sessionPending = clc.sessionProven = qfalse;
+}
+
+/*
+=================
+CL_SessionUp
+
+The session's first sealed datagram opened: a key the connect expected is
+the one its address is remembered by from now on, in place of any before,
+and one seen for the first time is remembered (the handshake design, 14.5)
+=================
+*/
+static void CL_SessionUp( void ) {
+	char	fingerprint[IDENT_FINGERPRINT_SIZE];
+
+	if ( clc.keyTrust == KEY_UNTRUSTED || ( !clc.keyAddress[0] && !clc.keyName[0] ) ) {
+		return;
+	}
+	Ident_Fingerprint( clc.serverKey, fingerprint );
+	if ( !CL_RememberKey( clc.keyName, clc.keyAddress, clc.serverKey ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't remember the server at %s by its key %s.\n",
+			clc.keyName[0] ? clc.keyName : clc.keyAddress, fingerprint );
+	} else if ( clc.keyTrust == KEY_FIRST_USE ) {
+		Com_Printf( "The first join of %s: it's remembered by its key %s, which it must prove from now on.\n",
+			clc.keyName[0] ? clc.keyName : clc.keyAddress, fingerprint );
+	}
+}
+
+/*
+=================
+CL_AcceptKey_f
+
+acceptkey: trusts the key a connect stopped for, a server's new key for
+an address remembered by another, or a private address's joined without
+its secrets, and joins again; or, for an address
+that answered without the session though remembered by a key, forgets the
+key and connects plainly. Refused to game code and game content, as join
+is, so a mod's menu can't run it after a refused join
+=================
+*/
+static void CL_AcceptKey_f( void ) {
+	char	address[NET_ADDRSTRMAXLEN], name[MAX_OSPATH], fingerprint[IDENT_FINGERPRINT_SIZE];
+
+	if ( Cmd_IsRestricted() ) {
+		Com_Printf( "acceptkey can't be run by game code or game content.\n" );
+		return;
+	}
+	if ( !cls.acceptAddress[0] ) {
+		Com_Printf( "No connect stopped for a server's key, so there's no key to accept.\n" );
+		return;
+	}
+	Q_strncpyz( address, cls.acceptAddress, sizeof( address ) );
+	Q_strncpyz( name, cls.acceptName, sizeof( name ) );
+	cls.acceptAddress[0] = '\0';
+	if ( cls.acceptKeyless ) {
+		if ( name[0] ) {
+			Com_ForgetServerKey( name );
+		}
+		Com_ForgetServerKey( address );
+		Com_Printf( "%s is no longer remembered by a key.\n", name[0] ? name : address );
+	} else {
+		Ident_Fingerprint( cls.acceptKey, fingerprint );
+		if ( !CL_RememberKey( name, address, cls.acceptKey ) ) {
+			Com_Printf( "Couldn't remember %s by the key %s.\n", name[0] ? name : address, fingerprint );
+			return;
+		}
+		Com_Printf( "%s is remembered by the key %s now.\n", name[0] ? name : address, fingerprint );
+	}
+	// by the name it was dialed by, which reads as the address did
+	Cbuf_AddText( va( "connect \"%s\"\n", name[0] ? name : address ) );
+}
+
+// the next word of a command as the server's tokenizer reads it
+// (Cmd_TokenizeString): past spaces and comments, quoted, or ended by a
+// space, a quote or a comment's start, so no spelling of a word can pass
+// for another
+static const char *CL_CommandWord( const char **text, char *word, int size ) {
+	const char	*s = *text;
+	int			length = 0;
+
+	// spaces and comments, as Cmd_TokenizeString skips them: // ends the
+	// line, and /* */ is passed over, its */ found from the / that opens it
+	for ( ;; ) {
+		while ( *s && *s <= ' ' ) {
+			s++;
+		}
+		if ( s[0] == '/' && s[1] == '/' ) {
+			s += strlen( s );
+		} else if ( s[0] == '/' && s[1] == '*' ) {
+			while ( *s && ( s[0] != '*' || s[1] != '/' ) ) {
+				s++;
+			}
+			s += *s ? 2 : 0;
+			continue;
+		}
+		break;
+	}
+	if ( *s == '"' ) {
+		for ( s++; *s && *s != '"'; s++ ) {
+			if ( length < size - 1 ) {
+				word[length++] = *s;
+			}
+		}
+		if ( *s ) {
+			s++;
+		}
+	} else {
+		for ( ; *s > ' ' && *s != '"' && !( s[0] == '/' && ( s[1] == '/' || s[1] == '*' ) ); s++ ) {
+			if ( length < size - 1 ) {
+				word[length++] = *s;
+			}
+		}
+	}
+	word[length] = '\0';
+	*text = s;
+	return word;
+}
+
+/*
+=================
+CL_SecretWithheld
+
+Whether a command for the server is a secret this connection mustn't
+carry (the handshake design, 14.5's client refusals), saying why. Every
+secret goes only over a sealed session, or to this process's own server:
+none to a private address's new key the player hasn't trusted;
+login_set only to a key the connect expected or remembered from before;
+login to any, the key said as it goes; claim, given as the server printed
+it, CODE@fingerprint, only to the key of that fingerprint, then
+remembered, and sent as "claim CODE" in rewritten, which is "" otherwise
+=================
+*/
+static qboolean CL_SecretWithheld( const char *text, char *rewritten, int size ) {
+	char		command[16], word[MAX_TOKEN_CHARS], rest[2], fingerprint[IDENT_FINGERPRINT_SIZE];
+	const char	*at;
+	qboolean	sealed = clc.netchan.sealed && !clc.netchan.failed;
+
+	rewritten[0] = '\0';
+	CL_CommandWord( &text, command, sizeof( command ) );
+	if ( clc.netchan.remoteAddress.type == NA_LOOPBACK ||
+		( Q_stricmp( command, "login" ) && Q_stricmp( command, "login_set" ) && Q_stricmp( command, "claim" ) ) ) {
+		return qfalse;
+	}
+	if ( !sealed ) {
+		Com_Printf( "%s goes only over a session with the server's key, and this connection has none, so it "
+			"wasn't sent.\n", command );
+		return qtrue;
+	}
+	Ident_Fingerprint( clc.serverKey, fingerprint );
+	// a private address's new key, which the player hasn't trusted
+	if ( clc.keyTrust == KEY_UNTRUSTED ) {
+		Com_Printf( "%s wasn't sent: this server's key, %s, isn't the one %s is remembered by. /acceptkey trusts "
+			"the new one.\n", command, fingerprint, clc.keyAddress );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "login_set" ) ) {
+		if ( clc.keyTrust != KEY_EXPECTED && clc.keyTrust != KEY_REMEMBERED ) {
+			Com_Printf( "login_set goes only to a server whose key a join code gave or an earlier join saw, and "
+				"this is the first join of this one, key %s, so it wasn't sent. It goes from the next join on.\n",
+				fingerprint );
+			return qtrue;
+		}
+		return qfalse;
+	}
+	if ( !Q_stricmp( command, "login" ) ) {
+		Com_Printf( "Your login goes to the server whose key is %s.\n", fingerprint );
+		return qfalse;
+	}
+	CL_CommandWord( &text, word, sizeof( word ) );
+	at = strchr( word, '@' );
+	if ( !at || CL_CommandWord( &text, rest, sizeof( rest ) )[0] ) {
+		Com_Printf( "usage: claim <code>@<fingerprint>, as the server printed it\n" );
+		return qtrue;
+	}
+	if ( Q_stricmp( at + 1, fingerprint ) ) {
+		Com_Printf( "This server's key is %s, not %s, so the claim wasn't sent.\n", fingerprint, at + 1 );
+		return qtrue;
+	}
+	Com_sprintf( rewritten, size, "claim %.*s", (int)( at - word ), word );
+	// the claimed key is the server's, as its owner's code says
+	if ( ( clc.keyAddress[0] || clc.keyName[0] ) && CL_RememberKey( clc.keyName, clc.keyAddress, clc.serverKey ) ) {
+		clc.keyTrust = KEY_REMEMBERED;
+	}
+	return qfalse;
+}
+
+/*
+=================
 CL_NewChallenge
 
 A client challenge, which the server's challengeResponse echoes so no one
@@ -2450,6 +2670,12 @@ static void CL_ConnectBegin( const char *server ) {
 	cls.reconnect.own = qfalse;
 	cl_connectedAt = cls.realtime;
 	cls.rejoin[0] = '\0';
+	// none dialed yet: set as the address resolves, or a candidate answers
+	Com_Memset( &clc.dialed, 0, sizeof( clc.dialed ) );
+	// and a key a stopped connect offered is the player's to accept
+	// before another connect, never after
+	cls.acceptAddress[0] = '\0';
+	cls.acceptName[0] = clc.keyName[0] = '\0';
 
 	// fire a message off to the motd server
 	CL_RequestMotd();
@@ -2511,9 +2737,8 @@ static void CL_ConnectSend( void ) {
 		// Set a client challenge number that ideally is mirrored back by the server.
 		clc.challenge = CL_NewChallenge();
 	}
-	// a new connect, with a nonce of its own for its key's proof
-	clc.clientNonceSet = qfalse;
-	clc.identityProved = qfalse;
+	// a new connect, with a handshake of its own
+	CL_SessionForget();
 	clc.challengeTag[0] = '\0';
 
 	Key_SetCatcher( 0 );
@@ -2522,6 +2747,40 @@ static void CL_ConnectSend( void ) {
 
 	// server connection string
 	Cvar_Set( "cl_currentServerAddress", clc.servername );
+}
+
+/*
+================
+CL_DialedName
+
+A connect's server as a name and port, lowercase, for the key it's
+remembered by (CL_RememberedKey); "" for one dialed by address, IPv4 or
+IPv6, or loopback's, whose address is the key's alone, and for a host of
+anything but letters, digits, '-' and '.', which a resolver may still
+have read an address from ("1.2.3.4\n5.6.7.8"): its line in
+known_servers.txt would be another's
+================
+*/
+static void CL_DialedName( const char *server, netadr_t adr, char *name, int size ) {
+	char		host[MAX_OSPATH];
+	const char	*colon = strchr( server, ':' ), *c;
+
+	name[0] = '\0';
+	// an IPv6 address, bracketed or bare, has more than one colon
+	if ( ( adr.type != NA_IP && adr.type != NA_IP6 ) || server[0] == '[' || ( colon && strchr( colon + 1, ':' ) ) ) {
+		return;
+	}
+	Q_strncpyz( host, server, colon ? MIN( (int)sizeof( host ), (int)( colon - server ) + 1 ) : (int)sizeof( host ) );
+	if ( !host[0] || !Q_stricmp( host, NET_AdrToString( adr ) ) || !Q_stricmp( host, "localhost" ) ) {
+		return;
+	}
+	for ( c = host; *c; c++ ) {
+		if ( !Q_isalpha( *c ) && !( *c >= '0' && *c <= '9' ) && *c != '-' && *c != '.' ) {
+			return;
+		}
+	}
+	Q_strlwr( host );
+	Com_sprintf( name, size, "%s:%i", host, (unsigned short)BigShort( adr.port ) );
 }
 
 /*
@@ -2573,6 +2832,8 @@ void CL_Connect_f( void ) {
 	Q_strncpyz( cl_reconnectAddress, NET_IsLocalAddress( clc.serverAddress ) ? "localhost" :
 		NET_AdrToStringwPort( clc.serverAddress ), sizeof( cl_reconnectAddress ) );
 	cl_reconnectRestricted = Cmd_IsRestricted();
+	clc.dialed = clc.serverAddress;
+	CL_DialedName( server, clc.serverAddress, clc.keyName, sizeof( clc.keyName ) );
 
 	Com_Printf( "%s resolved to %s\n", clc.servername, NET_AdrToStringwPort(clc.serverAddress));
 
@@ -3944,6 +4205,12 @@ void CL_CheckForResend( void ) {
 		return;
 	}
 
+	// the session's third message, until the server's first packet
+	if ( clc.state == CA_CONNECTED && clc.sessionPending ) {
+		CL_SessionResend();
+		return;
+	}
+
 	// resend if we haven't gotten a reply yet
 	if ( clc.state != CA_CONNECTING && clc.state != CA_CHALLENGING ) {
 		return;
@@ -3985,16 +4252,10 @@ void CL_CheckForResend( void ) {
 		// Without a game name the tokens would be read as one, so none are sent
 		tokens[0] = '\0';
 		if ( *com_gamename->string ) {
-			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", OFX_BUILD ) );
-			// this device's key is proved with a nonce of the connect's own,
-			// the same in every resend; without a key or the randomness for
-			// one, the server's ignores OFX_IDENTITY (identity.h). A connect
-			// expecting a server's key asks for its proof without one too
-			if ( !clc.clientNonceSet && ( Com_DeviceKey() || clc.expectedFingerprint[0] ) ) {
-				clc.clientNonceSet = Com_RandomSecret( clc.clientNonce, sizeof( clc.clientNonce ) );
-			}
-			if ( clc.clientNonceSet ) {
-				Ident_AppendHex( tokens, sizeof( tokens ), "ofc", clc.clientNonce );
+			// every extension rides on the session, which needs this
+			// device's key: without one, the connect is a classic one
+			if ( Com_DeviceKey() ) {
+				Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", OFX_BUILD ) );
 			}
 			// fragments the browser's connection carries whole
 			if ( clc.serverAddress.type == NA_WEB ) {
@@ -4017,7 +4278,14 @@ void CL_CheckForResend( void ) {
 		// sending back the challenge
 		port = Cvar_VariableValue ("net_qport");
 
-		Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), sizeof( info ) );
+		// a session's connect carries no userinfo but the keys the server
+		// needs before it can open anything: the rest goes sealed in the
+		// third message
+		if ( clc.ofx & OFX_SESSION ) {
+			info[0] = '\0';
+		} else {
+			Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), sizeof( info ) );
+		}
 		
 #ifdef LEGACY_PROTOCOL
 		if(com_legacyprotocol->integer == com_protocol->integer)
@@ -4041,24 +4309,24 @@ void CL_CheckForResend( void ) {
 			if ( clc.fragmentSize ) {
 				Com_AppendExtensionToken( tokens, sizeof( tokens ), "off", va( "%d", clc.fragmentSize ) );
 			}
-			if ( ( clc.ofx & OFX_IDENTITY ) && clc.clientNonceSet ) {
-				Ident_AppendHex( tokens, sizeof( tokens ), "ofc", clc.clientNonce );
-			}
 			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofv", clc.challengeTag );
-		}
-		// and the device's proof, once the server proved its own key
-		if ( clc.identityProved && Com_DeviceKey() ) {
-			byte	sig[IDENT_SIG_SIZE];
+			// the session's first message, this connect's ephemeral: the
+			// same in every resend, until message 2 comes
+			if ( clc.ofx & OFX_SESSION ) {
+				char	hex[SHA256_HEX_SIZE];
 
-			Ident_SignClient( Com_DeviceKey(), clc.serverKey, clc.serverNonce, clc.clientNonce, clc.challenge, sig );
-			Ident_AppendHex( tokens, sizeof( tokens ), "ofi", Com_DeviceKey()->pub );
-			Ident_AppendSig( tokens, sizeof( tokens ), sig );
+				Com_SHA256Hex( clc.sessionFirst, hex );
+				Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofe", hex );
+			}
 		}
 		Com_sprintf( data, sizeof(data), "connect \"%s\"%s", info, tokens );
 		NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) data, strlen ( data ) );
 		// the most current userinfo has been sent, so watch for any
-		// newer changes to userinfo variables
-		cvar_modifiedFlags &= ~CVAR_USERINFO;
+		// newer changes to userinfo variables; a session's goes in its third
+		// message (CL_SessionAnswer)
+		if ( !( clc.ofx & OFX_SESSION ) ) {
+			cvar_modifiedFlags &= ~CVAR_USERINFO;
+		}
 		break;
 
 	default:
@@ -4287,6 +4555,7 @@ when the one the connect carries has run out
 =================
 */
 static void CL_ChallengeAgain( void ) {
+	CL_SessionForget();
 	clc.state = CA_CONNECTING;
 	clc.challenge = CL_NewChallenge();
 	clc.connectTime = -99999;
@@ -4318,8 +4587,10 @@ static qboolean CL_RefusalEnds( netadr_t from, const char *message ) {
 	};
 	size_t	i;
 
-	if ( ( clc.state != CA_CONNECTING && clc.state != CA_CHALLENGING ) ||
-		!NET_CompareAdr( from, clc.serverAddress ) ) {
+	// a session takes a refusal until the server's first packet: after
+	// that, a server drops it over the connection
+	if ( ( clc.state != CA_CONNECTING && clc.state != CA_CHALLENGING &&
+		!( clc.state == CA_CONNECTED && clc.sessionPending ) ) || !NET_CompareAdr( from, clc.serverAddress ) ) {
 		return qfalse;
 	}
 	if ( NET_CompareAdr( from, cls.rconAddress ) && cls.realtime - cls.rconTime < RCON_REPLY_TIMEOUT ) {
@@ -4335,36 +4606,18 @@ static qboolean CL_RefusalEnds( netadr_t from, const char *message ) {
 
 /*
 =================
-CL_ServerManifest
-
-The content manifest connectResponse's tokens name; qfalse when they name
-none, or not as 64 lowercase hexadecimal digits, which leaves the
-connection as it is
-=================
-*/
-static qboolean CL_ServerManifest( byte sha256[SHA256_DIGEST_SIZE] ) {
-	extTokens_t	tokens;
-	const char	*value;
-
-	return !Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) &&
-		( value = Com_ExtensionValue( &tokens, "ofm" ) ) != NULL && Com_SHA256FromHex( value, sha256 );
-}
-
-/*
-=================
 CL_ServerExtensions
 
 The extension bits a server's tokens, the command's arguments from
-firstArg on, agree to; 0 when they agree to none. With key, they must also
-carry the connection's content key, which goes there. Malformed tokens, or
+firstArg on, agree to; 0 when they agree to none. Malformed tokens, or
 bits this client never asked for, and the connection is classic
 =================
 */
-static uint32_t CL_ServerExtensions( int firstArg, uint64_t *key ) {
+static uint32_t CL_ServerExtensions( int firstArg ) {
 	const char	*error;
 	uint32_t	bits;
 
-	error = Com_ParseExtensionBitsAndKey( Cmd_ArgsFrom( firstArg ), &bits, key );
+	error = Com_ParseExtensionBitsAndKey( Cmd_ArgsFrom( firstArg ), &bits, NULL );
 	if ( !error && ( bits & ~OFX_BUILD ) ) {
 		error = "ofx bits this client never asked for";
 	}
@@ -4436,113 +4689,370 @@ CL_ContentServer
 
 The server connected to, for the content cache, which keeps what each
 server sent (P473): the address and port the netchan talks to, never a
-name, which can point anywhere later; and with the key the server proved
-there, both, as a proof alone isn't tied to the connection that follows:
-a server can pass on another's challengeResponse. A web connection is
-none (Content_ServerOf), what its server sends kept for it alone
+name, which can point anywhere later; and with the key the session proved
+there, which ties it to this connection. A web connection is none
+(Content_ServerOf), what its server sends kept for it alone
 =================
 */
 static void CL_ContentServer( void ) {
 	contentServer_t	server;
 
-	Content_ServerOf( &server, &clc.netchan.remoteAddress, clc.identityProved ? clc.serverKey : NULL );
+	Content_ServerOf( &server, &clc.netchan.remoteAddress, clc.sessionProven ? clc.serverKey : NULL );
 	Content_Cache_SetServer( &server );
 }
 
 /*
 =================
-CL_ServerProof
+CL_CandidateChosen
 
-Whether challengeResponse's tokens prove the server's key over this
-connect's nonce (identity.h), keeping the key and the server's nonce for
-the connect's own proof. One that doesn't hold leaves the connection
-unproven
+A candidate connect's server, the address that answered: what goes by the
+server's address is redone for it, and reconnect goes there
 =================
 */
-static qboolean CL_ServerProof( netadr_t from ) {
-	extTokens_t	tokens;
-	byte		sig[IDENT_SIG_SIZE], known[IDENT_KEY_SIZE];
-	char		fingerprint[IDENT_FINGERPRINT_SIZE];
-	netadr_t	named = clc.numCandidates ? from : clc.serverAddress;
+static void CL_CandidateChosen( netadr_t from ) {
+	clc.numCandidates = 0;
+	clc.dialed = from;
+	clc.fastUntil = clc.giveUpAt = 0;
+	CL_ConnectTarget();
+	Cvar_Set( "cl_currentServerAddress", NET_AdrToStringwPort( from ) );
+	// a web connection's id can't be connected to again: reconnect
+	// joins again instead (CL_Reconnect_f)
+	if ( from.type != NA_WEB ) {
+		Q_strncpyz( cl_reconnectAddress, NET_AdrToStringwPort( from ), sizeof( cl_reconnectAddress ) );
+		Q_strncpyz( cl_reconnectExpected, clc.expectedFingerprint, sizeof( cl_reconnectExpected ) );
+		cl_reconnectRestricted = qfalse;
+	}
+}
 
-	if ( Com_ParseExtensionTokens( Cmd_ArgsFrom( 4 ), &tokens ) ||
-		!Ident_ReadServerProof( &tokens, clc.serverNonce, clc.serverKey, sig ) ) {
-		Com_DPrintf( "challengeResponse: no proof of the server's key\n" );
+/*
+=================
+CL_SessionStart
+
+The session's handshake, once challengeResponse agreed it: this device's
+static, a new ephemeral, the prologue (session.h), and message 1, which
+the connect carries. qfalse without the randomness for the ephemeral
+=================
+*/
+static qboolean CL_SessionStart( void ) {
+	static noiseStatic_t	deviceStatic;
+	static qboolean			deviceStaticReady;
+	byte					e[NOISE_DHLEN], prologue[SESSION_PROLOGUE_MAX];
+	int						prologueLength;
+
+	if ( !Com_DeviceKey() || !Com_RandomSecret( e, sizeof( e ) ) ) {
 		return qfalse;
 	}
-	if ( !Ident_CheckServer( clc.serverKey, clc.clientNonce, clc.serverNonce, sig ) ) {
-		Com_Printf( "The server's proof of its key doesn't hold: connecting without this device's.\n" );
+	if ( !deviceStaticReady ) {
+		Session_Static( Com_DeviceKey(), &deviceStatic );
+		deviceStaticReady = qtrue;
+	}
+	prologueLength = Session_Prologue( prologue, com_protocol->integer, com_gamename->string, clc.challenge,
+		clc.ofx, clc.fragmentSize, Cvar_VariableIntegerValue( "net_qport" ) );
+	Noise_Init( &clc.session, qtrue, prologue, prologueLength, &deviceStatic, e );
+	Ident_Wipe( e, sizeof( e ) );
+	return prologueLength && Noise_WriteMessage( &clc.session, NULL, 0, clc.sessionFirst, NOISE_DHLEN ) == NOISE_DHLEN;
+}
+
+// the address the player dialed, which a proxy's hand-off at
+// challengeResponse doesn't change (clc.dialed), or the server's
+static netadr_t CL_Dialed( void ) {
+	return clc.dialed.type != NA_BAD ? clc.dialed : clc.serverAddress;
+}
+
+/*
+=================
+CL_RememberedKey, CL_RememberKey
+
+The key a server is remembered by for this connect: by the name and port
+it was dialed by first, when it was dialed by name, then by its address,
+so whoever points the name elsewhere doesn't make a first join of it, and
+a reconnect by the address finds it too; qfalse for none, and byName says
+which held it. Remembered under both, each written only where it differs
+=================
+*/
+static qboolean CL_RememberedKey( const char *name, const char *address, byte key[IDENT_KEY_SIZE], qboolean *byName ) {
+	*byName = name[0] && Com_RememberedServerKey( name, key );
+	return *byName || ( address[0] && Com_RememberedServerKey( address, key ) );
+}
+
+static qboolean CL_RememberKey( const char *name, const char *address, const byte key[IDENT_KEY_SIZE] ) {
+	byte		known[IDENT_KEY_SIZE];
+	qboolean	ok = qtrue;
+
+	if ( name[0] && !( Com_RememberedServerKey( name, known ) && Ident_Equal32( known, key ) ) ) {
+		ok = Com_RememberServerKey( name, key );
+	}
+	if ( address[0] && !( Com_RememberedServerKey( address, known ) && Ident_Equal32( known, key ) ) ) {
+		ok = Com_RememberServerKey( address, key ) && ok;
+	}
+	return ok;
+}
+
+/*
+=================
+CL_AddressRepeats
+
+Whether an address is one many networks use, a private one (NET_IsPrivate),
+so the server there last time may well not be this one: a party's
+192.168.1.10 is someone else's at home. A public neighbor on one of this
+computer's subnets, or in its IPv6 /64, is one server anywhere
+=================
+*/
+static qboolean CL_AddressRepeats( netadr_t adr ) {
+	return NET_IsPrivate( &adr );
+}
+
+/*
+=================
+CL_SessionDowngraded
+
+A connect to an address remembered by a key, that goes on without the
+session: it stops, saying why, and /acceptkey forgets the key and
+connects plainly (the handshake design, 14.5's downgrade rule). When it's
+this device's fault, as it has no key or no randomness, there's nothing to
+accept, and the key stays
+=================
+*/
+static void CL_SessionDowngraded( netadr_t named, const char *why, qboolean devicesFault ) {
+	const char	*address, *name;
+	char		fingerprint[IDENT_FINGERPRINT_SIZE];
+	byte		known[IDENT_KEY_SIZE];
+	qboolean	byName;
+
+	if ( named.type == NA_WEB || named.type == NA_LOOPBACK ) {
+		return;
+	}
+	address = NET_AdrToStringwPort( named );
+	name = NET_CompareAdr( named, clc.dialed ) ? clc.keyName : "";
+	if ( !CL_RememberedKey( name, address, known, &byName ) ) {
+		return;
+	}
+	if ( byName ) {
+		address = name;
+	}
+	Ident_Fingerprint( known, fingerprint );
+	// this device's own fault, not the server's: nothing to accept
+	if ( !Com_DeviceKey() || devicesFault ) {
+		Com_Error( ERR_DROP, "This device has %s, so it can't join %s, which proved the key %s before, with the "
+			"session it needs.", Com_DeviceKey() ? "no randomness for the session" : "no key (" IDENT_DEVICE_FILE ")",
+			address, fingerprint );
+	}
+	// a private address, remembered by address alone, may be another
+	// network's server, a stock one too: it's joined plainly, said, and the
+	// key kept for the network that has it
+	if ( !byName && CL_AddressRepeats( named ) ) {
+		Com_Printf( "The server at %s, a private address, answered without the session, though one there proved the "
+			"key %s before, so it's joined plainly and that key is kept.\n", address, fingerprint );
+		return;
+	}
+	Q_strncpyz( cls.acceptAddress, NET_AdrToStringwPort( named ), sizeof( cls.acceptAddress ) );
+	Q_strncpyz( cls.acceptName, name, sizeof( cls.acceptName ) );
+	cls.acceptKeyless = qtrue;
+	Com_Error( ERR_DROP, "The server at %s %s, though it proved the key %s before. If its owner didn't move it to a "
+		"server that can't, this may be a different server. /acceptkey forgets the key and connects plainly.",
+		address, why, fingerprint );
+}
+
+/*
+=================
+CL_SessionKeyAccepted
+
+Whether the key a server proved at message 2 is the one this connect
+takes: the one it expects, when it expects one; otherwise this address's
+remembered key is compared, and a change said. A candidate connect's
+address that proved another key is dropped, and the rest are asked
+again; with none left the connect ends
+=================
+*/
+static qboolean CL_SessionKeyAccepted( netadr_t from, const byte key[IDENT_KEY_SIZE] ) {
+	char		fingerprint[IDENT_FINGERPRINT_SIZE], before[IDENT_FINGERPRINT_SIZE];
+	byte		known[IDENT_KEY_SIZE];
+	qboolean	byName;
+	netadr_t	named = clc.numCandidates ? from : CL_Dialed();
+	int			i;
+
+	Ident_Fingerprint( key, fingerprint );
+	// a web connection's id is no address to remember a key by
+	clc.keyAddress[0] = '\0';
+	if ( clc.expectedFingerprint[0] ) {
+		if ( !Q_stricmp( fingerprint, clc.expectedFingerprint ) ) {
+			if ( clc.numCandidates ) {
+				CL_CandidateChosen( from );
+			}
+			// it replaces the address's remembered key once the session is
+			// up (CL_SessionUp)
+			clc.keyTrust = KEY_EXPECTED;
+			if ( from.type != NA_WEB ) {
+				Q_strncpyz( clc.keyAddress, NET_AdrToStringwPort( from ), sizeof( clc.keyAddress ) );
+			}
+			return qtrue;
+		}
+		Com_Printf( "%s answered with key %s, not %s, so it isn't the server asked for.\n",
+			NET_AdrToStringwPort( from ), fingerprint, clc.expectedFingerprint );
+		for ( i = 0; i < clc.numCandidates; i++ ) {
+			if ( NET_CompareAdr( from, clc.candidates[i].adr ) ) {
+				clc.candidates[i] = clc.candidates[--clc.numCandidates];
+				break;
+			}
+		}
+		if ( !clc.numCandidates ) {
+			Com_Error( ERR_DROP, "No address answered as the server asked for, so the connect stopped." );
+		}
+		CL_ChallengeAgain();
 		return qfalse;
 	}
-	// another key than a connect expects (CL_ExtConnect) isn't kept for
-	// the address: CL_ExpectedServer passes its server over
-	Ident_Fingerprint( clc.serverKey, fingerprint );
-	if ( clc.expectedFingerprint[0] && Q_stricmp( fingerprint, clc.expectedFingerprint ) ) {
+	// otherwise the key the address is remembered by, the one the player
+	// connected to, as a reply from elsewhere is taken too (a proxy's
+	// hand-off), must be this one; with none, it's remembered once the
+	// session is up
+	if ( named.type == NA_WEB ) {
+		clc.keyTrust = KEY_FIRST_USE;
 		return qtrue;
 	}
-	// a different key than this address proved before is said, and the
-	// connection goes on: refusing it waits for the list of servers a
-	// player runs (server-hosting.md, step 5). The address is the one the
-	// player connected to, as a reply from elsewhere is taken too (a
-	// proxy's hand-off), which mustn't escape the check; for a candidate
-	// connect, the candidate that answered
-	if ( Com_KnownServerKey( NET_AdrToStringwPort( named ), clc.serverKey, known ) == KNOWN_CHANGED ) {
-		char	before[IDENT_FINGERPRINT_SIZE], now[IDENT_FINGERPRINT_SIZE];
-
-		Ident_Fingerprint( known, before );
-		Ident_Fingerprint( clc.serverKey, now );
-		Com_Printf( S_COLOR_YELLOW "WARNING: the server at %s has a different key than before: %s, not %s. If its "
-			"owner didn't make it a new one, it may not be the server you think it is.\n",
-			NET_AdrToStringwPort( named ), now, before );
+	Q_strncpyz( clc.keyAddress, NET_AdrToStringwPort( named ), sizeof( clc.keyAddress ) );
+	if ( !NET_CompareAdr( named, clc.dialed ) ) {
+		clc.keyName[0] = '\0';
 	}
+	if ( !CL_RememberedKey( clc.keyName, clc.keyAddress, known, &byName ) ) {
+		clc.keyTrust = KEY_FIRST_USE;
+		return qtrue;
+	}
+	if ( Ident_Equal32( known, key ) ) {
+		clc.keyTrust = KEY_REMEMBERED;
+		return qtrue;
+	}
+	Ident_Fingerprint( known, before );
+	// the player may trust it with /acceptkey
+	Q_strncpyz( cls.acceptAddress, clc.keyAddress, sizeof( cls.acceptAddress ) );
+	Q_strncpyz( cls.acceptName, clc.keyName, sizeof( cls.acceptName ) );
+	Com_Memcpy( cls.acceptKey, key, IDENT_KEY_SIZE );
+	cls.acceptKeyless = qfalse;
+	// a private address, remembered by address alone, may be another
+	// network's server: it's joined, sealed with the key that answered, but
+	// the connection carries no secret (CL_SecretWithheld), and the address
+	// stays remembered by its key until the player trusts the new one
+	if ( !byName && CL_AddressRepeats( named ) ) {
+		Com_Printf( "The server at %s, a private address, has a different key than last time (%s, was %s). It's "
+			"joined, but your server password, login, login_set and claim aren't sent to it, and the address keeps "
+			"its key. /acceptkey trusts the new one.\n", clc.keyAddress, fingerprint, before );
+		clc.keyTrust = KEY_UNTRUSTED;
+		return qtrue;
+	}
+	// another stops the connect, until the player trusts it
+	Com_Error( ERR_DROP, "The server at %s has a new key (%s, was %s). If its owner didn't reinstall or replace it, "
+		"this may be a different server. /acceptkey trusts the new key.", byName ? clc.keyName : clc.keyAddress,
+		fingerprint, before );
+	return qfalse;
+}
+
+/*
+=================
+CL_SessionAnswer
+
+connectResponse's session part, message 2: read on the handshake, which
+a forgery leaves as it was; the server's key checked as its static and as
+the one this connect takes; then message 3, with this device's key and
+the userinfo, sent at once and again until the server's first packet
+(CL_SessionResend), and the transport's keys. qfalse for an answer to
+ignore
+=================
+*/
+static qboolean CL_SessionAnswer( netadr_t from, msg_t *msg ) {
+	const byte	*blob = msg->data + msg->readcount;
+	int			length = msg->cursize - msg->readcount, read, written;
+	byte		payload[SESSION_SERVER_MAX], finish[SESSION_CLIENT_MAX], key[IDENT_KEY_SIZE];
+	byte		manifest[SHA256_DIGEST_SIZE];
+	char		info[MAX_INFO_STRING];
+	const char	*line;
+	uint64_t	ofk;
+	qboolean	hasManifest;
+	msg_t		out;
+	// a copy, kept only once every check passes, so a message 2 that opens
+	// but doesn't hold leaves the handshake for the server's own; in
+	// cl_sessionCopy, which CL_SessionForget wipes too, for a check that
+	// ends the connect with an error
+	noiseHandshake_t	*hs = &cl_sessionCopy;
+
+	*hs = clc.session;
+	if ( length < 1 || blob[0] != SESSION_VERSION ) {
+		Com_DPrintf( "connectResponse without the session's answer. Ignored.\n" );
+		Noise_Wipe( hs );
+		return qfalse;
+	}
+	read = Noise_ReadMessage( hs, blob + 1, length - 1, payload, sizeof( payload ) );
+	if ( read < 0 || !Session_ReadServerPayload( payload, read, key, &ofk, manifest, &hasManifest ) ||
+		!Session_KeyIsStatic( key, Noise_RemoteStatic( hs ) ) ) {
+		Com_DPrintf( "connectResponse whose session doesn't open. Ignored.\n" );
+		Noise_Wipe( hs );
+		return qfalse;
+	}
+	if ( !CL_SessionKeyAccepted( from, key ) ) {
+		Noise_Wipe( hs );
+		return qfalse;
+	}
+	Com_Memcpy( clc.serverKey, key, IDENT_KEY_SIZE );
+	clc.sessionProven = qtrue;
+	clc.contentKey = ofk;
+	clc.contentManifestKnown = hasManifest;
+	if ( hasManifest ) {
+		Com_Memcpy( clc.contentManifest, manifest, sizeof( clc.contentManifest ) );
+	}
+
+	// message 3, after its line: the userinfo goes here, sealed, but for
+	// the server's password when it's a private address's new key, which
+	// may be another network's server
+	Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), sizeof( info ) );
+	if ( clc.keyTrust == KEY_UNTRUSTED ) {
+		Info_RemoveKey( info, "password" );
+	}
+	MSG_InitOOB( &out, clc.sessionFinish, sizeof( clc.sessionFinish ) );
+	MSG_WriteLong( &out, -1 );
+	line = va( "session %d %d\n", clc.challenge, Cvar_VariableIntegerValue( "net_qport" ) );
+	MSG_WriteData( &out, line, (int)strlen( line ) );
+	MSG_WriteByte( &out, SESSION_VERSION );
+	written = Noise_WriteMessage( hs, finish, Session_WriteClientPayload( finish, Com_DeviceKey()->pub, info ),
+		out.data + out.cursize, out.maxsize - out.cursize );
+	Ident_Wipe( finish, sizeof( finish ) );
+	Ident_Wipe( info, sizeof( info ) );
+	if ( written < 0 || !Noise_Split( hs, clc.sendKey, clc.receiveKey ) ) {
+		Com_Printf( "The session's last message couldn't be made. Ignored.\n" );
+		Noise_Wipe( hs );
+		return qfalse;
+	}
+	clc.sessionFinishLength = out.cursize + written;
+	NET_SendPacket( NS_CLIENT, clc.sessionFinishLength, clc.sessionFinish, from );
+	clc.sessionFinishSends = 1;
+	clc.sessionFinishAt = cls.realtime;
+	clc.sessionPending = qtrue;
+	// the most current userinfo has been sent, so watch for any newer
+	// changes to userinfo variables
+	cvar_modifiedFlags &= ~CVAR_USERINFO;
+	clc.session = *hs;
+	Noise_Wipe( hs );
 	return qtrue;
 }
 
 /*
 =================
-CL_ExpectedServer
+CL_SessionResend
 
-Whether a challengeResponse is from the server CL_ExtConnect expects, by
-the key it proved. One that proves another key has its address dropped
-from the candidates, and with none left the connect ends; one that
-proves none is only passed over
+Message 3 again, every RETRANSMIT_TIMEOUT until the server's first packet,
+three times at most; then the handshake starts over, with a new challenge
+and a new ephemeral (the handshake design, 14.3)
 =================
 */
-static qboolean CL_ExpectedServer( netadr_t from, qboolean proved ) {
-	char	fingerprint[IDENT_FINGERPRINT_SIZE];
-	int		i;
-
-	if ( proved ) {
-		Ident_Fingerprint( clc.serverKey, fingerprint );
-		if ( !Q_stricmp( fingerprint, clc.expectedFingerprint ) ) {
-			return qtrue;
-		}
-		Com_Printf( "%s answered with key %s, not %s, so it isn't the server asked for.\n",
-			NET_AdrToStringwPort( from ), fingerprint, clc.expectedFingerprint );
-	} else {
-		// a server short of time to sign, under a flood of challenges,
-		// answers unproven: its address stays, and the next answer may prove.
-		// A reconnect that wants the join's key says it once, as it may be
-		// one that never will (a stock server); a join waits on quietly
-		if ( !clc.keyedReconnect ) {
-			Com_DPrintf( "%s answered without proving a key, passed over\n", NET_AdrToStringwPort( from ) );
-		} else if ( !clc.unprovenSaid ) {
-			Com_Printf( "%s answers without proving a key, so it isn't known to be the server asked for. Waiting for "
-				"one that proves %s.\n", NET_AdrToStringwPort( from ), clc.expectedFingerprint );
-			clc.unprovenSaid = qtrue;
-		}
-		return qfalse;
+static void CL_SessionResend( void ) {
+	if ( cls.realtime - clc.sessionFinishAt < RETRANSMIT_TIMEOUT ) {
+		return;
 	}
-	for ( i = 0; i < clc.numCandidates; i++ ) {
-		if ( NET_CompareAdr( from, clc.candidates[i].adr ) ) {
-			clc.candidates[i] = clc.candidates[--clc.numCandidates];
-			break;
-		}
+	if ( clc.sessionFinishSends >= 3 ) {
+		Com_Printf( "The server didn't answer the session's last message, so the connect starts again.\n" );
+		CL_ChallengeAgain();
+		return;
 	}
-	if ( !clc.numCandidates ) {
-		Com_Error( ERR_DROP, "No address answered as the server asked for, so the connect stopped." );
-	}
-	return qfalse;
+	NET_SendPacket( NS_CLIENT, clc.sessionFinishLength, clc.sessionFinish, clc.serverAddress );
+	clc.sessionFinishSends++;
+	clc.sessionFinishAt = cls.realtime;
 }
 
 /*
@@ -4573,7 +5083,6 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	{
 		char *strver;
 		uint32_t	ofx = 0;
-		qboolean	proved;
 #ifdef LEGACY_PROTOCOL
 		qboolean	compat = clc.compat;
 #endif
@@ -4648,14 +5157,35 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 #ifdef LEGACY_PROTOCOL
 		if ( !clc.compat )
 #endif
-			ofx = CL_ServerExtensions( 4, NULL );
+			ofx = CL_ServerExtensions( 4 );
 
-		// the server's key, if it proved it: then this device proves its
-		// own. A connect expecting a key passes over another server's
-		// answer, or one that proves none, before it changes anything, so
-		// the expected server's answer still finds the challenge it sent
-		proved = ( ofx & OFX_IDENTITY ) && clc.clientNonceSet && CL_ServerProof( from );
-		if ( clc.expectedFingerprint[0] && !CL_ExpectedServer( from, proved ) ) {
+		// every extension rides on the session, which proves the server's
+		// key at message 2. A connect expecting a key passes over an answer
+		// that can't, before it changes anything, so the expected server's
+		// answer still finds the challenge it sent
+		if ( !( ofx & OFX_SESSION ) ) {
+			ofx = 0;
+		}
+		// an address remembered by a key, that answers without the
+		// session, stops the connect: /acceptkey forgets the key and
+		// connects plainly. A connect expecting a key passes over it
+		if ( !ofx && !clc.expectedFingerprint[0] ) {
+			CL_SessionDowngraded( clc.numCandidates ? from : CL_Dialed(), "answered without the session", qfalse );
+		} else if ( !ofx ) {
+			if ( !Com_DeviceKey() ) {
+				Com_Error( ERR_DROP, "This device has no key (%s), so it can't join a server by its key.",
+					IDENT_DEVICE_FILE );
+			}
+			// a reconnect that wants the join's key says it once, as it may
+			// be one that never will (a stock server); a join waits on
+			// quietly
+			if ( !clc.keyedReconnect ) {
+				Com_DPrintf( "%s answered without the session, passed over\n", NET_AdrToStringwPort( from ) );
+			} else if ( !clc.unprovenSaid ) {
+				Com_Printf( "%s answers without proving a key, so it isn't known to be the server asked for. Waiting "
+					"for one that proves %s.\n", NET_AdrToStringwPort( from ), clc.expectedFingerprint );
+				clc.unprovenSaid = qtrue;
+			}
 #ifdef LEGACY_PROTOCOL
 			// nor the legacy protocol it took for: the expected server's
 			// answer is read as its own
@@ -4664,7 +5194,6 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			return;
 		}
 		clc.ofx = ofx;
-		clc.identityProved = proved;
 		clc.fragmentSize = CL_ServerFragmentSize();
 		CL_ChallengeTag();
 
@@ -4681,22 +5210,23 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		clc.connectTime = -99999;
 
 		// take this address as the new server address.  This allows
-		// a server proxy to hand off connections to multiple servers
+		// a server proxy to hand off connections to multiple servers. The
+		// key's still looked up by the one dialed (clc.dialed)
 		clc.serverAddress = from;
-		// a candidate connect has its server: what goes by the server's
-		// address is redone for it, and reconnect goes there
-		if ( clc.numCandidates ) {
-			clc.numCandidates = 0;
-			clc.fastUntil = clc.giveUpAt = 0;
-			CL_ConnectTarget();
-			Cvar_Set( "cl_currentServerAddress", NET_AdrToStringwPort( from ) );
-			// a web connection's id can't be connected to again: reconnect
-			// joins again instead (CL_Reconnect_f)
-			if ( from.type != NA_WEB ) {
-				Q_strncpyz( cl_reconnectAddress, NET_AdrToStringwPort( from ), sizeof( cl_reconnectAddress ) );
-				Q_strncpyz( cl_reconnectExpected, clc.expectedFingerprint, sizeof( cl_reconnectExpected ) );
-				cl_reconnectRestricted = qfalse;
+		// the session's handshake, its first message the connect's; without
+		// the randomness for it, a classic connect, which a connect
+		// expecting a key can't take
+		if ( clc.ofx && !CL_SessionStart() ) {
+			clc.ofx = 0;
+			if ( clc.expectedFingerprint[0] ) {
+				Com_Error( ERR_DROP, "This device has no randomness for the session, so it can't join a server by its key." );
 			}
+			CL_SessionDowngraded( clc.numCandidates ? from : CL_Dialed(), NULL, qtrue );
+		}
+		// a candidate connect has its server, unless it expects a key: then
+		// the others stay until message 2 proves it (CL_SessionKeyAccepted)
+		if ( clc.numCandidates && !clc.expectedFingerprint[0] ) {
+			CL_CandidateChosen( from );
 		}
 		Com_DPrintf ("challengeResponse: %d\n", clc.challenge);
 		return;
@@ -4704,9 +5234,6 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 
 	// server connection
 	if ( !Q_stricmp(c, "connectResponse") ) {
-		uint32_t	ofx;
-		uint64_t	key = 0;
-
 		if ( clc.state >= CA_CONNECTED ) {
 			Com_Printf ("Dup connect received. Ignored.\n");
 			return;
@@ -4740,15 +5267,10 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 				return;
 			}
 
-			// the extensions agreed on challengeResponse, confirmed with
-			// the connection's content key
-			ofx = CL_ServerExtensions( 2, &key );
-			if ( ofx != clc.ofx ) {
-				Com_DPrintf( "Ignored the server's extension tokens: ofx %x after %x\n", ofx, clc.ofx );
-				clc.ofx = 0;
-			} else if ( ofx ) {
-				clc.contentKey = key;
-				clc.contentManifestKnown = CL_ServerManifest( clc.contentManifest );
+			// the session's message 2, which brings the server's key, the
+			// content key and the manifest; a classic connection has none
+			if ( clc.ofx && !CL_SessionAnswer( from, msg ) ) {
+				return;
 			}
 		}
 #ifdef LEGACY_PROTOCOL
@@ -4771,6 +5293,13 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 		// what challengeResponse agreed, as the server's netchan splits
 		if ( clc.fragmentSize ) {
 			Netchan_SetFragmentSize( &clc.netchan, clc.fragmentSize );
+		}
+		// the session's keys: every datagram sealed from here on (14.6),
+		// the netchan's copy alone kept
+		if ( clc.sessionProven ) {
+			Netchan_SetKeys( &clc.netchan, clc.sendKey, clc.receiveKey );
+			Ident_Wipe( clc.sendKey, sizeof( clc.sendKey ) );
+			Ident_Wipe( clc.receiveKey, sizeof( clc.receiveKey ) );
 		}
 
 		clc.state = CA_CONNECTED;
@@ -4880,7 +5409,13 @@ A packet has arrived from the main event loop
 void CL_PacketEvent( netadr_t from, msg_t *msg ) {
 	int		headerBytes;
 
-	clc.lastPacketTime = cls.realtime;
+	// what keeps the connection from timing out: on a sealed one only a
+	// datagram that opens (below), or a new chunk of the fast download for a
+	// transfer this client asked for (CL_ContentData), never any packet
+	// at all (the handshake design, 14.6)
+	if ( !clc.netchan.sealed ) {
+		clc.lastPacketTime = cls.realtime;
+	}
 
 	// the fast download's datagrams, which no command parser reads
 	if ( OFD_IsContent( msg->data, msg->cursize ) ) {
@@ -4915,6 +5450,12 @@ void CL_PacketEvent( netadr_t from, msg_t *msg ) {
 	if (!CL_Netchan_Process( &clc.netchan, msg) ) {
 		return;		// out of order, duplicated, etc
 	}
+	// the server's first packet: the session's third message got there,
+	// and the session is up
+	if ( clc.sessionPending ) {
+		clc.sessionPending = qfalse;
+		CL_SessionUp();
+	}
 
 	// the header is different lengths for reliable and unreliable messages
 	headerBytes = msg->readcount;
@@ -4943,6 +5484,12 @@ CL_CheckTimeout
 ==================
 */
 void CL_CheckTimeout( void ) {
+	// a sealed connection that can't seal its next datagram ends: past
+	// the guard or the cap (Netchan_Send)
+	if ( clc.state >= CA_CONNECTED && clc.netchan.failed ) {
+		Com_Error( ERR_DROP, "The connection can't seal more datagrams, so it ended. Connect again." );
+	}
+
 	//
 	// check timeout
 	//
@@ -6160,6 +6707,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand( "rtc_connect", CL_RtcConnect_f );
 #endif
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f);
+	Cmd_AddCommand( "acceptkey", CL_AcceptKey_f );
 	Cmd_AddCommand ("localservers", CL_LocalServers_f);
 	Cmd_AddCommand ("globalservers", CL_GlobalServers_f);
 	Cmd_AddCommand ("recentservers_clear", CL_RecentServersClear_f);
@@ -6249,6 +6797,7 @@ void CL_Shutdown(char *finalmsg, qboolean disconnect, qboolean quit)
 	Cmd_RemoveCommand( "rtc_connect" );
 #endif
 	Cmd_RemoveCommand ("reconnect");
+	Cmd_RemoveCommand( "acceptkey" );
 	Cmd_RemoveCommand ("localservers");
 	Cmd_RemoveCommand ("globalservers");
 	Cmd_RemoveCommand ("recentservers_clear");

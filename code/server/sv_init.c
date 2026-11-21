@@ -403,7 +403,8 @@ void SV_ChangeMaxClients( void ) {
 		}
 	}
 
-	// free old clients arrays
+	// free old clients arrays, wiped of their sessions' keys
+	Com_Memset( svs.clients, 0, oldMaxClients * sizeof( client_t ) );
 	Z_Free( svs.clients );
 
 	// allocate new clients
@@ -425,6 +426,7 @@ void SV_ChangeMaxClients( void ) {
 	}
 
 	// free the old clients on the hunk
+	Com_Memset( oldClients, 0, count * sizeof( client_t ) );
 	Hunk_FreeTempMemory( oldClients );
 	
 	// allocate new snapshot entities
@@ -1765,6 +1767,7 @@ void SV_Shutdown( char *finalmsg ) {
 	// free current level
 	SV_ClearServer();
 	SV_ContentShutdown();
+	SV_SessionShutdown();
 	// and the paks it kept from clients, as a listen server's player
 	// shares its files and plays on after it
 	FS_ExcludePaks( "" );
@@ -1774,8 +1777,10 @@ void SV_Shutdown( char *finalmsg ) {
 	{
 		int index;
 		
-		for(index = 0; index < svs.maxclients; index++)
+		for(index = 0; index < svs.maxclients; index++) {
 			SV_FreeClient(&svs.clients[index]);
+			Netchan_WipeKeys(&svs.clients[index].netchan);
+		}
 		
 		Z_Free(svs.clients);
 	}

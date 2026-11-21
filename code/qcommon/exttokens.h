@@ -48,8 +48,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // the capability bits, sent as ofx in lowercase hex. Each is assigned in
 // the commit that first uses it and never reused
 #define OFX_CONTENT		0x00000001u	// content protocol version 1
-#define OFX_IDENTITY	0x00000002u	// keys proved in the handshake (identity.h)
-#define OFX_BUILD		( OFX_CONTENT | OFX_IDENTITY )	// the bits this build has
+// 0x00000002u was the first key proof, deleted before a release: never reused
+#define OFX_SESSION		0x00000004u	// the session's handshake and seal (session.h)
+#define OFX_BUILD		( OFX_CONTENT | OFX_SESSION )	// the bits this build has
 
 // the digits of ofk: a connection's 64-bit content key in lowercase hex,
 // the most significant first, as the content datagrams' key field holds

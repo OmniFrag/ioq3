@@ -208,6 +208,7 @@ typedef enum {
 netScope_t	NET_AdrScope( const netadr_t *adr );
 qboolean	NET_AdrReachableFrom( const netadr_t *adr, netScope_t from );
 qboolean	NET_IsLANv4( const netadr_t *adr );
+qboolean	NET_IsPrivate( const netadr_t *adr );
 qboolean	NET_IsSharedv4( const netadr_t *adr );
 // a subnet of one of this computer's interfaces, its first bits bits base's
 typedef struct {
@@ -254,6 +255,11 @@ qboolean	NET_SleepUntil( int64_t ns );
 Netchan handles packet fragmentation and out of order / duplicate suppression
 */
 
+#define	NETCHAN_KEYLEN		32		// a session's transport key (NOISE_KEYLEN)
+#define	NETCHAN_TAGLEN		16		// what sealing adds to a datagram
+// the sequence a sealed channel stops at, so its nonces never repeat
+#define	NETCHAN_SEALED_CAP	( 1 << 30 )
+
 typedef struct {
 	netsrc_t	sock;
 
@@ -284,6 +290,15 @@ typedef struct {
 	int		lastSentTime;
 	int		lastSentSize;
 
+	// with the session's keys (Netchan_SetKeys), every datagram sealed, its
+	// header the associated data (the handshake design, 14.6), and none
+	// sent in clear; once wiped, or past the guard or the cap, nothing is
+	// sent at all (failed). The last sequence and fragment start sealed,
+	// which the next must pass
+	qboolean	sealed, failed;
+	byte		sendKey[NETCHAN_KEYLEN], receiveKey[NETCHAN_KEYLEN];
+	int			sealedSequence, sealedStart;
+
 #ifdef LEGACY_PROTOCOL
 	qboolean	compat;
 #endif
@@ -297,6 +312,11 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data );
 void Netchan_TransmitNextFragment( netchan_t *chan );
 
 qboolean Netchan_Process( netchan_t *chan, msg_t *msg );
+// the session's keys, this side's to send and to receive with: from then on
+// the channel seals each datagram and takes only sealed ones. Wiping them
+// leaves the channel sending nothing
+void Netchan_SetKeys( netchan_t *chan, const byte sendKey[NETCHAN_KEYLEN], const byte receiveKey[NETCHAN_KEYLEN] );
+void Netchan_WipeKeys( netchan_t *chan );
 
 
 /*

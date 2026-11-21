@@ -46,6 +46,7 @@ set(COMMON_SOURCES
     ${SOURCE_DIR}/qcommon/huffman.c
     ${SOURCE_DIR}/qcommon/q_math.c
     ${SOURCE_DIR}/qcommon/q_shared.c
+    ${SOURCE_DIR}/qcommon/session.c
     ${SOURCE_DIR}/qcommon/sha256.c
     ${SOURCE_DIR}/qcommon/unzip.c
     ${SOURCE_DIR}/qcommon/ioapi.c
@@ -92,6 +93,7 @@ set(SERVER_SOURCES
     ${SOURCE_DIR}/server/sv_init.c
     ${SOURCE_DIR}/server/sv_main.c
     ${SOURCE_DIR}/server/sv_net_chan.c
+    ${SOURCE_DIR}/server/sv_session.c
     ${SOURCE_DIR}/server/sv_snapshot.c
     ${SOURCE_DIR}/server/sv_transfer.c
     ${SOURCE_DIR}/server/sv_world.c

@@ -883,6 +883,10 @@ static qboolean CL_ContentData( clcSlot_t *s, const ofdData_t *data, byte flags,
 	}
 	CL_ContentSetBit( s->have, data->chunkIndex, qtrue );
 	s->chunks++;
+	// a new chunk of a transfer this client asked for keeps a sealed
+	// connection from timing out, as a datagram that opens does; never a
+	// copy, which anyone who saw it could send again
+	clc.lastPacketTime = cls.realtime;
 	if ( s->fetch >= 0 ) {
 		// in a race, the site's bytes show
 		if ( clContent.web.fetch != s->fetch ) {

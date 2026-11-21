@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "exttokens.h"
+#include "noise.h"
+#include "../thirdparty/monocypher-4.0.2/monocypher.h"
 
 /*
 
@@ -122,6 +124,62 @@ void Netchan_SetFragmentSize( netchan_t *chan, int size ) {
 }
 
 /*
+==============
+Netchan_SetKeys, Netchan_WipeKeys
+
+A session's transport keys (Noise_Split), set once the channel is: every
+datagram is sealed from then on, and only sealed ones are taken. Wiped,
+the channel sends nothing more
+==============
+*/
+void Netchan_SetKeys( netchan_t *chan, const byte sendKey[NETCHAN_KEYLEN], const byte receiveKey[NETCHAN_KEYLEN] ) {
+	Com_Memcpy( chan->sendKey, sendKey, NETCHAN_KEYLEN );
+	Com_Memcpy( chan->receiveKey, receiveKey, NETCHAN_KEYLEN );
+	chan->sealed = qtrue;
+	chan->failed = qfalse;
+	chan->sealedSequence = chan->sealedStart = -1;
+}
+
+void Netchan_WipeKeys( netchan_t *chan ) {
+	if ( chan->sealed ) {
+		crypto_wipe( chan->sendKey, sizeof( chan->sendKey ) );
+		crypto_wipe( chan->receiveKey, sizeof( chan->receiveKey ) );
+		chan->failed = qtrue;
+	}
+}
+
+/*
+==============
+Netchan_Send
+
+A datagram written, its first headerLength bytes the header: sealed on a
+sealed channel, the header the associated data and n the sequence word as
+sent above the fragment start (the handshake design, 14.6), then sent.
+The guard, a sequence and fragment start not past the last sealed, and the
+cap fail the channel instead, which its owner drops; a failed one sends
+nothing
+==============
+*/
+static void Netchan_Send( netchan_t *chan, msg_t *send, int headerLength, int sequenceWord, int fragmentStart ) {
+	if ( chan->sealed ) {
+		int		sequence = sequenceWord & ~FRAGMENT_BIT;
+
+		if ( chan->failed || sequence >= NETCHAN_SEALED_CAP || sequence < chan->sealedSequence ||
+			( sequence == chan->sealedSequence && fragmentStart <= chan->sealedStart ) ||
+			send->cursize + NETCHAN_TAGLEN > send->maxsize ||
+			!Noise_Seal( chan->sendKey, Noise_DatagramNonce( sequenceWord, fragmentStart ), send->data, headerLength,
+				send->data + headerLength, send->cursize - headerLength, send->data + headerLength ) ) {
+			chan->failed = qtrue;
+			return;
+		}
+		chan->sealedSequence = sequence;
+		chan->sealedStart = fragmentStart;
+		send->cursize += NETCHAN_TAGLEN;
+	}
+	NET_SendPacket( chan->sock, send->cursize, send->data, chan->remoteAddress );
+}
+
+/*
 =================
 Netchan_TransmitNextFragment
 
@@ -133,6 +191,7 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 	byte		send_buf[MAX_PACKETLEN];
 	int			fragmentLength;
 	int			outgoingSequence;
+	int			headerLength;
 
 	// write the packet header
 	MSG_InitOOB (&send, send_buf, sizeof(send_buf));				// <-- only do the oob here
@@ -158,10 +217,11 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 
 	MSG_WriteShort( &send, chan->unsentFragmentStart );
 	MSG_WriteShort( &send, fragmentLength );
+	headerLength = send.cursize;
 	MSG_WriteData( &send, chan->unsentBuffer + chan->unsentFragmentStart, fragmentLength );
 
 	// send the datagram
-	NET_SendPacket(chan->sock, send.cursize, send.data, chan->remoteAddress);
+	Netchan_Send( chan, &send, headerLength, outgoingSequence, chan->unsentFragmentStart );
 	
 	// Store send time and size of this packet for rate control
 	chan->lastSentTime = Sys_Milliseconds();
@@ -199,6 +259,7 @@ A 0 length will still generate a packet.
 void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 	msg_t		send;
 	byte		send_buf[MAX_PACKETLEN];
+	int			headerLength;
 
 	if ( length > MAX_MSGLEN ) {
 		Com_Error( ERR_DROP, "Netchan_Transmit: length = %i", length );
@@ -231,12 +292,12 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 #endif
 		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
 
-	chan->outgoingSequence++;
-
+	headerLength = send.cursize;
 	MSG_WriteData( &send, data, length );
 
 	// send the datagram
-	NET_SendPacket( chan->sock, send.cursize, send.data, chan->remoteAddress );
+	Netchan_Send( chan, &send, headerLength, chan->outgoingSequence, 0 );
+	chan->outgoingSequence++;
 
 	// Store send time and size of this packet for rate control
 	chan->lastSentTime = Sys_Milliseconds();
@@ -264,7 +325,7 @@ copied out.
 =================
 */
 qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
-	int			sequence;
+	int			sequence, sequenceWord;
 	int			fragmentStart, fragmentLength;
 	qboolean	fragmented;
 
@@ -273,7 +334,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 
 	// get sequence numbers		
 	MSG_BeginReadingOOB( msg );
-	sequence = MSG_ReadLong( msg );
+	sequence = sequenceWord = MSG_ReadLong( msg );
 
 	// check for fragment information
 	if ( sequence & FRAGMENT_BIT ) {
@@ -306,6 +367,27 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	} else {
 		fragmentStart = 0;		// stop warning message
 		fragmentLength = 0;
+	}
+
+	// a sealed channel's datagram opens before anything of it is used, and
+	// is checked only for its length and its fragment filling it before
+	// then, and dropped unopened if it's out of order or a duplicate, which
+	// changes nothing; it opens in place
+	if ( chan->sealed && sequence <= chan->incomingSequence ) {
+		return qfalse;
+	}
+	if ( chan->sealed ) {
+		int		headerLength = msg->readcount, sealedLength = msg->cursize - msg->readcount;
+
+		if ( sealedLength < NETCHAN_TAGLEN || ( fragmented && fragmentLength != sealedLength - NETCHAN_TAGLEN ) ||
+			!Noise_Open( chan->receiveKey, Noise_DatagramNonce( sequenceWord, fragmentStart ), msg->data, headerLength,
+				msg->data + headerLength, sealedLength, msg->data + headerLength ) ) {
+			if ( showdrop->integer || showpackets->integer ) {
+				Com_Printf( "%s:a datagram that doesn't open\n", NET_AdrToString( chan->remoteAddress ) );
+			}
+			return qfalse;
+		}
+		msg->cursize -= NETCHAN_TAGLEN;
 	}
 
 	if ( showpackets->integer ) {

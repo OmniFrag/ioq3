@@ -22,7 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // sv_client.c -- server code for dealing with clients
 
 #include "server.h"
-#include "../qcommon/identity.h"
+#include "../qcommon/session.h"
 #include "../thirdparty/monocypher-4.0.2/monocypher.h"
 #include "../thirdparty/monocypher-4.0.2/monocypher-ed25519.h"
 
@@ -78,13 +78,11 @@ SV_CHALLENGE_SLOT ms and the slot after it, so a challenge holds for 16 to
 from forged addresses fills no table, and the challenge still shows that
 a connect comes from the address it was sent to.
 
-What else the challenge agreed, the extensions (ofx) and with OFX_IDENTITY
-the client's nonce (ofc), the client repeats on its connect, with the off
-it asked for and ofv, a MAC of them on the challenge that challengeResponse
-sent (docs/contracts.md). The server's nonce (ofn) and the connection's
-content key are MACs of the same terms, so every connect on one challenge
-is sent the same key. A connect without ofv, a stock client's or an older
-OmniFrag client's, or one whose terms don't match it, connects plainly.
+What else the challenge agreed, the extensions (ofx), the client repeats
+on its connect, with the off it asked for and ofv, a MAC of them on the
+challenge that challengeResponse sent (docs/contracts.md). A connect
+without ofv, a stock client's, or one whose terms don't match it, connects
+plainly; one that carries the session's first message then is dropped.
 =================
 */
 
@@ -112,14 +110,7 @@ typedef struct {
 	int			secret;				// the one it was made with: its slot's parity
 	uint32_t	ofx;				// the extensions agreed (exttokens.h), 0 for none
 	int			fragmentSize;		// the client's off, which challengeResponse repeats, 0 for none
-	// with OFX_IDENTITY, the nonces the proofs sign (identity.h): the
-	// client's ofc, and this server's ofn
-	byte		clientNonce[IDENT_KEY_SIZE];
-	byte		serverNonce[IDENT_KEY_SIZE];
-	// from the terms (SV_ChallengeTerms): ofv, which binds them, and the
-	// content key, so each connect on the challenge is sent the same
-	byte		tag[SV_CHALLENGE_TAG];
-	uint64_t	contentKey;
+	byte		tag[SV_CHALLENGE_TAG];	// ofv, which binds the terms (SV_ChallengeTerms)
 } challenge_t;
 
 /*
@@ -175,7 +166,7 @@ SV_ChallengeMAC
 
 HMAC-SHA-512 under one of the secrets of what, the address and port (as
 SV_ChallengeAddress gives them) and the fragment size; with terms, the
-challenge, its ofx and with OFX_IDENTITY its ofc too
+challenge and its ofx too
 =================
 */
 static void SV_ChallengeMAC( const char *what, int secret, const challenge_t *challenge,
@@ -202,9 +193,6 @@ static void SV_ChallengeMAC( const char *what, int secret, const challenge_t *ch
 		numbers[8] = (byte)( challenge->ofx >> 8 );
 		numbers[9] = (byte)challenge->ofx;
 		crypto_sha512_hmac_update( &ctx, numbers, 10 );
-		if ( challenge->ofx & OFX_IDENTITY ) {
-			crypto_sha512_hmac_update( &ctx, challenge->clientNonce, IDENT_KEY_SIZE );
-		}
 	}
 	crypto_sha512_hmac_final( &ctx, mac );
 }
@@ -244,24 +232,14 @@ static int SV_MakeChallenge( int secret, const challenge_t *challenge ) {
 =================
 SV_ChallengeTerms
 
-ofv, ofn and the content key, from one MAC of the challenge's terms under
-its secret: the same on every connect on it, and the key never 0
+ofv, a MAC of the challenge's terms under its secret
 =================
 */
 static void SV_ChallengeTerms( challenge_t *challenge ) {
 	byte	mac[64];
-	int		i;
 
 	SV_ChallengeMAC( "terms", challenge->secret, challenge, qtrue, mac );
 	Com_Memcpy( challenge->tag, mac, SV_CHALLENGE_TAG );
-	Com_Memcpy( challenge->serverNonce, mac + SV_CHALLENGE_TAG, IDENT_KEY_SIZE );
-	challenge->contentKey = 0;
-	for ( i = 0; i < 8; i++ ) {
-		challenge->contentKey = challenge->contentKey << 8 | mac[SV_CHALLENGE_TAG + IDENT_KEY_SIZE + i];
-	}
-	if ( !challenge->contentKey ) {
-		challenge->contentKey = 1;
-	}
 }
 
 /*
@@ -284,16 +262,6 @@ static void SV_SendChallengeResponse( const challenge_t *challenge, int clientCh
 	// the fragment size it asked for, which this server splits at too
 	if ( challenge->fragmentSize ) {
 		Com_AppendExtensionToken( tokens, sizeof( tokens ), "off", va( "%d", challenge->fragmentSize ) );
-	}
-	// this server's key, proved over both nonces (identity.h)
-	if ( challenge->ofx & OFX_IDENTITY ) {
-		const identKey_t	*key = Com_ServerKey();
-		byte				sig[IDENT_SIG_SIZE];
-
-		Ident_SignServer( key, challenge->clientNonce, challenge->serverNonce, sig );
-		Ident_AppendHex( tokens, sizeof( tokens ), "ofn", challenge->serverNonce );
-		Ident_AppendHex( tokens, sizeof( tokens ), "ofp", key->pub );
-		Ident_AppendSig( tokens, sizeof( tokens ), sig );
 	}
 	if ( challenge->ofx || challenge->fragmentSize ) {
 		Com_BytesToHex( challenge->tag, SV_CHALLENGE_TAG, tag );
@@ -363,25 +331,17 @@ void SV_GetChallenge( netadr_t from ) {
 	SV_ChallengeRotate();
 	SV_ChallengeAddress( &challenge, from );
 	// the extensions its tokens ask for, after the game name
-	// a challenge made under a weak secret binds nothing, so it agrees
+	// every extension rides on the session, which needs this server's key;
+	// and a challenge made under a weak secret binds nothing, so it agrees
 	// nothing: the connection is a classic one
-	challenge.ofx = challengeSecrets.secure[challengeSecrets.slot & 1] ? SV_AskedExtensions( 3 ) : 0;
+	challenge.ofx = SV_AskedExtensions( 3 );
+	if ( !( challenge.ofx & OFX_SESSION ) || !SV_SessionReady() ||
+		!challengeSecrets.secure[challengeSecrets.slot & 1] ) {
+		challenge.ofx = 0;
+	}
 	challenge.fragmentSize = SV_AskedFragmentSize( 3 );
 	challenge.secret = (int)( challengeSecrets.slot & 1 );
 	challenge.challenge = SV_MakeChallenge( challenge.secret, &challenge );
-	// a key's proof needs the client's nonce, this server's key and a
-	// nonce of its own: without one of them, the connection proves nothing.
-	// Each is a signature, so all addresses together get 50 a second,
-	// which forged ones can't spend past: the rest are answered unproven
-	if ( challenge.ofx & OFX_IDENTITY ) {
-		static rateLimit_t	signedReplies;
-		extTokens_t			tokens;
-
-		if ( SVC_RateLimit( &signedReplies, 50, 1000 ) || Com_ParseExtensionTokens( Cmd_ArgsFrom( 3 ), &tokens ) ||
-			!Ident_ReadNonce( &tokens, "ofc", challenge.clientNonce ) || !Com_ServerKey() ) {
-			challenge.ofx &= ~OFX_IDENTITY;
-		}
-	}
 	SV_ChallengeTerms( &challenge );
 
 	SV_SendChallengeResponse( &challenge, atoi( Cmd_Argv( 1 ) ) );
@@ -420,9 +380,6 @@ static qboolean SV_CheckChallenge( netadr_t from, int number, qboolean extension
 			( !ofx || Com_ParseExtensionBits( ofx, &challenge->ofx ) );
 		challenge->ofx &= OFX_BUILD;
 		asked = Com_ParseFragmentSize( Com_ExtensionValue( &tokens, "off" ) );
-		if ( ( challenge->ofx & OFX_IDENTITY ) && !Ident_ReadNonce( &tokens, "ofc", challenge->clientNonce ) ) {
-			repeated = qfalse;
-		}
 	}
 	sizes[0] = asked;
 	sizes[1] = 0;
@@ -525,7 +482,7 @@ can be forged, so the replies to all connects together are limited, and
 can't be used to flood another address.
 ==================
 */
-static Q_PRINTF_FUNC(2, 3) void QDECL SV_RefuseConnect( netadr_t to, const char *fmt, ... ) {
+void QDECL SV_RefuseConnect( netadr_t to, const char *fmt, ... ) {
 	static rateLimit_t bucket;
 	va_list		argptr;
 	char		message[MAX_STRING_CHARS];
@@ -587,41 +544,6 @@ client_t *SV_OldestFreeClient( int startIndex, int endIndex ) {
 
 /*
 ==================
-SV_DirectConnect
-
-A "connect" OOB command has been received
-==================
-*/
-
-/*
-==================
-SV_ClientProof
-
-The device key a connect's tokens prove, on the challenge it answers
-(identity.h): qfalse for none, or a proof that doesn't hold, which leaves
-the client unproven but connecting
-==================
-*/
-static qboolean SV_ClientProof( const challenge_t *challenge, byte identity[IDENT_KEY_SIZE] ) {
-	extTokens_t			tokens;
-	byte				sig[IDENT_SIG_SIZE];
-	const identKey_t	*key = Com_ServerKey();
-
-	if ( !key || Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) ||
-		!Ident_ReadClientProof( &tokens, identity, sig ) ) {
-		return qfalse;
-	}
-	if ( !Ident_CheckClient( identity, key->pub, challenge->serverNonce, challenge->clientNonce,
-		challenge->challenge, sig ) ) {
-		Com_Printf( "%s: a device key's proof that doesn't hold; connecting without it\n",
-			NET_AdrToString( challenge->adr ) );
-		return qfalse;
-	}
-	return qtrue;
-}
-
-/*
-==================
 SV_ReleaseClient
 
 What an old connection holds, before its slot goes to a new one: the game
@@ -637,6 +559,7 @@ static void SV_ReleaseClient( client_t *cl, const char *why ) {
 		VM_Call( gvm, GAME_CLIENT_DISCONNECT, cl - svs.clients );
 	}
 	SV_FreeClient( cl );
+	Netchan_WipeKeys( &cl->netchan );
 }
 
 /*
@@ -654,36 +577,76 @@ static void SV_FreeStaleClient( client_t *cl ) {
 	cl->state = CS_FREE;
 }
 
+/*
+==================
+SV_NewPlayerRefusal
+
+Why a new player from an address, with no slot at its address, port and
+qport yet, can't come in, before the session's handshake brings what a
+reserved slot needs: a draining server, sv_maxclientsPerIP, or no slot
+free at all; NULL for none. The same are asked again as the slot is made
+(SV_AdmitClient)
+==================
+*/
+const char *SV_NewPlayerRefusal( netadr_t from, int qport, svRefusal_t *kind ) {
+	client_t	*cl;
+	int			i, count = 0;
+
+	*kind = SV_REFUSE_NONE;
+	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
+		if ( cl->state != CS_FREE && cl->netchan.qport == qport && NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
+			return NULL;
+		}
+	}
+	if ( sv_drainReason[0] ) {
+		*kind = SV_REFUSE_DRAIN;
+		return sv_drainReason;
+	}
+	if ( sv_maxclientsPerIP->integer ) {
+		for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
+			if ( cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
+				NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
+				count++;
+			}
+		}
+		if ( count >= sv_maxclientsPerIP->integer ) {
+			*kind = SV_REFUSE_PER_IP;
+			return "Too many connections.";
+		}
+	}
+	if ( !NET_IsLocalAddress( from ) && !SV_OldestFreeClient( 0, svs.maxclients ) ) {
+		*kind = SV_REFUSE_FULL;
+		return "Server is full";
+	}
+	return NULL;
+}
+
+/*
+==================
+SV_DirectConnect
+
+A "connect" OOB command has been received: the checks that need nothing
+but its line, then a classic connect's slot (SV_AdmitClient), or with the
+session's first message (ofe), its handshake (SV_SessionConnect), whose
+third message makes the slot (the handshake design, 14.4)
+==================
+*/
 void SV_DirectConnect( netadr_t from ) {
-	char		userinfo[MAX_INFO_STRING];
-	int			i;
-	client_t	*cl, *newcl;
-	client_t	temp;
-	sharedEntity_t *ent;
-	int			clientNum;
-	int			version;
-	int			qport;
-	int			challenge;
-	int			startIndex;
-	intptr_t		denied;
-	int			count;
-	netadr_t	to;
+	svAdmit_t	admit;
+	int			i, version;
+	client_t	*cl;
 	char		*ip;
-	uint32_t	ofx = 0;
-	uint64_t	contentKey = 0;
-	int			fragmentSize = 0;
-	qboolean	identityProven = qfalse;
-	byte		identity[IDENT_KEY_SIZE];
-	char		tokens[EXT_MAX_STRING];
-	char		key[OFK_DIGITS + 1];
-	char		hex[SHA256_HEX_SIZE];
-	const byte	*sha256;
-#ifdef LEGACY_PROTOCOL
-	qboolean	compat = qfalse;
-#endif
+	extTokens_t	tokens;
+	const char	*ofe;
+	byte		e[NOISE_DHLEN];
+	// a session's first message, the client's ephemeral, is its ofe token:
+	// text, as the connect's line is Huffman-coded, which binary could
+	// make longer than it was
+	qboolean	session = !Com_ParseExtensionTokens( Cmd_ArgsFrom( 2 ), &tokens ) &&
+		( ofe = Com_ExtensionValue( &tokens, "ofe" ) ) != NULL;
 
 	Com_DPrintf ("SVC_DirectConnect ()\n");
-	
+
 	// Check whether this client is banned.
 	if(SV_IsBanned(&from, qfalse))
 	{
@@ -691,13 +654,15 @@ void SV_DirectConnect( netadr_t from ) {
 		return;
 	}
 
-	Q_strncpyz( userinfo, Cmd_Argv(1), sizeof(userinfo) );
+	Com_Memset( &admit, 0, sizeof( admit ) );
+	admit.from = from;
+	Q_strncpyz( admit.userinfo, Cmd_Argv(1), sizeof( admit.userinfo ) );
 
-	version = atoi(Info_ValueForKey(userinfo, "protocol"));
-	
+	version = atoi( Info_ValueForKey( admit.userinfo, "protocol" ) );
+
 #ifdef LEGACY_PROTOCOL
 	if(version > 0 && com_legacyprotocol->integer == version)
-		compat = qtrue;
+		admit.compat = qtrue;
 	else
 #endif
 	{
@@ -710,8 +675,8 @@ void SV_DirectConnect( netadr_t from ) {
 		}
 	}
 
-	challenge = atoi( Info_ValueForKey( userinfo, "challenge" ) );
-	qport = atoi( Info_ValueForKey( userinfo, "qport" ) );
+	admit.challenge = atoi( Info_ValueForKey( admit.userinfo, "challenge" ) );
+	admit.qport = atoi( Info_ValueForKey( admit.userinfo, "qport" ) );
 
 	// quick reject
 	for (i=0,cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
@@ -719,7 +684,7 @@ void SV_DirectConnect( netadr_t from ) {
 			continue;
 		}
 		if ( NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
-			if (( svs.time - cl->lastConnectTime) 
+			if (( svs.time - cl->lastConnectTime)
 				< (sv_reconnectlimit->integer * 1000)) {
 				Com_DPrintf ("%s:reconnect rejected : too soon\n", NET_AdrToString (from));
 				return;
@@ -727,19 +692,20 @@ void SV_DirectConnect( netadr_t from ) {
 			break;
 		}
 	}
-	
-	// don't let "ip" overflow userinfo string
+
+	// don't let "ip" overflow userinfo string; a session's userinfo comes
+	// with its third message, where it's asked again
 	if ( NET_IsLocalAddress (from) )
 		ip = "localhost";
 	else
 		ip = (char *)NET_AdrToString( from );
-	if( ( strlen( ip ) + strlen( userinfo ) + 4 ) >= MAX_INFO_STRING ) {
+	if( !session && ( strlen( ip ) + strlen( admit.userinfo ) + 4 ) >= MAX_INFO_STRING ) {
 		SV_RefuseConnect( from,
 			"Userinfo string length exceeded.  "
 			"Try removing setu cvars from your config.\n" );
 		return;
 	}
-	Info_SetValueForKey( userinfo, "ip", ip );
+	Info_SetValueForKey( admit.userinfo, "ip", ip );
 
 	// see if the challenge is valid (LAN clients don't need to challenge)
 	if (!NET_IsLocalAddress(from))
@@ -749,42 +715,87 @@ void SV_DirectConnect( netadr_t from ) {
 
 #ifdef LEGACY_PROTOCOL
 		// the extensions agreed on its challenge; never with the legacy protocol
-		extensions = !compat;
+		extensions = !admit.compat;
 #endif
-		if ( !SV_CheckChallenge( from, challenge, extensions, &agreed ) ) {
+		if ( !SV_CheckChallenge( from, admit.challenge, extensions, &agreed ) ) {
 			SV_RefuseConnect( from, "No or bad challenge for your address.\n" );
 			return;
 		}
 		Com_Printf( "%s connecting\n", NET_AdrToString( from ) );
 
 		if ( extensions ) {
-			ofx = agreed.ofx;
-			// made from the challenge's terms, so a connect sent twice on
-			// the challenge is sent the same
-			if ( ofx ) {
-				contentKey = agreed.contentKey;
-			}
-			fragmentSize = agreed.fragmentSize;
-			identityProven = ( ofx & OFX_IDENTITY ) && SV_ClientProof( &agreed, identity );
+			admit.ofx = agreed.ofx;
+			admit.fragmentSize = agreed.fragmentSize;
 		}
+	} else if ( Com_DeviceKey() ) {
+		// the listen server's own client, the same process and key: no
+		// handshake, and proven
+		admit.identityProven = qtrue;
+		Com_Memcpy( admit.identity, Com_DeviceKey()->pub, IDENT_KEY_SIZE );
+	}
 
-		// the challenge shows the address is real, so this connect
-		// doesn't count against it
-		SVC_RateRestoreBurstAddress( from, 10, 1000 );
+	// a session's handshake needs the session agreed; a classic connect
+	// gets no extension without it
+	if ( session != ( ( admit.ofx & OFX_SESSION ) != 0 ) ) {
+		if ( session ) {
+			SV_SessionDropped( from, "a session's connect on a challenge that didn't agree one" );
+			return;
+		}
+		admit.ofx = 0;
 	}
 
 	// one open to its local network alone takes no player from elsewhere,
 	// a reconnect into a slot it was just dropped from included
-	NET_PacketDestination( &to );
-	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !SV_ExtLocalPlayer( &from, &to ) ) {
+	NET_PacketDestination( &admit.to );
+	if ( SV_ExtVisibility() == EXT_VISIBILITY_LOCAL && !SV_ExtLocalPlayer( &from, &admit.to ) ) {
 		SV_StandInRefused( &from );
 		SV_RefuseConnect( from, "This server is for players on its local network only.\n" );
 		return;
 	}
 
+	// the challenge shows the address is real, so this connect doesn't
+	// count against it; a session's handshake costs the server its DH,
+	// which SV_SessionConnect limits apart, and a resend of one with the
+	// same ephemeral only the checks and its message 2 sent again
+	if ( !NET_IsLocalAddress( from ) ) {
+		SVC_RateRestoreBurstAddress( from, 10, 1000 );
+	}
+	if ( session ) {
+		if ( !Com_SHA256FromHex( ofe, e ) ) {
+			SV_SessionDropped( from, "an ofe that isn't 64 hex digits" );
+			return;
+		}
+		SV_SessionConnect( &admit, e );
+		return;
+	}
+
+	SV_AdmitClient( &admit );
+}
+
+/*
+==================
+SV_AdmitClient
+
+A connection's slot, once what it brings is known: a classic connect's at
+once, a session's at its third message. The userinfo's ip is set
+==================
+*/
+void SV_AdmitClient( const svAdmit_t *admit ) {
+	netadr_t	from = admit->from;
+	int			i;
+	client_t	*cl, *newcl;
+	client_t	temp;
+	sharedEntity_t *ent;
+	int			clientNum;
+	int			startIndex;
+	intptr_t		denied;
+	int			count;
+	const char	*refusal;
+	svRefusal_t	refused;
+
 	newcl = &temp;
 	Com_Memset (newcl, 0, sizeof(client_t));
-	newcl->localTo = to;
+	newcl->localTo = admit->to;
 
 	// a slot at this address and port with another qport is a connection
 	// that's gone: a game started again on the same port, as a player
@@ -796,19 +807,26 @@ void SV_DirectConnect( netadr_t from ) {
 	// out of order. It's freed, telling nobody over its netchan, and the
 	// connect goes on as a new player's, through the checks below
 	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
-		if ( cl->state != CS_FREE && cl->netchan.qport != qport &&
+		if ( cl->state != CS_FREE && cl->netchan.qport != admit->qport &&
 			NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
 			SV_FreeStaleClient( cl );
 		}
 	}
 
-	// if there is already a slot for this address, port and qport, reuse it
+	// if there is already a slot for this address, port and qport, reuse
+	// it: a reconnect. A session's that proves another device than the
+	// slot's is a new player there, and the slot is freed
 	for (i=0,cl=svs.clients ; i < svs.maxclients ; i++,cl++) {
 		if ( cl->state == CS_FREE ) {
 			continue;
 		}
 		if ( NET_CompareAdr( from, cl->netchan.remoteAddress )
-			&& cl->netchan.qport == qport ) {
+			&& cl->netchan.qport == admit->qport ) {
+			if ( ( admit->ofx & OFX_SESSION ) &&
+				!( cl->identityProven && Ident_Equal32( cl->identity, admit->identity ) ) ) {
+				SV_FreeStaleClient( cl );
+				break;
+			}
 			Com_Printf ("%s:reconnect\n", NET_AdrToString (from));
 			newcl = cl;
 
@@ -817,28 +835,16 @@ void SV_DirectConnect( netadr_t from ) {
 		}
 	}
 
-	// a draining server takes no new player: the ones on it reconnect above
-	if ( sv_drainReason[0] ) {
-		SV_RefuseConnect( from, "%s\n", sv_drainReason );
-		return;
-	}
-
-	// a new player from an address with sv_maxclientsPerIP players already
-	// is refused (bots aside; a reconnect took its slot above)
-	if ( sv_maxclientsPerIP->integer ) {
-		count = 0;
-		for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
-			if ( cl->state >= CS_CONNECTED && cl->netchan.remoteAddress.type != NA_BOT &&
-				NET_CompareBaseAdr( from, cl->netchan.remoteAddress ) ) {
-				count++;
-			}
-		}
-		if ( count >= sv_maxclientsPerIP->integer ) {
+	// a draining server takes no new player, nor one past
+	// sv_maxclientsPerIP (bots aside); the ones on it reconnect above
+	refusal = SV_NewPlayerRefusal( from, admit->qport, &refused );
+	if ( refusal && refused != SV_REFUSE_FULL ) {
+		if ( refused == SV_REFUSE_PER_IP ) {
 			Com_Printf( "%s refused: %d players connect from its address already (sv_maxclientsPerIP)\n",
-				NET_AdrToString( from ), count );
-			SV_RefuseConnect( from, "Too many connections.\n" );
-			return;
+				NET_AdrToString( from ), sv_maxclientsPerIP->integer );
 		}
+		SV_RefuseConnect( from, "%s\n", refusal );
+		return;
 	}
 
 	// find a client slot
@@ -852,9 +858,9 @@ void SV_DirectConnect( netadr_t from ) {
 	// servers so we can play without having to kick people.
 
 	// check for privateClient password
-	if ( SV_PrivatePassword( userinfo ) ||
+	if ( SV_PrivatePassword( admit->userinfo ) ||
 		// an admin's device, as the keeper of roles says (hooks.h)
-		( identityProven && Hooks_ClientRole( -1, identity ) >= ROLE_ADMIN ) ) {
+		( admit->identityProven && Hooks_ClientRole( -1, admit->identity ) >= ROLE_ADMIN ) ) {
 		startIndex = 0;
 	} else {
 		// skip past the reserved slots
@@ -894,7 +900,7 @@ void SV_DirectConnect( netadr_t from ) {
 		}
 	}
 
-gotnewcl:	
+gotnewcl:
 	// build a new connection
 	// accept the new client
 	// this is the only place a client_t is ever initialized
@@ -904,38 +910,42 @@ gotnewcl:
 	newcl->gentity = ent;
 
 	// save the challenge
-	newcl->challenge = challenge;
+	newcl->challenge = admit->challenge;
 
 	// save the address
 #ifdef LEGACY_PROTOCOL
-	newcl->compat = compat;
-	Netchan_Setup(NS_SERVER, &newcl->netchan, from, qport, challenge, compat);
+	newcl->compat = admit->compat;
+	Netchan_Setup(NS_SERVER, &newcl->netchan, from, admit->qport, admit->challenge, admit->compat);
 #else
-	Netchan_Setup(NS_SERVER, &newcl->netchan, from, qport, challenge, qfalse);
+	Netchan_Setup(NS_SERVER, &newcl->netchan, from, admit->qport, admit->challenge, qfalse);
 #endif
 	newcl->proxied = NET_PacketProxied();
 	newcl->browser = NET_PacketFromGateway();
 	if ( !newcl->proxied ) {
 		NET_ProxyForget( &from );
 	}
-	if ( fragmentSize ) {
-		Netchan_SetFragmentSize( &newcl->netchan, fragmentSize );
+	// a session's keys: every datagram sealed from here on (14.6)
+	if ( admit->ofx & OFX_SESSION ) {
+		Netchan_SetKeys( &newcl->netchan, admit->sendKey, admit->receiveKey );
+	}
+	if ( admit->fragmentSize ) {
+		Netchan_SetFragmentSize( &newcl->netchan, admit->fragmentSize );
 		// a web client's, which an admin may want to tell apart
-		Com_Printf( "Client %i: fragments of %i bytes\n", clientNum, fragmentSize );
+		Com_Printf( "Client %i: fragments of %i bytes\n", clientNum, admit->fragmentSize );
 	}
 	// init the netchan queue
 	newcl->netchan_end_queue = &newcl->netchan_start_queue;
 
 	// save the userinfo
-	Q_strncpyz( newcl->userinfo, userinfo, sizeof(newcl->userinfo) );
+	Q_strncpyz( newcl->userinfo, admit->userinfo, sizeof(newcl->userinfo) );
 
 	// the device it proved, before the game asks its role (trap_ClientRole)
-	newcl->identityProven = identityProven;
-	if ( identityProven ) {
+	newcl->identityProven = admit->identityProven;
+	if ( admit->identityProven ) {
 		char	fingerprint[IDENT_FINGERPRINT_SIZE];
 
-		Com_Memcpy( newcl->identity, identity, sizeof( newcl->identity ) );
-		Ident_Fingerprint( identity, fingerprint );
+		Com_Memcpy( newcl->identity, admit->identity, sizeof( newcl->identity ) );
+		Ident_Fingerprint( admit->identity, fingerprint );
 		Com_Printf( "Client %i proved device %s\n", clientNum, fingerprint );
 	}
 
@@ -946,31 +956,26 @@ gotnewcl:
 
 		SV_RefuseConnect( from, "%s\n", str );
 		Com_DPrintf ("Game rejected a connection: %s.\n", str);
-		// the free slot keeps no device for trap_ClientRole to find
+		// the free slot keeps no device for trap_ClientRole to find, nor
+		// the session's keys
 		newcl->identityProven = qfalse;
+		Netchan_WipeKeys( &newcl->netchan );
 		return;
 	}
 
 	SV_UserinfoChanged( newcl );
 
-	// the extensions agreed, confirmed with the connection's content key
-	tokens[0] = '\0';
-	newcl->ofx = ofx;
-	newcl->contentKey = contentKey;
-	if ( ofx ) {
-		Com_ExtensionKeyString( newcl->contentKey, key );
-		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofx", va( "%x", ofx ) );
-		Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofk", key );
-		// the content manifest the client checks its paks against
-		if ( ( ofx & OFX_CONTENT ) && ( sha256 = SV_ContentManifestHash() ) != NULL ) {
-			Com_SHA256Hex( sha256, hex );
-			Com_AppendExtensionToken( tokens, sizeof( tokens ), "ofm", hex );
-		}
-	}
-	Com_DPrintf( "Client %i: extensions %x\n", clientNum, ofx );
+	// the extensions agreed: a session's were confirmed in its handshake,
+	// its content key and manifest with them; a classic connect has none
+	newcl->ofx = admit->ofx;
+	newcl->contentKey = admit->contentKey;
+	Com_DPrintf( "Client %i: extensions %x\n", clientNum, admit->ofx );
 
-	// send the connect packet to the client
-	NET_OutOfBandPrint(NS_SERVER, from, "connectResponse %d%s", challenge, tokens);
+	// send the connect packet to the client: a session's client has its
+	// answer already, and its first sealed packet is the next word
+	if ( !( admit->ofx & OFX_SESSION ) ) {
+		NET_OutOfBandPrint( NS_SERVER, from, "connectResponse %d", admit->challenge );
+	}
 
 	Com_DPrintf( "Going from CS_FREE to CS_CONNECTED for %s\n", newcl->name );
 
@@ -978,7 +983,7 @@ gotnewcl:
 	newcl->lastSnapshotTime = 0;
 	newcl->lastPacketTime = svs.time;
 	newcl->lastConnectTime = svs.time;
-	
+
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
 	// gamestate message was not just sent, forcing a retransmit

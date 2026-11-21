@@ -444,6 +444,7 @@ extern rateLimit_t outboundLeakyBucket;
 
 qboolean SVC_RateLimit( rateLimit_t *bucket, int burst, int period );
 qboolean SVC_RateLimitAddress( netadr_t from, int burst, int period );
+qboolean SVC_RateLimitHandshake( netadr_t from );
 void SVC_RateRestoreBurstAddress( netadr_t from, int burst, int period );
 void SVC_RateDropAddress( netadr_t from, int burst, int period );
 void SVC_RateRestoreToxicAddress( netadr_t from, int burst, int period );
@@ -571,7 +572,46 @@ uint32_t SV_AskedExtensions( int firstArg );
 
 client_t *SV_OldestFreeClient( int startIndex, int endIndex );
 qboolean SV_PrivatePassword( const char *userinfo );
+
+// what a connection brings to its slot (SV_AdmitClient): a classic
+// connect's at once, a session's at its third message (sv_session.c)
+typedef struct {
+	netadr_t	from, to;
+	char		userinfo[MAX_INFO_STRING];
+	int			qport, challenge;
+	uint32_t	ofx;
+	int			fragmentSize;
+	uint64_t	contentKey;
+	qboolean	identityProven;
+	byte		identity[32];
+	// the session's transport keys, from Split: this side's, then the client's
+	byte		sendKey[32], receiveKey[32];
+#ifdef LEGACY_PROTOCOL
+	qboolean	compat;
+#endif
+} svAdmit_t;
+
 void SV_DirectConnect( netadr_t from );
+void SV_AdmitClient( const svAdmit_t *admit );
+// why a new player can't come in (SV_NewPlayerRefusal), as its words may
+// be the admin's (a drain's)
+typedef enum {
+	SV_REFUSE_NONE,
+	SV_REFUSE_DRAIN,	// sv_drainReason's words
+	SV_REFUSE_PER_IP,	// sv_maxclientsPerIP
+	SV_REFUSE_FULL		// no slot free, which a reserved slot may still take
+} svRefusal_t;
+const char *SV_NewPlayerRefusal( netadr_t from, int qport, svRefusal_t *kind );
+void QDECL SV_RefuseConnect( netadr_t to, const char *fmt, ... ) Q_PRINTF_FUNC(2, 3);
+
+//
+// sv_session.c, the session's handshake (the handshake design, section 14)
+//
+qboolean SV_SessionReady( void );
+void SV_SessionConnect( const svAdmit_t *terms, const byte e[32] );
+void SV_SessionFinish( netadr_t from, msg_t *msg );
+void SV_SessionDropped( netadr_t from, const char *why );
+void SV_SessionShutdown( void );
 
 
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg );
