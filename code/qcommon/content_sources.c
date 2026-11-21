@@ -48,8 +48,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //   4  4  reserved
 //   8  8  when it last sent or used the pak, Unix seconds
 //  16 32  the server's address (4 or 16 bytes, zero-padded), or a SHA-256:
-//         of a key and the address it was proved at (Content_ServerAt), or of
-//         the name another transport's server was connected to by
+//         of a key and the address it was proved at (Content_ServerAt), or,
+//         kind NAMED, of a name: kept, though no engine makes one since
+//         a web connection became none (Content_ServerOf)
 //
 // Reserved bytes, the header's and a record's, are kept as read, as are a
 // later engine's fields and entries of a kind this engine doesn't know,
@@ -77,6 +78,35 @@ void Content_ServerAt( contentServer_t *out, const byte key[IDENT_KEY_SIZE], con
 	memset( out, 0, sizeof( *out ) );
 	out->kind = CONTENT_SERVER_KEY_AT;
 	Com_SHA256Buffer( both, sizeof( both ), out->id );
+}
+
+/*
+=================
+Content_ServerOf
+
+The server a connection goes to, as the cache knows it: the resolved
+address and port it was reached at, never a host name, and with key, the
+key it proved there. Any other connection is none, a web one too: its
+address is an id each page starts again, and its name ("web:N", or a
+join's code) names no server, so even a key proved there could be any
+relay's, and only this connection's note holds (Content_Cache_SentHere)
+=================
+*/
+void Content_ServerOf( contentServer_t *out, const netadr_t *to, const byte *key ) {
+	memset( out, 0, sizeof( *out ) );
+	if ( to->type != NA_IP && to->type != NA_IP6 ) {
+		return;
+	}
+	out->kind = to->type == NA_IP ? CONTENT_SERVER_IPV4 : CONTENT_SERVER_IPV6;
+	out->port = (unsigned short)BigShort( to->port );
+	if ( to->type == NA_IP ) {
+		memcpy( out->id, to->ip, sizeof( to->ip ) );
+	} else {
+		memcpy( out->id, to->ip6, sizeof( to->ip6 ) );
+	}
+	if ( key ) {
+		Content_ServerAt( out, key, out );
+	}
 }
 
 // whether this engine knows an entry's kind, which it may give up for another

@@ -4340,33 +4340,17 @@ CL_ContentServer
 
 The server connected to, for the content cache, which keeps what each
 server sent (P473): the address and port the netchan talks to, never a
-name, which can point anywhere later, or on another transport (a web
-client's), the name the player connected to; and with the key the server
-proved there, both, as a proof alone isn't tied to the connection that
-follows: a server can pass on another's challengeResponse
+name, which can point anywhere later; and with the key the server proved
+there, both, as a proof alone isn't tied to the connection that follows:
+a server can pass on another's challengeResponse. A web connection is
+none (Content_ServerOf), what its server sends kept for it alone
 =================
 */
 static void CL_ContentServer( void ) {
-	contentServer_t	address;
-	netadr_t		to = clc.netchan.remoteAddress;
+	contentServer_t	server;
 
-	Com_Memset( &address, 0, sizeof( address ) );
-	if ( to.type == NA_IP || to.type == NA_IP6 ) {
-		address.kind = to.type == NA_IP ? CONTENT_SERVER_IPV4 : CONTENT_SERVER_IPV6;
-		address.port = (unsigned short)BigShort( to.port );
-		if ( address.kind == CONTENT_SERVER_IPV4 ) {
-			Com_Memcpy( address.id, to.ip, sizeof( to.ip ) );
-		} else {
-			Com_Memcpy( address.id, to.ip6, sizeof( to.ip6 ) );
-		}
-	} else if ( to.type != NA_LOOPBACK && to.type != NA_BOT && clc.servername[0] ) {
-		address.kind = CONTENT_SERVER_NAMED;
-		Com_SHA256Buffer( clc.servername, strlen( clc.servername ), address.id );
-	}
-	if ( clc.identityProved && address.kind != CONTENT_SERVER_NONE ) {
-		Content_ServerAt( &address, clc.serverKey, &address );
-	}
-	Content_Cache_SetServer( &address );
+	Content_ServerOf( &server, &clc.netchan.remoteAddress, clc.identityProved ? clc.serverKey : NULL );
+	Content_Cache_SetServer( &server );
 }
 
 /*

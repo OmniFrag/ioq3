@@ -227,7 +227,7 @@ typedef enum {
 	CONTENT_SERVER_KEY_AT = 1,		// a key at an address: SHA-256 of both (Content_ServerAt)
 	CONTENT_SERVER_IPV4 = 2,
 	CONTENT_SERVER_IPV6 = 3,
-	CONTENT_SERVER_NAMED = 4		// another transport's server, by the name the player connected to: its SHA-256
+	CONTENT_SERVER_NAMED = 4		// another transport's server, by a name's SHA-256: kept, never made since P473's web change
 } contentServerKind_t;
 
 typedef struct {
@@ -239,6 +239,9 @@ typedef struct {
 // a server that proved key at address: kind CONTENT_SERVER_KEY_AT, its id
 // SHA-256( key, then address's kind, port (2 bytes, little-endian) and id )
 void		Content_ServerAt( contentServer_t *out, const byte key[IDENT_KEY_SIZE], const contentServer_t *address );
+// the server a connection to to goes to, with the key it proved, or NULL;
+// none for any but an IPv4 or IPv6 address (a web connection's too)
+void		Content_ServerOf( contentServer_t *out, const netadr_t *to, const byte *key );
 
 // how a pak came into the cache
 typedef enum {
@@ -304,6 +307,7 @@ typedef struct {
 	char			name[CACHE_NAME_SIZE];
 	qboolean		mounted;		// not in the file: in the search path now, or stored for the next restart's
 	qboolean		downloading;	// not in the file: a partial one being written
+	qboolean		sentNow;		// not in the file: the server connected to sent it, this connection
 } cacheEntry_t;
 
 // as Content_ParsePakIndex, for index.dat; a record that breaks a rule
@@ -382,8 +386,10 @@ void		Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] );
 // the server connected to, by which the cache records what each server
 // sent (sources.dat, below): the address it was reached at, with the key
 // it proved there (Content_ServerAt); NULL once there's none. A server
-// other than the last one counts, and the serial tells the file system its
-// cached paks were another's (FS_ConditionalRestart)
+// other than the last one counts, as does every one that's none, and the
+// serial tells the file system its cached paks were another's
+// (FS_ConditionalRestart). What a server sends is its own for that
+// connection whatever sources.dat notes (cacheEntry_t's sentNow)
 void	Content_Cache_SetServer( const contentServer_t *server );
 int		Content_Cache_ServerSerial( void );
 // whether the cache holds a complete pak with this checksum that the

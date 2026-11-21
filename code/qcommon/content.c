@@ -1534,6 +1534,29 @@ static void Content_Sources_Noted( const byte sha256[SHA256_DIGEST_SIZE], conten
 
 /*
 =================
+Content_Cache_NoteSent
+
+The server connected to sent this pak: noted for this connection in
+memory, whatever sources.dat can note (a server that's none, a side file
+left alone, full or past its size, a record not grown), so a pak a
+server has just sent is always that server's while it's connected
+=================
+*/
+static void Content_Cache_NoteSent( const byte sha256[SHA256_DIGEST_SIZE], contentSource_t source ) {
+	int		i;
+
+	if ( source == SOURCE_UNKNOWN || source == SOURCE_INSTALLED ) {
+		return;
+	}
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( !memcmp( cacheEntries[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			cacheEntries[i].sentNow = qtrue;
+		}
+	}
+}
+
+/*
+=================
 Content_Sources_Write
 
 sources.dat, as index.dat is written; a record goes with its pak
@@ -1570,14 +1593,22 @@ Content_Cache_SetServer
 =================
 */
 void Content_Cache_SetServer( const contentServer_t *server ) {
+	int		i;
+
 	if ( server ) {
 		cacheServer = *server;
 	} else {
 		memset( &cacheServer, 0, sizeof( cacheServer ) );
 	}
-	// counted only for a server other than the last: a reconnect to it, past
-	// the disconnect's none, mounts the same paks, and needn't restart
-	if ( cacheServer.kind != CONTENT_SERVER_NONE && memcmp( &cacheServer, &cacheServerLast, sizeof( cacheServer ) ) ) {
+	// what the last connection's server sent was its alone
+	for ( i = 0; i < cacheCount; i++ ) {
+		cacheEntries[i].sentNow = qfalse;
+	}
+	// counted for a server other than the last: a reconnect to it, past the
+	// disconnect's none, mounts the same paks, and needn't restart. A
+	// connection to a server that's none may be to any, so it always counts
+	if ( server && ( cacheServer.kind == CONTENT_SERVER_NONE ||
+		memcmp( &cacheServer, &cacheServerLast, sizeof( cacheServer ) ) ) ) {
 		cacheServerLast = cacheServer;
 		cacheServerSerial++;
 	}
@@ -1597,13 +1628,18 @@ int Content_Cache_ServerSerial( void ) {
 Content_Cache_SentHere
 
 Whether the server connected to sent this entry's pak: what a classic
-server, which names it by checksum alone, mounts (P473). A pak with no
-record was sent by no server
+server, which names it by checksum alone, mounts (P473). It sent it this
+connection, or sources.dat says it did before; a pak with no record was
+sent by no server
 =================
 */
 static qboolean Content_Cache_SentHere( const cacheEntry_t *e ) {
-	const sourceRecord_t	*r = Content_Sources_Find( e->sha256 );
+	const sourceRecord_t	*r;
 
+	if ( e->sentNow ) {
+		return qtrue;
+	}
+	r = Content_Sources_Find( e->sha256 );
 	return r && Content_Sources_Has( r, &cacheServer, SOURCES_SENT );
 }
 
@@ -1971,6 +2007,7 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 		e->mounted = qtrue;
 		cacheChanged = qtrue;
 		Content_Sources_Noted( sha256, source );
+		Content_Cache_NoteSent( sha256, source );
 		Content_Cache_Flush();
 		return qtrue;
 	}
@@ -2004,6 +2041,7 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 	e->mounted = qtrue;
 	// the server connected to sent it, unless it's the player's own copy
 	Content_Sources_Noted( sha256, source );
+	Content_Cache_NoteSent( sha256, source );
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
 	return qtrue;
@@ -2131,6 +2169,7 @@ qboolean Content_Cache_CompletePartial( const byte sha256[SHA256_DIGEST_SIZE], c
 	e->mounted = qtrue;
 	cacheChanged = qtrue;
 	Content_Sources_Noted( sha256, SOURCE_FAST );
+	Content_Cache_NoteSent( sha256, SOURCE_FAST );
 	Content_Cache_Evict( CONTENT_MAX_RECORDS );
 	Content_Cache_Flush();
 	return qtrue;
