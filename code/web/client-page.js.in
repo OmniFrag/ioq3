@@ -196,12 +196,15 @@ let dataURL = new URL(dataPath, location.origin + location.pathname);
 // server's gateway writes the config its own page reads. That page plays
 // the server its address names, and a server's own page plays its own,
 // whatever its fragment says. Its words are placeholders until they're
-// chosen, kept here
+// chosen, kept here. A server it can't play is dropped by the engine in
+// the same words (cl_parse.c's mod, vm.c's game code), ending in
+// PLAY_ELSEWHERE, which tells a front that leave from others (leftKind)
+const PLAY_ELSEWHERE = 'Play it on its own page.';
 const CENTRAL_WORDS = {
     noServer: 'This page plays a server its link names, and this link names none.',
     unreached: (shown) => `Couldn't reach ${shown} to play it. Check the link, or try again later.`,
     unread: (shown) => `${shown} didn't say which game it plays, so it can't be played here.`,
-    mod: (shown) => `${shown} runs a mod this page can't play yet. Play it on its own page.`,
+    mod: (shown) => `${shown} runs a mod this page can't play yet. ${PLAY_ELSEWHERE}`,
     otherServer: (shown) => `${shown} has another key than this link names, so it may not be the server meant. Ask whoever gave you the link for a new one.`,
     // the page's title and heading: the name as contacted, the link's
     // host and port, never one the server gives, beside what it calls itself
@@ -209,6 +212,11 @@ const CENTRAL_WORDS = {
     title: (name, shown) => (name ? `${shown}: ${name}` : shown),
     runBy: 'This server is run by its host, not OmniFrag.',
 };
+// A leave as a front gets it: the shared site's page's drop of a server it
+// can't play, an error's in the engine (its kind 'error'), is a leave of
+// its own, 'elsewhere', whose words are the player's to read, where an
+// error's other words are the engine's
+const leftKind = (kind, reason) => (centralServer && kind === 'error' && String(reason).endsWith(PLAY_ELSEWHERE) ? 'elsewhere' : kind);
 // The server the shared site's address names: #s=<name>[:<port>], its
 // HTTPS port when not 443, and #k=<key>, the 64 hex digits of its Ed25519
 // public key, which the join then takes alone (JoinWeb's sameKey). Without
@@ -2776,7 +2784,7 @@ ioquake3({
     },
     // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
     // the page has asked for its own join, 0 while it holds it
-    left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
+    left: (kind, reason) => tellFront(frontListeners.left, leftKind(kind, reason), reason),
     pageJoins: () => (programsBuilding ? 0 : pageJoins),
     // and how many times it has canceled the join under way
     pageJoinCancels: () => joinCancels,
