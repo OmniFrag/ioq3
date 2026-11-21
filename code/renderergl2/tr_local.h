@@ -1483,6 +1483,7 @@ typedef struct {
 	qboolean seamlessCubeMap;
 
 	qboolean vertexArrayObject;
+	qboolean parallelShaderCompile;	// GL_KHR_parallel_shader_compile
 	qboolean directStateAccess;
 	qboolean mapBufferRange;
 
@@ -1824,6 +1825,7 @@ extern  cvar_t  *r_arb_seamless_cube_map;
 extern  cvar_t  *r_arb_vertex_array_object;
 extern  cvar_t  *r_arb_map_buffer_range;
 extern  cvar_t  *r_ext_direct_state_access;
+extern  cvar_t  *r_ext_parallel_shader_compile;
 
 extern	cvar_t	*r_nobind;						// turns off binding to appropriate textures
 extern	cvar_t	*r_singleShader;				// make most world faces use default shader

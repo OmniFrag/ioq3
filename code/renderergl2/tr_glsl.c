@@ -427,17 +427,22 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 // compile or link it is reported, not an error
 static qboolean optionalProgram;
 
+// a shader made and its compile begun, its status not asked
+static GLuint GLSL_CreateShader(const GLchar *buffer, int size, GLenum shaderType)
+{
+	GLuint shader = qglCreateShader(shaderType);
+
+	qglShaderSource(shader, 1, (const GLchar **)&buffer, &size);
+	qglCompileShader(shader);
+	return shader;
+}
+
 static int GLSL_CompileGPUShader(GLuint program, GLuint *prevShader, const GLchar *buffer, int size, GLenum shaderType)
 {
 	GLint           compiled;
 	GLuint          shader;
 
-	shader = qglCreateShader(shaderType);
-
-	qglShaderSource(shader, 1, (const GLchar **)&buffer, &size);
-
-	// compile shader
-	qglCompileShader(shader);
+	shader = GLSL_CreateShader(buffer, size, shaderType);
 
 	// check if shader compiled
 	qglGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
@@ -581,11 +586,20 @@ typedef struct {
 	GLuint		program, vertexShader, fragmentShader;
 	char		*uniformBuffer;	// the values its uniforms hold, as the program has them
 	int			generation;		// the context's it was built in (GLimp_ContextGeneration)
+	qboolean	submitted;		// built by the submitting pass, its status not read yet
 } keptProgram_t;
 
 #define MAX_KEPT_PROGRAMS	256
 static keptProgram_t	keptPrograms[MAX_KEPT_PROGRAMS];
-static int				numKeptPrograms, numTakenPrograms;
+static int				numKeptPrograms, numTakenPrograms, numSubmittedPrograms;
+// the pass of GLSL_InitGPUShaders that, with GL_KHR_parallel_shader_compile,
+// only submits each program it would build, compiled and linked with
+// nothing asked of it, and keeps it for the pass after to take back: so the
+// driver builds them side by side, where reading each status at once made
+// it build them one by one (3.3 s against 0.07 s for the 118, cold, in
+// Chrome on the Mac). Set from GLSL_InitPrograms's parameter as each pass
+// begins, so a pass an error cut short leaves nothing for the next start
+static qboolean			submittingPrograms;
 static qboolean			keepingPrograms;	// GLSL_ShutdownGPUShaders keeping, so GLSL_DeleteGPUShader keeps
 
 // FNV-1a over a program's attributes and its two sources, each with its end
@@ -644,28 +658,129 @@ void GLSL_DeleteKeptPrograms(void)
 		GLSL_DeleteKept(&keptPrograms[--numKeptPrograms]);
 }
 
-// a kept program built from the same source in this context, taken back
-static qboolean GLSL_TakeKept(shaderProgram_t *program)
+// the kept program built from a program's source in its context, or NULL
+static keptProgram_t *GLSL_FindKept(const shaderProgram_t *program)
 {
 	int i;
 
 	for (i = 0; i < numKeptPrograms; i++)
+		if (keptPrograms[i].key == program->sourceKey && keptPrograms[i].generation == program->generation
+			&& qglIsProgram(keptPrograms[i].program))
+			return &keptPrograms[i];
+	return NULL;
+}
+
+// a kept program built from the same source in this context, taken back
+static qboolean GLSL_TakeKept(shaderProgram_t *program)
+{
+	keptProgram_t *kept = GLSL_FindKept(program);
+
+	if (!kept)
+		return qfalse;
+
+	// one submitted fails here as it would have, built again the one by one
+	// way, which says why
+	if (kept->submitted)
 	{
-		keptProgram_t *kept = &keptPrograms[i];
+		GLint linked = 0;
 
-		if (kept->key != program->sourceKey || kept->generation != program->generation || !qglIsProgram(kept->program))
-			continue;
-
-		program->program = kept->program;
-		program->vertexShader = kept->vertexShader;
-		program->fragmentShader = kept->fragmentShader;
-		// the same source has the same uniforms, which hold their values
-		program->uniformBuffer = kept->uniformBuffer;
-		*kept = keptPrograms[--numKeptPrograms];
-		numTakenPrograms++;
-		return qtrue;
+		qglGetProgramiv(kept->program, GL_LINK_STATUS, &linked);
+		if (!linked)
+		{
+			GLSL_DeleteKept(kept);
+			*kept = keptPrograms[--numKeptPrograms];
+			return qfalse;
+		}
+		numSubmittedPrograms++;
 	}
-	return qfalse;
+	else
+		numTakenPrograms++;
+
+	program->program = kept->program;
+	program->vertexShader = kept->vertexShader;
+	program->fragmentShader = kept->fragmentShader;
+	// the same source has the same uniforms, which hold their values
+	program->uniformBuffer = kept->uniformBuffer;
+	*kept = keptPrograms[--numKeptPrograms];
+	return qtrue;
+}
+
+static void GLSL_BindAttribs(GLuint program, int attribs)
+{
+	if(attribs & ATTR_POSITION)
+		qglBindAttribLocation(program, ATTR_INDEX_POSITION, "attr_Position");
+
+	if(attribs & ATTR_TEXCOORD)
+		qglBindAttribLocation(program, ATTR_INDEX_TEXCOORD, "attr_TexCoord0");
+
+	if(attribs & ATTR_LIGHTCOORD)
+		qglBindAttribLocation(program, ATTR_INDEX_LIGHTCOORD, "attr_TexCoord1");
+
+//  if(attribs & ATTR_TEXCOORD2)
+//      qglBindAttribLocation(program, ATTR_INDEX_TEXCOORD2, "attr_TexCoord2");
+
+//  if(attribs & ATTR_TEXCOORD3)
+//      qglBindAttribLocation(program, ATTR_INDEX_TEXCOORD3, "attr_TexCoord3");
+
+	if(attribs & ATTR_TANGENT)
+		qglBindAttribLocation(program, ATTR_INDEX_TANGENT, "attr_Tangent");
+
+	if(attribs & ATTR_NORMAL)
+		qglBindAttribLocation(program, ATTR_INDEX_NORMAL, "attr_Normal");
+
+	if(attribs & ATTR_COLOR)
+		qglBindAttribLocation(program, ATTR_INDEX_COLOR, "attr_Color");
+
+	if(attribs & ATTR_PAINTCOLOR)
+		qglBindAttribLocation(program, ATTR_INDEX_PAINTCOLOR, "attr_PaintColor");
+
+	if(attribs & ATTR_LIGHTDIRECTION)
+		qglBindAttribLocation(program, ATTR_INDEX_LIGHTDIRECTION, "attr_LightDirection");
+
+	if(attribs & ATTR_BONE_INDEXES)
+		qglBindAttribLocation(program, ATTR_INDEX_BONE_INDEXES, "attr_BoneIndexes");
+
+	if(attribs & ATTR_BONE_WEIGHTS)
+		qglBindAttribLocation(program, ATTR_INDEX_BONE_WEIGHTS, "attr_BoneWeights");
+
+	if(attribs & ATTR_POSITION2)
+		qglBindAttribLocation(program, ATTR_INDEX_POSITION2, "attr_Position2");
+
+	if(attribs & ATTR_NORMAL2)
+		qglBindAttribLocation(program, ATTR_INDEX_NORMAL2, "attr_Normal2");
+
+	if(attribs & ATTR_TANGENT2)
+		qglBindAttribLocation(program, ATTR_INDEX_TANGENT2, "attr_Tangent2");
+}
+
+// The submitting pass's program: compiled and linked, and kept, with no
+// status read, unless it's kept already
+static void GLSL_SubmitProgram(const shaderProgram_t *program, const char *vpCode, const char *fpCode)
+{
+	keptProgram_t	*kept;
+	const char		*code[2] = { vpCode, fpCode };
+	const GLenum	types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
+	GLuint			shaders[2] = { 0, 0 };
+	int				i;
+
+	if (GLSL_FindKept(program) || numKeptPrograms == MAX_KEPT_PROGRAMS)
+		return;
+
+	kept = &keptPrograms[numKeptPrograms++];
+	Com_Memset(kept, 0, sizeof(*kept));
+	kept->key = program->sourceKey;
+	kept->generation = program->generation;
+	kept->submitted = qtrue;
+	kept->program = qglCreateProgram();
+	for (i = 0; i < 2 && code[i]; i++)
+	{
+		shaders[i] = GLSL_CreateShader(code[i], strlen(code[i]), types[i]);
+		qglAttachShader(kept->program, shaders[i]);
+	}
+	kept->vertexShader = shaders[0];
+	kept->fragmentShader = shaders[1];
+	GLSL_BindAttribs(kept->program, program->attribs);
+	qglLinkProgram(kept->program);
 }
 
 static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int attribs, const char *vpCode, const char *fpCode)
@@ -682,6 +797,11 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 	program->attribs = attribs;
 	program->sourceKey = GLSL_SourceKey(attribs, vpCode, fpCode);
 	program->generation = GLimp_ContextGeneration();
+	if (submittingPrograms)
+	{
+		GLSL_SubmitProgram(program, vpCode, fpCode);
+		return 1;
+	}
 	if (GLSL_TakeKept(program))
 		return 1;
 	if (numKeptPrograms)
@@ -706,50 +826,7 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 		}
 	}
 
-	if(attribs & ATTR_POSITION)
-		qglBindAttribLocation(program->program, ATTR_INDEX_POSITION, "attr_Position");
-
-	if(attribs & ATTR_TEXCOORD)
-		qglBindAttribLocation(program->program, ATTR_INDEX_TEXCOORD, "attr_TexCoord0");
-
-	if(attribs & ATTR_LIGHTCOORD)
-		qglBindAttribLocation(program->program, ATTR_INDEX_LIGHTCOORD, "attr_TexCoord1");
-
-//  if(attribs & ATTR_TEXCOORD2)
-//      qglBindAttribLocation(program->program, ATTR_INDEX_TEXCOORD2, "attr_TexCoord2");
-
-//  if(attribs & ATTR_TEXCOORD3)
-//      qglBindAttribLocation(program->program, ATTR_INDEX_TEXCOORD3, "attr_TexCoord3");
-
-	if(attribs & ATTR_TANGENT)
-		qglBindAttribLocation(program->program, ATTR_INDEX_TANGENT, "attr_Tangent");
-
-	if(attribs & ATTR_NORMAL)
-		qglBindAttribLocation(program->program, ATTR_INDEX_NORMAL, "attr_Normal");
-
-	if(attribs & ATTR_COLOR)
-		qglBindAttribLocation(program->program, ATTR_INDEX_COLOR, "attr_Color");
-
-	if(attribs & ATTR_PAINTCOLOR)
-		qglBindAttribLocation(program->program, ATTR_INDEX_PAINTCOLOR, "attr_PaintColor");
-
-	if(attribs & ATTR_LIGHTDIRECTION)
-		qglBindAttribLocation(program->program, ATTR_INDEX_LIGHTDIRECTION, "attr_LightDirection");
-
-	if(attribs & ATTR_BONE_INDEXES)
-		qglBindAttribLocation(program->program, ATTR_INDEX_BONE_INDEXES, "attr_BoneIndexes");
-
-	if(attribs & ATTR_BONE_WEIGHTS)
-		qglBindAttribLocation(program->program, ATTR_INDEX_BONE_WEIGHTS, "attr_BoneWeights");
-
-	if(attribs & ATTR_POSITION2)
-		qglBindAttribLocation(program->program, ATTR_INDEX_POSITION2, "attr_Position2");
-
-	if(attribs & ATTR_NORMAL2)
-		qglBindAttribLocation(program->program, ATTR_INDEX_NORMAL2, "attr_Normal2");
-
-	if(attribs & ATTR_TANGENT2)
-		qglBindAttribLocation(program->program, ATTR_INDEX_TANGENT2, "attr_Tangent2");
+	GLSL_BindAttribs(program->program, attribs);
 
 	if (!GLSL_LinkProgram(program->program))
 	{
@@ -818,6 +895,14 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 
 	GLint *uniforms = program->uniforms;
 
+	// a program only submitted has none to set yet
+	if (submittingPrograms)
+	{
+		for (i = 0; i < UNIFORM_COUNT; i++)
+			uniforms[i] = -1;
+		return;
+	}
+
 	size = 0;
 	for (i = 0; i < UNIFORM_COUNT; i++)
 	{
@@ -874,6 +959,8 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 
 void GLSL_FinishGPUShader(shaderProgram_t *program)
 {
+	if (submittingPrograms)
+		return;
 	GLSL_ShowProgramUniforms(program->program);
 	GL_CheckErrors();
 }
@@ -881,10 +968,12 @@ void GLSL_FinishGPUShader(shaderProgram_t *program)
 void GLSL_SetUniformInt(shaderProgram_t *program, int uniformNum, GLint value)
 {
 	GLint *uniforms = program->uniforms;
-	GLint *compare = (GLint *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	GLint *compare = (GLint *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_INT)
 	{
@@ -905,10 +994,12 @@ void GLSL_SetUniformInt(shaderProgram_t *program, int uniformNum, GLint value)
 void GLSL_SetUniformFloat(shaderProgram_t *program, int uniformNum, GLfloat value)
 {
 	GLint *uniforms = program->uniforms;
-	GLfloat *compare = (GLfloat *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	GLfloat *compare = (GLfloat *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_FLOAT)
 	{
@@ -929,10 +1020,12 @@ void GLSL_SetUniformFloat(shaderProgram_t *program, int uniformNum, GLfloat valu
 void GLSL_SetUniformVec2(shaderProgram_t *program, int uniformNum, const vec2_t v)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_VEC2)
 	{
@@ -954,10 +1047,12 @@ void GLSL_SetUniformVec2(shaderProgram_t *program, int uniformNum, const vec2_t 
 void GLSL_SetUniformVec3(shaderProgram_t *program, int uniformNum, const vec3_t v)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_VEC3)
 	{
@@ -978,10 +1073,12 @@ void GLSL_SetUniformVec3(shaderProgram_t *program, int uniformNum, const vec3_t 
 void GLSL_SetUniformVec4(shaderProgram_t *program, int uniformNum, const vec4_t v)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_VEC4)
 	{
@@ -1002,10 +1099,12 @@ void GLSL_SetUniformVec4(shaderProgram_t *program, int uniformNum, const vec4_t 
 void GLSL_SetUniformFloat5(shaderProgram_t *program, int uniformNum, const vec5_t v)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_FLOAT5)
 	{
@@ -1026,10 +1125,12 @@ void GLSL_SetUniformFloat5(shaderProgram_t *program, int uniformNum, const vec5_
 void GLSL_SetUniformMat4(shaderProgram_t *program, int uniformNum, const mat4_t matrix)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_MAT16)
 	{
@@ -1051,11 +1152,13 @@ void GLSL_SetUniformMat4(shaderProgram_t *program, int uniformNum, const mat4_t 
 void GLSL_SetUniformVec4Dlights(shaderProgram_t *program, int uniformNum, const vec4_t *v, int count)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1) {
 		return;
 	}
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_VEC4_DLIGHTS || count > 2 * MAX_GENERIC_DLIGHTS)
 	{
@@ -1076,11 +1179,13 @@ void GLSL_SetUniformVec4Dlights(shaderProgram_t *program, int uniformNum, const 
 void GLSL_SetUniformMat4BoneMatrix(shaderProgram_t *program, int uniformNum, /*const*/ mat4_t *matrix, int numMatricies)
 {
 	GLint *uniforms = program->uniforms;
-	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1) {
 		return;
 	}
+
+	// computed once there's a cache: a program only submitted has none (GLSL_InitUniforms)
+	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniformsInfo[uniformNum].type != GLSL_MAT16_BONEMATRIX)
 	{
@@ -1109,8 +1214,9 @@ void GLSL_DeleteGPUShader(shaderProgram_t *program)
 {
 	if(program->program)
 	{
-		const keptProgram_t kept = { program->sourceKey, program->program, program->vertexShader,
-			program->fragmentShader, program->uniformBuffer, program->generation };
+		const keptProgram_t kept = { .key = program->sourceKey, .program = program->program,
+			.vertexShader = program->vertexShader, .fragmentShader = program->fragmentShader,
+			.uniformBuffer = program->uniformBuffer, .generation = program->generation };
 
 		if (keepingPrograms && numKeptPrograms < MAX_KEPT_PROGRAMS)
 			keptPrograms[numKeptPrograms++] = kept;
@@ -1418,30 +1524,29 @@ static qboolean GLSL_InitLightallProgram(int i)
 	return qtrue;
 }
 
-void GLSL_InitGPUShaders(void)
+// one pass of GLSL_InitGPUShaders: with submitting, each program is only
+// submitted (GLSL_SubmitProgram); without, each is built or taken back.
+// startTime is the first pass's start, which the time it reports counts from
+static void GLSL_InitPrograms(qboolean submitting, int startTime)
 {
-	int             startTime, endTime;
+	int             endTime;
 	int i;
 	char extradefines[1024];
 	int attribs;
 	int numGenShaders = 0, numLightShaders = 0, numEtcShaders = 0;
 
-	ri.Printf(PRINT_ALL, "------- GLSL_InitGPUShaders -------\n");
+	submittingPrograms = submitting;
+	if (!submittingPrograms)
+		ri.Printf(PRINT_ALL, "------- GLSL_InitGPUShaders -------\n");
 
 	R_IssuePendingRenderCommands();
-
-	startTime = ri.Milliseconds();
 
 	tr.stageDlights = GLSL_StageDlightsFit();
 
 	// OpenGL ES may not have enough attributes to fit ones used for vertex animation
-	if ( glRefConfig.maxVertexAttribs > ATTR_INDEX_NORMAL2 ) {
-		ri.Printf(PRINT_ALL, "Using GPU vertex animation\n");
-		glRefConfig.gpuVertexAnimation = qtrue;
-	} else {
-		ri.Printf(PRINT_ALL, "Using CPU vertex animation\n");
-		glRefConfig.gpuVertexAnimation = qfalse;
-	}
+	glRefConfig.gpuVertexAnimation = glRefConfig.maxVertexAttribs > ATTR_INDEX_NORMAL2;
+	if (!submittingPrograms)
+		ri.Printf(PRINT_ALL, "Using %s vertex animation\n", glRefConfig.gpuVertexAnimation ? "GPU" : "CPU");
 
 	for (i = 0; i < GENERICDEF_COUNT; i++)
 	{
@@ -1879,15 +1984,30 @@ void GLSL_InitGPUShaders(void)
 #endif
 
 
+	// the submitting pass's programs are the next pass's to take back
+	if (submittingPrograms)
+		return;
+
 	// a kept program not taken back was built from a source changed since
 	GLSL_DeleteKeptPrograms();
 
 	endTime = ri.Milliseconds();
 
-	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc, %i kept from before) in %5.2f seconds\n", 
-		numGenShaders + numLightShaders + numEtcShaders, numGenShaders, numLightShaders, 
-		numEtcShaders, numTakenPrograms, (endTime - startTime) / 1000.0);
-	numTakenPrograms = 0;
+	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc, %i kept from before, %i built side by side) in %5.2f seconds\n",
+		numGenShaders + numLightShaders + numEtcShaders, numGenShaders, numLightShaders,
+		numEtcShaders, numTakenPrograms, numSubmittedPrograms, (endTime - startTime) / 1000.0);
+	numTakenPrograms = numSubmittedPrograms = 0;
+}
+
+void GLSL_InitGPUShaders(void)
+{
+	int		startTime = ri.Milliseconds();
+
+	// with GL_KHR_parallel_shader_compile, every program is submitted
+	// first, and taken back by the pass after once all are under way
+	if (glRefConfig.parallelShaderCompile)
+		GLSL_InitPrograms(qtrue, startTime);
+	GLSL_InitPrograms(qfalse, startTime);
 }
 
 void GLSL_ShutdownGPUShaders(qboolean keep)
