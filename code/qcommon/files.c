@@ -7772,7 +7772,14 @@ static void FS_Startup( const char *gameName )
 	if ( indexCheck ) {
 		Cvar_Set( "fs_indexCheck", indexCheck );
 	}
+	// which installed paks count on a map: a client's game code and servers
+	// can't change it, nor fs_globalPaks (P479); a dedicated server's are its
+	// operator's
+#ifdef DEDICATED
 	fs_mapPakScope = Cvar_Get( "fs_mapPakScope", "1", CVAR_ARCHIVE );
+#else
+	fs_mapPakScope = Cvar_Get( "fs_mapPakScope", "1", CVAR_ARCHIVE | CVAR_PROTECTED );
+#endif
 	Cvar_CheckRange( fs_mapPakScope, 0, 1, qtrue );
 	Cvar_SetDescription( fs_mapPakScope,
 		"Whether a map pack changes only its own maps\n"
@@ -7783,7 +7790,11 @@ static void FS_Startup( const char *gameName )
 		"Applies from the next map.\n"
 		"0 = off: every pak counts on every map, as in Quake III\n"
 		"1 = on" );
+#ifdef DEDICATED
 	fs_globalPaks = Cvar_Get( "fs_globalPaks", "", CVAR_ARCHIVE );
+#else
+	fs_globalPaks = Cvar_Get( "fs_globalPaks", "", CVAR_ARCHIVE | CVAR_PROTECTED );
+#endif
 	Cvar_SetDescription( fs_globalPaks,
 		"Map packs whose files count on every map, as they did before fs_mapPakScope\n"
 		"Names of pak files, separated by spaces, with or without .pk3, in any case: a name alone for "
