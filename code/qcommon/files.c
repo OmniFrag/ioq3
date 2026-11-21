@@ -8054,7 +8054,7 @@ static void FS_Startup( const char *gameName )
 	const char *dataPath = Sys_DefaultHomeDataPath();
 	const char *statePath = Sys_DefaultHomeStatePath();
 	const char *predConfigPath = "", *predDataPath = "";
-	const char *indexCheck;
+	const char *indexCheck, *indexDirs;
 
 	// what this start leaves out, said again by each
 	fs_leftOutPaks = 0;
@@ -8090,6 +8090,12 @@ static void FS_Startup( const char *gameName )
 	indexCheck = Com_TestEnv( "OMNIFRAG_TEST_FS_INDEX_CHECK" );
 	if ( indexCheck ) {
 		Cvar_Set( "fs_indexCheck", indexCheck );
+	}
+	// and the directories' files in the index natively too, as the web has
+	// them, so the walk proves the index there with fs_indexCheck
+	indexDirs = Com_TestEnv( "OMNIFRAG_TEST_FS_INDEX_DIRS" );
+	if ( indexDirs ) {
+		Cvar_Set( "fs_indexDirs", indexDirs );
 	}
 	// which installed paks count on a map: a client's game code and servers
 	// can't change it, nor fs_globalPaks (P479); a dedicated server's are its
