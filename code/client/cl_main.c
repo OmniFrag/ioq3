@@ -141,7 +141,12 @@ clientConnection_t	clc;
 clientStatic_t		cls;
 vm_t				*cgvm;
 
-char				cl_reconnectArgs[MAX_OSPATH];
+// the address reconnect goes back to, as read and printed again, never the
+// words connect was given, which reconnect would run as commands of their
+// own (CL_Reconnect_f); and whether restricted text ran the connect, as
+// the reconnect then runs too
+static char			cl_reconnectAddress[MAX_OSPATH];
+static qboolean		cl_reconnectRestricted;
 // the key reconnect's address must prove, as the join that found it did
 // (CL_ExtConnect's expected fingerprint), or "" for any
 static char			cl_reconnectExpected[IDENT_FINGERPRINT_SIZE];
@@ -1927,27 +1932,24 @@ CL_Reconnect_f
 ================
 */
 void CL_Reconnect_f( void ) {
-	// a connection with no address to go back to, as a web client's, joins
-	// again as it was joined (CL_ExtSetRejoin)
-	const char	*command = cl_reconnectArgs[0] ? va( "connect %s", cl_reconnectArgs ) : cls.rejoin;
 	netadr_t	adr;
 	char		name[MAX_OSPATH], expected[IDENT_FINGERPRINT_SIZE], rejoin[sizeof( cls.rejoin )];
 	static int	restrictedRejoinAt;
 
-	if ( !command[0] )
+	if ( !cl_reconnectAddress[0] && !cls.rejoin[0] )
 		return;
 	Cvar_Set("ui_singlePlayerActive", "0");
 	// an address a join found wants the key the join wanted: another server
 	// at that address since is passed over (CL_ExpectedServer), as the
 	// join's would be. A restarting server's goodbye rejoins as the join
 	// went instead (CL_ReconnectAsked)
-	if ( cl_reconnectArgs[0] && cl_reconnectExpected[0] ) {
+	if ( cl_reconnectAddress[0] && cl_reconnectExpected[0] ) {
 		// never a keyless connect in its place
-		if ( !NET_StringToAdr( cl_reconnectArgs, &adr, NA_UNSPEC ) ) {
-			Com_Printf( "Couldn't read %s, the address to reconnect to.\n", cl_reconnectArgs );
+		if ( !NET_StringToAdr( cl_reconnectAddress, &adr, NA_UNSPEC ) ) {
+			Com_Printf( "Couldn't read %s, the address to reconnect to.\n", cl_reconnectAddress );
 			return;
 		}
-		Q_strncpyz( name, cl_reconnectArgs, sizeof( name ) );
+		Q_strncpyz( name, cl_reconnectAddress, sizeof( name ) );
 		Q_strncpyz( expected, cl_reconnectExpected, sizeof( expected ) );
 		Q_strncpyz( rejoin, cls.rejoin, sizeof( rejoin ) );
 		// as long as the join would wait, not forever: a server there that
@@ -1957,26 +1959,30 @@ void CL_Reconnect_f( void ) {
 		// still the join's: the address and key to go back to, if this finds
 		// no server with the key (CL_ExtConnect forgets them until an
 		// answer), and its rejoin by code, a restarting server's goodbye's
-		Q_strncpyz( cl_reconnectArgs, name, sizeof( cl_reconnectArgs ) );
+		Q_strncpyz( cl_reconnectAddress, name, sizeof( cl_reconnectAddress ) );
 		Q_strncpyz( cl_reconnectExpected, expected, sizeof( cl_reconnectExpected ) );
 		Q_strncpyz( cls.rejoin, rejoin, sizeof( cls.rejoin ) );
 		return;
 	}
-	// the engine's own rejoin, the join it saved (CL_ExtSetRejoin), runs
-	// with the player's rights though game code ran reconnect: it goes only
-	// where the join went, and a join elsewhere game code can't run itself.
-	// Game code's once in RECONNECT_RESTRICTED_MSEC at most
-	if ( !cl_reconnectArgs[0] ) {
+	// a connection with no address to go back to, as a web client's, joins
+	// again as it was joined. The engine's own rejoin, the join it saved
+	// (CL_ExtSetRejoin), runs with the player's rights though game code ran
+	// reconnect: it goes only where the join went, and a join elsewhere
+	// game code can't run itself. Game code's once in
+	// RECONNECT_RESTRICTED_MSEC at most
+	if ( !cl_reconnectAddress[0] ) {
 		if ( Cmd_IsRestricted() ) {
 			if ( restrictedRejoinAt && cls.realtime - restrictedRejoinAt < RECONNECT_RESTRICTED_MSEC ) {
 				return;
 			}
 			restrictedRejoinAt = cls.realtime ? cls.realtime : 1;
 		}
-		Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", command ) );
+		Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", cls.rejoin ) );
 		return;
 	}
-	Cbuf_AddText( va( "%s\n", command ) );
+	// the address quoted, so nothing in it ends the command, and with the
+	// rights of the connect's text or this one's, whichever has fewer
+	Cbuf_AddTextRestricted( va( "connect \"%s\"\n", cl_reconnectAddress ), cl_reconnectRestricted || Cmd_IsRestricted() );
 }
 
 // a server's goodbye that asks its players to reconnect, as one that's
@@ -2110,7 +2116,7 @@ void CL_ReconnectAsked( const char *reason ) {
 		// every player of a restarting server's gateway joins again, so not
 		// all at once
 		CL_ReconnectBegin( cls.rejoin, NULL, CL_ReconnectSpread( RECONNECT_JOIN_MSEC, RECONNECT_JOIN_SPREAD ) );
-	} else if ( cl_reconnectArgs[0] && ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) ) {
+	} else if ( cl_reconnectAddress[0] && ( clc.serverAddress.type == NA_IP || clc.serverAddress.type == NA_IP6 ) ) {
 		CL_ReconnectBegin( "reconnect", &clc.serverAddress, RECONNECT_ASK_MSEC );
 	} else {
 		return;
@@ -2519,8 +2525,8 @@ void CL_Connect_f( void ) {
 		Q_strncpyz( server, Cmd_Argv(2), sizeof( server ) );
 	}
 
-	// save arguments for reconnect, which expects no key, as this doesn't
-	Q_strncpyz( cl_reconnectArgs, Cmd_Args(), sizeof( cl_reconnectArgs ) );
+	// reconnect expects no key, as this doesn't
+	cl_reconnectAddress[0] = '\0';
 	cl_reconnectExpected[0] = '\0';
 
 	CL_ConnectBegin( server );
@@ -2533,6 +2539,11 @@ void CL_Connect_f( void ) {
 	if (clc.serverAddress.port == 0) {
 		clc.serverAddress.port = BigShort( PORT_SERVER );
 	}
+	// reconnect goes back here, printed as NET_StringToAdr reads it again,
+	// loopback's as localhost
+	Q_strncpyz( cl_reconnectAddress, NET_IsLocalAddress( clc.serverAddress ) ? "localhost" :
+		NET_AdrToStringwPort( clc.serverAddress ), sizeof( cl_reconnectAddress ) );
+	cl_reconnectRestricted = Cmd_IsRestricted();
 
 	Com_Printf( "%s resolved to %s\n", clc.servername, NET_AdrToStringwPort(clc.serverAddress));
 
@@ -2561,7 +2572,7 @@ void CL_ExtConnect( const char *name, const netadr_t *candidates, const int *del
 	}
 	count = MIN( count, MAX_CONNECT_CANDIDATES );
 	// reconnect goes to the address that answers, once one does
-	cl_reconnectArgs[0] = '\0';
+	cl_reconnectAddress[0] = '\0';
 	cl_reconnectExpected[0] = '\0';
 	CL_ConnectBegin( name );
 	for ( i = 0; i < count; i++ ) {
@@ -2609,7 +2620,7 @@ static void CL_RtcConnect_f( void ) {
 		return;
 	}
 	// reconnect needs a new connection, so it has nothing to go back to
-	cl_reconnectArgs[0] = '\0';
+	cl_reconnectAddress[0] = '\0';
 	cl_reconnectExpected[0] = '\0';
 	Q_strncpyz( name, NET_AdrToString( adr ), sizeof( name ) );
 	CL_ConnectBegin( name );
@@ -4653,8 +4664,9 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			// a web connection's id can't be connected to again: reconnect
 			// joins again instead (CL_Reconnect_f)
 			if ( from.type != NA_WEB ) {
-				Q_strncpyz( cl_reconnectArgs, NET_AdrToStringwPort( from ), sizeof( cl_reconnectArgs ) );
+				Q_strncpyz( cl_reconnectAddress, NET_AdrToStringwPort( from ), sizeof( cl_reconnectAddress ) );
 				Q_strncpyz( cl_reconnectExpected, clc.expectedFingerprint, sizeof( cl_reconnectExpected ) );
+				cl_reconnectRestricted = qfalse;
 			}
 		}
 		Com_DPrintf ("challengeResponse: %d\n", clc.challenge);
