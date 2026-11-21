@@ -99,8 +99,9 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 
 	// actually start the commands going, but in no context other than the
 	// one the renderer started in: one lost, or given back and not started
-	// in again yet, has none of the objects they draw with
-	if ( !r_skipBackEnd->integer && GLimp_ContextGeneration() == tr.contextGeneration ) {
+	// in again yet, has none of the objects they draw with; nor before its
+	// programs are in (GLSL_SpreadPrograms)
+	if ( !r_skipBackEnd->integer && GLimp_ContextGeneration() == tr.contextGeneration && !GLSL_Spreading() ) {
 		// let it start on the new batch
 		RB_ExecuteRenderCommands( cmdList->cmds );
 	}
@@ -133,6 +134,13 @@ void *R_GetCommandBufferReserved( int bytes, int reservedBytes ) {
 
 	cmdList = &backEndData->commands;
 	bytes = PAD(bytes, sizeof(void *));
+
+	// nothing is drawn while the programs are spread over frames
+	// (R_IssueRenderCommands), so nothing but the frame's end waits: an
+	// image's update or a 2D delete, which mustn't be lost, is done at once
+	if ( reservedBytes && GLSL_Spreading() ) {
+		return NULL;
+	}
 
 	// always leave room for the end of list command
 	if ( cmdList->used + bytes + sizeof( int ) + reservedBytes > MAX_RENDER_COMMANDS ) {
@@ -474,6 +482,10 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 		return;
 	}
 	glState.finishCalled = qfalse;
+
+	// a few more of the programs spread over frames, as far as about a
+	// frame's time takes, the page drawn between
+	GLSL_SpreadPrograms( 10 );
 
 	tr.frameCount++;
 	tr.frameSceneNum = 0;

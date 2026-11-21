@@ -1713,6 +1713,25 @@ qboolean GLimp_WindowSizeIsOwn( void )
 
 /*
 ===============
+GLimp_ProgramsBuilt
+
+How many of the renderer's programs are in, of all it builds as it starts,
+while it builds them over frames (renderergl2's GLSL_SpreadPrograms): the
+web page says how far along, and holds the game's start until all are
+===============
+*/
+void GLimp_ProgramsBuilt( int built, int total )
+{
+#ifdef __EMSCRIPTEN__
+	MAIN_THREAD_EM_ASM( { Module.programsBuilt?.( $0, $1 ); }, built, total );
+#else
+	(void)built;
+	(void)total;
+#endif
+}
+
+/*
+===============
 GLimp_ContextGeneration
 
 How many times the context has been lost or given back (the web page's

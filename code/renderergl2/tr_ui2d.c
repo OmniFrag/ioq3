@@ -214,7 +214,7 @@ void R_GetCaps2DRetained( caps2D_t *caps ) {
 	// the render target's samples, unless the views draw apart from it
 	// (FBO_UseRenderTarget)
 	caps->layers = R_Layers2DAvailable();
-	caps->glass = caps->layers && caps->clipShapes && tr.ui2dGlassShader.program;
+	caps->glass = caps->layers && caps->clipShapes && GLSL_ProgramComing( &tr.ui2dGlassShader );
 	caps->multisample = tr.renderFbo && tr.renderFbo == tr.renderTargetFbo && tr.renderTargetResolveFbo ?
 		tr.multisample : 0;
 }
@@ -223,14 +223,36 @@ void R_GetCaps2DRetained( caps2D_t *caps ) {
 ===============
 R_InitUI2D
 
-Finds the ui2d program's own uniforms, once GLSL_InitGPUShaders has made
-it, and opens the store
+Starts ui2d's state, before the programs are in, and opens the store;
+the program's own uniforms are R_InitUI2DProgram's
 ===============
 */
 void R_InitUI2D( void ) {
+	Com_Memset( &ui2d, 0, sizeof( ui2d ) );
+
+	// GL starts them at 0, but a program kept from the renderer before
+	// (GLSL_TakeKept) holds what that one set last: what's set first is set,
+	// a paint as no paint (kind -1) is
+	ui2d.lastPremultiplied = ui2d.lastTextureMode = ui2d.lastClipShape = -1;
+	ui2d.lastColorScale = -1;
+	ui2d.lastClip[2] = -1;
+	ui2d.lastTextureWidth = ui2d.lastTextureHeight = -1;
+	ui2d.lastPaint.kind = (paint2DKind_t)-1;
+	ui2d.painting = qtrue;
+
+	R_InitStore2D();
+}
+
+/*
+===============
+R_InitUI2DProgram
+
+The ui2d program's own uniforms, once it's built (R_ProgramsBuilt)
+===============
+*/
+void R_InitUI2DProgram( void ) {
 	GLuint	program = tr.ui2dShader.program;
 
-	Com_Memset( &ui2d, 0, sizeof( ui2d ) );
 	ui2d.vertexPremultiplied = qglGetUniformLocation( program, "u_VertexPremultiplied" );
 	ui2d.colorScale = qglGetUniformLocation( program, "u_ColorScale" );
 	ui2d.textureMode = qglGetUniformLocation( program, "u_TextureMode" );
@@ -250,18 +272,6 @@ void R_InitUI2D( void ) {
 	ui2d.clipShape = qglGetUniformLocation( program, "u_ClipShape" );
 	ui2d.clipBox = qglGetUniformLocation( program, "u_ClipBox" );
 	ui2d.clipRadii = qglGetUniformLocation( program, "u_ClipRadii" );
-
-	// GL starts them at 0, but a program kept from the renderer before
-	// (GLSL_TakeKept) holds what that one set last: what's set first is set,
-	// a paint as no paint (kind -1) is
-	ui2d.lastPremultiplied = ui2d.lastTextureMode = ui2d.lastClipShape = -1;
-	ui2d.lastColorScale = -1;
-	ui2d.lastClip[2] = -1;
-	ui2d.lastTextureWidth = ui2d.lastTextureHeight = -1;
-	ui2d.lastPaint.kind = (paint2DKind_t)-1;
-	ui2d.painting = qtrue;
-
-	R_InitStore2D();
 }
 
 

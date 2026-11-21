@@ -731,7 +731,8 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 	vec2_t texCoords[4];
 	vec4_t color;
 
-	if ( !tr.registered ) {
+	// drawn at once, with a program that may not be in yet (GLSL_SpreadPrograms)
+	if ( !tr.registered || GLSL_Spreading() ) {
 		return;
 	}
 	R_IssuePendingRenderCommands();

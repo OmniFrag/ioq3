@@ -442,6 +442,7 @@ qboolean	GLimp_SetFullscreen( qboolean fullscreen );
 qboolean	GLimp_WindowSizeIsOwn( void );
 qboolean	GLimp_FrameReady( void );
 int		GLimp_ContextGeneration( void );
+void	GLimp_ProgramsBuilt( int built, int total );
 void		GLimp_ForgetObjects( qboolean forget );
 qboolean	GLimp_UpdateWindowSize( void );
 

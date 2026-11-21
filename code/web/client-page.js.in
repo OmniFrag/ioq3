@@ -398,6 +398,10 @@ const engineScript = enginePath + `@CLIENT_BINARY@.js`;
 // from the browser's cache
 let engineTag = null;
 let startGame, pageJoins = FRONT ? 0 : 1, joinCancels = 0;
+// the renderer's programs still being built over frames, in a browser that
+// can't build them side by side (programsBuilt), and the game's start, told
+// once they're in: a join meanwhile waits
+let programsBuilding = false, startedWaits = false;
 // what the front's play gave the next join: a name, cleaned as a link's is,
 // and a password, which is never stored and goes once it's taken
 const joinFields = { name: '', password: '' };
@@ -1509,6 +1513,18 @@ const configWritten = () => {
 // saved. A page the browser keeps in its back-forward cache may come back,
 // and keeps playing, so it's only saved
 let runningEngine = null;
+// the game started, its programs in: told to a front, which plays from here
+const gameIsStarted = () => {
+    startedWaits = false;
+    showStatus();
+    if (frontOn) {
+        engineTag = fetch(engineScript, { cache: 'force-cache' }).then((r) => {
+            r.body?.cancel().catch(() => {});
+            return r.headers.get('ETag');
+        }, () => null);
+    }
+    tellFront(frontListeners.started);
+};
 // a phone may end a tab it has hidden without a pagehide, so its copy too
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) return;
@@ -2761,7 +2777,7 @@ ioquake3({
     // the front's (WEB_PAGE_FRONT): a leave of a server, and how many times
     // the page has asked for its own join, 0 while it holds it
     left: (kind, reason) => tellFront(frontListeners.left, kind, reason),
-    pageJoins: () => pageJoins,
+    pageJoins: () => (programsBuilding ? 0 : pageJoins),
     // and how many times it has canceled the join under way
     pageJoinCancels: () => joinCancels,
     // the client's join as it goes (the join extension's), to a front as a
@@ -2835,17 +2851,22 @@ ioquake3({
         left.hidden = false;
         again.focus();
     },
-    // the engine has started, and draws from here on
+    // the renderer's programs built over frames (GLimp_ProgramsBuilt), so
+    // the page isn't held while the browser builds them all: the start goes
+    // on saying so, with how far along, and is told once all are in
+    programsBuilt: (built, total) => {
+        const wasBuilding = programsBuilding;
+        programsBuilding = built < total;
+        if (programsBuilding) showStatus('Starting…', built / total, false, { kind: 'starting' });
+        else if (startedWaits) gameIsStarted();
+        // a renderer's restart after the start, as in a context given back
+        else if (wasBuilding) showStatus();
+    },
+    // the engine has started, and draws from here on, once its programs are in
     postRun: [(module) => {
         runningEngine = module;
         centralHeading.hidden = true;
-        showStatus();
-        if (frontOn) {
-            engineTag = fetch(engineScript, { cache: 'force-cache' }).then((r) => {
-                r.body?.cancel().catch(() => {});
-                return r.headers.get('ETag');
-            }, () => null);
-        }
-        tellFront(frontListeners.started);
+        if (programsBuilding) startedWaits = true;
+        else gameIsStarted();
     }],
 });

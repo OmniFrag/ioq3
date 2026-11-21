@@ -1695,9 +1695,8 @@ void R_Init( void ) {
 	// nothing (RND-017)
 	ri.Cvar_Set( "r_shadowModes", va( "%d", 1 << 1 | 1 << 3 | glRefConfig.framebufferObject << 4 ) );
 
-	GLSL_InitGPUShaders();
 	R_InitUI2D();
-	R_InitLayers2D();
+	GLSL_InitGPUShaders();
 
 	R_InitVaos();
 
@@ -1726,6 +1725,19 @@ void R_Init( void ) {
 
 /*
 =============
+R_ProgramsBuilt
+
+What reads the GLSL programs once they're in: at once, or frames after
+the renderer's start where they're spread over frames (GLSL_SpreadPrograms)
+=============
+*/
+void R_ProgramsBuilt( void ) {
+	R_InitUI2DProgram();
+	R_InitLayers2D();
+}
+
+/*
+==================
 R_UpdateViewScale
 
 Sizes what world views draw into for r_viewScale and the window's size.
@@ -1890,6 +1902,8 @@ Touch all images to make sure they are resident
 =============
 */
 void RE_EndRegistration( void ) {
+	// the dlights' programs and RB_ShowImages need the programs in
+	GLSL_SpreadPrograms( INT_MAX );
 	R_IssuePendingRenderCommands();
 	// the dlights' programs for the shaders registered, while the map loads
 	GLSL_InitStageDlightPrograms();

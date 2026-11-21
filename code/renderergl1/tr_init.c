@@ -1359,6 +1359,9 @@ void R_Init( void ) {
 
 	R_InitFreeType();
 
+	// no programs to build: a page waiting on opengl2's, spread over frames
+	// before a restart into this renderer, hears none are left
+	GLimp_ProgramsBuilt( 0, 0 );
 
 	err = qglGetError();
 	if ( err != GL_NO_ERROR )

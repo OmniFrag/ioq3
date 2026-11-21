@@ -2355,6 +2355,10 @@ GLSL
 */
 
 void GLSL_InitGPUShaders(void);
+void R_ProgramsBuilt( void );
+qboolean GLSL_SpreadPrograms(int msec);
+qboolean GLSL_Spreading(void);
+qboolean GLSL_ProgramComing(const shaderProgram_t *program);
 void GLSL_ShutdownGPUShaders(qboolean keep);
 void GLSL_VertexAttribPointers(uint32_t attribBits);
 void GLSL_BindProgram(shaderProgram_t * program);
@@ -2679,6 +2683,7 @@ void RB_Scissor2D( const int *rect );
 void R_GetCaps2DRetained( caps2D_t *caps );
 qboolean R_Paints2DAvailable( void );
 void R_InitUI2D( void );
+void R_InitUI2DProgram( void );
 void RB_ShapeRowsUp2D( const float *shape, int height, float out[8] );
 
 // tr_ui2d_layers.c: the layers and their filters

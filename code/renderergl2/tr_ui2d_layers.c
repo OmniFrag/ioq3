@@ -110,7 +110,7 @@ GLSL_InitGPUShaders makes where GLSL allows it
 ===============
 */
 qboolean R_Layers2DAvailable( void ) {
-	return glRefConfig.framebufferObject && tr.renderFbo && tr.ui2dFilterShader.program;
+	return glRefConfig.framebufferObject && tr.renderFbo && GLSL_ProgramComing( &tr.ui2dFilterShader );
 }
 
 /*
@@ -216,8 +216,8 @@ void R_ShutdownLayers2D( void ) {
 ===============
 R_InitLayers2D
 
-Finds the ui2dfilter program's own uniforms, once GLSL_InitGPUShaders has
-made it. The layers are made when first pushed
+Finds the ui2dfilter program's own uniforms, once it's built
+(R_ProgramsBuilt). The layers are made when first pushed
 ===============
 */
 void R_InitLayers2D( void ) {

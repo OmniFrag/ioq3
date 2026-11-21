@@ -2900,6 +2900,10 @@ void RE_LoadWorldMap( const char *name ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map" );
 	}
 
+	// a map is what the programs are for, and its load may draw with them:
+	// any still spread over frames (GLSL_SpreadPrograms) are read now
+	GLSL_SpreadPrograms( INT_MAX );
+
 	// set default map light scale
 	tr.sunShadowScale = 0.5f;
 

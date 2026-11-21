@@ -587,6 +587,7 @@ typedef struct {
 	char		*uniformBuffer;	// the values its uniforms hold, as the program has them
 	int			generation;		// the context's it was built in (GLimp_ContextGeneration)
 	qboolean	submitted;		// built by the submitting pass, its status not read yet
+	GLint		linked;			// a submitted one's link status once read (GLSL_SpreadPrograms), else -1
 } keptProgram_t;
 
 #define MAX_KEPT_PROGRAMS	256
@@ -601,6 +602,15 @@ static int				numKeptPrograms, numTakenPrograms, numSubmittedPrograms;
 // begins, so a pass an error cut short leaves nothing for the next start
 static qboolean			submittingPrograms;
 static qboolean			keepingPrograms;	// GLSL_ShutdownGPUShaders keeping, so GLSL_DeleteGPUShader keeps
+// In a browser without GL_KHR_parallel_shader_compile, the programs are
+// submitted as with it, and their statuses read a few a frame, the world
+// drawn once all are in (GLSL_SpreadPrograms): reading one holds the page
+// until the browser has built it, which for all at once held it 13 s in
+// Firefox on Windows, whose shader compiler is slow
+static qboolean			spreadingPrograms;
+// the first pass's start, which the time reported counts from; how many
+// are submitted and read; and the kept program to look at next
+static int				spreadStartTime, spreadTotal, spreadRead, spreadNext;
 
 // FNV-1a over a program's attributes and its two sources, each with its end
 static uint64_t GLSL_SourceKey(int attribs, const char *vpCode, const char *fpCode)
@@ -682,9 +692,10 @@ static qboolean GLSL_TakeKept(shaderProgram_t *program)
 	// way, which says why
 	if (kept->submitted)
 	{
-		GLint linked = 0;
+		GLint linked = kept->linked;
 
-		qglGetProgramiv(kept->program, GL_LINK_STATUS, &linked);
+		if (linked < 0)
+			qglGetProgramiv(kept->program, GL_LINK_STATUS, &linked);
 		if (!linked)
 		{
 			GLSL_DeleteKept(kept);
@@ -771,6 +782,7 @@ static void GLSL_SubmitProgram(const shaderProgram_t *program, const char *vpCod
 	kept->key = program->sourceKey;
 	kept->generation = program->generation;
 	kept->submitted = qtrue;
+	kept->linked = -1;
 	kept->program = qglCreateProgram();
 	for (i = 0; i < 2 && code[i]; i++)
 	{
@@ -1993,29 +2005,129 @@ static void GLSL_InitPrograms(qboolean submitting, int startTime)
 
 	endTime = ri.Milliseconds();
 
-	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc, %i kept from before, %i built side by side) in %5.2f seconds\n",
+	// the submitted ones by the way they were built: side by side with the extension, else spread over frames
+	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc, %i kept from before, %i built %s) in %5.2f seconds\n",
 		numGenShaders + numLightShaders + numEtcShaders, numGenShaders, numLightShaders,
-		numEtcShaders, numTakenPrograms, numSubmittedPrograms, (endTime - startTime) / 1000.0);
+		numEtcShaders, numTakenPrograms, numSubmittedPrograms, spreadTotal ? "spread over frames" : "side by side",
+		(endTime - startTime) / 1000.0);
 	numTakenPrograms = numSubmittedPrograms = 0;
+}
+
+// the programs submitted and not taken back yet: those GLSL_SpreadPrograms
+// reads; and how many of them it read already, before a restart that kept them
+static int GLSL_SubmittedPrograms(int *read)
+{
+	int i, n = 0;
+
+	*read = 0;
+	for (i = 0; i < numKeptPrograms; i++)
+	{
+		n += keptPrograms[i].submitted;
+		*read += keptPrograms[i].submitted && keptPrograms[i].linked >= 0;
+	}
+	return n;
 }
 
 void GLSL_InitGPUShaders(void)
 {
 	int		startTime = ri.Milliseconds();
+	// the statuses read a few a frame: in a browser, whose page they'd hold,
+	// without the extension, unless r_ext_parallel_shader_compile 0 asks for
+	// the programs one by one
+#ifdef __EMSCRIPTEN__
+	const qboolean spread = !glRefConfig.parallelShaderCompile && r_ext_parallel_shader_compile->integer;
+#else
+	const qboolean spread = qfalse;
+#endif
 
 	// with GL_KHR_parallel_shader_compile, every program is submitted
 	// first, and taken back by the pass after once all are under way
-	if (glRefConfig.parallelShaderCompile)
+	if (glRefConfig.parallelShaderCompile || spread)
 		GLSL_InitPrograms(qtrue, startTime);
+	// all kept from before is taken back at once
+	spreadTotal = spread ? GLSL_SubmittedPrograms(&spreadRead) : 0;
+	if (spreadTotal)
+	{
+		spreadingPrograms = qtrue;
+		spreadStartTime = startTime;
+		spreadNext = 0;
+		GLimp_ProgramsBuilt(spreadRead, spreadTotal);
+		return;
+	}
 	GLSL_InitPrograms(qfalse, startTime);
+	R_ProgramsBuilt();
+	// none left to build, as a page waiting on a spread a restart cut short hears
+	GLimp_ProgramsBuilt(0, 0);
+}
+
+/*
+====================
+GLSL_SpreadPrograms
+
+While the programs are spread over frames (GLSL_InitGPUShaders), the
+statuses of those submitted, read for msec, and at least one; once all
+are read, the pass that takes them back, which then waits on nothing.
+Until then the renderer draws nothing (R_IssueRenderCommands). True once
+the programs are in
+====================
+*/
+qboolean GLSL_SpreadPrograms(int msec)
+{
+	int start = ri.Milliseconds(), readNow = 0;
+
+	if (!spreadingPrograms)
+		return qtrue;
+	// none read in a context lost, or given back and not started in again:
+	// the renderer's restart in the new one submits them again
+	if (GLimp_ContextGeneration() != tr.contextGeneration)
+		return qfalse;
+
+	// in the order submitted, which the browser builds them in; the kept
+	// list only grows until the pass that takes them back
+	while (spreadNext < numKeptPrograms && (!readNow || ri.Milliseconds() - start < msec))
+	{
+		keptProgram_t *kept = &keptPrograms[spreadNext++];
+
+		if (!kept->submitted || kept->linked >= 0)
+			continue;
+		qglGetProgramiv(kept->program, GL_LINK_STATUS, &kept->linked);
+		readNow++;
+	}
+	spreadRead += readNow;
+
+	if (readNow)
+		GLimp_ProgramsBuilt(spreadRead, spreadTotal);
+	if (spreadRead < spreadTotal)
+		return qfalse;
+
+	spreadingPrograms = qfalse;
+	GLSL_InitPrograms(qfalse, spreadStartTime);
+	R_ProgramsBuilt();
+	return qtrue;
+}
+
+qboolean GLSL_Spreading(void)
+{
+	return spreadingPrograms;
+}
+
+// a program built, or, while they're spread over frames, one submitted or
+// kept from before that the pass that takes them back would take
+qboolean GLSL_ProgramComing(const shaderProgram_t *program)
+{
+	return program->program || (spreadingPrograms && program->sourceKey && GLSL_FindKept(program));
 }
 
 void GLSL_ShutdownGPUShaders(qboolean keep)
 {
 	int i;
 
-	// any left from before, which a shutdown keeps no longer than the next
-	GLSL_DeleteKeptPrograms();
+	// any left from before, which a shutdown keeps no longer than the next;
+	// those still spread over frames, and their statuses read, stay for the
+	// next renderer where the context does, as a join may cut a spread short
+	if (!keep || !spreadingPrograms || GLimp_ContextGeneration() != tr.contextGeneration)
+		GLSL_DeleteKeptPrograms();
+	spreadingPrograms = qfalse;
 	keepingPrograms = keep;
 
 	ri.Printf(PRINT_ALL, "------- GLSL_ShutdownGPUShaders -------\n");
