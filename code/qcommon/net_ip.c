@@ -3111,46 +3111,50 @@ NET_GetCvars
 static qboolean NET_GetCvars( void ) {
 	int modified;
 
+	// what carries the traffic and from where: game code and servers can't
+	// change it, as they can't the proxy below, or their own next connect
+	// would go wherever they chose (net_enabled with net_restart, on the
+	// web, where it would turn on the socket emulation's WebSockets)
 #if defined(__EMSCRIPTEN__)
-	// a browser has no UDP
-	net_enabled = Cvar_Get( "net_enabled", "0", CVAR_LATCH | CVAR_ARCHIVE );
+	// a browser has no UDP, and nothing turns the emulation on
+	net_enabled = Cvar_Get( "net_enabled", "0", CVAR_ROM | CVAR_PROTECTED );
 #else
 	/* End users have it enabled so they can connect to ipv6-only hosts, but ipv4 will be
 	 * used if available due to ping. A dedicated server answers on both, on one port,
 	 * or on ipv4 alone where ipv6 doesn't open (NET_OpenIP) */
-	net_enabled = Cvar_Get( "net_enabled", "3", CVAR_LATCH | CVAR_ARCHIVE );
+	net_enabled = Cvar_Get( "net_enabled", "3", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
 #endif
 	modified = net_enabled->modified;
 	net_enabled->modified = qfalse;
 
-	net_ip = Cvar_Get( "net_ip", "0.0.0.0", CVAR_LATCH );
+	net_ip = Cvar_Get( "net_ip", "0.0.0.0", CVAR_LATCH | CVAR_PROTECTED );
 	modified += net_ip->modified;
 	net_ip->modified = qfalse;
 	
-	net_ip6 = Cvar_Get( "net_ip6", "::", CVAR_LATCH );
+	net_ip6 = Cvar_Get( "net_ip6", "::", CVAR_LATCH | CVAR_PROTECTED );
 	modified += net_ip6->modified;
 	net_ip6->modified = qfalse;
 	
 	// a port, or 0 for one the system picks
-	net_port = Cvar_Get( "net_port", va( "%i", PORT_SERVER ), CVAR_LATCH );
+	net_port = Cvar_Get( "net_port", va( "%i", PORT_SERVER ), CVAR_LATCH | CVAR_PROTECTED );
 	Cvar_CheckRange( net_port, 0, 65535, qtrue );
 	modified += net_port->modified;
 	net_port->modified = qfalse;
 	
-	net_port6 = Cvar_Get( "net_port6", va( "%i", PORT_SERVER ), CVAR_LATCH );
+	net_port6 = Cvar_Get( "net_port6", va( "%i", PORT_SERVER ), CVAR_LATCH | CVAR_PROTECTED );
 	Cvar_CheckRange( net_port6, 0, 65535, qtrue );
 	modified += net_port6->modified;
 	net_port6->modified = qfalse;
 
 	// Some cvars for configuring multicast options which facilitates scanning for servers on local subnets.
-	net_mcast6addr = Cvar_Get( "net_mcast6addr", NET_MULTICAST_IP6, CVAR_LATCH | CVAR_ARCHIVE );
+	net_mcast6addr = Cvar_Get( "net_mcast6addr", NET_MULTICAST_IP6, CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
 	modified += net_mcast6addr->modified;
 	net_mcast6addr->modified = qfalse;
 
 #ifdef _WIN32
-	net_mcast6iface = Cvar_Get( "net_mcast6iface", "0", CVAR_LATCH | CVAR_ARCHIVE );
+	net_mcast6iface = Cvar_Get( "net_mcast6iface", "0", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
 #else
-	net_mcast6iface = Cvar_Get( "net_mcast6iface", "", CVAR_LATCH | CVAR_ARCHIVE );
+	net_mcast6iface = Cvar_Get( "net_mcast6iface", "", CVAR_LATCH | CVAR_ARCHIVE | CVAR_PROTECTED );
 #endif
 	modified += net_mcast6iface->modified;
 	net_mcast6iface->modified = qfalse;
