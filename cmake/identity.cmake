@@ -37,7 +37,7 @@ set_identity(PNG_ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/misc/linux/quake3-tango.p
 # where they can; none by default
 set_identity(WEB_PAGE_SVG_ICON_PATH "")
 # A page in front of the web client's game, a JavaScript module's file name
-# beside the page, which the parent project puts there (client.html.in's
+# beside the page, which the parent project puts there (client-page.js.in's
 # FRONT): it decides when the game loads and joins; none by default
 set_identity(WEB_PAGE_FRONT "")
 
