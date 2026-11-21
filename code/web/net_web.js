@@ -108,13 +108,15 @@ addToLibrary({
       NetWeb.received.push({ id: peer.id, data: new Uint8Array(data) });
     },
 
-    // A POST of body to url, on the page's own server, within OPEN_MS: its
-    // response's status, ok and json(), the body read within the time too.
-    // The URL parser reads a backslash as a slash and drops tabs, so the
-    // origin is checked after it, not on the text
+    // A POST of body to url, on the page's own server, or the shared site's
+    // page's server (its centralServer), within OPEN_MS: its response's
+    // status, ok and json(), the body read within the time too. The URL
+    // parser reads a backslash as a slash and drops tabs, so the origin is
+    // checked after it, not on the text
     request: async function(url, body) {
       url = new URL(url, location.href);
-      if (url.origin != location.origin) throw new Error('its signal is on another server');
+      var server = Module.centralServer;
+      if (url.origin != (server ? server.origin : location.origin)) throw new Error('its signal is on another server');
       // a signal that never answers fails, as no route would, and so does
       // one whose headers come and whose body doesn't
       var abort = new AbortController();

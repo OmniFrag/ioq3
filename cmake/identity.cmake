@@ -40,6 +40,11 @@ set_identity(WEB_PAGE_SVG_ICON_PATH "")
 # beside the page, which the parent project puts there (client-page.js.in's
 # FRONT): it decides when the game loads and joins; none by default
 set_identity(WEB_PAGE_FRONT "")
+# A page that plays whichever server its address names, for a site of its
+# own apart from any server's: its config says so ("central": true), and
+# the page takes the server from its fragment. Off by default, so the page
+# a server serves plays that server alone
+set_identity(WEB_PAGE_CENTRAL OFF)
 
 set(BASEGAME baseq3)
 

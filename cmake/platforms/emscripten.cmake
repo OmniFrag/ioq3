@@ -89,8 +89,16 @@ function(deploy_shell_files)
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.webmanifest @ONLY)
 
     if(NOT EMSCRIPTEN_PRELOAD_FILE)
-        configure_file(${SOURCE_DIR}/web/client-config.json
-            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-config.json COPYONLY)
+        set(WEB_CONFIG ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-config.json)
+        if(WEB_PAGE_CENTRAL)
+            # the page plays the server its address names (identity.cmake)
+            file(READ ${SOURCE_DIR}/web/client-config.json WEB_CONFIG_TEXT)
+            string(JSON WEB_CONFIG_TEXT SET "${WEB_CONFIG_TEXT}" central true)
+            file(WRITE ${WEB_CONFIG} "${WEB_CONFIG_TEXT}\n")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SOURCE_DIR}/web/client-config.json)
+        else()
+            configure_file(${SOURCE_DIR}/web/client-config.json ${WEB_CONFIG} COPYONLY)
+        endif()
     endif()
 
     # The page checks the player's own paks (pak_check.js) against the game's
