@@ -762,6 +762,8 @@ typedef struct shaderProgram_s
 	GLuint          vertexShader;
 	GLuint          fragmentShader;
 	uint32_t        attribs;	// vertex array attributes
+	uint64_t        sourceKey;	// of its attributes and source, which a kept program is taken back by
+	int             generation;	// the context's it was built in (GLimp_ContextGeneration)
 
 	// uniform parameters
 	GLint uniforms[UNIFORM_COUNT];
@@ -2349,10 +2351,11 @@ GLSL
 */
 
 void GLSL_InitGPUShaders(void);
-void GLSL_ShutdownGPUShaders(void);
+void GLSL_ShutdownGPUShaders(qboolean keep);
 void GLSL_VertexAttribPointers(uint32_t attribBits);
 void GLSL_BindProgram(shaderProgram_t * program);
 void GLSL_DeleteGPUShader(shaderProgram_t *program);
+void GLSL_DeleteKeptPrograms(void);
 
 void GLSL_SetUniformInt(shaderProgram_t *program, int uniformNum, GLint value);
 void GLSL_SetUniformFloat(shaderProgram_t *program, int uniformNum, GLfloat value);

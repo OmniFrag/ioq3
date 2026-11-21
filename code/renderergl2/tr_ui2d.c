@@ -251,10 +251,14 @@ void R_InitUI2D( void ) {
 	ui2d.clipBox = qglGetUniformLocation( program, "u_ClipBox" );
 	ui2d.clipRadii = qglGetUniformLocation( program, "u_ClipRadii" );
 
-	// GL starts them at 0: what's set first is set
+	// GL starts them at 0, but a program kept from the renderer before
+	// (GLSL_TakeKept) holds what that one set last: what's set first is set,
+	// a paint as no paint (kind -1) is
 	ui2d.lastPremultiplied = ui2d.lastTextureMode = ui2d.lastClipShape = -1;
 	ui2d.lastColorScale = -1;
 	ui2d.lastClip[2] = -1;
+	ui2d.lastTextureWidth = ui2d.lastTextureHeight = -1;
+	ui2d.lastPaint.kind = (paint2DKind_t)-1;
 	ui2d.painting = qtrue;
 
 	R_InitStore2D();
