@@ -684,6 +684,8 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 	program->generation = GLimp_ContextGeneration();
 	if (GLSL_TakeKept(program))
 		return 1;
+	if (numKeptPrograms)
+		ri.Printf(PRINT_DEVELOPER, "GLSL_InitGPUShader2: %s built anew while other programs were kept\n", name);
 
 	program->program = qglCreateProgram();
 
@@ -1938,6 +1940,7 @@ void GLSL_ShutdownGPUShaders(qboolean keep)
 		GLSL_DeleteGPUShader(&tr.calclevels4xShader[i]);
 
 	GLSL_DeleteGPUShader(&tr.shadowmaskShader);
+	GLSL_DeleteGPUShader(&tr.greyscaleShader);
 	GLSL_DeleteGPUShader(&tr.ssaoShader);
 
 	for ( i = 0; i < 4; i++)
