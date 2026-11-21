@@ -1047,7 +1047,7 @@ void Key_Bind_f (void)
 
 	if (c < 2)
 	{
-		Com_Printf ("bind <key> [command] : attach a command to a key\n");
+		Com_Printf ("%s <key> [command] : attach a command to a key\n", Cmd_Argv( 0 ));
 		return;
 	}
 	b = Key_StringToKeynum (Cmd_Argv(1));
@@ -1060,7 +1060,8 @@ void Key_Bind_f (void)
 	if (c == 2)
 	{
 		if (keys[b].binding && keys[b].binding[0])
-			Com_Printf ("\"%s\" = \"%s\"\n", Key_KeynumToString(b), keys[b].binding );
+			Com_Printf ("\"%s\" = \"%s\"%s\n", Key_KeynumToString(b), keys[b].binding,
+				keys[b].restricted ? " (restricted)" : "" );
 		else
 			Com_Printf ("\"%s\" is not bound\n", Key_KeynumToString(b) );
 		return;
@@ -1076,15 +1077,23 @@ void Key_Bind_f (void)
 	}
 
 	Key_SetBinding (b, cmd);
-	// a bind in restricted text runs restricted
-	keys[b].restricted = Cmd_IsRestricted();
+	// a bind in restricted text runs restricted, and is saved so
+	// (Key_WriteBindings); bind_restricted's always does
+	keys[b].restricted = Cmd_IsRestricted() || !Q_stricmp( Cmd_Argv( 0 ), "bind_restricted" );
 }
 
 /*
 ============
 Key_WriteBindings
 
-Writes lines containing "bind key value"
+Writes lines containing "bind key value": "bind_restricted key value" for
+one game code or restricted text made, so it still runs restricted once
+the config is read again, at the next start. Restricted text is any pak's
+config, a server's default.cfg among them, and pak0's own, so the
+defaults are saved so too; they bind game actions, which run restricted
+the same. Saved as "bind", a server's binding would come back as the
+player's own, able to run whatever the player's console can, on every
+server after
 ============
 */
 void Key_WriteBindings( configText_t *config ) {
@@ -1102,7 +1111,8 @@ void Key_WriteBindings( configText_t *config ) {
 					"or a line break, not written to file\n", Key_KeynumToString(i) );
 				continue;
 			}
-			Com_ConfigAppend( config, va( "bind %s \"%s\"\n", Key_KeynumToString(i), keys[i].binding ) );
+			Com_ConfigAppend( config, va( "%s %s \"%s\"\n", keys[i].restricted ? "bind_restricted" : "bind",
+				Key_KeynumToString(i), keys[i].binding ) );
 
 		}
 
@@ -1121,7 +1131,8 @@ void Key_Bindlist_f( void ) {
 
 	for ( i = 0 ; i < MAX_KEYS ; i++ ) {
 		if ( keys[i].binding && keys[i].binding[0] ) {
-			Com_Printf( "%s \"%s\"\n", Key_KeynumToString(i), keys[i].binding );
+			Com_Printf( "%s \"%s\"%s\n", Key_KeynumToString(i), keys[i].binding,
+				keys[i].restricted ? " (restricted)" : "" );
 		}
 	}
 }
@@ -1375,6 +1386,10 @@ void CL_InitKeyCommands( void ) {
 	// register our functions
 	Cmd_AddCommand ("bind",Key_Bind_f);
 	Cmd_SetCommandCompletionFunc( "bind", Key_CompleteBind );
+	// a binding that runs restricted, as a saved config writes one game
+	// code or restricted text made
+	Cmd_AddCommand( "bind_restricted", Key_Bind_f );
+	Cmd_SetCommandCompletionFunc( "bind_restricted", Key_CompleteBind );
 	Cmd_AddCommand ("unbind",Key_Unbind_f);
 	Cmd_SetCommandCompletionFunc( "unbind", Key_CompleteUnbind );
 	Cmd_AddCommand ("unbindall",Key_Unbindall_f);

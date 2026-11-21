@@ -25,7 +25,8 @@ typedef struct {
 	qboolean	down;
 	int			repeats;		// if > 1, it is autorepeating
 	char		*binding;
-	qboolean	restricted;		// game code bound it: its commands run restricted
+	qboolean	restricted;		// game code or restricted text bound it: its commands run
+								// restricted, and it's saved so (Key_WriteBindings)
 } qkey_t;
 
 extern	qboolean	key_overstrikeMode;
