@@ -201,6 +201,7 @@ const CENTRAL_WORDS = {
     noServer: 'This page plays a server its link names, and this link names none.',
     unreached: (shown) => `Couldn't reach ${shown} to play it. Check the link, or try again later.`,
     unread: (shown) => `${shown} didn't say which game it plays, so it can't be played here.`,
+    mod: (shown) => `${shown} runs a mod this page can't play yet. Play it on its own page.`,
     otherServer: (shown) => `${shown} has another key than this link names, so it may not be the server meant. Ask whoever gave you the link for a new one.`,
     // the page's title and heading: the name as contacted, the link's
     // host and port, never one the server gives, beside what it calls itself
@@ -308,8 +309,19 @@ const centralConfig = async (own) => {
     dataURL = new URL('/', origin);
     const served = await read(`/${CLIENT_NAME}-config.json`);
     if (!served || typeof served != 'object' || Array.isArray(served)) fail(CENTRAL_WORDS.unread(shown));
+    // one of this build's own games alone, whose game code is the build's:
+    // a server whose game is a mod is left, plainly, as the engine leaves one
+    // that switches to a mod as it joins (cl_webCentral); one step 4 decides.
+    // A mod's server names the build's base game as its basegame, and says
+    // which of its game directory's modules are its own code (client_code,
+    // the gateway's web_mod_code)
+    const game = gameOfServer(served);
+    const ownGames = Object.keys(own).filter((dir) => isGameDir(dir) && Array.isArray(own[dir]?.files));
+    const modCode = served.server?.client_code;
+    if ((game.basegame && !ownGames.includes(game.basegame)) || (Array.isArray(modCode) && modCode.length))
+        fail(CENTRAL_WORDS.mod(shown));
     // a link's console commands never run here
-    return { ...gameOfServer(served), central: true, consoleArgs: false,
+    return { ...game, central: true, consoleArgs: false,
         ...(typeof own.isolated == 'string' && { isolated: own.isolated }) };
 };
 // The page's title and heading on the shared site's page: the server as the
@@ -2552,6 +2564,9 @@ if (isolation.form && startOwn.length) {
     else if (!canKeepFolders && readsChosenInPlace && !frontChosen.opened) await moveIsolated(isolation.form, 'asking');
 }
 const ioquake3 = (await engine).default;
+// the shared site's page names its server to the engine, which then plays
+// the base game alone there (cl_webCentral)
+if (centralServer) generatedArguments.unshift('+set', 'cl_webCentral', `"${centralServer.shown}"`);
 generatedArguments.unshift('+set', 'com_basegame', `"${com_basegame}"`,
     ...(fs_basegame ? ['+set', 'fs_basegame', `"${fs_basegame}"`] : []), ...(fs_game ? ['+set', 'fs_game', `"${fs_game}"`] : []));
 // split at spaces outside quotes, each quoted part kept whole with its

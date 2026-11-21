@@ -430,7 +430,14 @@ void CL_SystemInfoChanged( void ) {
 				Com_Printf(S_COLOR_YELLOW "WARNING: Server sent invalid fs_game value %s\n", value);
 				continue;
 			}
-				
+
+			// a web page that plays whichever server its address names
+			// (cl_webCentral) plays the base game alone: a mod's game code
+			// would run where every server played from that page keeps its
+			// files, so a server that switches to one is left, plainly
+			if ( cl_webCentral->string[0] && value[0] && Q_stricmp( value, com_basegame->string ) )
+				Com_Error( ERR_DROP, "%s runs a mod this page can't play yet. Play it on its own page.", cl_webCentral->string );
+
 			gameSet = qtrue;
 		}
 
