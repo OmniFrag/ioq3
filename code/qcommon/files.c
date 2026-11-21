@@ -350,6 +350,7 @@ typedef struct {
 	char		fullpath[MAX_OSPATH];		// c:\quake3\baseq3
 	char		gamedir[MAX_OSPATH];	// baseq3
 	qboolean	holdsMap, holdsCode;	// a pk3dir's, as a pak's
+	qboolean	listed;					// its files all in the index's (fs_indexDirs)
 } directory_t;
 
 typedef struct searchpath_s {
@@ -396,6 +397,8 @@ static	int			fs_loadStack;			// total files in memory
 static	int			fs_packFiles = 0;		// total number of files in packs
 
 static cvar_t *fs_pathVars[16];
+
+static void FS_DirsWritten( const char *ospath );
 
 // Only the paks are read from the predecessor's home (a server offers them
 // for download), never its configs or other files
@@ -966,6 +969,9 @@ static fileHandle_t FS_OSPath_FOpenFileWrite( const char *ospath, const char *fi
 	}
 
 	fsh[f].handleFiles.file.o = Sys_FOpen( ospath, "wb" );
+	if ( fsh[f].handleFiles.file.o ) {
+		FS_DirsWritten( ospath );
+	}
 
 	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
 
@@ -1154,6 +1160,7 @@ qboolean FS_ReplaceOSFile( const char *ospath, const void *data, int length, qbo
 #endif
 	ok = fclose( f ) == 0 && ok;
 	if ( ok && Sys_Rename( tmp, target ) ) {
+		FS_DirsWritten( target );
 		return qtrue;
 	}
 	remove( tmp );
@@ -1193,6 +1200,7 @@ qboolean FS_AppendOSFile( const char *ospath, const void *data, int length, qboo
 	if ( !f ) {
 		return qfalse;
 	}
+	FS_DirsWritten( ospath );
 	ok = (int)fwrite( data, 1, length, f ) == length;
 	return fclose( f ) == 0 && ok;
 }
@@ -1357,7 +1365,11 @@ qboolean FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean 
 	if ( FS_CheckRefuses( __func__, from_ospath ) ) {
 		return qfalse;
 	}
-	return rename( from_ospath, to_ospath ) == 0;
+	if ( rename( from_ospath, to_ospath ) ) {
+		return qfalse;
+	}
+	FS_DirsWritten( to_ospath );
+	return qtrue;
 }
 
 /*
@@ -1528,6 +1540,7 @@ fileHandle_t FS_FOpenFileAppend_HomeData( const char *filename ) {
 		f = 0;
 	} else {
 		fsh[f].isLog = isLog;
+		FS_DirsWritten( ospath );
 	}
 	return f;
 }
@@ -1861,7 +1874,7 @@ static indexEntry_t	*fs_indexEntries;
 static unsigned int	fs_indexMask;
 static searchpath_t	**fs_indexDirs;		// the directories, in the lookups' order
 static int			fs_numIndexDirs;
-static cvar_t		*fs_indexUse, *fs_indexCheck;
+static cvar_t		*fs_indexUse, *fs_indexCheck, *fs_indexDirsUse;
 static int			fs_indexMismatches, fs_indexWalks;
 static int			fs_lookupTimed;			// fs_lookup's timing: 1 of the index, 2 of the walk
 
@@ -2051,11 +2064,305 @@ The next entry a lookup asks: of the name's paks and the directories,
 the earlier in the lookups' order; NULL after the last. *p and *d start at 0
 ===========
 */
-static searchpath_t *FS_IndexNext( searchpath_t **paks, int numPaks, int *p, int *d ) {
-	if ( *d < fs_numIndexDirs && ( *p == numPaks || fs_indexDirs[*d]->order < paks[*p]->order ) ) {
-		return fs_indexDirs[( *d )++];
+static unsigned int FS_DirHash( const char *filename );
+static qboolean FS_DirHas( const directory_t *dir, const char *filename, unsigned int hash );
+
+static searchpath_t *FS_IndexNext( const char *filename, searchpath_t **paks, int numPaks, int *p, int *d ) {
+	const unsigned int	hash = *d < fs_numIndexDirs ? FS_DirHash( filename ) : 0;
+
+	while ( *d < fs_numIndexDirs && ( *p == numPaks || fs_indexDirs[*d]->order < paks[*p]->order ) ) {
+		searchpath_t	*dir = fs_indexDirs[( *d )++];
+
+		// a directory listed whole is asked only for a file it has
+		if ( FS_DirHas( dir->dir, filename, hash ) ) {
+			return dir;
+		}
 	}
 	return *p < numPaks ? paks[( *p )++] : NULL;
+}
+
+/*
+=============================================================================
+
+THE DIRECTORIES' FILES
+
+With fs_indexDirs, the index also holds every file in the search path's
+directories, listed as the search path is built (FS_Startup) and added
+to as the file system writes or renames one into them, so a lookup asks a
+directory only for a file it has: a pak's file is found with no look into
+the directories before it, and a file in none with no look at all. It
+holds only what's there; the lookups still ask the directory itself. A
+file put there behind the file system's back isn't seen until the next
+FS_Startup, so it's the default only where nothing does that (the web,
+whose files only the engine writes); elsewhere the directories are asked
+as before. A directory that can't be listed whole is asked as before
+=============================================================================
+*/
+
+typedef struct dirFile_s {
+	struct dirFile_s	*next;
+	const directory_t	*dir;
+	unsigned int		hash;
+	char				name[1];			// as the lookups name it, from the game directory
+} dirFile_t;
+
+static dirFile_t	**fs_dirFiles;
+static unsigned int	fs_dirFilesMask;
+static int			fs_numDirFiles;
+
+/*
+===========
+FS_DirHash
+
+A lookup's name's hash, for FS_DirHas, as FS_FOpenFileReadDir takes the name
+===========
+*/
+static unsigned int FS_DirHash( const char *filename ) {
+	if ( !fs_dirFiles ) {
+		return 0;
+	}
+	return FS_IndexHash( filename[0] == '/' || filename[0] == '\\' ? filename + 1 : filename );
+}
+
+/*
+===========
+FS_DirNameListed
+
+Whether a lookup's name is one the directories' files can say of: not
+one FS_BuildOSPath would make another of (a run of separators it makes
+one, a "." it leaves to the system to skip, a separator first or last),
+nor one too long for the files listed (FS_DirList)
+===========
+*/
+static qboolean FS_DirNameListed( const char *filename ) {
+	const char	*c, *start = filename;
+
+	for ( c = filename; *c; c++ ) {
+		if ( *c == '/' || *c == '\\' ) {
+			if ( c == start || !c[1] || c[1] == '/' || c[1] == '\\' ) {
+				return qfalse;
+			}
+		} else if ( *c == '.' && ( c == start || c[-1] == '/' || c[-1] == '\\' ) &&
+			( !c[1] || c[1] == '/' || c[1] == '\\' ) ) {
+			return qfalse;
+		}
+	}
+	return c - start < MAX_QPATH;
+}
+
+/*
+===========
+FS_DirHas
+
+Whether a lookup asks a directory for a file: one not listed is always
+asked, a listed one only for a file it has
+===========
+*/
+static qboolean FS_DirHas( const directory_t *dir, const char *filename, unsigned int hash ) {
+	const dirFile_t	*file;
+
+	if ( !fs_dirFiles || !dir->listed ) {
+		return qtrue;
+	}
+	// as FS_FOpenFileReadDir takes it
+	if ( filename[0] == '/' || filename[0] == '\\' ) {
+		filename++;
+	}
+	if ( !FS_DirNameListed( filename ) ) {
+		return qtrue;
+	}
+	for ( file = fs_dirFiles[hash & fs_dirFilesMask]; file; file = file->next ) {
+		if ( file->hash == hash && file->dir == dir && !FS_FilenameCompare( file->name, filename ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+===========
+FS_DirAdd
+===========
+*/
+static void FS_DirAdd( directory_t *dir, const char *name ) {
+	dirFile_t		*file, **slot;
+	size_t			len = strlen( name );
+	unsigned int	hash = FS_IndexHash( name );
+
+	slot = &fs_dirFiles[hash & fs_dirFilesMask];
+	for ( file = *slot; file; file = file->next ) {
+		if ( file->dir == dir && !FS_FilenameCompare( file->name, name ) ) {
+			return;
+		}
+	}
+	file = malloc( sizeof( *file ) + len );
+	if ( !file ) {
+		// it can't say what the directory has, so the directory is asked
+		dir->listed = qfalse;
+		return;
+	}
+	file->dir = dir;
+	file->hash = hash;
+	memcpy( file->name, name, len + 1 );
+	file->next = *slot;
+	*slot = file;
+	fs_numDirFiles++;
+}
+
+/*
+===========
+FS_DirList
+
+Adds every file below a directory to the index
+===========
+*/
+static void FS_DirList( directory_t *dir ) {
+	char	**list;
+	int		i, num;
+
+	// every name below it, from it, subdirectories' too, which no file
+	// lookup takes for its own
+	list = Sys_ListFiles( dir->fullpath, NULL, "*", &num, qfalse );
+	for ( i = 0; i < num && dir->listed; i++ ) {
+		// the filter's list names those in the directory itself with a
+		// separator first ("/autoexec.cfg"), as a lookup doesn't
+		const char	*name = list[i][0] == '/' || list[i][0] == '\\' ? list[i] + 1 : list[i];
+
+		// a name too long is asked of the directory (FS_DirNameListed)
+		if ( strlen( name ) < MAX_QPATH ) {
+			FS_DirAdd( dir, name );
+		}
+	}
+	Sys_FreeFileList( list );
+}
+
+/*
+===========
+FS_DirsClear
+===========
+*/
+static void FS_DirsClear( void ) {
+	dirFile_t		*file, *next;
+	unsigned int	i;
+
+	if ( fs_dirFiles ) {
+		for ( i = 0; i <= fs_dirFilesMask; i++ ) {
+			for ( file = fs_dirFiles[i]; file; file = next ) {
+				next = file->next;
+				free( file );
+			}
+		}
+	}
+	free( fs_dirFiles );
+	fs_dirFiles = NULL;
+	fs_dirFilesMask = 0;
+	fs_numDirFiles = 0;
+}
+
+/*
+===========
+FS_DirsResize
+
+As many slots as files, once they're listed
+===========
+*/
+static void FS_DirsResize( void ) {
+	dirFile_t		**slots, *file, *next;
+	unsigned int	size, i;
+
+	for ( size = fs_dirFilesMask + 1; size < (unsigned int)fs_numDirFiles; size *= 2 ) {
+	}
+	if ( size == fs_dirFilesMask + 1 || !( slots = calloc( size, sizeof( *slots ) ) ) ) {
+		return;
+	}
+	for ( i = 0; i <= fs_dirFilesMask; i++ ) {
+		for ( file = fs_dirFiles[i]; file; file = next ) {
+			next = file->next;
+			file->next = slots[file->hash & ( size - 1 )];
+			slots[file->hash & ( size - 1 )] = file;
+		}
+	}
+	free( fs_dirFiles );
+	fs_dirFiles = slots;
+	fs_dirFilesMask = size - 1;
+}
+
+/*
+===========
+FS_DirsBuild
+
+Lists each of the search path's directories into the index, with
+fs_indexDirs
+===========
+*/
+static void FS_DirsBuild( void ) {
+	searchpath_t	*search;
+	int				dirs = 0, listed = 0, start = Sys_Milliseconds();
+
+	FS_DirsClear();
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->dir ) {
+			search->dir->listed = qfalse;
+		}
+	}
+	if ( !fs_indexDirsUse || !fs_indexDirsUse->integer || !fs_index ) {
+		return;
+	}
+	fs_dirFilesMask = 1023;
+	fs_dirFiles = calloc( fs_dirFilesMask + 1, sizeof( *fs_dirFiles ) );
+	if ( !fs_dirFiles ) {
+		return;
+	}
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( !search->dir ) {
+			continue;
+		}
+		dirs++;
+		// listed while it's being listed, so FS_DirAdd can take it back
+		search->dir->listed = qtrue;
+		FS_DirList( search->dir );
+		listed += search->dir->listed;
+	}
+	FS_DirsResize();
+	Com_DPrintf( "Indexed %d files of %d of %d directories in %d msec\n", fs_numDirFiles, listed, dirs,
+		Sys_Milliseconds() - start );
+}
+
+/*
+===========
+FS_DirsWritten
+
+A file the file system wrote or renamed to, at ospath: added to its
+directory's files, so the lookups find it
+===========
+*/
+static void FS_DirsWritten( const char *ospath ) {
+	const searchpath_t	*search;
+	char				name[MAX_QPATH], *c;
+	size_t				len;
+
+	if ( !fs_dirFiles ) {
+		return;
+	}
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( !search->dir || !search->dir->listed ) {
+			continue;
+		}
+		len = strlen( search->dir->fullpath );
+		if ( Q_strncmp( ospath, search->dir->fullpath, len ) || ( ospath[len] != '/' && ospath[len] != PATH_SEP ) ) {
+			continue;
+		}
+		if ( strlen( ospath + len + 1 ) >= sizeof( name ) ) {
+			continue;
+		}
+		Q_strncpyz( name, ospath + len + 1, sizeof( name ) );
+		for ( c = name; *c; c++ ) {
+			if ( *c == PATH_SEP ) {
+				*c = '/';
+			}
+		}
+		FS_DirAdd( search->dir, name );
+	}
 }
 
 /*
@@ -2555,7 +2862,7 @@ static long FS_FOpenFileReadAs(const char *filename, fileHandle_t *file, qboolea
 	fs_lastFileSearch = NULL;
 	isLocalConfig = FS_IsLocalConfig( filename );
 	if ( FS_IndexPaks( filename, paks, &numPaks ) ) {
-		while ( ( search = FS_IndexNext( paks, numPaks, &p, &d ) ) &&
+		while ( ( search = FS_IndexNext( filename, paks, numPaks, &p, &d ) ) &&
 			!FS_TryRead( search, filename, file, uniqueFILE, isExec, isLocalConfig, &len ) ) {
 		}
 		FS_IndexChecked( filename, search, file == NULL, isExec, isLocalConfig );
@@ -2635,7 +2942,7 @@ static const searchpath_t *FS_FileSearch( const char *filename )
 	if ( !FS_IndexPaks( filename, paks, &numPaks ) ) {
 		return FS_WalkFinds( filename, qfalse, qfalse, qfalse );
 	}
-	while ( ( search = FS_IndexNext( paks, numPaks, &p, &d ) ) && !FS_SearchHasFile( search, filename ) ) {
+	while ( ( search = FS_IndexNext( filename, paks, numPaks, &p, &d ) ) && !FS_SearchHasFile( search, filename ) ) {
 	}
 	FS_IndexChecked( filename, search, qfalse, qfalse, qfalse );
 	return search;
@@ -7001,6 +7308,8 @@ qboolean FS_WriteMapPicture( const fsMapPicture_t *picture, const char *ospath )
 		ok = fclose( f ) == 0 && ok && Sys_Rename( tmp, ospath );
 		if ( !ok ) {
 			remove( tmp );
+		} else {
+			FS_DirsWritten( ospath );
 		}
 	}
 	free( data );
@@ -7438,6 +7747,7 @@ void FS_Shutdown( qboolean closemfp ) {
 		fs_indexMismatches = 0;
 	}
 	FS_IndexClear();
+	FS_DirsClear();
 
 	// free everything
 	for(p = fs_searchpaths; p; p = next)
@@ -7660,6 +7970,7 @@ static void FS_ImportPredecessorConfig( const char *predHome, const char *gameNa
 		return;
 	}
 	Com_Printf( "Copied your settings from %s\n", from );
+	FS_DirsWritten( to );
 	FS_MarkPredecessorConfig( mark, from );
 }
 
@@ -7696,6 +8007,14 @@ static void FS_Startup( const char *gameName )
 	fs_indexUse = Cvar_Get( "fs_index", "1", 0 );
 	Cvar_SetDescription( fs_indexUse,
 		"Whether file lookups use the name index of the search path's paks, rather than asking each pak in turn: 1 or 0, to compare" );
+	// only the engine writes the web's files, so it knows what its directories hold
+#ifdef __EMSCRIPTEN__
+	fs_indexDirsUse = Cvar_Get( "fs_indexDirs", "1", 0 );
+#else
+	fs_indexDirsUse = Cvar_Get( "fs_indexDirs", "0", 0 );
+#endif
+	Cvar_SetDescription( fs_indexDirsUse,
+		"Whether the name index also holds the search path's directories' files, listed as it starts, so a lookup asks a directory only for a file it has: 1, the web's default, or 0 to ask each one. 1 is meant for the web, where only the game writes its files; natively a file put in a folder by anything else is seen only at the next start, and Windows' trailing dots and short names, macOS's Unicode forms and symbolic link loops can make the list differ from what opening a file finds" );
 	fs_indexCheck = Cvar_Get( "fs_indexCheck", "0", 0 );
 	Cvar_SetDescription( fs_indexCheck,
 		"Whether each indexed file lookup is checked against asking every pak in turn: 0, 1 to say where they differ, 2 to stop at the first" );
@@ -7822,6 +8141,7 @@ static void FS_Startup( const char *gameName )
 
 	// the name index of the paks found, in the order the lookups go
 	FS_IndexBuild();
+	FS_DirsBuild();
 
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=506
 	// reorder the pure pk3 files according to server order
