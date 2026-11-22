@@ -129,6 +129,10 @@ bind g "cmd use rocket ; +attack ; wait ; -attack ; cmd use blaster"
 // it (a second at 1000 frames a second, eight at 125)
 #define CBUF_RESTRICTED_WAIT	1000
 
+// the cap's developer line was printed since a client module last unloaded
+// (Cbuf_EndGameCodeWait); a dedicated server's says it once
+static qboolean	cmd_waitCapSaid;
+
 void Cmd_Wait_f( void ) {
 	cmd_t	*buf = Cbuf_Current();
 
@@ -140,6 +144,11 @@ void Cmd_Wait_f( void ) {
 		buf->wait = 1;
 	}
 	if ( cmd_restricted && buf->wait > CBUF_RESTRICTED_WAIT ) {
+		if ( !cmd_waitCapSaid ) {
+			Com_DPrintf( "Game code's wait of %d frames cut to %d, the most it may wait\n",
+				buf->wait, CBUF_RESTRICTED_WAIT );
+			cmd_waitCapSaid = qtrue;
+		}
 		buf->wait = CBUF_RESTRICTED_WAIT;
 	}
 }
@@ -1003,12 +1012,14 @@ Cbuf_EndGameCodeWait
 A module unloaded: game code's buffer waits no longer, so a wait it left
 holds nothing after it, the keys that run in that buffer among them. Its
 text stays, which a menu queues after a map line (Start Server's bots),
-or a vote (a rotation's nextmap)
+or a vote (a rotation's nextmap). The next module's capped wait is said
+again
 ============
 */
 void Cbuf_EndGameCodeWait( void )
 {
 	cmd_buffers[CBUF_RESTRICTED].wait = 0;
+	cmd_waitCapSaid = qfalse;
 }
 
 /*
