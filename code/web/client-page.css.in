@@ -15,21 +15,21 @@ canvas.held { cursor: none !important; }
 #status, #hints, #leaving { position: fixed; pointer-events: none; font: 18px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); text-align: center; }
 #status { inset: 0; display: grid; place-items: center; }
 #status[hidden] { display: none; }
-#status > div, .hint, #leaving span { background: rgba(0, 0, 0, 0.7); border-radius: 8px; }
+#status > div, #hints .hint, #leaving span { background: rgba(0, 0, 0, 0.7); border-radius: 8px; }
 #status > div { padding: 16px 24px; max-width: min(32em, 80vw); }
 #status progress { display: block; width: 100%; margin-top: 8px; }
 #status progress[hidden] { display: none; }
 /* an error stays, and its words can be copied */
 #status.error { pointer-events: auto; user-select: text; }
 /* The page's hints near the top center, where a browser says how to leave
-   fullscreen: how to leave it and come back, and "Click to play"; #status
-   is the download's and errors'. Clicks go through them. A hint fades in
-   from nothing and, faded out and emptied, takes no room */
+   fullscreen: how to leave it and come back; #status is the download's
+   and errors'. Clicks go through them. A hint fades in from nothing and,
+   faded out and emptied, takes no room */
 #hints { top: 48px; left: 16px; right: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.hint { padding: 8px 16px; opacity: 0; transition: opacity 0.4s; }
-.hint:empty { display: none; }
-.hint.shown { opacity: 1; }
-@starting-style { .hint.shown { opacity: 0; } }
+#hints .hint { padding: 8px 16px; opacity: 0; transition: opacity 0.4s; }
+#hints .hint:empty { display: none; }
+#hints .hint.shown { opacity: 1; }
+@starting-style { #hints .hint.shown { opacity: 0; } }
 /* The ring that fills while Esc is held to leave fullscreen, low in the
    center: it shows after --ring-after, so a tap never shows it, and is full
    after --ring-fill more (the page's script sets both) */
@@ -63,3 +63,88 @@ canvas.held { cursor: none !important; }
 #central[hidden] { display: none; }
 #central span { color: rgb(180, 180, 180); }
 #central p { margin: 2px 0 0; font-size: 13px; color: rgb(180, 180, 180); }
+/* "Click to play" (#play), while the game wants the pointer in a match and
+   the page doesn't hold it: the front page's Play, see-through, with a
+   solid play key (Joe, 2026-11-21, "Play comes along"). Large in the lower
+   middle as the player first enters a match, clear of the crosshair; small
+   at the top center coming back, with a hint the page is showing then as
+   its caption. Its height sets everything in it. Everything that moves is
+   transform or opacity on a layer of its own, and the plate's see-through
+   is a layer's opacity, never a backdrop filter, so the game's frames are
+   never read back or blurred. The squircle corners are drawn by the page's
+   script, as the front page draws them. Only the plate takes clicks: one
+   anywhere else goes to the canvas, as before. */
+#prompt { position: fixed; inset: 0; container-type: size; pointer-events: none;
+  --plate: #14161c; --bone: #edeae3; --soft: cubic-bezier(0.22, 1, 0.36, 1); --spring: cubic-bezier(0.34, 1.56, 0.64, 1); }
+#prompt .pa { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  --h: clamp(54px, 11.5cqmin, 80px); top: calc(63% - var(--h) / 2); }
+#prompt.back .pa { --h: clamp(42px, 7.5cqmin, 52px); top: clamp(14px, 6cqh, 48px); }
+#play { position: relative; display: none; align-items: center; gap: 0.5em; height: var(--h); padding: 0 1.15em 0 0.32em; margin: 0; border: 0;
+  background: none; font: 700 calc(var(--h) * 0.38)/1 "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.015em;
+  color: var(--bone); white-space: nowrap; pointer-events: auto; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent; outline: none;
+  will-change: transform, opacity; transition: scale 0.3s var(--soft), translate 0.12s var(--soft); }
+#play.shown, #play.going { display: inline-flex; }
+#play .plate, #play .edge { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; will-change: opacity; transition: opacity 0.3s var(--soft); }
+#play .plate { opacity: 0.7; }
+#play .plate path { fill: var(--plate); }
+/* the edge, a layer of its own so it brightens by its opacity: as a stroke
+   at 0.42 inside the plate's 0.7, and 0.7 inside its 0.86 on hover */
+#play .edge { opacity: 0.29; }
+#play .edge path { fill: none; stroke: var(--bone); stroke-width: 1.5; }
+#play .shine { position: absolute; inset: 0; overflow: hidden; clip-path: var(--sq); border-radius: calc(var(--h) / 3); }
+#play .shine i { position: absolute; inset: 0 auto 0 0; width: 45%; opacity: 0; transform: translateX(-130%) skewX(-12deg);
+  background: linear-gradient(90deg, transparent, rgba(237, 234, 227, 0.3), transparent); }
+#play .word { position: relative; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+/* the play key: the one solid thing in it, so it reads over any frame */
+#play .key { position: relative; flex: none; display: grid; place-items: center; width: calc(var(--h) * 0.76); height: calc(var(--h) * 0.76);
+  border-radius: 28%; background: var(--bone); will-change: transform; transition: scale 0.3s var(--soft); }
+#play .key svg { width: 50%; height: 50%; fill: var(--plate); }
+/* a quiet hover on the plate alone, on one soft curve: it firms up, its
+   edge brightens, the mark grows a tenth, and one sheen crosses it */
+@media (hover: hover) {
+  #play:hover .key { scale: 1.1; }
+  #play:hover .plate { opacity: 0.86; }
+  #play:hover .edge { opacity: 0.6; }
+  #play:hover .shine i { animation: play-sheen 0.7s var(--soft) both; }
+}
+/* held down on it: it sinks, and lets go as the pointer slides off */
+#play.down { translate: 0 1px; scale: 0.97; }
+#play.down .plate { opacity: 0.93; }
+#play.down .key { scale: 1; }
+/* it comes in (large, it grows into place; small, it drops in from above)
+   with one sheen; the mouse taken, the key crosses the plate like a switch
+   thrown and the plate lets go; a click the browser refused, a short shake */
+#play.enter .shine i { animation: play-sheen 0.7s var(--soft) 0.45s both; }
+#play.enter { animation: play-arrive 0.42s var(--spring) both; }
+#prompt.back #play.enter { animation-name: play-drop; animation-duration: 0.34s; }
+#play.going { animation: play-fire 0.24s var(--soft) forwards; pointer-events: none; }
+#play.going .key { animation: play-shoot 0.24s var(--soft) forwards; }
+#play.leaving { display: inline-flex; animation: play-fade-out 0.2s var(--soft) forwards; pointer-events: none; }
+#play.nope { animation: play-nope 0.32s var(--soft); }
+@keyframes play-arrive { from { opacity: 0; transform: scale(0.84); } }
+@keyframes play-drop { from { opacity: 0; transform: translateY(-16px); } }
+@keyframes play-fire { to { opacity: 0; transform: scale(1.06); } }
+@keyframes play-shoot { to { transform: translateX(calc(var(--w) - var(--h))); } }
+@keyframes play-nope { 20% { transform: translateX(-7px); } 45% { transform: translateX(6px); } 70% { transform: translateX(-3px); } }
+@keyframes play-sheen { from { opacity: 1; transform: translateX(-130%) skewX(-12deg); } to { opacity: 1; transform: translateX(330%) skewX(-12deg); } }
+@keyframes play-fade-in { from { opacity: 0; } }
+@keyframes play-fade-out { to { opacity: 0; } }
+@keyframes play-flash { 50% { opacity: 1; } }
+/* a hint the page shows while the small plate is up sits under it as its
+   caption, one object with it, its keys drawn as keys */
+#cap { display: none; align-items: center; gap: 6px; margin: 0; padding: 6px 12px; border-radius: 10px; background: rgba(20, 22, 28, 0.72); color: var(--bone);
+  font: 500 13px/1.35 "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif; white-space: nowrap; animation: play-fade-in 0.4s both; }
+#cap.shown { display: inline-flex; }
+#cap .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+#cap kbd { min-width: 1.7em; padding: 1px 6px; border: 1px solid rgba(237, 234, 227, 0.45); border-radius: 6px; font: inherit; font-weight: 600; font-size: 12px; line-height: 1.4; text-align: center; }
+/* less motion: nothing travels. It fades in and out, the key holds still,
+   and a refused click firms the plate up for a moment */
+@media (prefers-reduced-motion: reduce) {
+  #play, #play .key { transition: none; scale: none !important; translate: none !important; }
+  #play .key, #play .shine i { animation: none !important; }
+  #play.enter, #prompt.back #play.enter { animation: play-fade-in 0.2s both; }
+  #play.going { animation: play-fade-out 0.12s forwards; }
+  #play.nope { animation: none; }
+  #play.nope .plate { animation: play-flash 0.32s; }
+}

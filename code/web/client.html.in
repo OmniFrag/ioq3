@@ -9,7 +9,8 @@
      the page stay there; tabindex lets the canvas have focus -->
 <canvas id=canvas tabindex=0></canvas>
 <div id=status hidden><div><span></span><progress hidden></progress></div></div>
-<div id=hints><div id=hint class=hint></div><div id=play class=hint></div></div>
+<div id=hints><div id=hint class=hint></div></div>
+<div id=prompt><div class=pa><button id=play class=hint type=button tabindex=-1><svg class=plate aria-hidden=true><path /></svg><svg class=edge aria-hidden=true><path /></svg><span class=shine aria-hidden=true><i></i></span><span class=key><svg viewBox="0 0 24 24" aria-hidden=true><path d="M8 5.2v13.6a1 1 0 0 0 1.52.86l11.2-6.8a1 1 0 0 0 0-1.72L9.52 4.34A1 1 0 0 0 8 5.2Z" /></svg></span><span class=word>Click to play</span></button><div id=cap class=hint></div></div></div>
 <div id=ask hidden></div>
 <div id=left hidden><div><p>You left the game.</p><button type=button>Play again</button></div></div>
 <div id=leaving><svg viewBox="0 0 48 48"><circle class=track cx=24 cy=24 r=20 /><circle class=fill cx=24 cy=24 r=20 pathLength=1 /></svg><span>Leaving fullscreen</span></div>

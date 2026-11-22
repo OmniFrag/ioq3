@@ -639,8 +639,14 @@ watchPixelRatio();
 // click's fullscreen request after it still goes out.
 const rawMouseField = linkField('rawMouse');
 const rawMouse = rawMouseField !== null ? rawMouseField !== '0' : /Windows/.test(navigator.userAgent);
-let rawLock = rawMouse, lockRequest = null;
-const lockPointer = () => lockRequest ??= new Promise((resolve) => resolve(canvas.requestPointerLock(rawLock ? { unadjustedMovement: true } : undefined)))
+// byClick: asked by the player's own click, on the match or on "Click to
+// play", whose refusal the prompt answers with a shake (showPlay, below);
+// a key's request and the retry after fullscreen ask without one. A
+// request joined while another is out is by a click if either is
+let rawLock = rawMouse, lockRequest = null, lockByClick = false;
+const lockPointer = (byClick = false) => {
+    lockByClick = (lockRequest !== null && lockByClick) || byClick;
+    return lockRequest ??= new Promise((resolve) => resolve(canvas.requestPointerLock(rawLock ? { unadjustedMovement: true } : undefined)))
     .catch((e) => {
         if (!rawLock || e?.name !== 'NotSupportedError') throw e;
         rawLock = false;
@@ -648,6 +654,7 @@ const lockPointer = () => lockRequest ??= new Promise((resolve) => resolve(canva
     })
     .then(() => { if (!wantPointer && locked()) document.exitPointerLock(); }, () => {})
     .finally(() => { lockRequest = null; });
+};
 const locked = () => document.pointerLockElement === canvas;
 
 // The WebGL context SDL creates, which has no attributes of its own for
@@ -732,17 +739,17 @@ const requestFullscreen = () => document.documentElement.requestFullscreen(fulls
         lockOption = false;
         return document.documentElement.requestFullscreen();
     });
-const enterFullscreen = () => {
+const enterFullscreen = (byClick = false) => {
     if (entering) return;
     entering = true;
     fullscreenAnswer = ANSWER_NONE;
-    if (wantPointer && !locked()) lockPointer();
+    if (wantPointer && !locked()) lockPointer(byClick);
     requestFullscreen()
         .catch(() => {
             if (document.fullscreenElement) return;
             // the request stands; the lock needn't wait for it
             fullscreenAnswer = ANSWER_REFUSED;
-            if (wantPointer && !locked()) lockPointer();
+            if (wantPointer && !locked()) lockPointer(byClick);
         })
         .finally(() => { entering = false; });
 };
@@ -1067,8 +1074,8 @@ addEventListener('pointerdown', (event) => {
     if (!goFullscreen && !takeLock) return;
     event.stopImmediatePropagation();
     claimedPointer = event.pointerId;
-    if (goFullscreen) enterFullscreen();
-    else lockPointer();
+    if (goFullscreen) enterFullscreen(true);
+    else lockPointer(true);
 }, { capture: true });
 addEventListener('pointerup', (event) => {
     if (event.pointerId !== claimedPointer) return;
@@ -1160,34 +1167,171 @@ addEventListener('keyup', (event) => {
 // the first time in a visit; and "Click to play", while the game wants the
 // pointer in a match and doesn't have it. It stays up through a click the
 // browser refuses, as Chrome does for a second or two after the player's
-// Esc in a window, and says nothing more.
+// Esc in a window, and says nothing more: a refused click gives the plate a
+// short shake (pointerlockerror, which Chrome, Firefox and Safari fire for a
+// refusal); a key's refused request doesn't.
+// "Click to play" is the front page's Play, see-through (client-page.css's
+// #play): large in the lower middle until the player has had the pointer in
+// this match, then small at the top center, with a hint the page is showing
+// then as its caption.
 const hintBox = document.getElementById('hint');
-const playBox = document.getElementById('play');
+const promptBox = document.getElementById('prompt');
+const playButton = document.getElementById('play');
+const capBox = document.getElementById('cap');
 const hinted = new Set();
-let hintTimer, playing = false;
+let hintTimer, hintNow = '', playing = false, playShown = false, hadLock = false, playTimer;
 const fade = (box, text) => {
     if (text) box.textContent = text;
     box.classList.toggle('shown', Boolean(text));
 };
-for (const box of [hintBox, playBox])
-    box.addEventListener('transitionend', () => { if (!box.classList.contains('shown')) box.textContent = ''; });
+hintBox.addEventListener('transitionend', () => { if (!hintBox.classList.contains('shown')) hintBox.textContent = ''; });
+// a hint's keys, as in "Alt+Enter for fullscreen", drawn as keys in the caption
+const captionOf = (text) => {
+    const [, keys, rest] = /^(\S+\+\S+) (.*)$/.exec(text) ?? [];
+    if (!keys) return [text];
+    // the "+" between them kept unseen, so the caption's text is the hint's
+    const plus = () => Object.assign(document.createElement('span'), { className: 'vh', textContent: '+' });
+    return [...keys.split('+').flatMap((key, i) => [...(i ? [plus()] : []), Object.assign(document.createElement('kbd'), { textContent: key })]), ` ${rest}`];
+};
+const drawHint = () => {
+    const asCaption = Boolean(hintNow) && playShown && hadLock;
+    fade(hintBox, asCaption ? '' : hintNow);
+    if (asCaption) capBox.replaceChildren(...captionOf(hintNow));
+    capBox.classList.toggle('shown', asCaption);
+};
 const hintOnce = (text) => {
     if (hinted.has(text)) return;
     hinted.add(text);
-    fade(hintBox, text);
+    hintNow = text;
+    drawHint();
     clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => fade(hintBox), 4000);
+    hintTimer = setTimeout(() => {
+        hintNow = '';
+        drawHint();
+    }, 4000);
 };
 // The system's cursor stays hidden over the match meanwhile, as under the
 // lock: a lock something else let go of, the page keeping the keys (a
 // program in the background, on Windows), showed it over a game the mouse
-// no longer turned, with nothing else changed.
+// no longer turned, with nothing else changed. Over the plate it shows.
+// The plate comes in once, with one sheen, and nothing repeats while it
+// waits; as the lock is taken the key crosses it like a switch thrown and
+// it lets go, and for any other reason it fades.
+const PLAY_ENTER = 1300, PLAY_GOING = 240, PLAY_FADING = 200;
 const showPlay = () => {
     const held = playing && wantPointer;
     canvas.classList.toggle('held', held);
-    fade(playBox, held && !locked() && !exiting ? 'Click to play' : '');
+    const shown = held && !locked() && !exiting;
+    if (shown === playShown) return;
+    playShown = shown;
+    clearTimeout(playTimer);
+    playButton.classList.remove('shown', 'enter', 'going', 'leaving', 'nope', 'down');
+    if (shown) {
+        promptBox.classList.toggle('back', hadLock);
+        playButton.classList.add('shown', 'enter');
+        playTimer = setTimeout(() => playButton.classList.remove('enter'), PLAY_ENTER);
+    } else {
+        const out = locked() ? 'going' : 'leaving';
+        playButton.classList.add(out);
+        playTimer = setTimeout(() => playButton.classList.remove(out), out === 'going' ? PLAY_GOING : PLAY_FADING);
+    }
+    drawHint();
 };
-document.addEventListener('pointerlockchange', showPlay);
+document.addEventListener('pointerlockchange', () => {
+    if (locked() && playing) hadLock = true;
+    showPlay();
+});
+document.addEventListener('pointerlockerror', () => {
+    if (!playShown || !lockByClick) return;
+    playButton.classList.remove('nope', 'enter');
+    void playButton.offsetWidth;  // to shake again
+    playButton.classList.add('nope');
+});
+playButton.addEventListener('animationend', (event) => {
+    if (event.animationName === 'play-nope' || event.animationName === 'play-flash') playButton.classList.remove('nope');
+});
+// The plate is a button, for the mouse and a finger alike: down while a
+// press that began on it is held over it, let go as the pointer slides off,
+// down again if it comes back still held, and it takes the mouse only when
+// the press ends on it, in its click, which a press ending anywhere else
+// never makes. That press and its release are the page's, never the game's,
+// and the canvas keeps the keys. A click anywhere else on the match takes
+// the mouse at its press, as before.
+let platePress = null, plateType = 'mouse';
+playButton.addEventListener('pointerdown', (event) => {
+    platePress = event.pointerId;
+    // another button's press is the page's too, but doesn't press the plate
+    if (event.button) return;
+    plateType = event.pointerType;
+    playButton.classList.add('down');
+    // a finger holds the element it went down on: let go of it, so that
+    // sliding off the plate is seen as leaving it
+    if (playButton.hasPointerCapture(event.pointerId)) playButton.releasePointerCapture(event.pointerId);
+});
+playButton.addEventListener('mousedown', (event) => event.preventDefault());
+playButton.addEventListener('contextmenu', (event) => event.preventDefault());
+playButton.addEventListener('pointerleave', () => playButton.classList.remove('down'));
+playButton.addEventListener('pointerenter', (event) => {
+    if (event.pointerId === platePress && (event.buttons & 1 || event.pointerType !== 'mouse')) playButton.classList.add('down');
+});
+// and a finger's motion: slid off onto the canvas, it would be a new one
+// there to SDL, down with no release, as the release is the page's (the
+// mouse's is the page's anyway until the lock, which it then turns)
+for (const type of ['pointermove', 'pointerup', 'pointercancel'])
+    addEventListener(type, (event) => {
+        if (event.pointerId !== platePress || (type === 'pointermove' && event.pointerType === 'mouse')) return;
+        event.stopImmediatePropagation();
+        if (type === 'pointermove') return;
+        platePress = null;
+        playButton.classList.remove('down');
+    }, { capture: true });
+playButton.addEventListener('click', () => {
+    if (!playShown) return;
+    canvas.focus({ preventScroll: true });
+    if (plateType === 'mouse' && wantFullscreen && !isFullscreen()) enterFullscreen(true);
+    else if (wantPointer && !locked()) lockPointer(true);
+});
+// The plate's squircle corners, as the front page draws them:
+// figma-squircle's smooth corner at a smoothing of 0.8 (figma-squircle,
+// Copyright (c) 2021 Tien Pham, MIT license), kept in step with the
+// front's (admin-page/src/kit/squircle.ts, from the package), which this
+// page can't import. Drawn again only when its size changes, so nothing
+// is measured while it moves.
+const SMOOTHING = 0.8;
+const squircle = (w, h, radius) => {
+    const budget = Math.min(w, h) / 2, r = Math.min(radius, budget), rad = Math.PI / 180;
+    const smooth = Math.min(SMOOTHING, budget / r - 1), p = Math.min((1 + SMOOTHING) * r, budget);
+    const arc = 90 * (1 - smooth), len = Math.sin(arc / 2 * rad) * r * Math.SQRT2;
+    const p34 = r * Math.tan((90 - arc) / 4 * rad), beta = 45 * smooth;
+    const c = p34 * Math.cos(beta * rad), d = c * Math.tan(beta * rad), b = (p - len - c - d) / 3, a = 2 * b;
+    const n = (v) => v.toFixed(3);
+    const corner = (x1, y1, x2, y2, x3, y3, ax, ay, x4, y4, x5, y5, x6, y6) => `c ${[x1, y1, x2, y2, x3, y3].map(n).join(' ')} `
+        + `a ${n(r)} ${n(r)} 0 0 1 ${n(ax)} ${n(ay)} c ${[x4, y4, x5, y5, x6, y6].map(n).join(' ')}`;
+    return `M ${n(w - p)} 0 ${corner(a, 0, a + b, 0, a + b + c, d, len, len, d, c, d, b + c, d, a + b + c)}`
+        + ` L ${n(w)} ${n(h - p)} ${corner(0, a, 0, a + b, -d, a + b + c, -len, len, -c, d, -(b + c), d, -(a + b + c), d)}`
+        + ` L ${n(p)} ${n(h)} ${corner(-a, 0, -(a + b), 0, -(a + b + c), -d, -len, -len, -d, -c, -d, -(b + c), -d, -(a + b + c))}`
+        + ` L 0 ${n(p)} ${corner(0, -a, 0, -(a + b), d, -(a + b + c), len, -len, c, -d, b + c, -d, a + b + c, -d)} Z`;
+};
+const playKey = playButton.querySelector('.key');
+const plateShaper = new ResizeObserver((entries) => {
+    // rounded up, as squircle.ts does, so a fractional size is never cut
+    // along its right or bottom edge
+    for (const { target, borderBoxSize: [box] } of entries) {
+        const w = Math.ceil(box?.inlineSize ?? 0), h = Math.ceil(box?.blockSize ?? 0);
+        if (!w || !h) continue;
+        if (target === playKey) {
+            target.style.clipPath = `path('${squircle(w, h, h * 0.28)}')`;
+            continue;
+        }
+        const path = squircle(w, h, h / 3);
+        for (const shape of target.querySelectorAll('.plate path, .edge path')) shape.setAttribute('d', path);
+        target.style.setProperty('--sq', `path('${path}')`);
+        target.style.setProperty('--w', `${w}px`);
+    }
+});
+plateShaper.observe(playButton, { box: 'border-box' });
+plateShaper.observe(playKey, { box: 'border-box' });
+
 
 // In the page's fullscreen, Esc and F11 are the page's where the browser has
 // Keyboard Lock: as the fullscreen request's option (Firefox, Safari), or
@@ -1388,6 +1532,8 @@ const confirmLeave = (event) => {
 let paksToSay = null;
 const setPlaying = (inMatch) => {
     playing = inMatch;
+    // the next match is entered anew, its prompt large again
+    if (!playing) hadLock = false;
     if (playing) addEventListener('beforeunload', confirmLeave);
     else removeEventListener('beforeunload', confirmLeave);
     showPlay();
