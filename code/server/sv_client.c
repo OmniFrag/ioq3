@@ -2179,6 +2179,12 @@ static void SV_UpdateUserinfo_f( client_t *cl ) {
 	if ( Cmd_Argc() != 2 || !*Cmd_Argv(1) ) {
 		return;
 	}
+	// nor may a line break, which a connect's userinfo can't hold, and
+	// which a game logging the userinfo would write as a line of the
+	// client's own
+	if ( strpbrk( Cmd_Argv(1), "\n\r" ) ) {
+		return;
+	}
 
 	Q_strncpyz( cl->userinfo, Cmd_Argv(1), sizeof(cl->userinfo) );
 
