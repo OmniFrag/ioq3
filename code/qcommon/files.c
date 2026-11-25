@@ -9581,7 +9581,7 @@ static qboolean FS_TakeHeldSets( void ) {
 		}
 		for ( i = 0; i < count; i++ ) {
 			if ( held[i] ) {
-				Com_Printf( "%s/pak%d.pk3, added with the rest of the game's own files, is in place\n", game, i );
+				Com_Printf( "%s/pak%d.pk3, added with the rest of the retail game files, is in place\n", game, i );
 			}
 		}
 		taken = qtrue;

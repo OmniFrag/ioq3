@@ -1424,7 +1424,7 @@ static void SV_ExportStart( const char *name, qboolean copies ) {
 	}
 
 	if ( numRefused ) {
-		Com_Printf( "content export: left out the game's own paks, which players add from their own copies: %s\n",
+		Com_Printf( "content export: left out the retail game files, which players add from their own copies: %s\n",
 			SV_ExportListEnd( refused, numRefused ) );
 	}
 	if ( numGone ) {
@@ -2275,7 +2275,7 @@ void SV_Content_f( void ) {
 		return;
 	}
 	Com_Printf( "usage:\n"
-		"content export [folder] [copy]: puts the paks the server sends, but the game's own, in the folder "
+		"content export [folder] [copy]: puts the paks the server sends, but the retail game files, in the folder "
 		"in sv_contentDir, " CONTENT_WWW " if it's not given, by hash (sha256/<hash>.pk3) and by name "
 		"(<game>/<name>.pk3), for a web server that sv_dlURL names; cloned or hard-linked where it can be, "
 		"unless copy says to copy. It keeps the files of the versions it lists and of those the export before it listed, "

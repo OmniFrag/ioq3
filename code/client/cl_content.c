@@ -2130,7 +2130,7 @@ static void CL_ContentSlotAnswered( clcSlot_t *s ) {
 		f->retryAt = Sys_Nanoseconds() + retry * CLC_MSEC;
 		break;
 	case ANSWER_STATUS | OFD_STATUS_RETAIL:
-		CL_ContentFetchEnded( fetch, FETCH_FAILED, "the server doesn't send it: it's one of the game's own paks" );
+		CL_ContentFetchEnded( fetch, FETCH_FAILED, "the server doesn't send it: it's a retail game file" );
 		break;
 	case ANSWER_STATUS | OFD_STATUS_BAD_REQUEST:
 		Com_Printf( "The server called the request for %s/%s.pk3 from byte %u bad\n", f->gameDir, f->name, offset );

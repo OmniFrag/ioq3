@@ -1650,13 +1650,13 @@ int SV_WriteDownloadToClient(client_t *cl, msg_t *msg)
                     "able to join the game anyway.\n", cl->downloadName);
 				}
 			} else if ( refused ) {
-				Com_Printf( "clientDownload: %d : \"%s\" is the game's own %s, which sv_refuseRetailPaks keeps from downloads\n",
+				Com_Printf( "clientDownload: %d : \"%s\" is the retail game file %s, which sv_refuseRetailPaks keeps from downloads\n",
 					(int) (cl - svs.clients), cl->downloadName, retail );
 				if ( !FS_FilenameCompare( cl->downloadName, retail ) ) {
-					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send the game's own paks. "
+					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send retail game files. "
 						"Add %s from your own copy of the game, then connect again.\n", retail );
 				} else {
-					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send the game's own paks: "
+					Com_sprintf( errorMessage, sizeof( errorMessage ), "This server doesn't send retail game files: "
 						"\"%s\" is %s. Add %s from your own copy of the game, then connect again.\n",
 						cl->downloadName, retail, retail );
 				}

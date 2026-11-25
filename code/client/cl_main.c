@@ -3415,7 +3415,7 @@ void CL_AddDownloadFailure( const char *name, unsigned int checksum, const char 
 	Com_Printf( S_COLOR_YELLOW "WARNING: couldn't download %s: %s\n", name, why );
 
 	if ( FS_RetailPakChecksum( name, checksum, retail, sizeof( retail ) ) ) {
-		line = va( "\n%s is one of the game's own paks: add %s from your own copy of the game.", name, retail );
+		line = va( "\n%s is a retail game file: add %s from your own copy of the game.", name, retail );
 	} else if ( own ) {
 		line = notFound ?
 			va( "\nThe server uses a different version of %s than yours, and its download site doesn't have it.", name ) :

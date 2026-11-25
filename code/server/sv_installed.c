@@ -1019,12 +1019,12 @@ qboolean SV_ExtContentRemove( const char *name, const char *gameDir, qboolean ow
 	// the game's own: the owner's alone, and only one the running game
 	// doesn't read, held until its set is whole, which goes at once
 	if ( file->gameOwn && !owner ) {
-		SV_ChangeSay( change, "game_own", "%s is one of the game's own files, so only the server's owner can remove "
+		SV_ChangeSay( change, "game_own", "%s is a retail game file, so only the server's owner can remove "
 			"it.", file->name );
 		return qtrue;
 	}
 	if ( file->gameOwn && strcmp( file->state, "held" ) ) {
-		SV_ChangeSay( change, "game_needs", "%s is one of the game's own files the server runs on; stop the server, "
+		SV_ChangeSay( change, "game_needs", "%s is a retail game file the server runs on; stop the server, "
 			"then remove it by hand.", file->name );
 		return qtrue;
 	}

@@ -1640,7 +1640,7 @@ const char *FS_CheckAddPak( const char *ospath, const char *gameDir, const char 
 // words for a pak of the game's own (its own name) and for other contents
 // under an installed pak's name (the game, the name), which leave out where
 // the installed one is: a tool's caller may not be the server's owner
-#define ADD_PAK_RETAIL			"it's one of the game's own files, %s, which players add from their own copies"
+#define ADD_PAK_RETAIL			"it's a retail game file, %s, which players add from their own copies"
 #define ADD_PAK_OTHER_CONTENTS	"a file named %s/%s.pk3 is already installed with different contents; give the new " \
 	"version its own name so players who have the old one aren't confused"
 const char *FS_AddPakInstalled( const char *gameDir, const char *name, unsigned int checksum,
