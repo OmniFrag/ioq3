@@ -1587,8 +1587,8 @@ static qboolean SV_GameOwnState( fsGameOwn_t own, int index, extGameOwnSet_t *st
 	int			i, count;
 
 	Com_Memset( state, 0, sizeof( *state ) );
-	state->set = own == FS_OWN_BASE ? "base" : "missionpack";
 	count = FS_GameOwnHave( own, have, held );
+	state->set = FS_OwnRelease( own, NULL );
 	if ( index >= 0 && index < count ) {
 		have[index] = held[index] = qtrue;
 	}

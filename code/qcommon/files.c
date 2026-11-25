@@ -5194,6 +5194,8 @@ static void FS_PakFacts( const searchpath_t *search, fsPak_t *facts ) {
 	facts->gameDir = search->pack->pakGamename;
 	facts->baseName = search->pack->pakBasename;
 	facts->gameOwn = FS_IdPak( search->pack );
+	facts->ownPart = -1;
+	facts->ownSet = facts->gameOwn ? FS_GameOwnPak( search->pack->checksum, &facts->ownPart ) : FS_OWN_NONE;
 	facts->mapPack = place == MAPPACK_OWN || place == MAPPACK_SET_ASIDE;
 	facts->gameCode = search->pack->holdsCode;
 	facts->codeLeftOut = FS_CodeLeftOut( search );
@@ -9432,6 +9434,31 @@ const char *FS_OwnGame( fsGameOwn_t own, int *count ) {
 		*count = own == FS_OWN_BASE ? NUM_ID_PAKS : own == FS_OWN_MISSIONPACK ? NUM_TA_PAKS : 0;
 	}
 	return own == FS_OWN_MISSIONPACK ? BASETA : BASEGAME;
+}
+
+// a release of the game's own files by name, as content list and content
+// add say it, "demo", "base" or "missionpack", and how many files it has;
+// NULL and 0 for FS_OWN_NONE; parts may be NULL
+const char *FS_OwnRelease( fsGameOwn_t own, int *parts ) {
+	int		count;
+
+	if ( !parts ) {
+		parts = &count;
+	}
+	switch ( own ) {
+	case FS_OWN_DEMO:
+		*parts = 1;
+		return "demo";
+	case FS_OWN_BASE:
+		*parts = NUM_ID_PAKS;
+		return "base";
+	case FS_OWN_MISSIONPACK:
+		*parts = NUM_TA_PAKS;
+		return "missionpack";
+	default:
+		*parts = 0;
+		return NULL;
+	}
 }
 
 // whether the engine chose the demo, for want of the full game

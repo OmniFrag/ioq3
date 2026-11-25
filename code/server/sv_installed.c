@@ -548,8 +548,9 @@ static void SV_ListMap( void *user, const char *map ) {
 		return;
 	}
 	file->maps[file->numMaps++] = copy;
-	// a kept copy's maps aren't in use: it's gone
-	if ( !Q_stricmp( file->state, "removed" ) ) {
+	// a kept copy's maps aren't in use: it's gone; nor the game's own,
+	// which content remove refuses while they're loaded
+	if ( !Q_stricmp( file->state, "removed" ) || file->gameOwn ) {
 		return;
 	}
 	if ( sv_mapname && !Q_stricmp( map, sv_mapname->string ) && com_sv_running->integer ) {
@@ -610,6 +611,8 @@ static void SV_ListFacts( void *user, const fsPak_t *pak ) {
 	extContentFile_t	*file = ( (listing_t *)user )->file;
 
 	file->gameOwn = pak->gameOwn;
+	file->release = FS_OwnRelease( pak->ownSet, &file->parts );
+	file->part = pak->ownPart;
 	file->mapPack = pak->mapPack;
 	file->gameCode = pak->gameCode;
 	file->codeLeftOut = pak->codeLeftOut;
@@ -631,7 +634,7 @@ static void SV_ListLoaded( void *user, const fsPak_t *pak ) {
 	SV_ListOrigin( file, pak->ospath );
 	file->removable = file->home && SV_InstalledName( file->name, file->game );
 	SV_ListFacts( l, pak );
-	if ( l->details && !pak->gameOwn ) {
+	if ( l->details ) {
 		FS_EachPakMap( pak, SV_ListMap, l );
 	}
 }

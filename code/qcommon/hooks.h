@@ -932,7 +932,13 @@ typedef struct {
 	qboolean	removable;		// content remove may take it
 	int64_t		addedAt, removedAt, keptUntil;	// Unix seconds, 0 for none
 	qboolean	gameOwn, mapPack, gameCode, codeLeftOut;	// as the file system says (fsPak_t)
-	int			numMaps;		// with details: its maps, none for the game's own
+	// the game's own: its release, "demo" (the demo's pak0), "base" (Quake III
+	// Arena's pak0 to pak8) or "missionpack" (Team Arena's pak0 to pak3), NULL
+	// for another file; its number in the release (pak<part>.pk3, -1 where
+	// it isn't known), and how many files the release has
+	const char	*release;
+	int			part, parts;
+	int			numMaps;		// with details: its maps (none for a held file of the game's own)
 	const char	**maps;
 	int			numUses;		// and those in use, a map once for each why
 	extContentUse_t	*uses;

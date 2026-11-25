@@ -1622,6 +1622,8 @@ int			FS_GameOwnHave( fsGameOwn_t own, qboolean *have, qboolean *held );
 // in missionpack; and a pak's number by its name, pak<n> below count, or -1
 #define NUM_TA_PAKS	4
 const char	*FS_OwnGame( fsGameOwn_t own, int *count );
+// a release's name, "demo", "base" or "missionpack", and its count of files
+const char	*FS_OwnRelease( fsGameOwn_t own, int *parts );
 int			FS_IdPakIndex( const char *basename, int count );
 // whether the engine chose the demo for want of the full game (files.c)
 qboolean	FS_DemoChosen( void );
@@ -1659,6 +1661,8 @@ typedef struct {
 	const char	*gameDir;
 	const char	*baseName;		// its name without .pk3
 	qboolean	gameOwn;		// one of the game's own paks, by its checksum
+	fsGameOwn_t	ownSet;			// and its release (FS_GameOwnPak), FS_OWN_NONE for another
+	int			ownPart;		// its number in that release, pak<n>.pk3; -1 where it isn't known
 	qboolean	mapPack;		// a map pack, as map-pack scope counts one (fs_mapPakScope)
 	qboolean	gameCode;		// it carries vm/*.qvm
 	qboolean	codeLeftOut;	// a map pak's game code the game leaves out (FS_CodeLeftOut)
