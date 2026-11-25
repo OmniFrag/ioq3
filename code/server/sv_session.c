@@ -355,7 +355,8 @@ The third message, "session <challenge> <qport>", then the client's
 static and its payload: its device's key and the userinfo. Without a live
 pending handshake at its address and qport for that challenge it's
 dropped, so a replay after the slot is made does nothing; one that doesn't
-open leaves the handshake as it was (14.3). One that opens makes the slot
+open leaves the handshake as it was (14.3). One that opens makes the slot,
+and gives the address back the request it counted
 =================
 */
 void SV_SessionFinish( netadr_t from, msg_t *msg ) {
@@ -391,6 +392,12 @@ void SV_SessionFinish( netadr_t from, msg_t *msg ) {
 		SV_SessionDropped( from, "a device key that isn't the one the handshake proved" );
 		return;
 	}
+
+	// the handshake is done, by the client its challenge found at this
+	// address, so this message doesn't count against the address, as its
+	// connect doesn't (SV_DirectConnect): a join costs it one request, the
+	// getchallenge, as a classic join does
+	SVC_RateRestoreBurstAddress( from, 10, 1000 );
 
 	admit = p->terms;
 	Noise_Split( &p->hs, admit.receiveKey, admit.sendKey );
