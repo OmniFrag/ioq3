@@ -34,6 +34,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #else
 #include <utime.h>
 #endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 /*
 ==============================================================
@@ -1283,6 +1286,7 @@ static int				sourceCount;
 static byte				sourcesHeader[CONTENT_HEADER_SIZE];	// as read, its reserved bytes kept
 static qboolean			sourcesLeftAlone, sourcesTooLargeSaid;
 static contentServer_t	cacheServer, cacheServerLast;	// connected to, and the last connected to
+static char				cacheServerName[MAX_OSPATH];	// human-readable label for sources.dat
 static int				cacheServerSerial;
 
 static sourceRecord_t	*Content_Sources_Find( const byte sha256[SHA256_DIGEST_SIZE] );
@@ -1528,6 +1532,9 @@ static void Content_Sources_Noted( const byte sha256[SHA256_DIGEST_SIZE], conten
 	r->lastUsed = now;
 	if ( flags ) {
 		Content_Sources_Note( r, &cacheServer, flags, now );
+		if ( cacheServerName[0] ) {
+			Content_Sources_NoteName( r, cacheServerName, flags, now );
+		}
 	}
 	cacheChanged = qtrue;
 }
@@ -1611,6 +1618,19 @@ void Content_Cache_SetServer( const contentServer_t *server ) {
 		memcmp( &cacheServer, &cacheServerLast, sizeof( cacheServer ) ) ) ) {
 		cacheServerLast = cacheServer;
 		cacheServerSerial++;
+	}
+}
+
+/*
+=================
+Content_Cache_SetServerName
+=================
+*/
+void Content_Cache_SetServerName( const char *name ) {
+	if ( name && name[0] ) {
+		Q_strncpyz( cacheServerName, name, sizeof( cacheServerName ) );
+	} else {
+		cacheServerName[0] = '\0';
 	}
 }
 
@@ -1857,6 +1877,34 @@ void Content_Cache_Unmounted( void ) {
 
 /*
 =================
+Content_Cache_RemoveBySHA256
+=================
+*/
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int Content_Cache_RemoveBySHA256( const char *hex ) {
+	byte	sha256[SHA256_DIGEST_SIZE];
+	int		i;
+
+	if ( !cacheStarted || !hex || !Com_SHA256FromHex( hex, sha256 ) ) {
+		return -1;
+	}
+	for ( i = 0; i < cacheCount; i++ ) {
+		if ( !memcmp( cacheEntries[i].sha256, sha256, SHA256_DIGEST_SIZE ) ) {
+			if ( cacheEntries[i].mounted || cacheEntries[i].downloading ) {
+				return -1;
+			}
+			Content_Cache_Delete( i );
+			Content_Cache_Flush();
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/*
+=================
 Content_Cache_Flush
 =================
 */
@@ -1866,6 +1914,9 @@ void Content_Cache_Flush( void ) {
 			Content_Sources_Write();
 		}
 		Content_Cache_Write();
+#ifdef __EMSCRIPTEN__
+		EM_ASM({ if (Module.cacheWritten) Module.cacheWritten(); });
+#endif
 	}
 }
 

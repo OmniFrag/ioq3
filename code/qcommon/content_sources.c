@@ -370,3 +370,174 @@ qboolean Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server,
 	Content_Put64( p + 8, now );
 	return qtrue;
 }
+
+// strips color codes and control bytes, trims spaces, and caps cleanly at
+// SOURCES_NAME_MAX UTF-8 bytes
+static int Sources_CleanName( const char *in, char out[SOURCES_NAME_MAX + 1] ) {
+	const byte	*s = (const byte *)in;
+	int			n = 0;
+
+	if ( !in ) {
+		out[0] = '\0';
+		return 0;
+	}
+	while ( *s && n < SOURCES_NAME_MAX ) {
+		if ( s[0] == '^' && s[1] && s[1] != '^' ) {
+			s += 2;
+			continue;
+		}
+		if ( *s < 0x20 || *s == 0x7f ) {
+			s++;
+			continue;
+		}
+		if ( *s == ' ' && n == 0 ) {
+			s++;
+			continue;
+		}
+		out[n++] = (char)*s++;
+	}
+	// don't leave an incomplete multi-byte UTF-8 sequence at the end
+	{
+		int	tail = n;
+		while ( tail > 0 && ( (byte)out[tail - 1] & 0xc0 ) == 0x80 ) {
+			tail--;
+		}
+		if ( tail > 0 && ( (byte)out[tail - 1] & 0x80 ) != 0 ) {
+			byte	lead = (byte)out[tail - 1];
+			int		want = ( lead & 0xe0 ) == 0xc0 ? 2 : ( lead & 0xf0 ) == 0xe0 ? 3 : ( lead & 0xf8 ) == 0xf0 ? 4 : 0;
+			if ( n - ( tail - 1 ) < want ) {
+				n = tail - 1;
+			}
+		}
+	}
+	while ( n > 0 && out[n - 1] == ' ' ) {
+		n--;
+	}
+	out[n] = '\0';
+	return n;
+}
+
+/*
+=================
+Content_Sources_ReadNames
+
+Parses the OFSN server-names block from a record's tail: returns the count
+(0 if the tail is empty), or -1 if the tail is non-empty and not a valid
+OFSN block (such as a later engine's unknown tail)
+=================
+*/
+int Content_Sources_ReadNames( const sourceRecord_t *r, sourceName_t *out, int maxNames ) {
+	const byte	*tail;
+	int			i, count, at, nameLen;
+
+	if ( r->tailLength == 0 ) {
+		return 0;
+	}
+	if ( r->tailLength < SOURCES_NAMES_HEAD || !r->servers ) {
+		return -1;
+	}
+	tail = r->servers + r->serverSize * r->serverCount;
+	if ( memcmp( tail, SOURCES_NAMES_MAGIC, 4 ) ) {
+		return -1;
+	}
+	count = Content_Get16( tail + 4 );
+	if ( count > SOURCES_MAX_SERVERS ) {
+		return -1;
+	}
+	at = SOURCES_NAMES_HEAD;
+	for ( i = 0; i < count; i++ ) {
+		if ( r->tailLength - at < SOURCES_NAME_HEAD ) {
+			return -1;
+		}
+		nameLen = tail[at + 1];
+		if ( nameLen < 1 || nameLen > SOURCES_NAME_MAX || r->tailLength - at < SOURCES_NAME_HEAD + nameLen ) {
+			return -1;
+		}
+		if ( memchr( tail + at + SOURCES_NAME_HEAD, '\0', nameLen ) ) {
+			return -1;
+		}
+		if ( out && i < maxNames ) {
+			out[i].flags = tail[at];
+			out[i].lastTime = Content_Get64( tail + at + 4 );
+			memcpy( out[i].name, tail + at + SOURCES_NAME_HEAD, nameLen );
+			out[i].name[nameLen] = '\0';
+		}
+		at += SOURCES_NAME_HEAD + nameLen;
+	}
+	return at == r->tailLength ? ( out && count > maxNames ? maxNames : count ) : -1;
+}
+
+/*
+=================
+Content_Sources_NoteName
+
+Records a human-readable server label with flags and timestamp in a record's
+OFSN tail. Leaves any unknown non-OFSN tail untouched and returns qfalse
+=================
+*/
+qboolean Content_Sources_NoteName( sourceRecord_t *r, const char *name, int flags, int64_t now ) {
+	sourceName_t	names[SOURCES_MAX_SERVERS];
+	char			clean[SOURCES_NAME_MAX + 1];
+	byte			*grown, *p;
+	int				count, i, found = -1, oldest = -1, oldestUsed = -1;
+	int				serversLength, tailLength;
+
+	if ( !flags || !Sources_CleanName( name, clean ) ) {
+		return qfalse;
+	}
+	count = Content_Sources_ReadNames( r, names, SOURCES_MAX_SERVERS );
+	if ( count < 0 ) {
+		return qfalse;
+	}
+	for ( i = 0; i < count; i++ ) {
+		if ( !Q_stricmp( names[i].name, clean ) ) {
+			found = i;
+			break;
+		}
+		if ( oldest < 0 || names[i].lastTime < names[oldest].lastTime ) {
+			oldest = i;
+		}
+		if ( !( names[i].flags & SOURCES_SENT ) && ( oldestUsed < 0 || names[i].lastTime < names[oldestUsed].lastTime ) ) {
+			oldestUsed = i;
+		}
+	}
+	if ( found >= 0 ) {
+		names[found].flags |= flags;
+		names[found].lastTime = now;
+	} else {
+		int	slot = count < SOURCES_MAX_SERVERS ? count++ : ( oldestUsed >= 0 ? oldestUsed : oldest );
+		names[slot].flags = flags;
+		names[slot].lastTime = now;
+		Q_strncpyz( names[slot].name, clean, sizeof( names[slot].name ) );
+	}
+	tailLength = SOURCES_NAMES_HEAD;
+	for ( i = 0; i < count; i++ ) {
+		tailLength += SOURCES_NAME_HEAD + (int)strlen( names[i].name );
+	}
+	if ( !r->serverSize ) {
+		r->serverSize = SOURCES_SERVER_SIZE;
+	}
+	serversLength = r->serverSize * r->serverCount;
+	grown = realloc( r->servers, serversLength + tailLength + 1 );
+	if ( !grown ) {
+		return qfalse;
+	}
+	r->servers = grown;
+	p = grown + serversLength;
+	memcpy( p, SOURCES_NAMES_MAGIC, 4 );
+	Content_Put16( p + 4, count );
+	Content_Put16( p + 6, 0 );
+	p += SOURCES_NAMES_HEAD;
+	for ( i = 0; i < count; i++ ) {
+		int	len = (int)strlen( names[i].name );
+		p[0] = names[i].flags;
+		p[1] = len;
+		p[2] = 0;
+		p[3] = 0;
+		Content_Put64( p + 4, names[i].lastTime );
+		memcpy( p + SOURCES_NAME_HEAD, names[i].name, len );
+		p += SOURCES_NAME_HEAD + len;
+	}
+	r->tailLength = tailLength;
+	return qtrue;
+}

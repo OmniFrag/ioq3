@@ -59,10 +59,32 @@ canvas.held { cursor: none !important; }
 @keyframes leaving-fill { to { stroke-dashoffset: 0; } }
 /* The shared site's page: the server as its link reached it, what it calls
    itself, and whose it is, until the game draws */
-#central { position: fixed; top: 0; left: 0; right: 0; padding: 10px 16px; font: 15px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); background: rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; }
+#central { position: fixed; top: 0; left: 0; right: 0; padding: 10px 16px; font: 15px/1.4 system-ui, sans-serif; color: rgb(235, 235, 235); background: rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 #central[hidden] { display: none; }
+#central .central-info { min-width: 0; }
 #central span { color: rgb(180, 180, 180); }
 #central p { margin: 2px 0 0; font-size: 13px; color: rgb(180, 180, 180); }
+#central .storage-btn { font: 14px/1.3 system-ui, sans-serif; padding: 5px 12px; border-radius: 6px; border: 1px solid rgb(120, 120, 120); background: rgb(40, 40, 40); color: rgb(235, 235, 235); cursor: pointer; flex: none; }
+#left .storage-btn { margin-left: 8px; }
+/* The storage list modal (one-site.md, section 7): everything stored on this
+   origin, quota usage against estimate(), persistence status, and removal */
+#storage { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); font: 15px/1.45 system-ui, sans-serif; color: rgb(235, 235, 235); }
+#storage[hidden] { display: none; }
+#storage .storage-panel { background: rgb(22, 24, 29); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; padding: 18px 22px; width: min(52em, 94vw); max-height: 88dvh; display: flex; flex-direction: column; gap: 12px; user-select: text; box-sizing: border-box; }
+#storage .storage-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#storage h2 { margin: 0; font-size: 19px; }
+#storage .storage-quota { margin: 0; font-size: 13px; color: rgb(185, 190, 200); display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+#storage .storage-note { margin: 0; font-size: 13px; color: rgb(245, 200, 120); }
+#storage .storage-note[hidden] { display: none; }
+#storage .storage-list { list-style: none; margin: 0; padding: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+#storage .storage-item { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+#storage .storage-main { min-width: 0; flex: 1; }
+#storage .storage-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 600; overflow-wrap: anywhere; }
+#storage .storage-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.12); color: rgb(220, 224, 232); }
+#storage .storage-meta { margin: 4px 0 0; font-size: 13px; color: rgb(175, 180, 190); overflow-wrap: anywhere; }
+#storage .storage-empty { margin: 8px 0; color: rgb(175, 180, 190); }
+#storage button { font: 13px/1.3 system-ui, sans-serif; padding: 5px 12px; border-radius: 6px; border: 1px solid rgb(120, 120, 120); background: rgb(42, 46, 54); color: inherit; cursor: pointer; flex: none; }
+#storage button:disabled { opacity: 0.5; cursor: default; }
 /* "Click to play" (#play), while the game wants the pointer in a match and
    the page doesn't hold it: the front page's Play, see-through, with a
    solid play key (Joe, 2026-11-21, "Play comes along"). Large in the lower

@@ -218,6 +218,21 @@ sends is written under a name it chose
 #define SOURCES_SENT			1	// the server sent the pak
 #define SOURCES_USED			2	// it was mounted for the server
 
+// human-readable server names in a sources.dat record's tail (one-site.md,
+// step 6): "OFSN" magic, 2-byte count, 2 reserved, then variable-length
+// entries (flags, nameLen, 2 reserved, 8-byte lastTime, UTF-8 name bytes).
+// Older engines preserve the tail byte for byte; an unknown tail is left alone
+#define SOURCES_NAMES_MAGIC		"OFSN"
+#define SOURCES_NAMES_HEAD		8
+#define SOURCES_NAME_HEAD		12
+#define SOURCES_NAME_MAX		64
+
+typedef struct {
+	int		flags;					// SOURCES_SENT, SOURCES_USED
+	int64_t	lastTime;				// Unix seconds
+	char	name[SOURCES_NAME_MAX + 1];
+} sourceName_t;
+
 // a server as the cache knows it: the address it was reached at, and the
 // key it proved there too, if it did. A proof alone doesn't tie the key to
 // the connection, as a server can pass another's proof on, so a key is
@@ -278,6 +293,10 @@ void		Content_FreeSources( sourceRecord_t *records, int count );
 // whether a record names the server with these flags; and adding them
 qboolean	Content_Sources_Has( const sourceRecord_t *r, const contentServer_t *server, int flags );
 qboolean	Content_Sources_Note( sourceRecord_t *r, const contentServer_t *server, int flags, int64_t now );
+// human-readable server names in a record's OFSN tail: count (0..maxNames),
+// or -1 if the tail is non-empty and not a valid OFSN block; and adding one
+int			Content_Sources_ReadNames( const sourceRecord_t *r, sourceName_t *out, int maxNames );
+qboolean	Content_Sources_NoteName( sourceRecord_t *r, const char *name, int flags, int64_t now );
 
 #define CACHE_INDEX_FILE		CONTENT_DIR "/index.dat"
 #define CACHE_INDEX_MAGIC		"OFCI"
@@ -391,6 +410,9 @@ void		Content_Cache_DropPartial( const byte sha256[SHA256_DIGEST_SIZE] );
 // (FS_ConditionalRestart). What a server sends is its own for that
 // connection whatever sources.dat notes (cacheEntry_t's sentNow)
 void	Content_Cache_SetServer( const contentServer_t *server );
+// the human-readable server label (domain, join code, or address) recorded
+// in sources.dat's OFSN tail for the storage list; NULL clears it
+void	Content_Cache_SetServerName( const char *name );
 int		Content_Cache_ServerSerial( void );
 // whether the cache holds a complete pak with this checksum that the
 // server connected to didn't send, which a classic server's reference
@@ -399,6 +421,9 @@ qboolean	Content_Cache_HeldForOthers( unsigned int pakChecksum );
 // a pak the search path took (it's used now), or one damaged, which goes
 void	Content_Cache_Mounted( int entry );
 void	Content_Cache_Remove( int entry );
+// removes an unmounted cached pak by its 64-hex SHA-256 and flushes:
+// 1 removed, 0 not found, -1 mounted/downloading or bad hash
+int		Content_Cache_RemoveBySHA256( const char *hex );
 // as the search path is built again: nothing's mounted, then what was
 // changed is written
 void	Content_Cache_Unmounted( void );

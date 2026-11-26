@@ -1625,6 +1625,7 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	}
 	cl_leaving = -1;
 	Content_Cache_SetServer( NULL );
+	Content_Cache_SetServerName( NULL );
 	// the session's secrets go with the connection
 	CL_SessionForget();
 
@@ -4607,9 +4608,17 @@ there, which ties it to this connection. A web connection is none
 */
 static void CL_ContentServer( void ) {
 	contentServer_t	server;
+	const char		*label = NULL;
 
 	Content_ServerOf( &server, &clc.netchan.remoteAddress, clc.sessionProven ? clc.serverKey : NULL );
 	Content_Cache_SetServer( &server );
+	if ( clc.netchan.remoteAddress.type != NA_LOOPBACK ) {
+		label = cl_webCentral && cl_webCentral->string[0] ? cl_webCentral->string : clc.servername;
+		if ( label && !Q_stricmpn( label, "join ", 5 ) ) {
+			label += 5;
+		}
+	}
+	Content_Cache_SetServerName( label );
 }
 
 /*

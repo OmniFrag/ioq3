@@ -402,9 +402,16 @@ const showCentral = (shown, called) => {
         if (document.title !== centralTitle) document.title = centralTitle;
     });
     centralTitleWatch.observe(document.head, { childList: true, subtree: true, characterData: true });
-    centralHeading.replaceChildren(Object.assign(document.createElement('b'), { textContent: shown }),
+    const info = document.createElement('div');
+    info.className = 'central-info';
+    info.append(Object.assign(document.createElement('b'), { textContent: shown }),
         ...(plainName ? [' ', Object.assign(document.createElement('span'), { textContent: plainName })] : []),
         Object.assign(document.createElement('p'), { textContent: CENTRAL_WORDS.runBy }));
+    const storageBtn = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'storage-btn', textContent: 'Storage',
+    });
+    storageBtn.addEventListener('click', () => openStorage());
+    centralHeading.replaceChildren(info, storageBtn);
     if (!centralHeading.isConnected) document.body.append(centralHeading);
     centralHeading.hidden = !!runningEngine;
 };
@@ -638,6 +645,7 @@ if (FRONT) {
             const now = response?.headers.get('ETag');
             return response?.status === 200 && !!now && now !== tag;
         },
+        openStorage: () => openStorage(),
     }); }).catch(noFront);
 } else {
     noFront();
@@ -1618,21 +1626,26 @@ const HOME = '/home/web_user';
 // A save asked for while one runs follows it, but the page's last, as it's
 // left, goes at once (now): the one running may have read the home before
 // the engine's quit wrote it, and the page may not outlive it.
-let homeFS, saving = false, saveAgain = false;
+let homeFS, saving = false, saveAgain = false, saveWaiters = [];
 const saveHome = (now = false, saved) => {
-    if (!homeFS) return;
+    if (!homeFS) {
+        saved?.(new Error('home not mounted'));
+        return;
+    }
     if (saving && !now) {
         saveAgain = true;
+        if (saved) saveWaiters.push(saved);
         return;
     }
     saving = true;
     homeFS.syncfs(false, (error) => {
         if (error) console.warn(`Couldn't save the settings: ${error}`);
-        else saved?.();
+        saved?.(error);
         saving = false;
         if (saveAgain) {
             saveAgain = false;
-            saveHome();
+            const waiters = saveWaiters.splice(0);
+            saveHome(false, (err) => waiters.forEach((fn) => fn(err)));
         }
     });
 };
@@ -1689,7 +1702,8 @@ const restoreSettings = (fs) => {
         }
         // kept until a save has them, should this page go as soon as it
         // starts, unless a leave since wrote another
-        saveHome(true, () => {
+        saveHome(true, (error) => {
+            if (error) return;
             try {
                 if (localStorage.getItem(SETTINGS_COPY) === kept) localStorage.removeItem(SETTINGS_COPY);
             } catch { /* blocked */ }
@@ -2412,7 +2426,9 @@ const bring = async (own) => {
             const from = copied, name = blob.name ?? entry.src;
             try {
                 const stamp = await paks.stampOf(blob);
-                const { path, busy, already } = await store.call('store', { file: blob, src: entry.src.toLowerCase(), checksum, stamp },
+                const { path, busy, already } = await store.call('store', {
+                    file: blob, src: entry.src.toLowerCase(), checksum, stamp, server: currentServerLabel(),
+                },
                     (bytes) => {
                         askBox.dataset.copied = from + bytes;
                         if (toIsolate && askBox.hidden) showStatus('Reading your files…', Math.floor(100 * (from + bytes) / toCopy) / 100, false,
@@ -2505,7 +2521,7 @@ const bring = async (own) => {
         });
         // a kept folder's paks, listed in the index as read in place, in one write
         if (folder && store.call && taken.length)
-            store.call('note', { folder, files: taken.map(({ entry, blob, checksum }) => ({ src: entry.src.toLowerCase(), name: blob.name,
+            store.call('note', { folder, server: currentServerLabel(), files: taken.map(({ entry, blob, checksum }) => ({ src: entry.src.toLowerCase(), name: blob.name,
                 checksum, size: blob.size, mtime: blob.lastModified })) }).catch(() => {});
         if (how !== 'Kept') refused = taken.length ? wrong : [...wrong, ...aside];
         takenNow.push(...taken);
@@ -2739,7 +2755,7 @@ const bring = async (own) => {
     if (moved === 'stored') persistOnInput();
     // the kept copies this visit read, as last used (a kept folder's were, as noted)
     const used = own.filter((file) => storedAt.has(file)).map((file) => storedAt.get(file));
-    if (used.length && store.call) store.call('used', { paths: used }).catch(() => {});
+    if (used.length && store.call) store.call('used', { paths: used, server: currentServerLabel() }).catch(() => {});
     const fromKept = [...inPlace.values()].filter(Boolean).length;
     console.log(`Own files: ${fromKept} read in place from a kept folder, ${inPlace.size - fromKept} chosen for this visit`);
     return own.map((file) => ({ ...file, blob: have.get(file), stored: storedAt.get(file), inPlace: inPlace.has(file) }));
@@ -2923,6 +2939,629 @@ const downloadGame = async (FS) => {
     }
 };
 
+// --- storage list (one-site.md, section 7)
+const DEMO_PAK0_CHECKSUM = 2985612116;
+const RETAIL_CHECKSUMS = new Set([
+    1566731103, 298122907, 412165236, 2991495316, 1197932710, 4087071573, 3709064859, 908855077, 977125798,
+    2430342401, 511014160, 2662638993, 1438664554,
+]);
+const SOURCE_KIND_INSTALLED = 5;
+const SOURCES_SENT = 1;
+const utf8Decoder = new TextDecoder();
+const utf8Encoder = new TextEncoder();
+const hexOf = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+const fromHexBytes = (hex) => Uint8Array.from(hex.match(/../g), (pair) => parseInt(pair, 16));
+const readCString = (bytes, offset, maxLen) => {
+    let end = offset;
+    const limit = offset + maxLen;
+    while (end < limit && bytes[end] !== 0) end++;
+    return utf8Decoder.decode(bytes.subarray(offset, end));
+};
+const readU64 = (view, offset) => Number(view.getBigUint64(offset, true));
+const writeU64 = (view, offset, value) => view.setBigUint64(offset, BigInt(Math.max(0, Math.trunc(value))), true);
+
+// Parses cache/content/index.dat (OFCI v1, 144-byte records, content.c)
+const parseCacheIndex = (bytes) => {
+    if (!bytes || bytes.length < 16) return [];
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'OFCI') return [];
+    if (view.getUint16(4, true) !== 1 || view.getUint16(6, true) !== 144) return [];
+    const count = view.getUint32(8, true);
+    if (u8.length !== 16 + count * 144) return [];
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const at = 16 + i * 144;
+        const state = u8[at + 60];
+        if (state !== 1 && state !== 2) return [];
+        out.push({
+            sha256: hexOf(u8.subarray(at, at + 32)),
+            size: readU64(view, at + 32),
+            valid: readU64(view, at + 40),
+            lastUsed: readU64(view, at + 48),
+            pakChecksum: view.getUint32(at + 56, true),
+            state,
+            gamedir: readCString(u8, at + 64, 32),
+            name: readCString(u8, at + 96, 48),
+        });
+    }
+    return out;
+};
+
+// Writes cache/content/index.dat (OFCI v1, 144-byte records, content.c)
+const writeCacheIndex = (entries) => {
+    const u8 = new Uint8Array(16 + entries.length * 144);
+    const view = new DataView(u8.buffer);
+    u8.set([0x4f, 0x46, 0x43, 0x49], 0); // OFCI
+    view.setUint16(4, 1, true);
+    view.setUint16(6, 144, true);
+    view.setUint32(8, entries.length, true);
+    entries.forEach((e, i) => {
+        const at = 16 + i * 144;
+        u8.set(fromHexBytes(e.sha256), at);
+        writeU64(view, at + 32, e.size);
+        writeU64(view, at + 40, e.valid);
+        writeU64(view, at + 48, e.lastUsed);
+        view.setUint32(at + 56, e.pakChecksum >>> 0, true);
+        u8[at + 60] = e.state;
+        u8.set(utf8Encoder.encode(e.gamedir).subarray(0, 31), at + 64);
+        u8.set(utf8Encoder.encode(e.name).subarray(0, 47), at + 96);
+    });
+    return u8;
+};
+
+const formatServerAddress = (kind, port, id) => {
+    if (kind === 2) return `${id[0]}.${id[1]}.${id[2]}.${id[3]}${port ? `:${port}` : ''}`;
+    if (kind === 3) {
+        const groups = [];
+        for (let i = 0; i < 16; i += 2) groups.push(((id[i] << 8) | id[i + 1]).toString(16));
+        return `[${groups.join(':')}]${port ? `:${port}` : ''}`;
+    }
+    return '';
+};
+
+// Parses cache/content/sources.dat (OFCS v1 + OFSN server-names tail)
+const parseCacheSources = (bytes) => {
+    if (!bytes || bytes.length < 16) return null;
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'OFCS') return null;
+    if (view.getUint16(4, true) !== 1) return null;
+    const count = view.getUint32(8, true);
+    const header = u8.slice(0, 16);
+    const records = [];
+    let at = 16;
+    for (let i = 0; i < count; i++) {
+        if (u8.length - at < 60) return null;
+        const recLen = view.getUint32(at, true);
+        if (recLen < 60 || recLen > u8.length - at) return null;
+        const sha256 = hexOf(u8.subarray(at + 4, at + 36));
+        const stored = readU64(view, at + 36);
+        const lastUsed = readU64(view, at + 44);
+        const source = u8[at + 52];
+        const serverSize = view.getUint16(at + 54, true);
+        const serverCount = view.getUint16(at + 56, true);
+        if (serverSize < 48 || serverSize * serverCount > recLen - 60) return null;
+        const servers = [];
+        for (let j = 0; j < serverCount; j++) {
+            const sAt = at + 60 + j * serverSize;
+            const kind = u8[sAt];
+            const flags = u8[sAt + 1];
+            const port = view.getUint16(sAt + 2, true);
+            const lastTime = readU64(view, sAt + 8);
+            const addr = formatServerAddress(kind, port, u8.subarray(sAt + 16, sAt + 48));
+            servers.push({ kind, flags, port, lastTime, addr });
+        }
+        const tailStart = at + 60 + serverSize * serverCount;
+        const tailLen = recLen - 60 - serverSize * serverCount;
+        const names = [];
+        if (tailLen >= 8 && String.fromCharCode(u8[tailStart], u8[tailStart + 1], u8[tailStart + 2], u8[tailStart + 3]) === 'OFSN') {
+            const nCount = view.getUint16(tailStart + 4, true);
+            let nAt = tailStart + 8;
+            let ok = nCount <= 32;
+            for (let j = 0; ok && j < nCount; j++) {
+                if (at + recLen - nAt < 12) { ok = false; break; }
+                const flags = u8[nAt];
+                const len = u8[nAt + 1];
+                if (len < 1 || len > 64 || at + recLen - nAt < 12 + len) { ok = false; break; }
+                const rawName = u8.subarray(nAt + 12, nAt + 12 + len);
+                if (rawName.includes(0)) { ok = false; break; }
+                const lastTime = readU64(view, nAt + 4);
+                const name = utf8Decoder.decode(rawName);
+                names.push({ flags, lastTime, name });
+                nAt += 12 + len;
+            }
+            if (!ok || nAt !== at + recLen) names.length = 0;
+        }
+        records.push({ sha256, stored, lastUsed, source, servers, names, rawRecord: u8.subarray(at, at + recLen) });
+        at += recLen;
+    }
+    return at === u8.length ? { header, records } : null;
+};
+
+// Rewrites sources.dat without sha256Hex, keeping header & other records byte-for-byte
+const removeCacheSource = (bytes, sha256Hex) => {
+    const parsed = parseCacheSources(bytes);
+    if (!parsed) return null;
+    const kept = parsed.records.filter((r) => r.sha256 !== sha256Hex);
+    const total = 16 + kept.reduce((sum, r) => sum + r.rawRecord.length, 0);
+    const out = new Uint8Array(total);
+    out.set(parsed.header, 0);
+    new DataView(out.buffer).setUint32(8, kept.length, true);
+    let at = 16;
+    for (const r of kept) {
+        out.set(r.rawRecord, at);
+        at += r.rawRecord.length;
+    }
+    return out;
+};
+
+const isRetailPak = (src, checksum) => {
+    if (Number.isFinite(checksum) && RETAIL_CHECKSUMS.has(checksum >>> 0)) return true;
+    const lower = String(src || '').toLowerCase();
+    return /^baseq3\/pak[0-8]\.pk3$/.test(lower) || /^missionpack\/pak[0-3]\.pk3$/.test(lower);
+};
+const isDemoPak = (gamedir, name, checksum) =>
+    (Number.isFinite(checksum) && (checksum >>> 0) === DEMO_PAK0_CHECKSUM)
+    || (String(gamedir).toLowerCase() === 'demoq3' && String(name).toLowerCase() === 'pak0');
+const hexChecksum = (n) => (Number.isFinite(n) ? (n >>> 0).toString(16).padStart(8, '0') : '—');
+const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes) || bytes < 0) return '—';
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+    if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(1)} KB`;
+    return `${bytes} B`;
+};
+const formatTime = (ms) => {
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    return new Date(ms).toLocaleString();
+};
+
+// Builds the unified storage list (one-site.md, section 7): engine, demo data,
+// own files, and server paks, each with name, size, checksum, kind, source,
+// servers that used it (with last time), stored/lastUsed times, retail route,
+// and removal target
+const storageEntries = ({ cacheIndex = [], cacheSources = null, ownRecords = [], idbOwn = [], resources = [], originHost = '' }) => {
+    const byHash = new Map((cacheSources?.records ?? []).map((r) => [r.sha256, r]));
+    const items = [];
+    const seenEngine = new Set();
+    for (const res of resources) {
+        const name = String(res?.name ?? '');
+        if (!name || seenEngine.has(name)) continue;
+        seenEngine.add(name);
+        items.push({
+            id: `engine:${name}`,
+            name,
+            size: Number.isFinite(res.size) ? res.size : 0,
+            checksum: res.checksum || '—',
+            kind: 'engine',
+            source: originHost || 'omnifrag.com',
+            servers: [],
+            stored: null,
+            lastUsed: null,
+            route: '',
+            removable: false,
+            removeTarget: null,
+        });
+    }
+    for (const rec of ownRecords) {
+        if (!rec) continue;
+        const inPlace = rec.route === 'in-place';
+        if (!inPlace && !(typeof rec.path == 'string' && rec.path)) continue;
+        const src = String(rec.src || rec.name || '');
+        const retail = isRetailPak(src, rec.checksum);
+        const servers = (Array.isArray(rec.servers) ? rec.servers : [])
+            .filter((s) => s && typeof s.name == 'string')
+            .map((s) => ({ name: s.name, lastUsed: Number.isFinite(s.lastUsed) ? s.lastUsed : null }))
+            .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
+        items.push({
+            id: inPlace ? `own-inplace:${rec.folder ?? ''}:${src}` : `own-copy:${rec.path}`,
+            name: src,
+            size: Number.isFinite(rec.size) ? rec.size : 0,
+            checksum: hexChecksum(rec.checksum),
+            kind: 'own file',
+            source: 'chosen from disk',
+            servers,
+            stored: Number.isFinite(rec.stored) ? rec.stored : null,
+            lastUsed: Number.isFinite(rec.lastUsed) ? rec.lastUsed : null,
+            route: retail ? (inPlace ? 'read from disk' : 'chosen from disk') : '',
+            removable: true,
+            removeTarget: inPlace
+                ? { type: 'own-inplace', src, folder: rec.folder ?? '' }
+                : { type: 'own-copy', path: rec.path, src },
+        });
+    }
+    const ownSrcs = new Set(ownRecords.map((r) => String(r.src || '').toLowerCase()));
+    for (const [key, blob] of idbOwn) {
+        if (ownSrcs.has(String(key).toLowerCase())) continue;
+        const retail = isRetailPak(key, NaN);
+        items.push({
+            id: `own-idb:${key}`,
+            name: String(key),
+            size: Number.isFinite(blob?.size) ? blob.size : 0,
+            checksum: '—',
+            kind: 'own file',
+            source: 'chosen from disk',
+            servers: [],
+            stored: null,
+            lastUsed: Number.isFinite(blob?.lastModified) ? blob.lastModified : null,
+            route: retail ? 'chosen from disk' : '',
+            removable: true,
+            removeTarget: { type: 'own-idb', key: String(key) },
+        });
+    }
+    for (const entry of cacheIndex) {
+        const srcRec = byHash.get(entry.sha256);
+        const demo = isDemoPak(entry.gamedir, entry.name, entry.pakChecksum);
+        const namedServers = (srcRec?.names ?? []).map((n) => ({
+            name: n.name, flags: n.flags, lastUsed: n.lastTime ? n.lastTime * 1000 : null,
+        }));
+        const addrServers = namedServers.length ? [] : (srcRec?.servers ?? [])
+            .filter((s) => s.addr)
+            .map((s) => ({ name: s.addr, flags: s.flags, lastUsed: s.lastTime ? s.lastTime * 1000 : null }));
+        const servers = (namedServers.length ? namedServers : addrServers)
+            .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
+        const sender = servers.find((s) => (s.flags & SOURCES_SENT) !== 0);
+        const source = srcRec?.source === SOURCE_KIND_INSTALLED ? 'chosen from disk'
+            : sender ? sender.name
+                : servers[0] ? servers[0].name
+                    : 'unknown';
+        const lastSec = Math.max(entry.lastUsed || 0, srcRec?.lastUsed || 0);
+        items.push({
+            id: `cache:${entry.sha256}`,
+            name: `${entry.gamedir}/${entry.name}.pk3`,
+            size: entry.state === 1 ? entry.size : entry.valid,
+            checksum: `${hexChecksum(entry.pakChecksum)} (${entry.sha256.slice(0, 12)})`,
+            kind: demo ? 'demo data' : 'server pak',
+            source,
+            servers: servers.map(({ name, lastUsed }) => ({ name, lastUsed })),
+            stored: srcRec?.stored ? srcRec.stored * 1000 : null,
+            lastUsed: lastSec ? lastSec * 1000 : null,
+            route: '',
+            removable: true,
+            removeTarget: { type: 'cache', sha256: entry.sha256, state: entry.state },
+        });
+    }
+    const order = { 'engine': 0, 'demo data': 1, 'own file': 2, 'server pak': 3 };
+    return items.sort((a, b) => (order[a.kind] - order[b.kind]) || ((b.lastUsed ?? 0) - (a.lastUsed ?? 0)) || a.name.localeCompare(b.name));
+};
+// --- storage list UI
+const currentServerLabel = () => (centralServer ? centralServer.shown : location.host);
+
+const openHomeDB = () => new Promise((resolve) => {
+    try {
+        const req = indexedDB.open(HOME);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+    } catch {
+        resolve(null);
+    }
+});
+
+const findHomeCacheDir = (fs, dir = HOME, depth = 0) => {
+    const candidate = `${dir}/cache/content`;
+    if (fs.analyzePath(`${candidate}/index.dat`).exists) return candidate;
+    if (depth >= 4) return '';
+    for (const name of fs.readdir(dir)) {
+        if (name === '.' || name === '..' || name === 'cache') continue;
+        const next = `${dir}/${name}`;
+        try {
+            if (!fs.isDir(fs.stat(next).mode)) continue;
+        } catch { continue; }
+        const found = findHomeCacheDir(fs, next, depth + 1);
+        if (found) return found;
+    }
+    return '';
+};
+
+const readHomeCache = async (databases) => {
+    if (homeFS) {
+        try {
+            const prefix = findHomeCacheDir(homeFS);
+            if (!prefix) return { prefix: '', indexBytes: null, srcBytes: null };
+            const indexBytes = homeFS.readFile(`${prefix}/index.dat`);
+            const srcPath = `${prefix}/sources.dat`;
+            const srcBytes = homeFS.analyzePath(srcPath).exists ? homeFS.readFile(srcPath) : null;
+            return { prefix, indexBytes, srcBytes };
+        } catch { /* fall back to IndexedDB */ }
+    }
+    if (databases && !databases.some(({ name }) => name === HOME)) return { prefix: '', indexBytes: null, srcBytes: null };
+    const db = await openHomeDB();
+    if (!db) return { prefix: '', indexBytes: null, srcBytes: null };
+    try {
+        if (!db.objectStoreNames.contains('FILE_DATA')) return { prefix: '', indexBytes: null, srcBytes: null };
+        const result = await new Promise((resolve) => {
+            const tx = db.transaction('FILE_DATA', 'readonly');
+            const store = tx.objectStore('FILE_DATA');
+            const keysReq = store.getAllKeys();
+            keysReq.onerror = () => resolve({ prefix: '', indexBytes: null, srcBytes: null });
+            keysReq.onsuccess = () => {
+                const keys = keysReq.result.map(String);
+                const idxKey = keys.find((k) => /\/cache\/content\/index\.dat$/.test(k));
+                if (!idxKey) return resolve({ prefix: '', indexBytes: null, srcBytes: null });
+                const prefix = idxKey.slice(0, -'/index.dat'.length);
+                const srcKey = `${prefix}/sources.dat`;
+                let indexBytes = null, srcBytes = null;
+                store.get(idxKey).onsuccess = (e) => { indexBytes = e.target.result?.contents ?? null; };
+                if (keys.includes(srcKey)) store.get(srcKey).onsuccess = (e) => { srcBytes = e.target.result?.contents ?? null; };
+                tx.oncomplete = () => resolve({ prefix, indexBytes, srcBytes });
+                tx.onerror = () => resolve({ prefix: '', indexBytes: null, srcBytes: null });
+                tx.onabort = () => resolve({ prefix: '', indexBytes: null, srcBytes: null });
+            };
+        });
+        return result;
+    } finally {
+        db.close();
+    }
+};
+
+const removeCachePakInFS = async (fs, prefix, sha256, state) => {
+    try {
+        const idxPath = `${prefix}/index.dat`;
+        const srcPath = `${prefix}/sources.dat`;
+        const pakPath = `${prefix}/${sha256}.${state === 1 ? 'pk3' : 'part'}`;
+        if (fs.analyzePath(idxPath).exists) {
+            const remaining = parseCacheIndex(fs.readFile(idxPath)).filter((e) => e.sha256 !== sha256);
+            fs.writeFile(idxPath, writeCacheIndex(remaining));
+        }
+        if (fs.analyzePath(srcPath).exists) {
+            const updated = removeCacheSource(fs.readFile(srcPath), sha256);
+            if (updated) fs.writeFile(srcPath, updated);
+        }
+        if (fs.analyzePath(pakPath).exists) fs.unlink(pakPath);
+        await new Promise((resolve) => saveHome(false, resolve));
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const removeCachePakOffline = async (prefix, sha256, state) => {
+    const db = await openHomeDB();
+    if (!db) return false;
+    try {
+        if (!db.objectStoreNames.contains('FILE_DATA')) return false;
+        return await new Promise((resolve) => {
+            const tx = db.transaction('FILE_DATA', 'readwrite');
+            const store = tx.objectStore('FILE_DATA');
+            const idxKey = `${prefix}/index.dat`;
+            const srcKey = `${prefix}/sources.dat`;
+            const pakKey = `${prefix}/${sha256}.${state === 1 ? 'pk3' : 'part'}`;
+            const idxReq = store.get(idxKey);
+            const srcReq = store.get(srcKey);
+            let idxRec, srcRec, got = 0;
+            const apply = () => {
+                if (++got < 2) return;
+                if (idxRec?.contents) {
+                    const remaining = parseCacheIndex(idxRec.contents).filter((e) => e.sha256 !== sha256);
+                    store.put({ ...idxRec, timestamp: new Date(), contents: writeCacheIndex(remaining) }, idxKey);
+                }
+                if (srcRec?.contents) {
+                    const updated = removeCacheSource(srcRec.contents, sha256);
+                    if (updated) store.put({ ...srcRec, timestamp: new Date(), contents: updated }, srcKey);
+                }
+                store.delete(pakKey);
+            };
+            idxReq.onsuccess = () => { idxRec = idxReq.result; apply(); };
+            srcReq.onsuccess = () => { srcRec = srcReq.result; apply(); };
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+            tx.onabort = () => resolve(false);
+        });
+    } finally {
+        db.close();
+    }
+};
+
+const engineResources = () => {
+    if (typeof performance?.getEntriesByType != 'function') return [];
+    const wanted = new Set([`${CLIENT_NAME}.wasm`, `${CLIENT_NAME}.js`, `${CLIENT_NAME}-page.js`, `${CLIENT_NAME}-page.css`,
+        'pak_check.js', 'pak_store.js', 'pak_reader.js', 'pak_reader_worker.js']);
+    const out = [];
+    for (const entry of performance.getEntriesByType('resource')) {
+        try {
+            const url = new URL(entry.name);
+            if (url.origin !== location.origin) continue;
+            const file = url.pathname.split('/').pop();
+            if (!wanted.has(file)) continue;
+            const size = entry.decodedBodySize || entry.transferSize || 0;
+            out.push({ name: file, size, checksum: '—' });
+        } catch { /* ignore */ }
+    }
+    return out;
+};
+
+let storageCachePrefix = '';
+const readStorageList = async () => {
+    const [databases, store, estimate, persisted] = await Promise.all([
+        indexedDB.databases?.().catch(() => undefined),
+        (ownStoreEarly ??= ownStore()).catch(() => ({})),
+        navigator.storage?.estimate?.().catch(() => null),
+        navigator.storage?.persisted?.().catch(() => null),
+    ]);
+    const homeCache = await readHomeCache(databases);
+    storageCachePrefix = homeCache.prefix;
+    const ownRecords = store.call ? (await store.call('index').catch(() => ({ records: [] }))).records ?? [] : [];
+    let idbOwn = [];
+    if (!databases || databases.some(({ name }) => name === OWN_DATABASE)) {
+        const db = await ownDatabase();
+        idbOwn = await ownAll(db);
+        db?.close();
+    }
+    const items = storageEntries({
+        cacheIndex: parseCacheIndex(homeCache.indexBytes),
+        cacheSources: parseCacheSources(homeCache.srcBytes),
+        ownRecords,
+        idbOwn,
+        resources: engineResources(),
+        originHost: location.host,
+    });
+    return { items, estimate, persisted };
+};
+
+const removeStorageItem = async (item) => {
+    const target = item.removeTarget;
+    if (!target) return { ok: false, message: 'Managed by browser cache.' };
+    if (target.type === 'cache') {
+        if (runningEngine?.ccall) {
+            const rc = runningEngine.ccall('Content_Cache_RemoveBySHA256', 'number', ['string'], [target.sha256]);
+            if (rc === -1) return { ok: false, message: 'In use in this match — leave the match to remove it.' };
+            if (rc === 1) await new Promise((resolve) => saveHome(false, resolve));
+            return { ok: true };
+        }
+        if (!storageCachePrefix) return { ok: false, message: "Couldn't locate the content cache." };
+        const ok = homeFS
+            ? await removeCachePakInFS(homeFS, storageCachePrefix, target.sha256, target.state)
+            : await removeCachePakOffline(storageCachePrefix, target.sha256, target.state);
+        return ok ? { ok: true } : { ok: false, message: "Couldn't remove the cached file." };
+    }
+    if (target.type === 'own-copy') {
+        const store = await (ownStoreEarly ??= ownStore()).catch(() => ({}));
+        if (!store.call) return { ok: false, message: "Couldn't reach the own-files store." };
+        try {
+            await store.call('drop', { path: target.path, src: target.src });
+            if (Array.isArray(store.files)) store.files = store.files.filter((f) => f.path !== target.path);
+            return { ok: true };
+        } catch {
+            return { ok: false, message: "Couldn't remove the stored file." };
+        }
+    }
+    if (target.type === 'own-inplace') {
+        const store = await (ownStoreEarly ??= ownStore()).catch(() => ({}));
+        if (!store.call) return { ok: false, message: "Couldn't reach the own-files store." };
+        try {
+            const { remainingForFolder } = await store.call('dropRecord', { src: target.src, folder: target.folder });
+            if (target.folder && remainingForFolder === 0 && canKeepFolders) {
+                const db = await foldersDatabase();
+                if (db) {
+                    await ownRequest(db, 'readwrite', (records) => records.delete(target.folder), 'folders');
+                    db.close();
+                }
+            }
+            return { ok: true };
+        } catch {
+            return { ok: false, message: "Couldn't remove the folder entry." };
+        }
+    }
+    if (target.type === 'own-idb') {
+        const db = await ownDatabase();
+        if (db) {
+            await ownRequest(db, 'readwrite', (records) => records.delete(target.key));
+            db.close();
+        }
+        return { ok: true };
+    }
+    return { ok: false, message: 'Unknown storage item.' };
+};
+
+let storageDialog = null;
+const closeStorage = () => {
+    if (storageDialog) storageDialog.hidden = true;
+};
+const openStorage = async () => {
+    if (!storageDialog) {
+        storageDialog = Object.assign(document.createElement('div'), { id: 'storage', hidden: true });
+        storageDialog.setAttribute('role', 'dialog');
+        storageDialog.setAttribute('aria-modal', 'true');
+        storageDialog.setAttribute('aria-labelledby', 'storage-title');
+        const panel = storageDialog.appendChild(Object.assign(document.createElement('div'), { className: 'storage-panel' }));
+        const head = panel.appendChild(Object.assign(document.createElement('div'), { className: 'storage-head' }));
+        head.append(Object.assign(document.createElement('h2'), { id: 'storage-title', textContent: 'Stored files' }));
+        const closeBtn = head.appendChild(Object.assign(document.createElement('button'), { type: 'button', textContent: 'Close' }));
+        closeBtn.addEventListener('click', closeStorage);
+        panel.append(Object.assign(document.createElement('p'), { className: 'storage-quota' }));
+        panel.append(Object.assign(document.createElement('p'), { className: 'storage-note', hidden: true }));
+        panel.append(Object.assign(document.createElement('ul'), { className: 'storage-list' }));
+        storageDialog.addEventListener('click', (e) => { if (e.target === storageDialog) closeStorage(); });
+        storageDialog.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeStorage(); } });
+        document.body.append(storageDialog);
+    }
+    if (document.pointerLockElement) document.exitPointerLock();
+    storageDialog.hidden = false;
+    await renderStorage();
+    storageDialog.querySelector('.storage-head button')?.focus();
+};
+
+let storageRenderGen = 0;
+const renderStorage = async (notice = '') => {
+    if (!storageDialog) return;
+    const gen = ++storageRenderGen;
+    const quotaEl = storageDialog.querySelector('.storage-quota');
+    const noteEl = storageDialog.querySelector('.storage-note');
+    const listEl = storageDialog.querySelector('.storage-list');
+    noteEl.textContent = notice;
+    noteEl.hidden = !notice;
+    const { items, estimate, persisted } = await readStorageList();
+    if (gen !== storageRenderGen) return;
+    quotaEl.replaceChildren();
+    const usageText = estimate && Number.isFinite(estimate.usage)
+        ? (Number.isFinite(estimate.quota) && estimate.quota > 0
+            ? `Using ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}`
+            : `Using ${formatBytes(estimate.usage)}`)
+        : 'Storage usage unavailable';
+    quotaEl.append(Object.assign(document.createElement('span'), {
+        textContent: persisted === true ? `${usageText} · Persistent storage enabled`
+            : persisted === false ? `${usageText} · Browser may clear stored files`
+                : usageText,
+    }));
+    if (persisted === false && navigator.storage?.persist) {
+        const keepBtn = Object.assign(document.createElement('button'), {
+            type: 'button', className: 'storage-persist', textContent: 'Keep stored files',
+        });
+        keepBtn.addEventListener('click', async () => {
+            keepBtn.disabled = true;
+            persistWanted = null;
+            const granted = await navigator.storage.persist().catch(() => false);
+            askBox.dataset.persist = granted ? 'granted' : 'refused';
+            await renderStorage(granted ? 'Persistent storage enabled.' : 'The browser did not grant persistent storage.');
+        });
+        quotaEl.append(keepBtn);
+    }
+    if (!items.length) {
+        listEl.replaceChildren(Object.assign(document.createElement('li'), {
+            className: 'storage-empty', textContent: 'No stored files yet.',
+        }));
+        return;
+    }
+    listEl.replaceChildren(...items.map((item) => {
+        const li = Object.assign(document.createElement('li'), { className: 'storage-item' });
+        li.dataset.kind = item.kind;
+        li.dataset.name = item.name;
+        const main = li.appendChild(Object.assign(document.createElement('div'), { className: 'storage-main' }));
+        const title = main.appendChild(Object.assign(document.createElement('div'), { className: 'storage-title' }));
+        title.append(
+            Object.assign(document.createElement('span'), { textContent: item.name }),
+            Object.assign(document.createElement('span'), { className: 'storage-kind', textContent: item.kind }),
+        );
+        const parts = [
+            `Size: ${formatBytes(item.size)}`,
+            `Checksum: ${item.checksum}`,
+            `Source: ${item.source}`,
+            ...(item.route ? [`Route: ${item.route}`] : []),
+            `Stored: ${formatTime(item.stored)}`,
+            `Last used: ${formatTime(item.lastUsed)}`,
+        ];
+        main.append(Object.assign(document.createElement('p'), { className: 'storage-meta', textContent: parts.join(' · ') }));
+        if (item.servers.length) {
+            const usedBy = item.servers.map((s) => `${s.name} (${formatTime(s.lastUsed)})`).join(', ');
+            main.append(Object.assign(document.createElement('p'), { className: 'storage-meta', textContent: `Used by: ${usedBy}` }));
+        }
+        const btn = Object.assign(document.createElement('button'), {
+            type: 'button', className: 'storage-remove', textContent: 'Remove', disabled: !item.removable,
+        });
+        if (!item.removable) btn.title = 'Managed by the browser HTTP cache';
+        else {
+            btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                const result = await removeStorageItem(item).catch(() => ({ ok: false, message: "Couldn't remove the file." }));
+                await renderStorage(result.ok ? '' : result.message);
+            });
+        }
+        li.append(btn);
+        return li;
+    }));
+};
+
 // nothing heavy before the front says the game may load
 await gameStarted;
 const engine = import(engineScript);
@@ -2968,8 +3607,14 @@ ioquake3({
     setPlaying,
     saveFile,
     configWritten,
+    cacheWritten: () => {
+        saveHome();
+        persistOnInput();
+    },
     // the engine aborted: a front is told, as of an error's exit
     onAbort: () => {
+        runningEngine = null;
+        homeFS = null;
         dropChosen();
         // a pak that changed on the player's disk stopped it, which the
         // page says itself (stopChanged)
@@ -3035,6 +3680,16 @@ ioquake3({
     // keeps its words on show
     onExit: (status) => {
         setPlaying(false);
+        runningEngine = null;
+        // flush final MEMFS state on clean quit before detaching homeFS so
+        // post-quit storage removal writes directly to IndexedDB and isn't
+        // overwritten on reload
+        if (!status) {
+            copySettings();
+            saveHome(true, () => { homeFS = null; });
+        } else {
+            homeFS = null;
+        }
         // an error's exit keeps its words on show, and tells a front
         if (status) {
             dropChosen();
@@ -3049,6 +3704,13 @@ ioquake3({
         }
         const left = document.getElementById('left'), again = left.querySelector('button');
         again.onclick = () => location.reload();
+        if (!left.querySelector('.storage-btn')) {
+            const storageBtn = Object.assign(document.createElement('button'), {
+                type: 'button', className: 'storage-btn', textContent: 'Storage',
+            });
+            storageBtn.addEventListener('click', () => openStorage());
+            again.after(storageBtn);
+        }
         left.hidden = false;
         again.focus();
     },

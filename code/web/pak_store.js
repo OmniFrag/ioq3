@@ -176,6 +176,27 @@ const remove = async (path) => {
     await dir.removeEntry(name);
 };
 
+// records a server name and timestamp on an own/index.json record (client-side
+// only, capped at 32 servers, matching sources.dat's limit)
+const MAX_SERVERS = 32;
+const noteServer = (record, server, now) => {
+    if (typeof server != 'string') return;
+    const clean = server.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 64);
+    if (!clean) return;
+    const list = Array.isArray(record.servers) ? record.servers.filter((s) => s && typeof s.name == 'string') : [];
+    const existing = list.find((s) => s.name.toLowerCase() === clean.toLowerCase());
+    if (existing) {
+        existing.lastUsed = now;
+    } else {
+        if (list.length >= MAX_SERVERS) {
+            list.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0));
+            list.splice(0, list.length - MAX_SERVERS + 1);
+        }
+        list.push({ name: clean, lastUsed: now });
+    }
+    record.servers = list;
+};
+
 const ops = {
     list: () => withIndex(async () => {
         const records = (await readIndex()).files;
@@ -186,7 +207,19 @@ const ops = {
         return { sync, files: files.filter(({ file }) => file) };
     }),
 
-    store: ({ file, src, checksum, stamp }, id) => navigator.locks.request(fileLock(src),
+    // all records for the storage list, both copied files that exist in OPFS
+    // and in-place records from kept folders
+    index: () => withIndex(async () => {
+        const records = (await readIndex()).files;
+        const checked = await Promise.all(records.map(async (record) => {
+            if (!record) return null;
+            if (typeof record.path == 'string' && record.path) return (await fileAt(record.path)) ? record : null;
+            return record.route === 'in-place' && typeof record.src == 'string' ? record : null;
+        }));
+        return { records: checked.filter(Boolean) };
+    }),
+
+    store: ({ file, src, checksum, stamp, server }, id) => navigator.locks.request(fileLock(src),
         { signal: AbortSignal.timeout(LOCK_WAIT) }, async () => {
             const [gamedir, name] = src.split('/');
             // Kept already, as by another page that held src a moment ago;
@@ -219,8 +252,10 @@ const ops = {
             }
             const now = Date.now();
             await changeIndex((index) => {
-                index.files.push({ src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified, stamp,
-                    route: 'copied', stored: now, lastUsed: now });
+                const record = { src, path, name: file.name, checksum, size: file.size, mtime: file.lastModified, stamp,
+                    route: 'copied', stored: now, lastUsed: now };
+                noteServer(record, server, now);
+                index.files.push(record);
             });
             return { path };
         }).catch((error) => {
@@ -238,32 +273,57 @@ const ops = {
         return {};
     },
 
-    note: async ({ folder, files }) => {
+    note: async ({ folder, files, server }) => {
         const now = Date.now();
         await changeIndex((index) => {
             for (const { src, name, checksum, size, mtime } of files) {
-                const record = index.files.find((each) => each.src === src && each.route === 'in-place' && each.folder === folder);
+                let record = index.files.find((each) => each.src === src && each.route === 'in-place' && each.folder === folder);
                 if (record) Object.assign(record, { name, checksum, size, mtime, lastUsed: now });
-                else index.files.push({ src, name, checksum, size, mtime, route: 'in-place', folder, stored: now, lastUsed: now });
+                else {
+                    record = { src, name, checksum, size, mtime, route: 'in-place', folder, stored: now, lastUsed: now };
+                    index.files.push(record);
+                }
+                noteServer(record, server, now);
             }
         });
         return {};
     },
 
-    used: async ({ paths }) => {
+    used: async ({ paths, server }) => {
         const now = Date.now(), used = new Set(paths);
         await changeIndex((index) => {
-            for (const record of index.files) if (typeof record.path == 'string' && used.has(record.path)) record.lastUsed = now;
+            for (const record of index.files) {
+                if (typeof record.path == 'string' && used.has(record.path)) {
+                    record.lastUsed = now;
+                    noteServer(record, server, now);
+                }
+            }
         });
         return {};
     },
 
-    drop: async ({ path }) => {
-        await changeIndex((index) => {
-            index.files = index.files.filter((record) => record.path !== path);
-        });
-        await remove(path).catch(() => {});
+    drop: async ({ path, src }) => {
+        if (typeof path != 'string' || !path) return {};
+        const run = async () => {
+            await changeIndex((index) => {
+                index.files = index.files.filter((record) => record.path !== path);
+            });
+            await remove(path).catch(() => {});
+        };
+        if (typeof src == 'string' && src) await navigator.locks.request(fileLock(src.toLowerCase()), run);
+        else await run();
         return {};
+    },
+
+    dropRecord: async ({ src, folder }) => {
+        let remainingForFolder = 0;
+        await changeIndex((index) => {
+            index.files = index.files.filter((record) => !(record.src === src && record.route === 'in-place' && record.folder === folder));
+            if (folder) {
+                remainingForFolder = index.files.filter((record) => record.route === 'in-place' && record.folder === folder).length;
+            }
+        });
+        return { remainingForFolder };
     },
 
     // files the index doesn't list, as a copy cut short leaves, that no
