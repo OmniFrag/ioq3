@@ -206,6 +206,10 @@ const CENTRAL_WORDS = {
     unread: (shown) => `${shown} didn't say which game it plays, so it can't be played here.`,
     mod: (shown) => `${shown} runs a mod this page can't play yet. ${PLAY_ELSEWHERE}`,
     otherServer: (shown) => `${shown} has another key than this link names, so it may not be the server meant. Ask whoever gave you the link for a new one.`,
+    noCode: (shown) => `No server has the join code ${shown} now. Check the code, or ask its host whether the server is running.`,
+    noBrowsers: (shown) => `The server for ${shown} doesn't take players from a browser. Its host can turn on browser play, or you can join it from the OmniFrag app.`,
+    rateLimited: 'Too many join code lookups from your network. Try again in a few minutes.',
+    noKey: "The rendezvous didn't give the server's key, so the join stopped.",
     // the page's title and heading: the name as contacted, the link's
     // host and port, never one the server gives, beside what it calls itself
     // first, so a name the server gives can't push it out of a tab's width
@@ -217,16 +221,38 @@ const CENTRAL_WORDS = {
 // its own, 'elsewhere', whose words are the player's to read, where an
 // error's other words are the engine's
 const leftKind = (kind, reason) => (centralServer && kind === 'error' && String(reason).endsWith(PLAY_ELSEWHERE) ? 'elsewhere' : kind);
-// The server the shared site's address names: #s=<name>[:<port>], its
-// HTTPS port when not 443, and #k=<key>, the 64 hex digits of its Ed25519
-// public key, which the join then takes alone (JoinWeb's sameKey). Without
-// a name and a key, with one malformed or named twice, it names none. The
-// name has a dot, as one with a certificate has, so a link can't aim the
-// page at localhost or a name only the visitor's network knows
+// The server the shared site's address names: either
+//   #s=<name>[:<port>]&k=<key>  (a server with a domain, its HTTPS port
+//                               when not 443, and its 64-hex Ed25519 key)
+// or
+//   #j=<code>[&p=<fingerprint>] (a join code served by the rendezvous under
+//                               this same origin, with an optional key pin).
+// Without a valid target, or with fields duplicated or mixed, it names none.
+// A domain name has a dot, as one with a certificate has, so a link can't aim
+// the page at localhost or a name only the visitor's network knows
 const serverOfFragment = (hash) => {
     const fields = new URLSearchParams(hash.replace(/^#/, ''));
-    const [names, keys] = [fields.getAll('s'), fields.getAll('k')];
-    if (names.length !== 1 || keys.length !== 1 || !/^[0-9a-f]{64}$/i.test(keys[0])) return null;
+    const [names, keys, codes, pins] = [fields.getAll('s'), fields.getAll('k'), fields.getAll('j'), fields.getAll('p')];
+    if (codes.length) {
+        if (codes.length !== 1 || names.length || keys.length || pins.length > 1) return null;
+        // Crockford base32 join code (contracts.md section 9.2): 8 characters,
+        // case-insensitive, I/L -> 1, O -> 0, dashes and spaces ignored
+        const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+        let code = '';
+        for (const ch of codes[0]) {
+            if (ch === '-' || ch === ' ') continue;
+            let c = ch.toUpperCase();
+            if (c === 'I' || c === 'L') c = '1';
+            else if (c === 'O') c = '0';
+            if (!alphabet.includes(c) || code.length === 8) return null;
+            code += c;
+        }
+        if (code.length !== 8) return null;
+        const pin = pins[0] ? pins[0].toLowerCase() : '';
+        if (pin && !/^[0-9a-f]{4}(?:-[0-9a-f]{4}){4}$/.test(pin)) return null;
+        return Object.freeze({ code, shown: `${code.slice(0, 4)}-${code.slice(4)}`, pin });
+    }
+    if (names.length !== 1 || keys.length !== 1 || pins.length || !/^[0-9a-f]{64}$/i.test(keys[0])) return null;
     const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
     const [, name, port] = new RegExp(`^(${label}(?:\\.${label})*)\\.?(?::([1-9][0-9]{0,4}))?$`).exec(names[0].toLowerCase()) ?? [];
     // a name ending in a number is an IPv4 address to the URL parser, which
@@ -284,18 +310,39 @@ const gameOfServer = (served) => {
     }
     return config;
 };
-// The policy the static host's header sets, narrowed to the server, before
-// anything of the server's is fetched: the page reaches its own origin and
-// the server's alone (a meta CSP can only narrow the header's)
+// The policy the static host's header sets, narrowed to the server (or
+// same-origin alone for a code join), before anything of the server's is
+// fetched: the page reaches its own origin and, for a domain server, that
+// server's alone (a meta CSP can only narrow the header's)
 const narrowPolicy = (origin) => {
     const meta = document.createElement('meta');
     meta.httpEquiv = 'Content-Security-Policy';
-    meta.content = `connect-src 'self' ${origin}; img-src 'self' data: blob: ${origin}`;
+    meta.content = origin ? `connect-src 'self' ${origin}; img-src 'self' data: blob: ${origin}` : "connect-src 'self'; img-src 'self' data: blob:";
     document.head.prepend(meta);
 };
 const centralConfig = async (own) => {
     centralServer = serverOfFragment(location.hash);
     if (!centralServer) fail(CENTRAL_WORDS.noServer);
+    if (centralServer.code) {
+        const { code, shown, pin } = centralServer;
+        narrowPolicy('');
+        showCentral(shown, '');
+        const response = await fetch(`/j/${code}`, { cache: 'no-store', headers: { Accept: 'application/json' } }).catch(() => null);
+        if (response?.status === 404) fail(CENTRAL_WORDS.noCode(shown));
+        if (response?.status === 429) fail(CENTRAL_WORDS.rateLimited);
+        if (!response?.ok) fail(CENTRAL_WORDS.unreached(shown));
+        const info = await response.json().catch(() => null);
+        if (!info || info.webrtc !== true) fail(CENTRAL_WORDS.noBrowsers(shown));
+        if (typeof info.key != 'string' || !/^[0-9a-f]{64}$/.test(info.key)) fail(CENTRAL_WORDS.noKey);
+        const rawKey = Uint8Array.from(info.key.match(/../g), (pair) => parseInt(pair, 16));
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', rawKey));
+        const fp = Array.from(digest.slice(0, 10), (b) => b.toString(16).padStart(2, '0')).join('').match(/..../g).join('-');
+        if (info.fingerprint !== undefined && info.fingerprint !== fp) fail(CENTRAL_WORDS.noKey);
+        if (pin && fp !== pin) fail(CENTRAL_WORDS.otherServer(shown));
+        centralServer = Object.freeze({ ...centralServer, key: info.key });
+        if (typeof info.name == 'string' && info.name) showCentral(shown, info.name);
+        return { ...own, central: true, consoleArgs: false };
+    }
     const { origin, shown, name, key } = centralServer;
     narrowPolicy(origin);
     showCentral(shown, '');
