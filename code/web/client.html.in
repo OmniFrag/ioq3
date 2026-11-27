@@ -1,18 +1,38 @@
-<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>@WEB_PAGE_TITLE@</title>
 @WEB_PAGE_SVG_ICON_LINK@<link rel=icon href="@CLIENT_NAME@.png">
 <link rel=manifest href="@CLIENT_NAME@.webmanifest">
-<link rel=stylesheet href="@CLIENT_NAME@-page.css">
-
-<!-- The game takes keys only while its canvas has focus (the engine sets
-     SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT), so keys typed into the rest of
-     the page stay there; tabindex lets the canvas have focus -->
+<style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+canvas { display: block; width: 100vw; height: 100dvh; border: 0; padding: 0; }
+canvas:focus { outline: none; }
+</style>
+<!-- Minimal standalone dev shell used only when WEB_SHELL_DIR is not set. -->
 <canvas id=canvas tabindex=0></canvas>
-<div id=status hidden><div><span></span><progress hidden></progress></div></div>
-<div id=hints><div id=hint class=hint></div></div>
-<div id=prompt><div class=pa><button id=play class=hint type=button tabindex=-1><svg class=plate aria-hidden=true><path /></svg><svg class=edge aria-hidden=true><path /></svg><span class=shine aria-hidden=true><i></i></span><span class=key><svg viewBox="0 0 24 24" aria-hidden=true><path d="M8 5.2v13.6a1 1 0 0 0 1.52.86l11.2-6.8a1 1 0 0 0 0-1.72L9.52 4.34A1 1 0 0 0 8 5.2Z" /></svg></span><span class=word>Click to play</span></button><div id=cap class=hint></div></div></div>
-<div id=ask hidden></div>
-<div id=left hidden><div><p>You left the game.</p><button type=button>Play again</button></div></div>
-<div id=leaving><svg viewBox="0 0 48 48"><circle class=track cx=24 cy=24 r=20 /><circle class=fill cx=24 cy=24 r=20 pathLength=1 /></svg><span>Leaving fullscreen</span></div>
-
-<script type=module src="@CLIENT_NAME@-page.js"></script>
+<script type=module>
+import ioquake3 from './@CLIENT_BINARY@.js';
+const canvas = document.getElementById('canvas');
+const BASEGAME = '@BASEGAME@';
+const PRELOAD = '@EMSCRIPTEN_PRELOAD_FILE@' === 'ON';
+const args = ['+set', 'com_basegame', `"${BASEGAME}"`];
+const config = PRELOAD
+  ? { [BASEGAME]: { files: [] } }
+  : await fetch('./@CLIENT_NAME@-config.json').then((r) => r.json());
+ioquake3({
+  canvas,
+  arguments: args,
+  locateFile: (file) => './' + file,
+  preRun: [async (module) => {
+    module.addRunDependency('standalone-files');
+    for (const file of (config[BASEGAME]?.files ?? [])) {
+      const res = await fetch('./' + file.src);
+      if (!res.ok) continue;
+      module.FS.mkdirTree(file.dst);
+      module.FS.writeFile(`${file.dst}/${file.src.split('/').pop()}`, new Uint8Array(await res.arrayBuffer()));
+    }
+    module.removeRunDependency('standalone-files');
+  }],
+});
+</script>

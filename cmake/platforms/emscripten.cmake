@@ -43,7 +43,7 @@ list(APPEND CLIENT_LINK_OPTIONS
     -sEXIT_RUNTIME=1
     -sEXPORT_ES6
     -sEXPORT_NAME=${CLIENT_NAME}
-    # the page keeps the home in the browser's storage (client-page.js.in)
+    # the page keeps the home in the browser's storage (WEB_SHELL_DIR)
     -lidbfs.js
     # the browser's connections to servers (code/web/net_web.c)
     --js-library=${SOURCE_DIR}/web/net_web.js
@@ -69,14 +69,19 @@ function(deploy_shell_files)
             ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.svg COPYONLY)
         set(WEB_PAGE_SVG_ICON_LINK "<link rel=icon href=\"${CLIENT_NAME}.svg\" type=\"image/svg+xml\">\n")
     endif()
-    configure_file(${SOURCE_DIR}/web/client.html.in
-        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
-    # its style and program, files of their own, so its content security
-    # policy needs no 'unsafe-inline'
-    configure_file(${SOURCE_DIR}/web/client-page.css.in
-        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.css @ONLY)
-    configure_file(${SOURCE_DIR}/web/client-page.js.in
-        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.js @ONLY)
+    if(WEB_SHELL_DIR)
+        configure_file(${WEB_SHELL_DIR}/client.html.in
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
+        # its style and program, files of their own, so its content security
+        # policy needs no 'unsafe-inline'
+        configure_file(${WEB_SHELL_DIR}/page.css
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.css COPYONLY)
+        configure_file(${WEB_SHELL_DIR}/page.js
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}-page.js COPYONLY)
+    else()
+        configure_file(${SOURCE_DIR}/web/client.html.in
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${CLIENT_NAME}.html @ONLY)
+    endif()
 
     # The page's icon, and a web app manifest, with which a browser can
     # install the page as an app
@@ -128,8 +133,10 @@ function(deploy_shell_files)
     configure_file(${SOURCE_DIR}/web/pak_check.js
         ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_check.js @ONLY)
     # and the worker that keeps them in the browser's private files, and the
-    # reader that reads them from there, with its worker
-    foreach(FILE pak_store.js pak_reader.js pak_reader_worker.js)
-        configure_file(${SOURCE_DIR}/web/${FILE} ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${FILE} COPYONLY)
-    endforeach()
+    # reader that reads them from there, with its worker (from WEB_SHELL_DIR)
+    if(WEB_SHELL_DIR)
+        foreach(FILE pak_store.js pak_reader.js pak_reader_worker.js)
+            configure_file(${WEB_SHELL_DIR}/${FILE} ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${FILE} COPYONLY)
+        endforeach()
+    endif()
 endfunction()
