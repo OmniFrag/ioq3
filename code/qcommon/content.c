@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "content.h"
 
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -203,6 +204,45 @@ static const char *Content_HomeFile( const char *file ) {
 	return FS_BaseDir_BuildOSPath( Cvar_VariableString( "fs_homedatapath" ), file );
 }
 
+#ifdef __EMSCRIPTEN__
+static qboolean Content_UseOPFSCache( void ) {
+	static int	cached = -1;
+
+	if ( cached < 0 ) {
+		cached = EM_ASM_INT({ return Module.opfsCache ? 1 : 0; }) ? 1 : 0;
+	}
+	return cached != 0;
+}
+#endif
+
+/*
+=================
+Content_CacheDir / Content_CacheFile
+
+The content cache's own folder (index.dat, sources.dat, <sha256>.pk3/.part):
+on Emscripten, /omnifrag-cache when the page mounted an OPFS-backed CacheFS
+outside /home/web_user (keeping IDBFS free of downloaded paks), otherwise
+under fs_homedatapath/cache/content as on desktop
+=================
+*/
+static const char *Content_CacheDir( void ) {
+#ifdef __EMSCRIPTEN__
+	if ( Content_UseOPFSCache() ) {
+		return "/omnifrag-cache";
+	}
+#endif
+	return Content_HomeFile( CONTENT_DIR );
+}
+
+static const char *Content_CacheFile( const char *name ) {
+#ifdef __EMSCRIPTEN__
+	if ( Content_UseOPFSCache() ) {
+		return va( "/omnifrag-cache/%s", name );
+	}
+#endif
+	return Content_HomeFile( va( "%s/%s", CONTENT_DIR, name ) );
+}
+
 /*
 =================
 Content_MakeDirs
@@ -237,7 +277,7 @@ in a folder (CONTENT_TEMP_FORMAT's), an hour or more old, so they can't
 pile up: the indexes' once a run
 =================
 */
-static void Content_RemoveStaleTempsIn( const char *folder, const char *kind ) {
+static void Content_RemoveStaleTempsInDir( const char *osdir, const char *kind ) {
 	char		dir[MAX_OSPATH], **files;
 	const char	*name, *c, *ospath;
 	int64_t		size, mtime, now = time( NULL );
@@ -246,7 +286,7 @@ static void Content_RemoveStaleTempsIn( const char *folder, const char *kind ) {
 	if ( com_check ) {
 		return;
 	}
-	Q_strncpyz( dir, Content_HomeFile( folder ), sizeof( dir ) );
+	Q_strncpyz( dir, osdir, sizeof( dir ) );
 	files = Sys_ListFiles( dir, ".tmp", NULL, &count, qfalse );
 	for ( i = 0; i < count; i++ ) {
 		// <name><kind><pid>.tmp only, such as installed.dat.123.tmp
@@ -267,12 +307,22 @@ static void Content_RemoveStaleTempsIn( const char *folder, const char *kind ) {
 	Sys_FreeFileList( files );
 }
 
+static void Content_RemoveStaleTempsIn( const char *folder, const char *kind ) {
+	Content_RemoveStaleTempsInDir( Content_HomeFile( folder ), kind );
+}
+
 static void Content_RemoveStaleTemps( void ) {
 	static qboolean	done;
+	char			homeDir[MAX_OSPATH], cacheDir[MAX_OSPATH];
 
 	if ( !done ) {
 		done = qtrue;
-		Content_RemoveStaleTempsIn( CONTENT_DIR, ".dat." );
+		Q_strncpyz( homeDir, Content_HomeFile( CONTENT_DIR ), sizeof( homeDir ) );
+		Q_strncpyz( cacheDir, Content_CacheDir(), sizeof( cacheDir ) );
+		Content_RemoveStaleTempsInDir( homeDir, ".dat." );
+		if ( strcmp( cacheDir, homeDir ) ) {
+			Content_RemoveStaleTempsInDir( cacheDir, ".dat." );
+		}
 	}
 }
 
@@ -1276,6 +1326,16 @@ static int			cacheCount;
 static qboolean		cacheStarted;		// a client's, once Content_Cache_Init has run
 static qboolean		cacheChanged;		// since index.dat was written
 static cvar_t		*cl_contentCacheMegs;
+#ifdef __EMSCRIPTEN__
+// Pinned demo pak SHA-256 mounted via the browser's read-only OPFS reader so
+// neither LRU eviction nor #storage removal can unlink it while active.
+static byte			cachePinnedSha256[SHA256_DIGEST_SIZE];
+static qboolean		cacheHasPinned;
+
+static qboolean Content_Cache_IsPinned( const cacheEntry_t *e ) {
+	return cacheHasPinned && !memcmp( e->sha256, cachePinnedSha256, SHA256_DIGEST_SIZE );
+}
+#endif
 
 // sources.dat's records, one a cached pak with a server noted, written as
 // index.dat is; whether this engine leaves the file alone (a later one's,
@@ -1306,9 +1366,11 @@ An entry's file: <sha256>.pk3, or .part while partial
 */
 static const char *Content_Cache_EntryFile( const cacheEntry_t *e ) {
 	char	hex[SHA256_HEX_SIZE];
+	char	file[SHA256_HEX_SIZE + 8];
 
 	Com_SHA256Hex( e->sha256, hex );
-	return Content_HomeFile( va( CONTENT_DIR "/%s.%s", hex, e->state == CACHE_COMPLETE ? "pk3" : "part" ) );
+	Com_sprintf( file, sizeof( file ), "%s.%s", hex, e->state == CACHE_COMPLETE ? "pk3" : "part" );
+	return Content_CacheFile( file );
 }
 
 /*
@@ -1326,10 +1388,10 @@ static void Content_Cache_Write( void ) {
 		return;
 	}
 	Content_WriteCacheIndex( cacheEntries, cacheCount, data, length );
-	if ( Content_WriteFile( Content_HomeFile( CACHE_INDEX_FILE ), data, length ) ) {
+	if ( Content_WriteFile( Content_CacheFile( "index.dat" ), data, length ) ) {
 		cacheChanged = qfalse;
 	} else if ( !com_check ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( CACHE_INDEX_FILE ) );
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_CacheFile( "index.dat" ) );
 	}
 	free( data );
 }
@@ -1377,7 +1439,7 @@ static void Content_Cache_RemoveStrays( void ) {
 		}
 	}
 
-	Q_strncpyz( dir, Content_HomeFile( CONTENT_DIR ), sizeof( dir ) );
+	Q_strncpyz( dir, Content_CacheDir(), sizeof( dir ) );
 	for ( x = 0; x < (int)ARRAY_LEN( extensions ); x++ ) {
 		files = Sys_ListFiles( dir, extensions[x], NULL, &count, qfalse );
 		for ( i = 0; i < count; i++ ) {
@@ -1452,11 +1514,11 @@ static void Content_Sources_Load( void ) {
 
 	sourceCount = 0;
 	sourcesLeftAlone = qfalse;
-	if ( !Content_FileStat( Content_HomeFile( CACHE_SOURCES_FILE ), &size, &mtime ) ) {
+	if ( !Content_FileStat( Content_CacheFile( "sources.dat" ), &size, &mtime ) ) {
 		return;
 	}
 	// one this engine can't read whole is left alone too, as a later one's
-	data = Content_ReadFile( Content_HomeFile( CACHE_SOURCES_FILE ), SOURCES_MAX_FILE, &length );
+	data = Content_ReadFile( Content_CacheFile( "sources.dat" ), SOURCES_MAX_FILE, &length );
 	sourceCount = data ? Content_ParseSources( data, length, sourceRecords, CONTENT_MAX_RECORDS, sourcesHeader ) : -2;
 	if ( sourceCount == -2 ) {
 		Com_Printf( "%s %s, so it's left alone, and a classic server's paks are downloaded again, kept for "
@@ -1588,8 +1650,8 @@ static void Content_Sources_Write( void ) {
 		return;
 	}
 	Content_WriteSources( sourceRecords, sourceCount, sourcesHeader, data, length );
-	if ( !Content_WriteFile( Content_HomeFile( CACHE_SOURCES_FILE ), data, length ) && !com_check ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_HomeFile( CACHE_SOURCES_FILE ) );
+	if ( !Content_WriteFile( Content_CacheFile( "sources.dat" ), data, length ) && !com_check ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: couldn't write %s\n", Content_CacheFile( "sources.dat" ) );
 	}
 	free( data );
 }
@@ -1705,7 +1767,7 @@ void Content_Cache_Init( void ) {
 	}
 	cacheStarted = qtrue;
 	cacheCount = 0;
-	data = Content_ReadFile( Content_HomeFile( CACHE_INDEX_FILE ),
+	data = Content_ReadFile( Content_CacheFile( "index.dat" ),
 		CONTENT_HEADER_SIZE + CONTENT_MAX_RECORDS * CACHE_INDEX_RECORD_SIZE, &length );
 	if ( data ) {
 		cacheCount = Content_ParseCacheIndex( data, length, cacheEntries, CONTENT_MAX_RECORDS );
@@ -1719,6 +1781,28 @@ void Content_Cache_Init( void ) {
 	}
 
 	Content_Sources_Load();
+
+#ifdef __EMSCRIPTEN__
+	{
+		char	pinnedHex[SHA256_HEX_SIZE];
+		int		i;
+
+		pinnedHex[0] = '\0';
+		EM_ASM({
+			if (typeof Module.demoSha256 === 'string' && Module.demoSha256.length === 64) {
+				stringToUTF8(Module.demoSha256, $0, $1);
+			}
+		}, pinnedHex, (int)sizeof( pinnedHex ) );
+		if ( pinnedHex[0] && Com_SHA256FromHex( pinnedHex, cachePinnedSha256 ) ) {
+			cacheHasPinned = qtrue;
+			for ( i = 0; i < cacheCount; i++ ) {
+				if ( Content_Cache_IsPinned( &cacheEntries[i] ) ) {
+					cacheEntries[i].mounted = qtrue;
+				}
+			}
+		}
+	}
+#endif
 
 	Content_RemoveStaleTemps();
 	if ( !com_check ) {
@@ -1871,7 +1955,11 @@ void Content_Cache_Unmounted( void ) {
 	int		i;
 
 	for ( i = 0; i < cacheCount; i++ ) {
+#ifdef __EMSCRIPTEN__
+		cacheEntries[i].mounted = Content_Cache_IsPinned( &cacheEntries[i] );
+#else
 		cacheEntries[i].mounted = qfalse;
+#endif
 	}
 }
 
@@ -2005,6 +2093,68 @@ static cacheEntry_t *Content_Cache_NewEntry( const byte sha256[SHA256_DIGEST_SIZ
 
 /*
 =================
+Content_CopyFile
+
+Streams a file in 256 KB chunks into a destination path. If expectedSize >= 0,
+verifies the exact byte count copied.
+=================
+*/
+static qboolean Content_CopyFile( const char *from, const char *to, int64_t expectedSize ) {
+	FILE		*in, *out;
+	byte		*buffer;
+	size_t		n;
+	int64_t		total = 0;
+	qboolean	copied;
+
+	in = Sys_FOpen( from, "rb" );
+	out = in ? Sys_FOpen( to, "wb" ) : NULL;
+	buffer = out ? malloc( HASH_BUFFER_SIZE ) : NULL;
+	copied = buffer != NULL;
+	while ( copied && ( n = fread( buffer, 1, HASH_BUFFER_SIZE, in ) ) > 0 ) {
+		copied = fwrite( buffer, 1, n, out ) == n;
+		total += n;
+	}
+	copied = copied && !ferror( in ) && ( expectedSize < 0 || total == expectedSize );
+	free( buffer );
+	if ( out && fclose( out ) ) {
+		copied = qfalse;
+	}
+	if ( in ) {
+		fclose( in );
+	}
+	return copied;
+}
+
+/*
+=================
+Content_Cache_MoveIn
+
+Moves a staged temporary file into the content cache. Falls back to a
+256 KB streaming copy + atomic rename on EXDEV (e.g. classic or web-lane
+downloads staged under fs_homedatapath moving into /omnifrag-cache).
+=================
+*/
+static qboolean Content_Cache_MoveIn( const char *from, const char *to ) {
+	char	tmp[MAX_OSPATH];
+
+	errno = 0;
+	if ( Sys_Rename( from, to ) ) {
+		return qtrue;
+	}
+	if ( errno != EXDEV ) {
+		return qfalse;
+	}
+	Q_strncpyz( tmp, Content_CacheFile( va( CONTENT_TEMP_FORMAT, "move.dat", Sys_PID() ) ), sizeof( tmp ) );
+	if ( !Content_CopyFile( from, tmp, -1 ) || !Sys_Rename( tmp, to ) ) {
+		remove( tmp );
+		return qfalse;
+	}
+	remove( from );
+	return qtrue;
+}
+
+/*
+=================
 Content_Cache_StoreHashed
 =================
 */
@@ -2049,7 +2199,7 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 	// it's gone; held as in use, as below
 	if ( ( i = Content_Cache_FindSHA256( sha256, target, sizeof( target ) ) ) >= 0 ) {
 		Content_MakeDirs();
-		if ( !Sys_Rename( tmp, target ) ) {
+		if ( !Content_Cache_MoveIn( tmp, target ) ) {
 			remove( tmp );
 		}
 		e = &cacheEntries[i];
@@ -2080,7 +2230,7 @@ qboolean Content_Cache_StoreHashed( const char *tmp, const byte *known, const ch
 
 	Content_MakeDirs();
 	Q_strncpyz( target, Content_Cache_EntryFile( e ), sizeof( target ) );
-	if ( !Sys_Rename( tmp, target ) ) {
+	if ( !Content_Cache_MoveIn( tmp, target ) ) {
 		cacheCount--;
 		Com_sprintf( why, whySize, "couldn't move %s into the content cache", tmp );
 		return qfalse;
@@ -2254,11 +2404,7 @@ qboolean Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], co
 	const pakRecord_t	*record = Content_PakIndex_FindSHA256( sha256 );
 	const char			*source;
 	char				from[MAX_OSPATH], tmp[MAX_OSPATH];
-	int64_t				size, mtime, total;
-	FILE				*in, *out;
-	byte				*buffer;
-	size_t				n;
-	qboolean			copied;
+	int64_t				size, mtime;
 
 	if ( !record || !( source = Content_PakOSPath( record ) ) ) {
 		Q_strncpyz( why, "the pak index has no installed pak with its hash", whySize );
@@ -2271,27 +2417,9 @@ qboolean Content_Cache_StoreInstalled( const byte sha256[SHA256_DIGEST_SIZE], co
 		return qfalse;
 	}
 	Content_MakeDirs();
-	Q_strncpyz( tmp, Content_HomeFile( va( CONTENT_DIR "/" CONTENT_TEMP_FORMAT, "copy.dat", Sys_PID() ) ),
+	Q_strncpyz( tmp, Content_CacheFile( va( CONTENT_TEMP_FORMAT, "copy.dat", Sys_PID() ) ),
 		sizeof( tmp ) );
-	in = Sys_FOpen( from, "rb" );
-	out = in ? Sys_FOpen( tmp, "wb" ) : NULL;
-	buffer = out ? malloc( HASH_BUFFER_SIZE ) : NULL;
-	copied = buffer != NULL;
-	total = 0;
-	while ( copied && ( n = fread( buffer, 1, HASH_BUFFER_SIZE, in ) ) > 0 ) {
-		copied = fwrite( buffer, 1, n, out ) == n;
-		total += n;
-	}
-	// stored under the index's hash unread, so at least the size it hashed
-	copied = copied && !ferror( in ) && total == record->size;
-	free( buffer );
-	if ( out && fclose( out ) ) {
-		copied = qfalse;
-	}
-	if ( in ) {
-		fclose( in );
-	}
-	if ( !copied ) {
+	if ( !Content_CopyFile( from, tmp, record->size ) ) {
 		remove( tmp );
 		Com_sprintf( why, whySize, "couldn't copy %s into the content cache", from );
 		return qfalse;
