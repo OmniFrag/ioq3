@@ -420,6 +420,10 @@ typedef struct {
 	void		(*moduleAsset)( extModule_t module, extAssetKind_t kind, const char *name, qhandle_t handle,
 				const fontInfo_t *font );
 	qboolean	(*moduleRender)( extModule_t module, const struct extRenderCall_s *call );
+	// qtrue when the extension turns moduleRender on and off itself via
+	// Hooks_SetModuleRender (starting off), so Hooks_WantModuleRender stays
+	// false while it doesn't need per-call interception
+	qboolean	moduleRenderDynamic;
 } engineExtension_t;
 
 // The executable's extensions, NULL-terminated, and the line naming them
@@ -517,6 +521,8 @@ void	Hooks_ModuleShutdown( extModule_t module );
 // whether an extension wants the modules' renderer calls, so the client
 // skips building them when none does
 qboolean	Hooks_WantModuleRender( void );
+// enables or disables moduleRender delivery for an extension
+void		Hooks_SetModuleRender( const engineExtension_t *ext, qboolean want );
 void	Hooks_ModuleAsset( extModule_t module, extAssetKind_t kind, const char *name, qhandle_t handle,
 		const fontInfo_t *font );
 qboolean	Hooks_ModuleRender( extModule_t module, const struct extRenderCall_s *call );
@@ -915,7 +921,7 @@ qboolean	SV_ExtContentAdd( const char *file, const char *gameDir, qboolean remov
 	extContentDone_t done, void *user );
 // What content add would say of a pak before it's in incoming, from file,
 // gameDir (NULL for this server's), its size and its pak checksum, which a
-// page computes from the zip's directory (code/web/pak_check.js): the
+// page computes from the zip's directory (web/src/pak-check.ts): the
 // names, the size, one of the game's own by its checksum, and an installed
 // pak of its name, the same file if it's the same size and checksum. With
 // hasChecksum qfalse, an installed pak of another size is another one, and

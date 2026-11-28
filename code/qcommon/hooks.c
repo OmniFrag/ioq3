@@ -37,10 +37,25 @@ static int	hooks_idleMsec = -1;
 static int	hooks_depth[MAX_ENGINE_EXTENSIONS];
 // the print hooks are running, so what they print isn't passed to them
 static qboolean	hooks_printing;
-// an active extension wants the modules' renderer calls
-static qboolean	hooks_wantModuleRender;
+// per-extension opt-in for moduleRender (bitmask over engineExtensions[])
+static uint32_t	hooks_moduleRenderWanted;
+static uint32_t	hooks_moduleRenderMask;
 // an active extension has a draw hook
 static qboolean	hooks_wantDraw;
+
+static void Hooks_UpdateModuleRender( void ) {
+	uint32_t	mask = 0;
+	int			i;
+
+	if ( hooks_activeCount ) {
+		for ( i = 0; engineExtensions[i]; i++ ) {
+			if ( hooks_active[i] && engineExtensions[i]->moduleRender && ( hooks_moduleRenderWanted & ( 1u << i ) ) ) {
+				mask |= 1u << i;
+			}
+		}
+	}
+	hooks_moduleRenderMask = mask;
+}
 
 /*
 ===============
@@ -95,20 +110,23 @@ void Hooks_Init( void ) {
 		Com_Printf( "%s\n", engineExtensionsLine );
 	}
 	Hooks_CheckModuleCalls();
+	hooks_moduleRenderWanted = 0;
+	hooks_moduleRenderMask = 0;
 	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i]->moduleRender && !engineExtensions[i]->moduleRenderDynamic ) {
+			hooks_moduleRenderWanted |= 1u << i;
+		}
 		hooks_depth[i]++;
 		hooks_active[i] = engineExtensions[i]->init ? engineExtensions[i]->init() : qtrue;
 		hooks_depth[i]--;
 		if ( hooks_active[i] ) {
 			hooks_activeCount++;
-			if ( engineExtensions[i]->moduleRender ) {
-				hooks_wantModuleRender = qtrue;
-			}
 			if ( engineExtensions[i]->draw ) {
 				hooks_wantDraw = qtrue;
 			}
 		}
 	}
+	Hooks_UpdateModuleRender();
 	// no wait before the extensions' first frames say how long they allow
 	if ( hooks_activeCount ) {
 		hooks_idleMsec = 0;
@@ -162,7 +180,7 @@ calls them as the quit command does
 */
 void Hooks_Signal( void ) {
 	hooks_activeCount = 0;
-	hooks_wantModuleRender = qfalse;
+	hooks_moduleRenderMask = 0;
 	hooks_wantDraw = qfalse;
 }
 
@@ -198,7 +216,8 @@ void Hooks_Shutdown( const char *reason ) {
 	}
 	hooks_activeCount = 0;
 	hooks_idleMsec = -1;
-	hooks_wantModuleRender = qfalse;
+	hooks_moduleRenderWanted = 0;
+	hooks_moduleRenderMask = 0;
 	hooks_wantDraw = qfalse;
 	for ( i = 0; engineExtensions[i]; i++ ) {
 		if ( !hooks_active[i] ) {
@@ -690,7 +709,26 @@ void Hooks_ModuleShutdown( extModule_t module ) {
 }
 
 qboolean Hooks_WantModuleRender( void ) {
-	return hooks_wantModuleRender;
+	return hooks_moduleRenderMask != 0;
+}
+
+void Hooks_SetModuleRender( const engineExtension_t *ext, qboolean want ) {
+	int	i;
+
+	if ( !ext ) {
+		return;
+	}
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( engineExtensions[i] == ext ) {
+			if ( want ) {
+				hooks_moduleRenderWanted |= 1u << i;
+			} else {
+				hooks_moduleRenderWanted &= ~( 1u << i );
+			}
+			Hooks_UpdateModuleRender();
+			return;
+		}
+	}
 }
 
 void Hooks_ModuleAsset( extModule_t module, extAssetKind_t kind, const char *name, qhandle_t handle,
@@ -699,12 +737,37 @@ void Hooks_ModuleAsset( extModule_t module, extAssetKind_t kind, const char *nam
 }
 
 qboolean Hooks_ModuleRender( extModule_t module, const struct extRenderCall_s *call ) {
-	int	taker;
+	int	i;
 
-	HOOKS_OFFER( taker, moduleRender, ( module, call ) );
-	return taker != 0;
+	if ( !hooks_moduleRenderMask ) {
+		return qfalse;
+	}
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( hooks_moduleRenderMask & ( 1u << i ) ) {
+			qboolean	taken;
+
+			hooks_depth[i]++;
+			taken = engineExtensions[i]->moduleRender( module, call );
+			hooks_depth[i]--;
+			if ( taken ) {
+				return qtrue;
+			}
+		}
+	}
+	return qfalse;
 }
 
 void Hooks_ModuleRenderSeen( extModule_t module, const struct extRenderCall_s *call ) {
-	HOOKS_CALL( moduleRender, ( module, call ) );
+	int	i;
+
+	if ( !hooks_moduleRenderMask ) {
+		return;
+	}
+	for ( i = 0; engineExtensions[i]; i++ ) {
+		if ( hooks_moduleRenderMask & ( 1u << i ) ) {
+			hooks_depth[i]++;
+			engineExtensions[i]->moduleRender( module, call );
+			hooks_depth[i]--;
+		}
+	}
 }

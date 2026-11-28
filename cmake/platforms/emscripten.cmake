@@ -106,35 +106,36 @@ function(deploy_shell_files)
         endif()
     endif()
 
-    # The page checks the player's own paks (pak_check.js) against the game's
-    # own checksums, read here from files.c's tables, so they have one
-    # source: Quake III Arena 1.32's, Team Arena's and the demo's, by game
-    # directory, as JSON. A standalone build has none. They're id's and never
-    # change, so an edit to files.c doesn't configure the build again.
-    set(WEB_GAME_PAKS "{}")
-    if(NOT BUILD_STANDALONE)
-        set(FILES_C ${SOURCE_DIR}/qcommon/files.c)
-        file(READ ${FILES_C} FILES_C_TEXT)
-        foreach(TABLE pak_checksums missionpak_checksums)
-            string(REGEX MATCH "[ \t]${TABLE}\\[\\][ \t]*=[ \t\r\n]*[{]([^}]*)[}]" FOUND "${FILES_C_TEXT}")
-            string(REGEX MATCHALL "[0-9]+" ${TABLE} "${CMAKE_MATCH_1}")
-            list(LENGTH ${TABLE} ${TABLE}_COUNT)
-            list(JOIN ${TABLE} "," ${TABLE})
-        endforeach()
-        string(REGEX MATCH "#define[ \t]+DEMO_PAK0_CHECKSUM[ \t]+([0-9]+)" FOUND "${FILES_C_TEXT}")
-        set(DEMO_PAK0_CHECKSUM "${CMAKE_MATCH_1}")
-        if(NOT pak_checksums_COUNT EQUAL 9 OR NOT missionpak_checksums_COUNT EQUAL 4 OR NOT DEMO_PAK0_CHECKSUM)
-            message(FATAL_ERROR "Couldn't read the game's pak checksums from ${FILES_C} for the web page "
-                "(pak_checksums, missionpak_checksums and DEMO_PAK0_CHECKSUM)")
-        endif()
-        set(WEB_GAME_PAKS
-            "{\"${BASEGAME}\":[${pak_checksums}],\"missionpack\":[${missionpak_checksums}],\"demoq3\":[${DEMO_PAK0_CHECKSUM}]}")
-    endif()
-    configure_file(${SOURCE_DIR}/web/pak_check.js
-        ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_check.js @ONLY)
-    # and the worker that keeps them in the browser's private files, and the
-    # reader that reads them from there, with its worker (from WEB_SHELL_DIR)
+    # The web shell checks the player's own paks (pak_check.js, from
+    # WEB_SHELL_DIR) against the game's own checksums, read here from files.c's
+    # tables, so they have one source: Quake III Arena 1.32's, Team Arena's and
+    # the demo's, by game directory, as JSON. A standalone build has none.
+    # They're id's and never change, so an edit to files.c doesn't configure
+    # the build again.
     if(WEB_SHELL_DIR)
+        set(WEB_GAME_PAKS "{}")
+        if(NOT BUILD_STANDALONE)
+            set(FILES_C ${SOURCE_DIR}/qcommon/files.c)
+            file(READ ${FILES_C} FILES_C_TEXT)
+            foreach(TABLE pak_checksums missionpak_checksums)
+                string(REGEX MATCH "[ \t]${TABLE}\\[\\][ \t]*=[ \t\r\n]*[{]([^}]*)[}]" FOUND "${FILES_C_TEXT}")
+                string(REGEX MATCHALL "[0-9]+" ${TABLE} "${CMAKE_MATCH_1}")
+                list(LENGTH ${TABLE} ${TABLE}_COUNT)
+                list(JOIN ${TABLE} "," ${TABLE})
+            endforeach()
+            string(REGEX MATCH "#define[ \t]+DEMO_PAK0_CHECKSUM[ \t]+([0-9]+)" FOUND "${FILES_C_TEXT}")
+            set(DEMO_PAK0_CHECKSUM "${CMAKE_MATCH_1}")
+            if(NOT pak_checksums_COUNT EQUAL 9 OR NOT missionpak_checksums_COUNT EQUAL 4 OR NOT DEMO_PAK0_CHECKSUM)
+                message(FATAL_ERROR "Couldn't read the game's pak checksums from ${FILES_C} for the web page "
+                    "(pak_checksums, missionpak_checksums and DEMO_PAK0_CHECKSUM)")
+            endif()
+            set(WEB_GAME_PAKS
+                "{\"${BASEGAME}\":[${pak_checksums}],\"missionpack\":[${missionpak_checksums}],\"demoq3\":[${DEMO_PAK0_CHECKSUM}]}")
+        endif()
+        configure_file(${WEB_SHELL_DIR}/pak_check.js
+            ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/pak_check.js @ONLY)
+        # and the worker that keeps them in the browser's private files, and the
+        # reader that reads them from there, with its worker (from WEB_SHELL_DIR)
         foreach(FILE pak_store.js pak_reader.js pak_reader_worker.js)
             configure_file(${WEB_SHELL_DIR}/${FILE} ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${FILE} COPYONLY)
         endforeach()

@@ -3896,8 +3896,8 @@ that leaves its directory's size or place to them (0xffffffff), or zip64's
 locator just before it, whose records unzip then takes for bytes before
 the zip (byte_before_the_zipfile), so it finds no entry where the
 directory says. The last end record, as unzip finds it
-(unzlocal_SearchCentralDir) and the web's pak check reads it
-(code/web/pak_check.js)
+(unzlocal_SearchCentralDir) and the web shell's pak check reads it
+(web/src/pak-check.ts)
 =================
 */
 #define ZIP_END_RECORD			0x06054b50
