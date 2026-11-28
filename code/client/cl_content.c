@@ -1114,7 +1114,18 @@ static void CL_ContentSend( int64_t now ) {
 	clContent.lastControl = now;
 	length = OFD_Write( &msg, out, sizeof( out ) );
 	if ( length > 0 ) {
-		NET_SendPacket( NS_CLIENT, length, out, clc.netchan.remoteAddress );
+		if ( clc.ofd.sealed ) {
+			byte	sealed[OFD_HEADER_SIZE + OFD_MAX_CONTROL_BODY + OFD_SEAL_OVERHEAD];
+
+			length = OFD_SessionSeal( &clc.ofd, out, length, sealed, sizeof( sealed ) );
+			if ( length > 0 ) {
+				NET_SendPacket( NS_CLIENT, length, sealed, clc.netchan.remoteAddress );
+			} else {
+				Com_DPrintf( "Couldn't seal a content CONTROL\n" );
+			}
+		} else {
+			NET_SendPacket( NS_CLIENT, length, out, clc.netchan.remoteAddress );
+		}
 	} else {
 		Com_DPrintf( "Couldn't write a content CONTROL\n" );
 	}
@@ -1399,21 +1410,36 @@ The acks go from here
 */
 void CL_ContentPacket( netadr_t from, msg_t *msg ) {
 	ofdMessage_t	m;
+	byte			plain[OFD_MAX_DATAGRAM];
 	clcSlot_t		*s;
 	int64_t			now;
+	int				plainLen;
 
 	clContent.datagrams++;
 	if ( clc.state < CA_CONNECTED || clc.demoplaying || !NET_CompareAdr( from, clc.netchan.remoteAddress ) ) {
 		clContent.drops[DROP_ADDRESS]++;
 		return;
 	}
-	if ( !OFD_Read( msg->data, msg->cursize, &m ) ) {
-		clContent.drops[DROP_INVALID]++;
-		return;
-	}
-	if ( !( clc.ofx & OFX_CONTENT ) || m.key != clc.contentKey ) {
-		clContent.drops[DROP_KEY]++;
-		return;
+	if ( clc.ofd.sealed ) {
+		if ( !( clc.ofx & OFX_CONTENT ) || !OFD_IsSealed( msg->data, msg->cursize )
+			|| OFD_ReadSealedCid( msg->data ) != clc.contentKey ) {
+			clContent.drops[DROP_KEY]++;
+			return;
+		}
+		plainLen = OFD_SessionOpen( &clc.ofd, msg->data, msg->cursize, plain, sizeof( plain ) );
+		if ( plainLen <= 0 || !OFD_Read( plain, plainLen, &m ) ) {
+			clContent.drops[DROP_INVALID]++;
+			return;
+		}
+	} else {
+		if ( !OFD_Read( msg->data, msg->cursize, &m ) ) {
+			clContent.drops[DROP_INVALID]++;
+			return;
+		}
+		if ( !( clc.ofx & OFX_CONTENT ) || m.key != clc.contentKey ) {
+			clContent.drops[DROP_KEY]++;
+			return;
+		}
 	}
 
 	switch ( m.type ) {

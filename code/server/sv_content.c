@@ -453,7 +453,7 @@ typedef struct {
 // last, which may be shorter, and then nothing more joins them
 typedef struct {
 	int			count, size, length;
-	byte		data[CONTENT_BATCH * OFD_MAX_DATAGRAM];
+	byte		data[CONTENT_BATCH * OFD_MAX_SEALED_DATAGRAM];
 } svContentBatch_t;
 
 struct svContent_s {
@@ -554,8 +554,16 @@ static qboolean SV_ContentFlush( client_t *cl ) {
 }
 
 static qboolean SV_ContentSendDatagram( void *arg, const byte *data, int length ) {
-	const client_t	*cl = arg;
+	client_t	*cl = arg;
+	byte		sealed[OFD_MAX_SEALED_DATAGRAM];
 
+	if ( cl->ofd.sealed ) {
+		length = OFD_SessionSeal( &cl->ofd, data, length, sealed, sizeof( sealed ) );
+		if ( length <= 0 ) {
+			return qfalse;
+		}
+		data = sealed;
+	}
 	if ( !NET_SendPacketChecked( NS_SERVER, length, data, cl->netchan.remoteAddress ) ) {
 		svContentSocketFull = qtrue;
 		return qfalse;
@@ -569,16 +577,24 @@ static qboolean SV_ContentSendDatagram( void *arg, const byte *data, int length 
 static qboolean SV_ContentBatchDatagram( void *arg, const byte *data, int length ) {
 	client_t			*cl = arg;
 	svContentBatch_t	*b = &cl->content->batch;
+	int					wireLen = cl->ofd.sealed ? length + OFD_SEAL_OVERHEAD : length;
 
-	if ( b->count && ( b->length < b->count * b->size || length > b->size || b->count == CONTENT_BATCH )
+	if ( b->count && ( b->length < b->count * b->size || wireLen > b->size || b->count == CONTENT_BATCH )
 		&& !SV_ContentFlush( cl ) ) {
 		return qfalse;
 	}
-	if ( !b->count ) {
-		b->size = length;
+	if ( cl->ofd.sealed ) {
+		wireLen = OFD_SessionSeal( &cl->ofd, data, length, b->data + b->length, (int)sizeof( b->data ) - b->length );
+		if ( wireLen <= 0 ) {
+			return qfalse;
+		}
+	} else {
+		Com_Memcpy( b->data + b->length, data, length );
 	}
-	Com_Memcpy( b->data + b->length, data, length );
-	b->length += length;
+	if ( !b->count ) {
+		b->size = wireLen;
+	}
+	b->length += wireLen;
 	b->count++;
 	return qtrue;
 }
@@ -838,7 +854,7 @@ static void SV_ContentBad( netadr_t from, const msg_t *msg ) {
 	int			i;
 
 	for ( i = 0, cl = svs.clients; i < svs.maxclients; i++, cl++ ) {
-		if ( cl->state >= CS_CONNECTED && ( cl->ofx & OFX_CONTENT ) && cl->contentKey == key
+		if ( cl->state >= CS_CONNECTED && ( cl->ofx & OFX_CONTENT ) && !cl->ofd.sealed && cl->contentKey == key
 			&& NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
 			if ( ++cl->contentBadDatagrams >= CONTENT_BAD_DATAGRAMS ) {
 				SV_DropClient( cl, "bad content control" );
@@ -855,28 +871,64 @@ SV_ContentPacket
 
 A content datagram (OFD_IsContent). Only a CONTROL comes this way; one
 from a client that negotiated the content protocol, from its address
-and with its key, is read, and anything else is dropped
+and with its key, is read, and anything else is dropped. Clients with
+OFX_SESSION must send sealed v2 datagrams (no cleartext downgrade).
 =================
 */
 void SV_ContentPacket( netadr_t from, msg_t *msg ) {
 	ofdMessage_t	m;
 	svTransferEnv_t	env;
 	svtResult_t		result;
-	client_t		*cl;
+	client_t		*cl = NULL;
+	byte			plain[OFD_MAX_DATAGRAM];
+	int				i, plainLen;
 
-	if ( !OFD_Read( msg->data, msg->cursize, &m ) || m.type != OFD_TYPE_CONTROL ) {
-		SV_ContentBad( from, msg );
-		return;
-	}
-	if ( m.u.control.slot >= svs.maxclients ) {
-		svContentIgnored++;
-		return;
-	}
-	cl = &svs.clients[m.u.control.slot];
-	if ( !( cl->ofx & OFX_CONTENT ) || cl->state < CS_CONNECTED || m.key != cl->contentKey
-		|| !NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
-		svContentIgnored++;
-		return;
+	if ( OFD_IsSealed( msg->data, msg->cursize ) ) {
+		uint64_t	cid = OFD_ReadSealedCid( msg->data );
+
+		for ( i = 0; i < svs.maxclients; i++ ) {
+			client_t	*c = &svs.clients[i];
+
+			if ( c->state >= CS_CONNECTED && ( c->ofx & OFX_CONTENT ) && c->ofd.sealed && c->contentKey == cid
+				&& NET_CompareAdr( from, c->netchan.remoteAddress ) ) {
+				cl = c;
+				break;
+			}
+		}
+		if ( !cl ) {
+			svContentIgnored++;
+			return;
+		}
+		plainLen = OFD_SessionOpen( &cl->ofd, msg->data, msg->cursize, plain, sizeof( plain ) );
+		if ( plainLen <= 0 ) {
+			svContentIgnored++;
+			return;
+		}
+		if ( !OFD_Read( plain, plainLen, &m ) || m.type != OFD_TYPE_CONTROL ) {
+			if ( ++cl->contentBadDatagrams >= CONTENT_BAD_DATAGRAMS ) {
+				SV_DropClient( cl, "bad content control" );
+			}
+			return;
+		}
+		if ( m.u.control.slot != (int)( cl - svs.clients ) ) {
+			svContentIgnored++;
+			return;
+		}
+	} else {
+		if ( !OFD_Read( msg->data, msg->cursize, &m ) || m.type != OFD_TYPE_CONTROL ) {
+			SV_ContentBad( from, msg );
+			return;
+		}
+		if ( m.u.control.slot >= svs.maxclients ) {
+			svContentIgnored++;
+			return;
+		}
+		cl = &svs.clients[m.u.control.slot];
+		if ( !( cl->ofx & OFX_CONTENT ) || cl->ofd.sealed || cl->state < CS_CONNECTED || m.key != cl->contentKey
+			|| !NET_CompareAdr( from, cl->netchan.remoteAddress ) ) {
+			svContentIgnored++;
+			return;
+		}
 	}
 
 	env = SV_ContentEnv( cl );
@@ -907,6 +959,7 @@ SV_ContentFreeClient
 void SV_ContentFreeClient( client_t *cl ) {
 	svTransferEnv_t	env;
 
+	OFD_SessionWipe( &cl->ofd );
 	if ( !cl->content ) {
 		return;
 	}
@@ -1042,7 +1095,7 @@ int SV_ContentSend( void ) {
 					}
 					continue;
 				}
-				if ( ( w = DLCC_BucketWait( &svContentCap, now, OFD_MAX_DATAGRAM ) ) > 0 ) {
+				if ( ( w = DLCC_BucketWait( &svContentCap, now, OFD_MAX_SEALED_DATAGRAM ) ) > 0 ) {
 					wait = MIN( wait, w );
 					goto done;
 				}
@@ -1050,7 +1103,7 @@ int SV_ContentSend( void ) {
 				env = SV_ContentEnv( cl );
 				env.send = SV_ContentBatchDatagram;
 				bytes = SVT_Send( &cl->content->t, now,
-					DLCC_BucketWait( &svContentCap, now, 2 * OFD_MAX_DATAGRAM ) == 0, &env );
+					DLCC_BucketWait( &svContentCap, now, 2 * OFD_MAX_SEALED_DATAGRAM ) == 0, &env );
 				if ( !bytes ) {
 					if ( svContentSocketFull ) {
 						wait = 1000;
@@ -1058,7 +1111,7 @@ int SV_ContentSend( void ) {
 					}
 					continue;
 				}
-				DLCC_BucketTake( &svContentCap, bytes );
+				DLCC_BucketTake( &svContentCap, bytes + ( cl->ofd.sealed ? OFD_SEAL_OVERHEAD : 0 ) );
 				sent++;
 				progress = qtrue;
 			}

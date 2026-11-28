@@ -1581,6 +1581,10 @@ void CL_DisconnectKind( const char *kind ) {
 	static const extLeft_t	named[] = { EXT_LEFT_KICKED, EXT_LEFT_BANNED, EXT_LEFT_SHUTDOWN };
 	int						i;
 
+	if ( !strcmp( kind, DISCONNECT_KIND_RESTART ) ) {
+		CL_Leaving( EXT_LEFT_SHUTDOWN );
+		return;
+	}
 	for ( i = 0; i < ARRAY_LEN( named ); i++ ) {
 		if ( !strcmp( kind, extLeftNames[named[i]] ) ) {
 			CL_Leaving( named[i] );
@@ -2042,19 +2046,22 @@ static void CL_ReconnectBegin( const char *command, const netadr_t *server, int 
 CL_ReconnectAsked
 
 A server's disconnect, run by cgame in the game or as it enters it: when its
-reason ends as a restarting server's does (RECONNECT_ASKED), the client
+machine kind is "restart" (SV_FinalMessage on EXIT_RESTART), the client
 reconnects by itself, unless cl_autoReconnect is off, a demo plays, one is
-under way already, or nothing goes back (a web connection, a listen
-server's). Its way back: an extension's command, as a join by code goes
-(CL_ExtSetRejoin), or reconnect, once the server's address answers a
-getinfo. The menu shows the goodbye meanwhile (CL_ReconnectFrame)
+under way already, or nothing goes back (a listen server's). Its way back:
+an extension's command, as a join by code goes (CL_ExtSetRejoin), or
+reconnect, once the server's address answers a getinfo. The menu shows the
+goodbye meanwhile (CL_ReconnectFrame). Any trailing RECONNECT_ASKED hint
+in the human display text is trimmed for display only, never as the trigger.
 =================
 */
-void CL_ReconnectAsked( const char *reason ) {
-	size_t	length = strlen( reason ), asked = strlen( RECONNECT_ASKED );
+void CL_ReconnectAsked( const char *reason, const char *kind ) {
+	size_t		length = strlen( reason ), asked = strlen( RECONNECT_ASKED );
+	qboolean	hasHint = length >= asked && !strcmp( reason + length - asked, RECONNECT_ASKED );
+	const char	*sep;
 
 	if ( !cl_autoReconnect->integer || clc.demoplaying || clc.state < CA_PRIMED || cls.reconnect.active ||
-		length < asked || strcmp( reason + length - asked, RECONNECT_ASKED ) ) {
+		strcmp( kind, DISCONNECT_KIND_RESTART ) ) {
 		return;
 	}
 	// the server is only now going down: a first try that comes before it's
@@ -2068,13 +2075,15 @@ void CL_ReconnectAsked( const char *reason ) {
 	} else {
 		return;
 	}
-	Q_strncpyz( cls.reconnect.reason, reason, MIN( sizeof( cls.reconnect.reason ), length - asked + 1 ) );
-	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ), "Server disconnected - %s Reconnecting when "
-		"it's back.", cls.reconnect.reason );
-	Com_sprintf( cls.reconnect.stopped, sizeof( cls.reconnect.stopped ), "Server disconnected - %s%s",
-		cls.reconnect.reason, RECONNECT_ASKED );
-	Com_sprintf( cls.reconnect.gaveUp, sizeof( cls.reconnect.gaveUp ), "Server disconnected - %s It didn't come back "
-		"within a minute. Type /reconnect to try again.", cls.reconnect.reason );
+	Q_strncpyz( cls.reconnect.reason, reason,
+		MIN( sizeof( cls.reconnect.reason ), ( hasHint ? length - asked : length ) + 1 ) );
+	sep = cls.reconnect.reason[0] ? " " : "";
+	Com_sprintf( cls.reconnect.message, sizeof( cls.reconnect.message ),
+		"Server disconnected - %s%sReconnecting when it's back.", cls.reconnect.reason, sep );
+	Com_sprintf( cls.reconnect.stopped, sizeof( cls.reconnect.stopped ), "Server disconnected - %s", reason );
+	Com_sprintf( cls.reconnect.gaveUp, sizeof( cls.reconnect.gaveUp ),
+		"Server disconnected - %s%sIt didn't come back within a minute. Type /reconnect to try again.",
+		cls.reconnect.reason, sep );
 }
 
 /*
@@ -2141,38 +2150,26 @@ static const char *CL_ReconnectLost( const char *failure, netLoss_t loss ) {
 CL_ReconnectDropped
 
 A server's disconnect, as for CL_ReconnectAsked: on a web connection, the
-server drops a player its gateway let go (rtc_left idle or shutdown)
-saying so in hosting's words (RECONNECT_AWAY, RECONNECT_LOST). That's a
-lost connection, joined again by itself as CL_ReconnectLost joins one,
-worded as the transport says when it already knows, else by the server's
-words. Any other reason, as a kick's, is the server's own end of the
-game, even when the connection is gone already. Returns the drop's words
-when it gave up rejoining (CL_ReconnectLost), else NULL for the server's
-own
-
-The words are matched because nothing else tells these apart: the gateway
-tells the server at once and writes its close word a quarter of a second
-later, so the server's disconnect reaches the game first, at every idle
-and shutdown, and the connection is ended before its word comes. And a
-kick a hidden page hasn't run yet comes with the gateway's idle, which
-mustn't join a kicked player again. They're display text, which a
-translation of hosting's would have to keep, until the server's
-disconnect carries the gateway's word itself
+server drops a player its gateway let go (rtc_left idle or shutdown) with a
+machine kind ("away" or "lost", SV_DropClientAs). That's a lost connection,
+joined again by itself as CL_ReconnectLost joins one, worded as the
+transport says when it already knows, else by the server's kind. Any other
+kind, as a kick's, is the server's own end of the game, even when the
+connection is gone already. Returns the drop's words when it gave up
+rejoining (CL_ReconnectLost), else NULL for the server's own.
 =================
 */
-#define RECONNECT_AWAY	"was away too long"
-#define RECONNECT_LOST	"lost the connection"
-const char *CL_ReconnectDropped( const char *reason ) {
+const char *CL_ReconnectDropped( const char *kind ) {
 	netLoss_t	loss, known;
 	const char	*failure, *transport, *said;
 
 	if ( clc.serverAddress.type != NA_WEB ) {
 		return NULL;
 	}
-	if ( !Q_stricmp( reason, RECONNECT_AWAY ) ) {
+	if ( !strcmp( kind, DISCONNECT_KIND_AWAY ) ) {
 		failure = "The server let the connection go while the game was hidden.";
 		loss = NET_LOST_AWAY;
-	} else if ( !Q_stricmp( reason, RECONNECT_LOST ) ) {
+	} else if ( !strcmp( kind, DISCONNECT_KIND_LOST ) ) {
 		failure = "The server lost the connection.";
 		loss = NET_LOST;
 	} else {
@@ -2358,6 +2355,7 @@ static void CL_SessionForget( void ) {
 	Ident_Wipe( clc.sessionFinish, sizeof( clc.sessionFinish ) );
 	Ident_Wipe( clc.sendKey, sizeof( clc.sendKey ) );
 	Ident_Wipe( clc.receiveKey, sizeof( clc.receiveKey ) );
+	OFD_SessionWipe( &clc.ofd );
 	clc.sessionFinishLength = clc.sessionFinishSends = 0;
 	clc.sessionPending = clc.sessionProven = qfalse;
 }
@@ -5215,9 +5213,10 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 			Netchan_SetFragmentSize( &clc.netchan, clc.fragmentSize );
 		}
 		// the session's keys: every datagram sealed from here on (14.6),
-		// the netchan's copy alone kept
+		// the netchan's and OFD's copies alone kept
 		if ( clc.sessionProven ) {
 			Netchan_SetKeys( &clc.netchan, clc.sendKey, clc.receiveKey );
+			OFD_SessionInit( &clc.ofd, clc.sendKey, clc.receiveKey, qfalse );
 			Ident_Wipe( clc.sendKey, sizeof( clc.sendKey ) );
 			Ident_Wipe( clc.receiveKey, sizeof( clc.receiveKey ) );
 		}

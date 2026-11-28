@@ -1711,6 +1711,7 @@ to totally exit after returning from this function.
 void SV_FinalMessage( char *message ) {
 	int			i, j;
 	client_t	*cl;
+	const char	*kind = Com_GetQuitStatus() == EXIT_RESTART ? DISCONNECT_KIND_RESTART : DISCONNECT_KIND_SHUTDOWN;
 	
 	// send it twice, ignoring rate
 	for ( j = 0 ; j < 2 ; j++ ) {
@@ -1719,8 +1720,8 @@ void SV_FinalMessage( char *message ) {
 				// don't send a disconnect to a local client
 				if ( cl->netchan.remoteAddress.type != NA_LOOPBACK ) {
 					SV_SendServerCommand( cl, "print \"%s\n\"\n", message );
-					// the server stopping, as the client tells it in its own words
-					SV_SendServerCommand( cl, "disconnect \"%s\" shutdown", SV_DisconnectWords( message ) );
+					// the server stopping or restarting, as the client tells it in its own words
+					SV_SendServerCommand( cl, "disconnect \"%s\" %s", SV_DisconnectWords( message ), kind );
 				}
 				// force a snapshot to be sent
 				cl->lastSnapshotTime = 0;

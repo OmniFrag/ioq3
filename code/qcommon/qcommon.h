@@ -1901,6 +1901,14 @@ void		Com_QuitAfterHooks( const char *reason );
 // for a restart asked for; and that status set for the quit queued next
 void		Com_QuitStatus( const char *reason, int status );
 void		Com_SetQuitStatus( int status );
+int			Com_GetQuitStatus( void );
+
+// machine kinds sent as the second argument of server disconnect commands
+// (SV_DropClientAs, SV_FinalMessage); stock clients ignore argument 2
+#define DISCONNECT_KIND_SHUTDOWN	"shutdown"
+#define DISCONNECT_KIND_RESTART		"restart"
+#define DISCONNECT_KIND_AWAY		"away"
+#define DISCONNECT_KIND_LOST		"lost"
 // a quit waits for the hooks to return: what's queued to run meanwhile can
 // stop
 qboolean	Com_QuitPending( void );

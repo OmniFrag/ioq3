@@ -2265,12 +2265,26 @@ static qboolean SV_ExtDropAs( int clientNum, const char *reason, svDrop_t kind )
 	return qtrue;
 }
 
+typedef char extDropMatchesSvDrop[
+	(int)EXT_DROP_PLAIN == (int)SV_DROP_PLAIN &&
+	(int)EXT_DROP_KICKED == (int)SV_DROP_KICKED &&
+	(int)EXT_DROP_BANNED == (int)SV_DROP_BANNED &&
+	(int)EXT_DROP_AWAY == (int)SV_DROP_AWAY &&
+	(int)EXT_DROP_LOST == (int)SV_DROP_LOST ? 1 : -1 ];
+
+qboolean SV_ExtDropClientAs( int clientNum, const char *reason, extDrop_t kind ) {
+	if ( (unsigned)kind > (unsigned)EXT_DROP_LOST ) {
+		kind = EXT_DROP_PLAIN;
+	}
+	return SV_ExtDropAs( clientNum, reason, (svDrop_t)kind );
+}
+
 qboolean SV_ExtDropClient( int clientNum, const char *reason ) {
-	return SV_ExtDropAs( clientNum, reason, SV_DROP_PLAIN );
+	return SV_ExtDropClientAs( clientNum, reason, EXT_DROP_PLAIN );
 }
 
 qboolean SV_ExtKickClient( int clientNum, const char *reason ) {
-	return SV_ExtDropAs( clientNum, reason, SV_DROP_KICKED );
+	return SV_ExtDropClientAs( clientNum, reason, EXT_DROP_KICKED );
 }
 
 qboolean SV_ExtMuteClient( int clientNum, qboolean mute, int seconds ) {

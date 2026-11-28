@@ -927,6 +927,7 @@ gotnewcl:
 	// a session's keys: every datagram sealed from here on (14.6)
 	if ( admit->ofx & OFX_SESSION ) {
 		Netchan_SetKeys( &newcl->netchan, admit->sendKey, admit->receiveKey );
+		OFD_SessionInit( &newcl->ofd, admit->receiveKey, admit->sendKey, qtrue );
 	}
 	if ( admit->fragmentSize ) {
 		Netchan_SetFragmentSize( &newcl->netchan, admit->fragmentSize );
@@ -960,6 +961,7 @@ gotnewcl:
 		// the session's keys
 		newcl->identityProven = qfalse;
 		Netchan_WipeKeys( &newcl->netchan );
+		OFD_SessionWipe( &newcl->ofd );
 		return;
 	}
 
@@ -1090,10 +1092,16 @@ const char *SV_DisconnectWords( const char *reason ) {
 	return words;
 }
 
+static const char	*sv_dropKinds[] = { "", " kicked", " banned", " " DISCONNECT_KIND_AWAY, " " DISCONNECT_KIND_LOST };
+typedef char svDropKindsMatch[ ARRAY_LEN( sv_dropKinds ) == SV_DROP_LOST + 1 ? 1 : -1 ];
+
 void SV_DropClientAs( client_t *drop, const char *reason, svDrop_t kind ) {
-	static const char	*kinds[] = { "", " kicked", " banned" };
 	int		i;
 	const qboolean isBot = drop->netchan.remoteAddress.type == NA_BOT;
+
+	if ( (unsigned)kind >= ARRAY_LEN( sv_dropKinds ) ) {
+		kind = SV_DROP_PLAIN;
+	}
 
 	if ( drop->state == CS_ZOMBIE ) {
 		return;		// already dropped
@@ -1126,7 +1134,7 @@ void SV_DropClientAs( client_t *drop, const char *reason, svDrop_t kind ) {
 
 	// add the disconnect command
 	if ( reason ) {
-		SV_SendServerCommand( drop, "disconnect \"%s\"%s", SV_DisconnectWords( reason ), kinds[kind] );
+		SV_SendServerCommand( drop, "disconnect \"%s\"%s", SV_DisconnectWords( reason ), sv_dropKinds[kind] );
 	}
 
 	drop->lastDisconnectTime = svs.time;

@@ -268,8 +268,8 @@ void CL_ServerDisconnect( void ) {
 		// the kind of drop the server names after the reason, a word
 		// of its own choosing, never the reason's (SV_DropClientAs)
 		CL_DisconnectKind( Cmd_Argv( 2 ) );
-		CL_ReconnectAsked( Cmd_Argv( 1 ) );
-		if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 1 ) ) ) != NULL ) {
+		CL_ReconnectAsked( Cmd_Argv( 1 ), Cmd_Argv( 2 ) );
+		if ( ( gaveUp = CL_ReconnectDropped( Cmd_Argv( 2 ) ) ) != NULL ) {
 			Com_Error( ERR_SERVERDISCONNECT, "%s", gaveUp );
 		}
 		Com_Error( ERR_SERVERDISCONNECT, "Server disconnected - %s", Cmd_Argv( 1 ) );

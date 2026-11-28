@@ -901,6 +901,10 @@ void Com_SetQuitStatus( int status ) {
 	com_quitStatus = status;
 }
 
+int Com_GetQuitStatus( void ) {
+	return com_quitStatus;
+}
+
 /*
 =============
 Com_Quit_f

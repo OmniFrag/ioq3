@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
+#include "../qcommon/ofd_seal.h"
 #include "../game/g_public.h"
 
 //=============================================================================
@@ -180,6 +181,8 @@ typedef struct client_s {
 	// one, and with them the connection's content key, sent on connectResponse
 	uint32_t		ofx;
 	uint64_t		contentKey;
+	// with OFX_SESSION, OFD's per-direction keys, send nonce and replay window (ofd_seal.h)
+	ofdSession_t	ofd;
 	// the device key the client proved on connect (identity.h), with
 	// identityProven; an unproven client has none
 	qboolean		identityProven;
@@ -628,7 +631,9 @@ void SV_DropClient( client_t *drop, const char *reason );
 typedef enum {
 	SV_DROP_PLAIN,
 	SV_DROP_KICKED,
-	SV_DROP_BANNED
+	SV_DROP_BANNED,
+	SV_DROP_AWAY,
+	SV_DROP_LOST
 } svDrop_t;
 void SV_DropClientAs( client_t *drop, const char *reason, svDrop_t kind );
 const char *SV_DisconnectWords( const char *reason );

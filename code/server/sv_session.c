@@ -185,6 +185,43 @@ static qboolean SV_SessionTestContent( netadr_t from, uint64_t *ofk, byte manife
 	return ok;
 }
 
+// Writes the derived OFD keys for a test build's content_standin.py proxy
+// to "<path>.keys" when from matches OMNIFRAG_TEST_SESSION_CONTENT's port.
+static void SV_SessionTestContentKeys( netadr_t from, uint64_t ofk,
+	const byte netC2s[NOISE_KEYLEN], const byte netS2c[NOISE_KEYLEN] ) {
+	const char	*path = Com_TestEnv( "OMNIFRAG_TEST_SESSION_CONTENT" );
+	char		key[OFK_DIGITS + 1], hash[SHA256_HEX_SIZE], c2sHex[SHA256_HEX_SIZE], s2cHex[SHA256_HEX_SIZE];
+	char		keysPath[MAX_OSPATH], tmpPath[MAX_OSPATH];
+	byte		ofdC2s[NOISE_KEYLEN], ofdS2c[NOISE_KEYLEN];
+	int			port;
+	qboolean	match;
+	FILE		*f;
+
+	if ( !path || !( f = fopen( path, "r" ) ) ) {
+		return;
+	}
+	match = fscanf( f, "%d %16s %64s", &port, key, hash ) == 3 && port == (unsigned short)BigShort( from.port );
+	fclose( f );
+	if ( !match ) {
+		return;
+	}
+	OFD_DeriveKeys( netC2s, netS2c, ofdC2s, ofdS2c );
+	Com_ExtensionKeyString( ofk, key );
+	Com_SHA256Hex( ofdC2s, c2sHex );
+	Com_SHA256Hex( ofdS2c, s2cHex );
+	OFD_WipeKey( ofdC2s );
+	OFD_WipeKey( ofdS2c );
+	Com_sprintf( keysPath, sizeof( keysPath ), "%s.keys", path );
+	Com_sprintf( tmpPath, sizeof( tmpPath ), "%s.keys.new", path );
+	if ( ( f = fopen( tmpPath, "w" ) ) != NULL ) {
+		fprintf( f, "%s %s %s\n", key, c2sHex, s2cHex );
+		fclose( f );
+		rename( tmpPath, keysPath );
+	}
+	Ident_Wipe( c2sHex, sizeof( c2sHex ) );
+	Ident_Wipe( s2cHex, sizeof( s2cHex ) );
+}
+
 /*
 =================
 SV_SessionConnect
@@ -402,6 +439,9 @@ void SV_SessionFinish( netadr_t from, msg_t *msg ) {
 	admit = p->terms;
 	Noise_Split( &p->hs, admit.receiveKey, admit.sendKey );
 	SV_PendingFree( p );
+	if ( admit.ofx & OFX_CONTENT ) {
+		SV_SessionTestContentKeys( from, admit.contentKey, admit.receiveKey, admit.sendKey );
+	}
 	admit.identityProven = qtrue;
 	Com_Memcpy( admit.identity, key, IDENT_KEY_SIZE );
 	NET_PacketDestination( &admit.to );

@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "../qcommon/session.h"
+#include "../qcommon/ofd_seal.h"
 #include "../renderercommon/tr_public.h"
 #include "cl_ext.h"
 #include "../ui/ui_public.h"
@@ -233,6 +234,8 @@ typedef struct {
 	char		keyName[MAX_OSPATH];
 	byte		serverKey[32];
 	byte		sendKey[32], receiveKey[32];
+	// with OFX_SESSION, OFD's per-direction keys, send nonce and replay window (ofd_seal.h)
+	ofdSession_t	ofd;
 	// challengeResponse's ofv, which binds what it agreed: the connect
 	// repeats those terms with it, as a stateless challenge needs (ENG-067);
 	// empty from a server that sends none
@@ -670,8 +673,8 @@ void CL_Disconnect_f (void);
 // leave's report takes (hooks.h's clientLeft); "" or another for none
 void CL_DisconnectKind( const char *kind );
 void CL_ServerDisconnect( void );
-void CL_ReconnectAsked( const char *reason );
-const char *CL_ReconnectDropped( const char *reason );
+void CL_ReconnectAsked( const char *reason, const char *kind );
+const char *CL_ReconnectDropped( const char *kind );
 void CL_ReconnectStop( void );
 qboolean CL_ReconnectKey( int key );
 void CL_ReconnectDraw( void );

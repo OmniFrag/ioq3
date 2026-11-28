@@ -800,10 +800,22 @@ qboolean	SV_ExtClientRank( int clientNum, int *rank );
 // times in configstrings count in, in milliseconds; 0 with no map
 qboolean	SV_ExtConfigstring( int index, char *out, int size );
 int			SV_ExtGameTime( void );
+// why an extension drops a client, sent as the disconnect command's second
+// argument (SV_DropClientAs) so our client acts on a machine code while
+// stock clients still display the reason text alone
+typedef enum {
+	EXT_DROP_PLAIN,
+	EXT_DROP_KICKED,
+	EXT_DROP_BANNED,
+	EXT_DROP_AWAY,
+	EXT_DROP_LOST
+} extDrop_t;
 // drops a client, telling it and everyone reason, as clientkick does
 // with "was kicked"; qfalse for none, or a listen server's own player,
 // whom clientkick won't drop either
 qboolean	SV_ExtDropClient( int clientNum, const char *reason );
+// the same, naming the drop's machine kind after its reason
+qboolean	SV_ExtDropClientAs( int clientNum, const char *reason, extDrop_t kind );
 // the same, the disconnect saying it was a kick (SV_DropClientAs), as
 // clientkick's does
 qboolean	SV_ExtKickClient( int clientNum, const char *reason );
